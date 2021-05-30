@@ -10,10 +10,14 @@ use std::error::Error;
 mod lexer;
 mod error;
 mod types;
+mod parser;
+mod ast;
 
 use std::path::Path;
 
 use error::EyeError;
+
+use crate::parser::Parser;
 
 fn main() -> Result<(), EyeError> {
 
@@ -22,10 +26,11 @@ fn main() -> Result<(), EyeError> {
 
     let tokens = lexer::TokenStream::from_source(&src)?;
 
-    //println!("tokens: {:?}", tokens);
-    for token in tokens.tokens {
-        println!("token: {:?}", token);
-    }
+    let mut parser = Parser::new(tokens.tokens);
+
+    let module = parser.parse()?;
+
+    println!("Module: {:?}", module);
 
     Ok(())
 }

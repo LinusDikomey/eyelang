@@ -4,7 +4,7 @@ use tokens::Token;
 
 use crate::error::{CompileError, EyeError};
 
-use self::tokens::{FloatLiteral, IntLiteral, Keyword, SourcePos, TokenType};
+use self::tokens::{Keyword, Operator, SourcePos, TokenType};
 
 #[derive(Debug)]
 pub struct TokenStream {
@@ -35,7 +35,7 @@ impl Lexer {
 
     fn parse(&mut self) -> Result<(), EyeError> {
         while self.index < self.chars.len() {
-            self.skip_junk()?;
+            self.skip_junk();
             if self.index >= self.chars.len() { break }
 
             let token = self.parse_token()?;
@@ -44,17 +44,22 @@ impl Lexer {
         Ok(())
     }
 
+    fn pos(&self) -> SourcePos {
+        SourcePos::new(self.line, self.col)
+    }
+
     fn parse_token(&mut self) -> Result<Token, EyeError> {
         let start = SourcePos::new(self.line, self.col);
         
+        let mut val = String::new();
+
         let ty = match self.current() {
             ';' => TokenType::Semicolon,
             ':' => {
-                if let Some(':') = self.peek() {
-                    self.step();
-                    TokenType::DoubleColon
-                } else {
-                    TokenType::Colon
+                match self.peek() {
+                    Some(':') => { self.step(); TokenType::DoubleColon },
+                    Some('=') => { self.step(); TokenType::Operator(Operator::Declare) }
+                    _ => TokenType::Colon
                 }
             },
             '(' => TokenType::LParen,
@@ -64,14 +69,25 @@ impl Lexer {
             '[' => TokenType::LBracket,
             ']' => TokenType::RBracket,
 
+            '=' => {
+                match self.peek() {
+                    Some('=') => { self.step(); TokenType::Operator(Operator::Equals) }
+                    _ => TokenType::Operator(Operator::Assign)
+                }
+            }
+
             '0'..='9' => { // int/float literal
-                let mut literal = String::from(self.current());
+                val.push(self.current());
                 let mut is_float = false;
                 while match self.peek() {
                     Some('0'..='9') => true,
                     Some('.') => {
                         if is_float {
-                            return Err(EyeError::CompileError(CompileError::UnexpectedCharacter('.', String::from("Multiple dots in float literal aren't allowed"))));
+                            return Err(EyeError::CompileError(
+                                CompileError::UnexpectedCharacter('.', String::from("Multiple dots in float literal aren't allowed")),
+                                start,
+                                SourcePos::new(self.line, self.col)
+                            ));
                         }
                         is_float = true;
                         true
@@ -79,61 +95,64 @@ impl Lexer {
                     _ => false
                     
                 } {
-                    literal.push(self.step().unwrap())
+                    val.push(self.step().unwrap())
                 }
                 if is_float {
-                    TokenType::FloatLiteral(FloatLiteral { val: literal, ty: None })
+                    TokenType::FloatLiteral
                 } else {
-                    TokenType::IntLiteral(IntLiteral { val: literal, ty: None })
+                    TokenType::IntLiteral
                 }
             },
             '"' => { // string literal
-                let mut literal = String::new();
                 while self.peek() != Some('"') {
                     match self.step() {
-                        Some(c) => literal.push(c),
-                        None => return Err(EyeError::CompileError(CompileError::UnexpectedEndOfFile))
+                        Some(c) => val.push(c),
+                        None => return Err(EyeError::CompileError(
+                            CompileError::UnexpectedEndOfFile,
+                            start,
+                            self.pos()
+                        ))
                     }
                 }
-                TokenType::StringLiteral(literal)
+                self.step();
+                TokenType::StringLiteral
             },
-            'A'..='z' => { // keyword/identifier
-                let mut ident = String::from(self.current());
+            'A'..='Z' | 'a'..='z' => { // keyword/identifier
+                let mut keyword_or_literal = String::from(self.current());
                 while match self.peek() {
-                    Some('A'..='z' | '0'..='9') => true,
+                    Some('A'..='Z' | 'a'..='z' | '0'..='9') => true,
                     _ => false
                     
                 } {
-                    ident.push(self.step().unwrap())
+                    keyword_or_literal.push(self.step().unwrap())
                 }
 
-                if let Some(keyword) = Keyword::from_string(&ident) {
+                if let Some(keyword) = Keyword::from_string(&keyword_or_literal) {
                     TokenType::Keyword(keyword)
                 } else {
-                    TokenType::Ident(ident)
+                    val = keyword_or_literal;
+                    TokenType::Ident
                 }
             },
-            _ => return Err(EyeError::CompileError(CompileError::UnexpectedCharacter(self.current(), String::from("Unexpected character"))))
+            _ => return Err(EyeError::CompileError(
+                CompileError::UnexpectedCharacter(self.current(), String::from("Unexpected character")),
+                start,
+                start.next()
+            ))
         };
         
         self.step();
         let end = SourcePos::new(self.line, self.col);
 
-        Ok(Token::new(ty, start, end))
+        Ok(Token::new(ty, val, start, end))
     }
 
-    fn skip_junk(&mut self) -> Result<(), EyeError> {
-        
-        while match self.current() {
-            ' ' | '\r' | '\n' => true,
-            _ => false
-        } { 
+    fn skip_junk(&mut self) {
+        while let ' ' | '\r' | '\n' = self.current() { 
             if self.step().is_none() { // end of file, no more checking for junk tokens
-                return Ok(())
+                return
             }
         }
-
-        Ok(())
     }
 
     fn current(&self) -> char {
