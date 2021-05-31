@@ -3,7 +3,14 @@ use crate::{lexer::tokens::{FloatLiteral, IntLiteral}, types::Primitive};
 
 #[derive(Debug)]
 pub struct Module {
-    pub functions: Vec<Function>
+    pub functions: Vec<Function>,
+    pub structs: Vec<Struct>
+}
+
+#[derive(Debug)]
+pub struct Struct {
+    pub name: String,
+    pub members: Vec<(String, UnresolvedType)>,
 }
 
 #[derive(Debug)]

@@ -62,6 +62,7 @@ impl Lexer {
                     _ => TokenType::Colon
                 }
             },
+            ',' => TokenType::Comma,
             '(' => TokenType::LParen,
             ')' => TokenType::RParen,
             '{' => TokenType::LBrace,

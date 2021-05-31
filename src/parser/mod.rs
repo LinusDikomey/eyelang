@@ -94,15 +94,37 @@ impl Parser {
 
     fn parse_module(&mut self) -> Result<Module, EyeError> {
         let mut functions = Vec::new();
+        let mut structs = Vec::new();
 
         while self.index < self.len {
-            functions.push(self.parse_function()?)
+            match_or_unexpected!(self.current()?, 
+                TokenType::Keyword(Keyword::Struct) => structs.push(self.parse_struct()?),
+                TokenType::Ident => functions.push(self.parse_function()?)
+            );
         }
-        Ok(Module { functions })
+        Ok(Module { functions, structs})
+    }
+
+    fn parse_struct(&mut self) -> Result<Struct, EyeError> {
+        tok_expect!(self.step()?, TokenType::Keyword(Keyword::Struct));
+        let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
+        tok_expect!(self.step()?, TokenType::LBrace);
+        let mut members: Vec<(String, UnresolvedType)> = Vec::new();
+        while self.current()?.ty != TokenType::RBrace {
+            let member_name = tok_expect!(self.step()?, TokenType::Ident).get_val();
+            let member_type = self.parse_type()?;
+            if self.current()?.ty == TokenType::Comma {
+                self.step()?;
+            }
+            members.push((member_name, member_type))
+        }
+        tok_expect!(self.step()?, TokenType::RBrace);
+        println!("Successfully conSTRUCTed {}", name);
+        Ok(Struct{name, members})
     }
 
     fn parse_function(&mut self) -> Result<Function, EyeError> {
-        let name = tok_expect!(self.step()?, TokenType::Ident).val.clone();
+        let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
         println!("Parsing function with name {}", name);
 
         let args: Vec<(String, UnresolvedType)> = Vec::new();

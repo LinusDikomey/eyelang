@@ -42,6 +42,7 @@ pub enum TokenType {
     Semicolon,
     Colon,
     DoubleColon,
+    Comma,
 
     LParen,
     RParen,
@@ -87,7 +88,8 @@ pub enum Keyword {
     Primitive(Primitive),
     Ret,
     True,
-    False
+    False,
+    Struct
 }
 
 impl Keyword {
@@ -112,6 +114,9 @@ impl Keyword {
             "bool" => Some(Keyword::Primitive(Primitive::Bool)),
 
             "ret" => Some(Keyword::Ret),
+            "true" => Some(Keyword::True),
+            "false" => Some(Keyword::False),
+            "struct" => Some(Keyword::Struct),
             _ => None
         }
     }
