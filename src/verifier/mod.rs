@@ -135,6 +135,14 @@ fn verify_expr(scope: &mut Scope, expr: &Expression, expected_type: &mut Variabl
                 scope.specify_variable_type(name, expected_type.clone());
             }
             var_type_clone
+        },
+        Expression::If(condition, then_block, else_block) => {
+            verify_expr(scope, &condition, &mut VariableType::Known(ResolvedType::Primitive(Primitive::Bool)))?;
+            verify_block(scope, &then_block)?;
+            if let Some(else_block) = else_block {
+                verify_block(scope, else_block)?;
+            }
+            VariableType::Known(ResolvedType::Primitive(Primitive::Void))
         }
     };
     let new_expected_type: Option<VariableType> = match expected_type {

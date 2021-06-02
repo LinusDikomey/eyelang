@@ -235,6 +235,7 @@ impl Parser {
                 let cond = self.parse_expression()?;
                 let then_block = self.parse_block()?;
                 let else_block = if self.current()?.ty == TokenType::Keyword(Keyword::Else) {
+                    self.step()?;
                     Some(self.parse_block()?,)
                 } else {
                     None
