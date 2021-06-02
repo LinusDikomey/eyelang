@@ -1,16 +1,16 @@
 
-struct Nudel {
-    length i32,
-    radius f32
-}
-
-
-main99 :: i32 {
-    a := 3;
-    ret a;
+struct Vector3 {
+    x f32,
+    y f32,
+    z f32
 }
 
 yeet :: {
-    a := 3;
-    b := a;
+
+}
+
+main :: u8 {
+    a := 4;
+    a = 256;
+    ret a;
 }

@@ -1,4 +1,6 @@
-use crate::{error::EyeError, types::{FloatType, IntType, Primitive}};
+use std::u128;
+
+use crate::{ast::VariableType, error::EyeError, types::{FloatType, IntType, Primitive}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -61,18 +63,33 @@ pub enum TokenType {
     Ident,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IntLiteral {
-    pub val: String,
+    pub unsigned_val: u128,
+    pub sign: bool,
     pub ty: Option<IntType>
 }
 impl IntLiteral {
     pub fn from_tok(token: &Token) -> Result<Self, EyeError> {
-        Ok(Self { val: token.get_val(), ty: None })
+        let val = &token.val;
+        let (unsigned_val, sign) = if val.starts_with("-") {
+            (val[1..].parse::<u128>().unwrap(), true)
+        } else {
+            (val.parse::<u128>().unwrap(), false)
+        };
+        Ok(Self { unsigned_val, sign, ty: None })
+    }
+
+    pub fn fits_into_type(&self, ty: &IntType) -> bool {
+        self.unsigned_val <= if self.sign {ty.min_val()} else {ty.max_val()}
+    }
+
+    pub fn as_variable_type(&self) -> VariableType {
+        VariableType::Integer(self.unsigned_val, self.sign)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FloatLiteral {
     pub val: String,
     pub ty: Option<FloatType>
@@ -80,6 +97,13 @@ pub struct FloatLiteral {
 impl FloatLiteral {
     pub fn from_tok(token: &Token) -> Result<Self, EyeError> {
         Ok(Self { val: token.get_val(), ty: None })
+    }
+
+    pub fn fits_into_type(&self, ty: &FloatType) -> bool {
+        match ty {
+            FloatType::F32 => self.val.parse::<f32>().is_ok(),
+            FloatType::F64 => self.val.parse::<f64>().is_ok(),
+        }
     }
 }
 

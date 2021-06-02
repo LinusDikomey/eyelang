@@ -1,4 +1,5 @@
-/*use inkwell::OptimizationLevel;
+/*
+use inkwell::OptimizationLevel;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
@@ -7,15 +8,19 @@ use inkwell::targets::{InitializationConfig, Target};
 use std::error::Error;
 */
 
+
 mod lexer;
 mod error;
 mod types;
 mod parser;
 mod ast;
+mod codegen;
+mod verifier;
 
 use std::path::Path;
 
 use error::EyeError;
+use inkwell::context::Context;
 
 use crate::parser::Parser;
 
@@ -29,9 +34,20 @@ fn main() -> Result<(), EyeError> {
     let mut parser = Parser::new(tokens.tokens);
 
     let module = parser.parse()?;
-
     println!("Module: {:?}", module);
+    
+    println!("Verifying module...");
 
+    verifier::verify(&module)?;
+
+    println!("... verified!");
+
+    /*
+    let ctx = Context::create();
+    let main = codegen::generate_module(&module, &ctx)?;
+    let result = unsafe { main.call() };
+    println!("Result of main: {}", result);
+    */
     Ok(())
 }
 
