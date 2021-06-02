@@ -5,7 +5,7 @@ struct Nudel {
 }
 
 
-main99 :: i32 {
+main :: i32 {
     a := 3;
     ret a;
 }

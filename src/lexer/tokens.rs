@@ -89,7 +89,9 @@ pub enum Keyword {
     Ret,
     True,
     False,
-    Struct
+    Struct,
+    If,
+    Else,
 }
 
 impl Keyword {
@@ -117,6 +119,8 @@ impl Keyword {
             "true" => Some(Keyword::True),
             "false" => Some(Keyword::False),
             "struct" => Some(Keyword::Struct),
+            "if" => Some(Keyword::Struct),
+            "else" => Some(Keyword::Struct),
             _ => None
         }
     }

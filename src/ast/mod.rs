@@ -40,7 +40,8 @@ pub enum Expression {
     FloatLiteral(FloatLiteral),
     StringLiteral(String),
     BoolLiteral(bool),
-    Variable(String)
+    Variable(String),
+    If(Box<Expression>, Block, Option<Block>)
 }
 
 #[derive(Debug)]

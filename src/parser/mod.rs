@@ -218,7 +218,17 @@ impl Parser {
             TokenType::StringLiteral           => Expression::StringLiteral(first.get_val()),
             TokenType::Keyword(Keyword::True)  => Expression::BoolLiteral(true),
             TokenType::Keyword(Keyword::False) => Expression::BoolLiteral(false),
-            TokenType::Ident                   => Expression::Variable(first.get_val())
+            TokenType::Ident                   => Expression::Variable(first.get_val()),
+            TokenType::Keyword(Keyword::If) => {
+                let cond = self.parse_expression()?;
+                let then_block = self.parse_block()?;
+                let else_block = if self.current()?.ty == TokenType::Keyword(Keyword::Else) {
+                    Some(self.parse_block()?,)
+                } else {
+                    None
+                };
+                Expression::If(Box::new(cond), then_block, else_block)
+            }
         ))
     }
 
