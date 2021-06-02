@@ -130,11 +130,38 @@ fn verify_expr(scope: &mut Scope, expr: &Expression, expected_type: &mut Variabl
                 eprintln!("Tried to use a variable that could be unassigned"); //TODO: turn this into a hard error when assigned check is complete
                 //return Err(EyeError::CompileErrorNoPos(CompileError::UseOfUnassignedVariable));
             }
-            let var_type_clone = var_type.clone();
-            if expected_type.is_more_precise_than(&var_type_clone) {
-                scope.specify_variable_type(name, expected_type.clone());
+            let mut new_var_type = None;
+            match var_type {
+                VariableType::Any => {
+                    if *expected_type != VariableType::Any {
+                        new_var_type = Some(expected_type.clone());
+                    }
+                },
+                VariableType::Float(lit) => {
+                    if let VariableType::Known(ResolvedType::Primitive(Primitive::Float(float_type))) = expected_type {
+                        if lit.fits_into_type(float_type) {
+                            new_var_type = Some(expected_type.clone());
+                        } else {
+                            return Err(EyeError::CompileErrorNoPos(CompileError::FloatLiteralOutOfRange));
+                        }
+                    }
+                },
+                VariableType::Integer(val, sign) => {
+                    if let VariableType::Known(ResolvedType::Primitive(Primitive::Integer(int_type))) = expected_type {
+                        if *val <= if *sign { int_type.min_val() } else { int_type.max_val() } {
+                            new_var_type = Some(expected_type.clone());
+                        } else {
+                            return Err(EyeError::CompileErrorNoPos(CompileError::IntLiteralOutOfRange));
+                        }
+                    }
+                },
+                VariableType::Known(_) => ()
             }
-            var_type_clone
+            if let Some(new_var_type) = new_var_type {
+                new_var_type
+            } else {
+                var_type.clone()
+            }
         }
     };
     let new_expected_type: Option<VariableType> = match expected_type {

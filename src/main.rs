@@ -20,7 +20,6 @@ mod verifier;
 use std::path::Path;
 
 use error::EyeError;
-use inkwell::context::Context;
 
 use crate::parser::Parser;
 
