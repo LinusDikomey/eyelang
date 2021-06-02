@@ -1,4 +1,4 @@
-use std::{primitive, thread::current};
+use std::collections::HashMap;
 
 use crate::{ast::*, error::{CompileError, EyeError}, lexer::tokens::{FloatLiteral, IntLiteral, Keyword, Operator, Token, TokenType}, types::Primitive};
 
@@ -47,7 +47,7 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Module, EyeError> {
-        self.parse_module()
+        self.parse_module(String::from("main"))
     }
 
     fn current(&self) -> Result<&Token, EyeError> {
@@ -92,20 +92,26 @@ impl Parser {
         }
     }
 
-    fn parse_module(&mut self) -> Result<Module, EyeError> {
-        let mut functions = Vec::new();
-        let mut structs = Vec::new();
+    fn parse_module(&mut self, name: String) -> Result<Module, EyeError> {
+        let mut functions = HashMap::new();
+        let mut structs = HashMap::new();
 
         while self.index < self.len {
             match_or_unexpected!(self.current()?, 
-                TokenType::Keyword(Keyword::Struct) => structs.push(self.parse_struct()?),
-                TokenType::Ident => functions.push(self.parse_function()?)
+                TokenType::Keyword(Keyword::Struct) => {
+                    let (name, struc) = self.parse_struct()?; 
+                    structs.insert(name, struc);
+                },
+                TokenType::Ident => {
+                    let (name, func) = self.parse_function()?;
+                    functions.insert(name, func);
+                }
             );
         }
-        Ok(Module { functions, structs})
+        Ok(Module { name, functions, structs})
     }
 
-    fn parse_struct(&mut self) -> Result<Struct, EyeError> {
+    fn parse_struct(&mut self) -> Result<(String, Struct), EyeError> {
         tok_expect!(self.step()?, TokenType::Keyword(Keyword::Struct));
         let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
         tok_expect!(self.step()?, TokenType::LBrace);
@@ -120,10 +126,10 @@ impl Parser {
         }
         tok_expect!(self.step()?, TokenType::RBrace);
         println!("Successfully conSTRUCTed {}", name);
-        Ok(Struct{name, members})
+        Ok((name, Struct { members }))
     }
 
-    fn parse_function(&mut self) -> Result<Function, EyeError> {
+    fn parse_function(&mut self) -> Result<(String, Function), EyeError> {
         let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
         println!("Parsing function with name {}", name);
 
@@ -151,7 +157,7 @@ impl Parser {
 
         let body = self.parse_block()?;
 
-        Ok(Function { name, args, return_type, body })
+        Ok((name, Function { args, return_type, body }))
     }
 
     fn parse_block(&mut self) -> Result<Block, EyeError> {
@@ -174,28 +180,27 @@ impl Parser {
             TokenType::LBrace => Some(BlockItem::Block(self.parse_block()?)),
             TokenType::Ident => {
                 let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
-                let (ty, val): (Option<UnresolvedType>, Option<Expression>) = match_or_unexpected!(self.step()?,
+                match_or_unexpected!(self.step()?,
                     TokenType::Colon => {
                         let ty = self.parse_type()?;
-                        (
-                            Some(ty),
-                            match_or_unexpected!{self.step()?, 
-                                TokenType::Operator(Operator::Assign) => {
-                                    let expr = self.parse_expression()?;
-                                    Some(expr)
-                                },
-                                TokenType::Semicolon => None
-                            }
-                        )
+                        let val = match_or_unexpected!{self.step()?, 
+                            TokenType::Operator(Operator::Assign) => Some(self.parse_expression()?),
+                            TokenType::Semicolon => None
+                        };
+                        tok_expect!(self.step()?, TokenType::Semicolon);
+                        Some(BlockItem::Declare(name, Some(ty), val))
                     },
                     TokenType::Operator(Operator::Declare) => {
-                        let expr = self.parse_expression()?;
-                        (None, Some(expr))
+                        let val = self.parse_expression()?;
+                        tok_expect!(self.step()?, TokenType::Semicolon);
+                        Some(BlockItem::Declare(name, None, Some(val)))
+                    },
+                    TokenType::Operator(Operator::Assign) => {
+                        let val = self.parse_expression()?;
+                        tok_expect!(self.step()?, TokenType::Semicolon);
+                        Some(BlockItem::Assign(name, val))
                     }
-                );
-                tok_expect!(self.step()?, TokenType::Semicolon);
-
-                Some(BlockItem::Declare(name, ty, val))
+                ) 
             },
             _ => None
         };
@@ -212,7 +217,14 @@ impl Parser {
         println!("Parsing expression...");
         let first = self.step()?;
         Ok(match_or_unexpected!(first,
-            TokenType::Keyword(Keyword::Ret)   => Expression::Return(Box::new(self.parse_expression()?)),
+            TokenType::Keyword(Keyword::Ret) => {
+                let return_val = if self.current()?.ty == TokenType::Semicolon {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                Expression::Return(return_val)
+            },
             TokenType::IntLiteral              => Expression::IntLiteral(IntLiteral::from_tok(first)?),
             TokenType::FloatLiteral            => Expression::FloatLiteral(FloatLiteral::from_tok(first)?),
             TokenType::StringLiteral           => Expression::StringLiteral(first.get_val()),
