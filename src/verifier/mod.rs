@@ -1,4 +1,4 @@
-use std::u128;
+/*use std::u128;
 
 use crate::{ast::{Block, BlockItem, Expression, Function, Module, ResolvedType, Scope, VariableType}, error::{CompileError, EyeError}, types::Primitive};
 
@@ -47,7 +47,7 @@ fn verify_block_item(scope: &mut Scope, item: &BlockItem) -> Result<(), EyeError
         BlockItem::Declare(name, ty, assign_val) => {
             let variable_type = match ty {
                 Some(ty) => {
-                    let resolved_type = scope.resolve_type(ty)?;
+                    let resolved_type = ty.resolve(scope)?;
                     if let Some(assign_expr) = assign_val {
                         let mut var_ty = VariableType::Known(resolved_type);
                         verify_expr(scope, assign_expr, &mut var_ty)?;
@@ -251,10 +251,10 @@ fn verify_expr(scope: &mut Scope, expr: &Expression, expected_type: &mut Variabl
 }
 
 fn resolve_function_type(scope: &Scope, func: &Function) -> Result<FunctionType, EyeError> {
-    let return_type = scope.resolve_type(&func.return_type)?;
+    let return_type = func.return_type.resolve(scope)?;
     let mut args = Vec::with_capacity(func.args.len());
     for (name, ty) in &func.args {
-        args.push((name.clone(), scope.resolve_type(ty)?));
+        args.push((name.clone(), ty.resolve(scope)?));
     }
     Ok(FunctionType{return_type, args})
 }
@@ -264,3 +264,5 @@ fn resolve_function_type(scope: &Scope, func: &Function) -> Result<FunctionType,
     
     Ok((resolve_function_type(scope, &func)?, func))
 }*/
+
+*/

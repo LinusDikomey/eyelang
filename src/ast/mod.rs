@@ -1,13 +1,25 @@
-use std::{collections::HashMap, u128};
+use std::{collections::HashMap};
 
-use crate::{error::{CompileError, EyeError}, lexer::tokens::{FloatLiteral, IntLiteral, SourcePos}, types::Primitive};
+use crate::{lexer::tokens::{FloatLiteral, IntLiteral}, types::Primitive};
 
+#[derive(Debug, Clone)]
+pub enum UnresolvedTypeDefinition {
+    Struct(StructDefinition)
+}
+
+pub struct Scope<'p> {
+    parent: Option<&'p Scope<'p>>,
+    functions: HashMap<String, Function>,
+    types: HashMap<String, UnresolvedTypeDefinition>,
+    variables: HashMap<String, UnresolvedType>,
+    expected_return: UnresolvedType
+
+}
 
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub name: String,
     pub functions: HashMap<String, Function>,
-    pub structs: HashMap<String, Struct>
+    pub types: HashMap<String, UnresolvedTypeDefinition>
 }
 
 impl Module {
@@ -15,84 +27,41 @@ impl Module {
         Scope {
             parent: None,
             functions: self.functions,
-            types: self.structs,
+            types: self.types,
+            variables: HashMap::new(),
+            expected_return: UnresolvedType::Primitive(Primitive::Void),
+        }
+    }
+}
+
+/*#[derive(PartialEq, Debug, Clone)]
+pub enum ResolvedType {
+    Primitive(Primitive),
+    Struct(Vec<(String, ResolvedType)>)
+}*/
+
+/*pub struct GenericScope<'p, FuncT, StrT : Clone, VarT, RetT : Clone> {
+    parent: Option<&'p GenericScope<'p, FuncT, StrT, VarT, RetT>>,
+    functions: HashMap<String, FuncT>,
+    types: HashMap<String, StrT>,
+    variables: HashMap<String, (VarT, bool)>,
+    expected_return: Option<RetT>,
+    specified_parent_var_types: HashMap<String, VarT>,
+    assigned_parent_vars: Vec<String>
+}*/
+/*impl<'p, FuncT, StrT : Clone, VarT, RetT : Clone> GenericScope<'p, FuncT, StrT, VarT, RetT> {
+
+    pub fn new() -> Self {
+        Self {
+            parent: None,
+            functions: HashMap::new(),
+            types: HashMap::new(),
             variables: HashMap::new(),
             expected_return: None,
             specified_parent_var_types: HashMap::new(),
             assigned_parent_vars: Vec::new()
         }
     }
-}
-
-#[derive(PartialEq, Debug, Clone)]
-pub enum ResolvedType {
-    Primitive(Primitive),
-    Struct(Vec<(String, ResolvedType)>)
-}
-
-pub struct Scope<'p> {
-    parent: Option<&'p Scope<'p>>,
-    functions: HashMap<String, Function>,
-    types: HashMap<String, Struct>,
-    variables: HashMap<String, (VariableType, bool)>,
-    expected_return: Option<ResolvedType>,
-    specified_parent_var_types: HashMap<String, VariableType>,
-    assigned_parent_vars: Vec<String>
-}
-
-/// used for variables because types might not yet be known
-/// example:
-/// x := 3      // UnknownType::Integer
-/// y :i32 = x  // now the type is known
-#[derive(Debug, Clone, PartialEq)]
-pub enum VariableType {
-    Known(ResolvedType),
-    Any,
-    Integer(u128, bool),
-    Float(FloatLiteral),
-}
-
-impl VariableType {
-
-    pub fn is_more_precise_than(&self, other: &Self) -> bool {
-        use VariableType::*;
-        match self {
-            Known(_) => if let Known(_) = other {false} else {true},  // known is the most precise
-            Any => false, // everything is more than or as precise as any
-            Integer(val, signed) => {
-                match other {
-                    Any | Float(_) => true,
-                    Known(_) => false,
-                    Integer(other_val, other_signed) => {
-                        if *signed {
-                            if *other_signed {
-                                other_val < val
-                            } else {
-                                true
-                            }
-                        } else {
-                            if *other_signed {
-                                false
-                            } else {
-                                other_val < val
-                            }
-                        }
-                    },
-                }
-            },
-            Float(_lit) => {
-                match other {
-                    Any | Integer(_, _) => true,
-                    Known(_) => false,
-                    Float(_other_lit) => false,    //TODO
-                }
-            }
-        }
-    }
-
-}
-
-impl<'p> Scope<'p> {
 
     pub fn create_inner(&'p self) -> Self {
         Self {
@@ -106,7 +75,7 @@ impl<'p> Scope<'p> {
         }
     }
 
-    pub fn create_function(&'p self, return_type: ResolvedType) -> Self {
+    pub fn create_function(&'p self, return_type: RetT) -> Self {
         Self {
             parent: Some(self),
             functions: HashMap::new(),
@@ -119,7 +88,7 @@ impl<'p> Scope<'p> {
     }
 
 
-    pub fn resolve_function(&self, name: &str) -> Result<&Function, EyeError> {
+    pub fn resolve_function(&self, name: &str) -> Result<&FuncT, EyeError> {
         if let Some(func) = self.functions.get(name) {
             Ok(func)
         } else {
@@ -130,29 +99,20 @@ impl<'p> Scope<'p> {
             }
         }
     }
-
-    pub fn resolve_type(&self, unresolved: &UnresolvedType) -> Result<ResolvedType, EyeError> {
-        match unresolved {
-            UnresolvedType::Primitive(primitive) => Ok(ResolvedType::Primitive(primitive.clone())),
-            UnresolvedType::Unresolved(name) => {
-                if let Some(ty) = self.types.get(name) {
-                    let mut members = Vec::new();
-                    for (name, member) in &ty.members {
-                        members.push((name.clone(), self.resolve_type(member)?));
-                    }
-                    Ok(ResolvedType::Struct(members))
-                } else {
-                    if let Some(parent) = &self.parent {
-                        parent.resolve_type(&unresolved)
-                    } else {
-                        Err(EyeError::CompileError(CompileError::UnknownType(name.clone()), SourcePos::new(0, 0), SourcePos::new(0, 0)))
-                    }
-                }
+    
+    pub fn resolve_type(&self, name: &str) -> Result<StrT, EyeError> {
+        if let Some(ty) = self.types.get(name) {
+            Ok(ty.clone())
+        } else {
+            if let Some(parent) = &self.parent {
+                parent.resolve_type(name)
+            } else {
+                Err(EyeError::CompileError(CompileError::UnknownType(name.to_owned()), SourcePos::new(0, 0), SourcePos::new(0, 0)))
             }
         }
     }
 
-    pub fn resolve_variable(&self, name: &str) -> Result<&(VariableType, bool), EyeError> {
+    pub fn resolve_variable(&self, name: &str) -> Result<&(VarT, bool), EyeError> {
         if let Some(var) = self.variables.get(name) {
             Ok(var)
         } else {
@@ -164,7 +124,7 @@ impl<'p> Scope<'p> {
         }
     }
 
-    pub fn specify_variable_type(&mut self, name: &str, ty: VariableType) {
+    pub fn specify_variable_type(&mut self, name: &str, ty: VarT) {
         if let Some((var_type, _assigned)) = self.variables.get_mut(name) {
             *var_type = ty;
         } else {
@@ -180,7 +140,7 @@ impl<'p> Scope<'p> {
         }
     }
 
-    pub fn expected_return_type(&self) -> Option<ResolvedType> {
+    pub fn expected_return_type(&self) -> Option<RetT> {
         if let Some(ty) = &self.expected_return {
             Some(ty.clone())
         } else {
@@ -192,13 +152,16 @@ impl<'p> Scope<'p> {
         }
     }
 
-    pub fn register_variable(&mut self, name: String, ty: VariableType, assigned: bool) {
+    pub fn register_variable(&mut self, name: String, ty: VarT, assigned: bool) {
         self.variables.insert(name, (ty, assigned));
     }
 }
+*/
+
+//pub type Scope<'p> = GenericScope<'p, Function, Struct, VariableType, ResolvedType>;
 
 #[derive(Debug, Clone)]
-pub struct Struct {
+pub struct StructDefinition {
     pub members: Vec<(String, UnresolvedType)>,
 }
 

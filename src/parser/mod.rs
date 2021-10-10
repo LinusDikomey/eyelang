@@ -47,7 +47,7 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Module, EyeError> {
-        self.parse_module(String::from("main"))
+        self.parse_module()
     }
 
     fn current(&self) -> Result<&Token, EyeError> {
@@ -92,15 +92,15 @@ impl Parser {
         }
     }
 
-    fn parse_module(&mut self, name: String) -> Result<Module, EyeError> {
+    fn parse_module(&mut self) -> Result<Module, EyeError> {
         let mut functions = HashMap::new();
-        let mut structs = HashMap::new();
+        let mut types = HashMap::new();
 
         while self.index < self.len {
             match_or_unexpected!(self.current()?, 
                 TokenType::Keyword(Keyword::Struct) => {
                     let (name, struc) = self.parse_struct()?; 
-                    structs.insert(name, struc);
+                    types.insert(name, UnresolvedTypeDefinition::Struct(struc));
                 },
                 TokenType::Ident => {
                     let (name, func) = self.parse_function()?;
@@ -108,10 +108,10 @@ impl Parser {
                 }
             );
         }
-        Ok(Module { name, functions, structs})
+        Ok(Module { functions, types })
     }
 
-    fn parse_struct(&mut self) -> Result<(String, Struct), EyeError> {
+    fn parse_struct(&mut self) -> Result<(String, StructDefinition), EyeError> {
         tok_expect!(self.step()?, TokenType::Keyword(Keyword::Struct));
         let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
         tok_expect!(self.step()?, TokenType::LBrace);
@@ -126,7 +126,7 @@ impl Parser {
         }
         tok_expect!(self.step()?, TokenType::RBrace);
         println!("Successfully conSTRUCTed {}", name);
-        Ok((name, Struct { members }))
+        Ok((name, StructDefinition { members }))
     }
 
     fn parse_function(&mut self) -> Result<(String, Function), EyeError> {

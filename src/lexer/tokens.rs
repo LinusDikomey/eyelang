@@ -1,6 +1,6 @@
 use std::u128;
 
-use crate::{ast::VariableType, error::EyeError, types::{FloatType, IntType, Primitive}};
+use crate::{error::EyeError, types::{FloatType, IntType, Primitive}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -83,26 +83,22 @@ impl IntLiteral {
     pub fn fits_into_type(&self, ty: &IntType) -> bool {
         self.unsigned_val <= if self.sign {ty.min_val()} else {ty.max_val()}
     }
-
-    pub fn as_variable_type(&self) -> VariableType {
-        VariableType::Integer(self.unsigned_val, self.sign)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloatLiteral {
-    pub val: String,
+    pub val: f64,
     pub ty: Option<FloatType>
 }
 impl FloatLiteral {
     pub fn from_tok(token: &Token) -> Result<Self, EyeError> {
-        Ok(Self { val: token.get_val(), ty: None })
+        Ok(Self { val: token.get_val().parse::<f64>().unwrap(), ty: None })
     }
 
     pub fn fits_into_type(&self, ty: &FloatType) -> bool {
         match ty {
-            FloatType::F32 => self.val.parse::<f32>().is_ok(),
-            FloatType::F64 => self.val.parse::<f64>().is_ok(),
+            FloatType::F32 => true, //TODO: boundary checks
+            FloatType::F64 => true,
         }
     }
 }

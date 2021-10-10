@@ -2,6 +2,7 @@ use crate::lexer::tokens::{SourcePos, TokenType};
 
 
 
+pub type EyeResult<T> = Result<T, EyeError>;
 
 #[derive(Debug)]
 pub enum EyeError {
@@ -22,5 +23,7 @@ pub enum CompileError {
     IntLiteralOutOfRange,
     FloatLiteralOutOfRange,
     UseOfUnassignedVariable,
-    MissingReturnValue
+    MissingReturnValue,
+    DuplicateTypeDefinition,
+    DuplicateFunctionDefinition
 }
