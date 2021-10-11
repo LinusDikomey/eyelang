@@ -125,7 +125,7 @@ impl Parser {
             members.push((member_name, member_type))
         }
         tok_expect!(self.step()?, TokenType::RBrace);
-        println!("Successfully conSTRUCTed {}", name);
+        println!("Successfully constructed {}", name);
         Ok((name, StructDefinition { members }))
     }
 

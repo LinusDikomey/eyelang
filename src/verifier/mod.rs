@@ -81,7 +81,7 @@ fn verify_block_item(scope: &mut Scope, item: &BlockItem) -> Result<(), EyeError
     Ok(())
 }
 
-/// returns: wether the expected type was modified
+/// returns: whether the expected type was modified
 fn verify_expr(scope: &mut Scope, expr: &Expression, expected_type: &mut VariableType) -> Result<bool, EyeError> {
     print!("Verifying expression: expected type: {:?}, expr: {:?}", expected_type, expr);
     let ty = match expr {
@@ -93,7 +93,7 @@ fn verify_expr(scope: &mut Scope, expr: &Expression, expected_type: &mut Variabl
                     return Err(EyeError::CompileErrorNoPos(CompileError::MissingReturnValue))
                 }
             }
-            // a return never returns anyting from the expression itself because it exits the function
+            // a return never returns anything from the expression itself because it exits the function
             VariableType::Known(ResolvedType::Primitive(Primitive::Void))
         },
         Expression::IntLiteral(int_literal) => {

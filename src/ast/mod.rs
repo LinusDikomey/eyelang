@@ -1,6 +1,38 @@
-use std::{collections::HashMap};
+use std::{borrow::Borrow, collections::HashMap};
 
 use crate::{lexer::tokens::{FloatLiteral, IntLiteral}, types::Primitive};
+
+/// used to represent ast nodes as the original code 
+pub trait Repr {
+    fn repr(&self, c: &ReprCtx);
+}
+
+/*enum ReprWriter<'a, W: std::fmt::Write> {
+    Writer(&'a mut W),
+    Parent(&'a mut ReprCtx<'a, W>)
+}*/
+
+pub struct ReprCtx<'a> {
+    indent: &'a str,
+    count: u32
+}
+impl<'a> ReprCtx<'a> {
+    pub fn new(indent: &'a str) -> Self {
+        Self { indent, count: 0 }
+    }
+    pub fn child(&self) -> ReprCtx<'_> {
+        Self {
+            indent: self.indent,
+            count: self.count + 1
+        }
+    }
+    pub fn write<S: Borrow<str>>(&self, str: S) {
+        print!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
+    }
+    pub fn writeln<S: Borrow<str>>(&self, str: S) {
+        println!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum UnresolvedTypeDefinition {
@@ -30,6 +62,28 @@ impl Module {
             types: self.types,
             variables: HashMap::new(),
             expected_return: UnresolvedType::Primitive(Primitive::Void),
+        }
+    }
+}
+impl Repr for Module {
+    fn repr(&self, c: &ReprCtx) {
+        for (name, ty) in &self.types {
+            match ty {
+                UnresolvedTypeDefinition::Struct(s) => {
+                    c.writeln(format!("struct {} {{", name));
+                    let struct_c = c.child();
+                    for (name, ty) in &s.members {
+                        struct_c.writeln(format!("{} {},", name, ty.display()))
+                    }
+                    c.writeln("}");
+                }
+            }
+        }
+        for (name, func) in &self.functions {
+            c.writeln(format!("{} :: {} {{", name, func.return_type.display()));
+            let body_c = c.child();
+            body_c.writeln("TODO: function body");
+            c.writeln("}");
         }
     }
 }
@@ -200,4 +254,13 @@ pub enum Expression {
 pub enum UnresolvedType {
     Primitive(Primitive),
     Unresolved(String)
+}
+
+impl UnresolvedType {
+    pub fn display(&self) -> &str {
+        match self {
+            UnresolvedType::Primitive(p) => p.display(),
+            UnresolvedType::Unresolved(name) => &name
+        }
+    }
 }

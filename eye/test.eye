@@ -1,7 +1,18 @@
 
-struct Test {
-    x i32,
-    y i32,
+struct Transform {
+    pos Vec3,
+    rot Vec3,
+    scale Vec3
+}
+
+struct Vec3 {
+    x f32,
+    y f32,
+    z f32,
+}
+
+newvec :: Vec3 {
+
 }
 
 main :: u8 {

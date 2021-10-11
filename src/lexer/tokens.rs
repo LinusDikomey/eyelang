@@ -34,7 +34,7 @@ impl Token {
     }
 
     pub fn get_val(&self) -> String {
-        assert!(self.val != "");
+        assert_ne!(self.val, "");
         self.val.clone()
     }
 }

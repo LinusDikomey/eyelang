@@ -31,7 +31,8 @@ impl Function {
 
 #[derive(Debug)]
 pub struct FunctionHeader {
-    pub args: Vec<(String, TypeRef)>
+    pub args: Vec<(String, TypeRef)>,
+    pub return_type: TypeRef
 }
 
 #[derive(Debug)]
@@ -41,11 +42,28 @@ pub enum Type {
 
 #[derive(Debug)]
 pub struct Struct {
-    
+    pub members: Vec<(String, TypeRef)>
+}
+impl Struct {
+    pub fn size(&self, module: &Module) -> u32 {
+        self.members.iter().map(|(_, m)| m.size(module)).sum()
+    }
 }
 
 #[derive(Debug)]
 pub enum TypeRef {
     Primitive(Primitive),
     Resolved(SymbolKey)
+}
+impl TypeRef {
+    pub fn size(&self, module: &Module) -> u32 {
+        match self {
+            TypeRef::Primitive(p) => p.size(),
+            TypeRef::Resolved(key) => {
+                match &module.types[key] {
+                    Type::Struct(s) => s.size(module)
+                }
+            }
+        }
+    }
 }

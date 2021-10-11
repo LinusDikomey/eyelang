@@ -1,5 +1,5 @@
 # eyelang
-A basic programming language. The compiler is written in rust using LLVM as it's backend.
+A basic programming language. The compiler is written in rust using LLVM as its backend.
 
 ## TO DO (for first real program to compile):
 - [ ] Basic features:
