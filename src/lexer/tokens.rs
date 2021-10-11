@@ -106,7 +106,7 @@ impl FloatLiteral {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Keyword {
     Primitive(Primitive),
-    Ret,
+    Yeet,
     True,
     False,
     Struct,
@@ -136,7 +136,7 @@ impl Keyword {
             
             "bool" => Some(Keyword::Primitive(Primitive::Bool)),
 
-            "ret" => Some(Keyword::Ret),
+            "yeet" => Some(Keyword::Yeet),
             "true" => Some(Keyword::True),
             "false" => Some(Keyword::False),
             "struct" => Some(Keyword::Struct),

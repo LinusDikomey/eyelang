@@ -217,7 +217,7 @@ impl Parser {
         println!("Parsing expression...");
         let first = self.step()?;
         Ok(match_or_unexpected!(first,
-            TokenType::Keyword(Keyword::Ret) => {
+            TokenType::Keyword(Keyword::Yeet) => {
                 let return_val = if self.current()?.ty == TokenType::Semicolon {
                     None
                 } else {

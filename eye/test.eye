@@ -18,10 +18,12 @@ newvec :: Vec3 {
 main :: u8 {
     a :u8 = 4;
     b := add;
-    ret a;
+    yeet a;
 }
 
 
 add :: u8 {
-    ret 3;
+
+
+    yeet 3;
 }
