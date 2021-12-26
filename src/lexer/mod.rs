@@ -84,6 +84,8 @@ impl Lexer {
                     }
                 },
                 ',' => TokenType::Comma,
+                '.' => TokenType::Dot,
+                
                 '(' => TokenType::LParen,
                 ')' => TokenType::RParen,
                 '{' => TokenType::LBrace,

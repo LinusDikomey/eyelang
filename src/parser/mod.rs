@@ -237,12 +237,26 @@ impl Parser {
                         let val = self.parse_expression()?;
                         tok_expect!(self.step()?, TokenType::Semicolon);
                         Some(Item::Block(BlockItem::Declare(name, None, Some(val))))
-                    },
+                    }
+                    Ok(TokenType::Dot) => {
+                        let mut l_value = LValue::Variable(name);
+                        loop {
+                            let member = tok_expect!(self.step()?, TokenType::Ident).val.clone();
+                            l_value = LValue::Member(Box::new(l_value), member);
+                            match_or_unexpected!{self.step()?,
+                                TokenType::Dot => {},
+                                TokenType::Assign => break
+                            }
+                        }
+                        let val = self.parse_expression()?;
+                        tok_expect!(self.step()?, TokenType::Semicolon);
+                        Some(Item::Block(BlockItem::Assign(l_value, val)))
+                    }
                     Ok(TokenType::Assign) => {
                         let val = self.parse_expression()?;
                         tok_expect!(self.step()?, TokenType::Semicolon);
-                        Some(Item::Block(BlockItem::Assign(name, val)))
-                    },
+                        Some(Item::Block(BlockItem::Assign(LValue::Variable(name), val)))
+                    }
                     _ => None
                 }
             },
@@ -317,14 +331,14 @@ impl Parser {
             }
         );
         loop {
-            match self.peek() {
-                Some(tok) if tok.ty == TokenType::LParen => {
+            match self.peek().map(|t| t.ty) {
+                Some(TokenType::LParen) => {
                     // function call
                     tok_expect!(self.step()?, TokenType::LParen);
                     let mut args = Vec::new();
                     loop {
-                        match self.peek() {
-                            Some(tok) if tok.ty == TokenType::RParen => { tok_expect!(self.step()?, TokenType::RParen); break },
+                        match self.peek().map(|t| t.ty) {
+                            Some(TokenType::RParen) => { self.step().unwrap(); break },
                             _ => ()
                         }
                         args.push(self.parse_expression()?);
@@ -334,7 +348,12 @@ impl Parser {
                         )
                     }
                     expr = Expression::FunctionCall(Box::new(expr), args);
-                },
+                }
+                Some(TokenType::Dot) => {
+                    self.step().unwrap();
+                    let field = tok_expect!(self.step()?, TokenType::Ident).val.clone();
+                    expr = Expression::MemberAccess(Box::new(expr), field);
+                }
                 _ => break
             }
         }

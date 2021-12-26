@@ -7,6 +7,14 @@ sayHello(newline: bool) -> { print("Hello", newline); }
 bye -> { print("Bye"); }
 
 main -> {
+    v := Vec3(1.0, 2.5, 3.0);
+    print("Vec before assignment", false);
+    print(v);
+    v.y = 3.1;
+    print("Vec after assignment", false);
+    print(v);
+    print("x: ", false);
+    print(v.x);
     name := read("What's your name? ");
     sayHello(false);
     print(", ", false);

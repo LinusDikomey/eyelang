@@ -45,6 +45,7 @@ pub enum TokenType {
     Colon,
     DoubleColon,
     Comma,
+    Dot,
 
     LParen,
     RParen,

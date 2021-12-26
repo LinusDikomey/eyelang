@@ -248,7 +248,7 @@ pub struct Block {
 pub enum BlockItem {
     Block(Block),
     Declare(String, Option<UnresolvedType>, Option<Expression>),
-    Assign(String, Expression),
+    Assign(LValue, Expression),
     Expression(Expression)
 }
 
@@ -262,7 +262,14 @@ pub enum Expression {
     Variable(String),
     If(Box<Expression>, Block, Option<Block>),
     FunctionCall(Box<Expression>, Vec<Expression>),
-    BinOp(Operator, Box<(Expression, Expression)>)
+    BinOp(Operator, Box<(Expression, Expression)>),
+    MemberAccess(Box<Expression>, String)
+}
+
+#[derive(Debug, Clone)]
+pub enum LValue {
+    Variable(String),
+    Member(Box<LValue>, String)
 }
 
 #[derive(Debug, Clone)]

@@ -1,7 +1,7 @@
 use core::panic;
 use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}};
 
-use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
+use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, Expression, LValue}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -68,9 +68,9 @@ impl fmt::Display for Value {
             Bool(b) => write!(f, "{}", b),
         
             Struct(fields) => {
-                write!(f, "{{\n")?;
-                for (name, val) in fields {
-                    write!(f, "\t{}: {}", name, val)?;
+                write!(f, "{{")?;
+                for (i, (name, val)) in fields.iter().enumerate() {
+                    write!(f, "{}{}: {}", if i == 0 {""} else {", "}, name, val)?;
                 }
                 write!(f, "}}")
             }
@@ -229,8 +229,8 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
                 };
                 scope.values.insert(name.clone(), val);
             },
-            BlockItem::Assign(var, expr) => {
-                *scope.resolve_mut(var) = get_or_ret!(eval_expr(&mut scope, expr, None)); //TODO set expected type from value
+            BlockItem::Assign(l_val, expr) => {
+                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, None)); //TODO set expected type from value
             },
             BlockItem::Expression(expr) => {
                 get_or_ret!(eval_expr(&mut scope, expr, None));
@@ -295,10 +295,29 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
             let mut arg_vals = Vec::with_capacity(args.len());
             match func {
                 Value::Function(func) => {
-                    for (arg, (_, ty)) in args.iter().zip(func.header().params.iter()) {
+                    if func.intrinsic.is_none() && args.len() != func.header().params.len() {
+                        panic!("Invalid arg count, expected: {}, found: {}", 
+                            func.header().params.len(),
+                            args.len(), 
+                        );
+                    }
+                    for (arg, (_, ty)) in args.iter().zip(&func.header().params) {
                         arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
                     }
                     eval_function(scope.outer(), &func, arg_vals) //TODO: proper scope
+                }
+                Value::Type(tir::Type::Struct(struc)) => {
+                    if args.len() != struc.members.len() {
+                        panic!("Invalid constructor argument count, expected: {}, found: {}",
+                            struc.members.len(),
+                            args.len(),
+                        );
+                    }
+                    let mut values = HashMap::new();
+                    for (arg, (name, ty)) in args.iter().zip(&struc.members) {
+                        values.insert(name.clone(), get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
+                    }
+                    Value::Struct(values)
                 }
                 _ => panic!("Tried to call non-function value as function")
             }
@@ -351,6 +370,14 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
             }
             op_match!(U8 U16 U32 U64 U128 I8 I16 I32 I64 I128 F32 F64)
         }
+        MemberAccess(expr, member_name) => {
+            match get_or_ret!(eval_expr(scope, expr, None)) {
+                Value::Struct(members) => {
+                    members[member_name].clone()
+                }
+                _ => panic!("Can't access non-struct member {}", member_name)
+            }
+        }
     };
 
     //println!("Adjusting expr val: {:?}, expected: {:?}", val, expected);
@@ -380,8 +407,19 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
         },
         other => other
     };
-    //println!("\t adjusted: {:?}", val);
     ValueOrReturn::Value(val)
+}
+
+fn eval_lvalue<'a>(scope: &'a mut Scope, l_val: &LValue) -> &'a mut Value {
+    match l_val {
+        LValue::Variable(var) => scope.resolve_mut(var),
+        LValue::Member(inner, member) => {
+            match eval_lvalue(scope, inner) {
+                Value::Struct(members) => members.get_mut(member).expect("Member not found"),
+                _ => panic!("Can't access non-struct type member")
+            }
+        }
+    }
 }
 
 fn as_unresolved(ty: &TypeRef) -> UnresolvedType {
