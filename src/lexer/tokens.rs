@@ -54,6 +54,10 @@ pub enum TokenType {
     RBracket,
 
     Operator(Operator),
+    Assign,
+    Declare,
+
+    Arrow,
 
     StringLiteral,
     IntLiteral,
@@ -135,8 +139,10 @@ impl Keyword {
             "f64" => Some(Keyword::Primitive(Primitive::Float(FloatType::F64))),
             
             "bool" => Some(Keyword::Primitive(Primitive::Bool)),
+            "string" => Some(Keyword::Primitive(Primitive::String)),
 
             "yeet" => Some(Keyword::Yeet),
+            "ret" => Some(Keyword::Yeet),
             "true" => Some(Keyword::True),
             "false" => Some(Keyword::False),
             "struct" => Some(Keyword::Struct),
@@ -150,7 +156,24 @@ impl Keyword {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operator {
-    Assign,     // =
     Equals,     // ==
-    Declare,    // :=
+    Add,
+    Sub,
+    Mul,
+    Div,
+    LT,
+    GT,
+    LE,
+    GE
+}
+impl Operator {
+    pub fn precedence(&self) -> u8 {
+        use Operator::*;
+        match self {
+            Equals => 20,
+            LT | LE | GT | GE => 30,
+            Add | Sub => 50,
+            Mul | Div => 60,
+        }
+    }
 }

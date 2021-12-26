@@ -1,3 +1,4 @@
+use std::fmt;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Primitive {
@@ -27,6 +28,19 @@ impl Primitive {
             Primitive::Bool => 1,
             Primitive::Void => 0            
         }
+    }
+}
+impl fmt::Display for Primitive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Primitive::*;
+        let s = match self {
+            Integer(int) => int.display(),
+            Float(float) => float.display(),
+            String => "string",
+            Bool => "bool",
+            Void => "()"
+        };
+        write!(f, "{}", s)
     }
 }
 

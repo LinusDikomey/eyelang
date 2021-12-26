@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{ast::*, error::{CompileError, EyeError}, lexer::tokens::{FloatLiteral, IntLiteral, Keyword, Operator, Token, TokenType}, types::Primitive};
-
-
+use crate::{log, ast::*, error::{CompileError, EyeError, EyeResult}, lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType}}, types::Primitive};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -63,23 +61,13 @@ impl Parser {
         }
     }
 
-    fn peek(&self) -> Result<&Token, EyeError> {
-        self.peek_count(1)
+    fn position(&self) -> usize {
+        self.index
     }
 
-    fn peek_count(&self, count: usize) -> Result<&Token, EyeError> {
-        let index = self.index + count;
-        if index < self.len {
-            Ok(&self.tokens[self.index + count])
-        } else {
-            let end = self.tokens.last().unwrap().end;
-            Err(EyeError::CompileError(
-                CompileError::UnexpectedEndOfFile,
-                end,
-                end
-            ))
-        }
-    }
+    fn set_position(&mut self, pos: usize) {
+        self.index = pos;
+    } 
 
     /// steps over the current token and returns it
     pub fn step(&mut self) -> Result<&Token, EyeError> {
@@ -92,48 +80,54 @@ impl Parser {
         }
     }
 
+    pub fn peek(&mut self) -> Option<&Token> {
+        if self.index < self.tokens.len() {
+            Some(&self.tokens[self.index])
+        } else {
+            None
+        }
+    }
+
     fn parse_module(&mut self) -> Result<Module, EyeError> {
         let mut functions = HashMap::new();
         let mut types = HashMap::new();
 
         while self.index < self.len {
-            match_or_unexpected!(self.current()?, 
+            match self.parse_item()? {
+                Item::Block(_) => return Err(EyeError::CompileErrorNoPos(CompileError::InvalidTopLevelBlockItem)),
+                Item::Definition(Definition::Function(name, func)) => {
+                    if functions.insert(name, func).is_some() {
+                        return Err(EyeError::CompileErrorNoPos(CompileError::DuplicateFunctionDefinition));
+                    }
+                }
+                Item::Definition(Definition::Struct(name, struc)) => {
+                    if types.insert(name, UnresolvedTypeDefinition::Struct(struc)).is_some() {
+                        return Err(EyeError::CompileErrorNoPos(CompileError::DuplicateTypeDefinition));
+                    }
+                },
+            }
+            /*match_or_unexpected!(self.current()?, 
                 TokenType::Keyword(Keyword::Struct) => {
                     let (name, struc) = self.parse_struct()?; 
                     types.insert(name, UnresolvedTypeDefinition::Struct(struc));
                 },
                 TokenType::Ident => {
                     let (name, func) = self.parse_function()?;
-                    functions.insert(name, func);
+                    if functions.insert(name, func).is_some() {
+                        return Err(EyeError::CompileErrorNoPos(CompileError::DuplicateFunctionDefinition));
+                    }
                 }
-            );
+            );*/
         }
         Ok(Module { functions, types })
     }
 
-    fn parse_struct(&mut self) -> Result<(String, StructDefinition), EyeError> {
-        tok_expect!(self.step()?, TokenType::Keyword(Keyword::Struct));
+    /*fn parse_function(&mut self) -> Result<(String, Function), EyeError> {
         let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
-        tok_expect!(self.step()?, TokenType::LBrace);
-        let mut members: Vec<(String, UnresolvedType)> = Vec::new();
-        while self.current()?.ty != TokenType::RBrace {
-            let member_name = tok_expect!(self.step()?, TokenType::Ident).get_val();
-            let member_type = self.parse_type()?;
-            if self.current()?.ty == TokenType::Comma {
-                self.step()?;
-            }
-            members.push((member_name, member_type))
-        }
-        tok_expect!(self.step()?, TokenType::RBrace);
-        println!("Successfully constructed {}", name);
-        Ok((name, StructDefinition { members }))
-    }
-
-    fn parse_function(&mut self) -> Result<(String, Function), EyeError> {
-        let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
-        println!("Parsing function with name {}", name);
+        log!("Parsing function with name {}", name);
 
         let args: Vec<(String, UnresolvedType)> = Vec::new();
+
 
         //TODO: optionally parse args here
 
@@ -158,65 +152,144 @@ impl Parser {
         let body = self.parse_block()?;
 
         Ok((name, Function { args, return_type, body }))
-    }
+    }*/
 
     fn parse_block(&mut self) -> Result<Block, EyeError> {
         tok_expect!(self.step()?, TokenType::LBrace);
 
+        let mut defs = Vec::new();
         let mut items = Vec::new();
 
         while self.current()?.ty != TokenType::RBrace {
-            items.push(self.parse_block_item()?)
+            match self.parse_item()? {
+                Item::Block(item) => items.push(item),
+                Item::Definition(def) => defs.push(def)
+            }
         }
 
         tok_expect!(self.step().unwrap(), TokenType::RBrace);
 
-        Ok( Block { items })
+        Ok( Block { items, defs })
     }
 
-    fn parse_block_item(&mut self) -> Result<BlockItem, EyeError> {
-
+    fn parse_item(&mut self) -> Result<Item, EyeError> {
+        let pre_item_pos = self.position();
         let block_item = match self.current()?.ty {
-            TokenType::LBrace => Some(BlockItem::Block(self.parse_block()?)),
+            TokenType::LBrace => Some(Item::Block(BlockItem::Block(self.parse_block()?))),
             TokenType::Ident => {
                 let name = tok_expect!(self.step()?, TokenType::Ident).get_val();
-                match_or_unexpected!(self.step()?,
-                    TokenType::Colon => {
+                match self.step().map(|t| t.ty) {
+                    Ok(TokenType::LParen) => match self.parse_params() {
+                        Ok(params) => {
+                            match self.step().map(|t| t.ty) {
+                                Ok(TokenType::Arrow) => {
+                                    let return_type = match self.peek().map(|t| t.ty) {
+                                        Some(TokenType::LBrace) => UnresolvedType::Primitive(Primitive::Void),
+                                        _ => self.parse_type()?
+                                    };
+                                    let body = self.parse_block()?;
+                                    Some(Item::Definition(Definition::Function(name, Function {
+                                        params,  body, return_type
+                                    })))
+                                },
+                                _ => None
+                            }
+                        },
+                        Err(_) => None
+                    },
+                    Ok(TokenType::Arrow) => {
+                        let return_type = match self.peek().map(|t| t.ty) {
+                            Some(TokenType::LBrace) => UnresolvedType::Primitive(Primitive::Void),
+                            _ => self.parse_type()?
+                        };
+                        let body = self.parse_block()?;
+                        Some(Item::Definition(Definition::Function(name, Function {
+                            params: Vec::new(),  body, return_type
+                        })))
+                    },
+                    Ok(TokenType::DoubleColon) => {
+                        tok_expect!(self.step()?, TokenType::LBrace);
+                        let mut members: Vec<(String, UnresolvedType)> = Vec::new();
+                        while self.current()?.ty != TokenType::RBrace {
+                            let member_name = tok_expect!(self.step()?, TokenType::Ident).get_val();
+                            let member_type = self.parse_type()?;
+                            if self.current()?.ty == TokenType::Comma {
+                                self.step()?;
+                            }
+                            members.push((member_name, member_type))
+                        }
+                        tok_expect!(self.step()?, TokenType::RBrace);
+                        log!("Successfully constructed {}", name);
+                        Some(Item::Definition(Definition::Struct(name,
+                            StructDefinition { members }
+                        )))
+                    },
+                    Ok(TokenType::Colon) => {
                         let ty = self.parse_type()?;
                         let val = match_or_unexpected!{self.step()?, 
-                            TokenType::Operator(Operator::Assign) => Some(self.parse_expression()?),
+                            TokenType::Assign => Some(self.parse_expression()?),
                             TokenType::Semicolon => None
                         };
                         tok_expect!(self.step()?, TokenType::Semicolon);
-                        Some(BlockItem::Declare(name, Some(ty), val))
+                        Some(Item::Block(BlockItem::Declare(name, Some(ty), val)))
                     },
-                    TokenType::Operator(Operator::Declare) => {
+                    Ok(TokenType::Declare) => {
                         let val = self.parse_expression()?;
                         tok_expect!(self.step()?, TokenType::Semicolon);
-                        Some(BlockItem::Declare(name, None, Some(val)))
+                        Some(Item::Block(BlockItem::Declare(name, None, Some(val))))
                     },
-                    TokenType::Operator(Operator::Assign) => {
+                    Ok(TokenType::Assign) => {
                         let val = self.parse_expression()?;
                         tok_expect!(self.step()?, TokenType::Semicolon);
-                        Some(BlockItem::Assign(name, val))
-                    }
-                ) 
+                        Some(Item::Block(BlockItem::Assign(name, val)))
+                    },
+                    _ => None
+                }
             },
             _ => None
         };
         if let Some(item) = block_item {
             Ok(item)
         } else {
+            self.set_position(pre_item_pos);
             let expr = BlockItem::Expression(self.parse_expression()?);
             tok_expect!(self.step()?, TokenType::Semicolon);
-            Ok(expr)
+            Ok(Item::Block(expr))
         }
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, EyeError> {
-        println!("Parsing expression...");
+    fn parse_params(&mut self) -> EyeResult<Vec<(String, UnresolvedType)>> {
+        let mut params = Vec::new();
+        loop {
+            match self.peek() {
+                Some(tok) if tok.ty == TokenType::RParen => break,
+                _ => ()
+            }
+            let name = tok_expect!(self.step()?, TokenType::Ident).val.clone();
+            tok_expect!(self.step()?, TokenType::Colon);
+            let ty = self.parse_type()?;
+            params.push((name, ty));
+            match_or_unexpected!(self.step()?,
+                TokenType::RParen => break,
+                TokenType::Comma => ()
+            );
+        }
+        Ok(params)
+    }
+
+    fn parse_expression(&mut self) -> EyeResult<Expression> {
+        let lhs = self.parse_factor()?;
+        self.parse_bin_op_rhs(0, lhs)
+    }
+
+    fn parse_factor(&mut self) -> Result<Expression, EyeError> {
         let first = self.step()?;
-        Ok(match_or_unexpected!(first,
+        let mut expr = match_or_unexpected!(first,
+            TokenType::LParen => {
+                let factor = self.parse_expression()?;
+                tok_expect!(self.step()?, TokenType::RParen);
+                factor
+            },
             TokenType::Keyword(Keyword::Yeet) => {
                 let return_val = if self.current()?.ty == TokenType::Semicolon {
                     None
@@ -242,7 +315,51 @@ impl Parser {
                 };
                 Expression::If(Box::new(cond), then_block, else_block)
             }
-        ))
+        );
+        loop {
+            match self.peek() {
+                Some(tok) if tok.ty == TokenType::LParen => {
+                    // function call
+                    tok_expect!(self.step()?, TokenType::LParen);
+                    let mut args = Vec::new();
+                    loop {
+                        match self.peek() {
+                            Some(tok) if tok.ty == TokenType::RParen => { tok_expect!(self.step()?, TokenType::RParen); break },
+                            _ => ()
+                        }
+                        args.push(self.parse_expression()?);
+                        match_or_unexpected!(self.step()?,
+                            TokenType::Comma => (),
+                            TokenType::RParen => break
+                        )
+                    }
+                    expr = Expression::FunctionCall(Box::new(expr), args);
+                },
+                _ => break
+            }
+        }
+        Ok(expr)
+
+    }
+
+    fn parse_bin_op_rhs(&mut self, expr_prec: u8, mut lhs: Expression) -> EyeResult<Expression> {
+        while let Some(TokenType::Operator(op)) = self.peek().map(|t| t.ty) {
+            self.step().unwrap(); // op
+            let op_prec = op.precedence();
+            if op_prec < expr_prec { break; }
+            let mut rhs = self.parse_factor()?;
+
+            // If BinOp binds less tightly with RHS than the operator after RHS, let
+            // the pending operator take RHS as its LHS.
+            match self.peek().map(|t| t.ty) {
+                Some(TokenType::Operator(next_op)) => if op_prec < next_op.precedence() {
+                    rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs)?;
+                },
+                _ => ()
+            };
+            lhs = Expression::BinOp(op, Box::new((lhs, rhs)));
+        }
+        Ok(lhs)
     }
 
     fn parse_type(&mut self) -> Result<UnresolvedType, EyeError> {

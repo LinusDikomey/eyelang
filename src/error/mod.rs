@@ -25,5 +25,7 @@ pub enum CompileError {
     UseOfUnassignedVariable,
     MissingReturnValue,
     DuplicateTypeDefinition,
-    DuplicateFunctionDefinition
+    DuplicateFunctionDefinition,
+    InvalidTopLevelBlockItem,
+    UnknownEscapeCode
 }

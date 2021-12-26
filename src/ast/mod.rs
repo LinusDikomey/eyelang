@@ -1,6 +1,6 @@
 use std::{borrow::Borrow, collections::HashMap};
-
-use crate::{lexer::tokens::{FloatLiteral, IntLiteral}, types::Primitive};
+use crate::{lexer::tokens::{FloatLiteral, IntLiteral, Operator}, types::Primitive};
+use crate::log;
 
 /// used to represent ast nodes as the original code 
 pub trait Repr {
@@ -30,7 +30,7 @@ impl<'a> ReprCtx<'a> {
         print!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
     }
     pub fn writeln<S: Borrow<str>>(&self, str: S) {
-        println!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
+        log!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
     }
 }
 
@@ -215,20 +215,33 @@ pub enum ResolvedType {
 //pub type Scope<'p> = GenericScope<'p, Function, Struct, VariableType, ResolvedType>;
 
 #[derive(Debug, Clone)]
+pub enum Item {
+    Definition(Definition),
+    Block(BlockItem)
+}
+
+#[derive(Debug, Clone)]
+pub enum Definition {
+    Function(String, Function),
+    Struct(String, StructDefinition),
+}
+
+#[derive(Debug, Clone)]
 pub struct StructDefinition {
     pub members: Vec<(String, UnresolvedType)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub args: Vec<(String, UnresolvedType)>,
+    pub params: Vec<(String, UnresolvedType)>,
     pub return_type: UnresolvedType,
     pub body: Block
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub items: Vec<BlockItem>
+    pub items: Vec<BlockItem>,
+    pub defs: Vec<Definition>
 }
 
 #[derive(Debug, Clone)]
@@ -247,7 +260,9 @@ pub enum Expression {
     StringLiteral(String),
     BoolLiteral(bool),
     Variable(String),
-    If(Box<Expression>, Block, Option<Block>)
+    If(Box<Expression>, Block, Option<Block>),
+    FunctionCall(Box<Expression>, Vec<Expression>),
+    BinOp(Operator, Box<(Expression, Expression)>)
 }
 
 #[derive(Debug, Clone)]

@@ -71,8 +71,8 @@ impl<'a> TypingCtx<'a> {
                 Ok(&self.function_headers[key])
             } else {
                 if let Some(func) = self.ast.functions.get(key.name()) {
-                    let args = func
-                        .args
+                    let params = func
+                        .params
                         .iter()
                         .map(|(name, arg)| {
                             let t = self.resolve_type(arg)?;
@@ -80,7 +80,7 @@ impl<'a> TypingCtx<'a> {
                         })
                         .collect::<EyeResult<Vec<_>>>()?;
                     let return_type = self.resolve_type(&func.return_type)?;
-                    let header = FunctionHeader { args, return_type };
+                    let header = FunctionHeader { params, return_type };
                     self.function_headers.insert(key.clone(), header);
                     Ok(&self.function_headers[key])
                 } else {
@@ -106,8 +106,14 @@ impl<'a> TypingCtx<'a> {
         }
     }
 
-    fn reduce_func(&mut self, _def: &ast::Function, header: FunctionHeader) -> EyeResult<Function> {
-        Ok(Function { header })
+    fn reduce_func(&mut self, def: &ast::Function, header: FunctionHeader, name: &str) -> EyeResult<Function> {
+        let intrinsic = match name {
+            "print" => Some(Intrinsic::Print),
+            "read" => Some(Intrinsic::Read),
+            "parse" => Some(Intrinsic::Parse),
+            _ => None
+        };
+        Ok(Function { header, ast: def.clone(), intrinsic })
     }
 }
 
@@ -130,7 +136,7 @@ pub fn reduce(ast: &ast::Module) -> EyeResult<Module> {
         ctx.resolve_func_header(&key)?;
         let header = ctx.function_headers.remove(&key).unwrap();
 
-        let func = ctx.reduce_func(func, header)?;
+        let func = ctx.reduce_func(func, header, name)?;
         ctx.insert_func(SymbolKey::new(name.clone()), func)?;
     }
     assert_eq!(ctx.function_headers.len(), 0);
