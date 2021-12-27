@@ -262,8 +262,10 @@ pub enum Expression {
     Variable(String),
     If(Box<Expression>, Block, Option<Block>),
     FunctionCall(Box<Expression>, Vec<Expression>),
+    Negate(Box<Expression>),
     BinOp(Operator, Box<(Expression, Expression)>),
-    MemberAccess(Box<Expression>, String)
+    MemberAccess(Box<Expression>, String),
+    Cast(Primitive, Box<Expression>)
 }
 
 #[derive(Debug, Clone)]
@@ -272,7 +274,7 @@ pub enum LValue {
     Member(Box<LValue>, String)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnresolvedType {
     Primitive(Primitive),
     Unresolved(String)

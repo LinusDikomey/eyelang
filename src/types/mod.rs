@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Primitive {
     Integer(IntType),
     Float(FloatType),
@@ -44,7 +44,7 @@ impl fmt::Display for Primitive {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum IntType {
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
@@ -107,7 +107,7 @@ impl IntType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FloatType {
     F32, F64,
 }

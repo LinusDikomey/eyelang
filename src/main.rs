@@ -1,5 +1,4 @@
-#![feature(let_else)]
-#![feature(iter_intersperse)]
+#![feature(iter_intersperse, let_else)]
 
 /*
 use inkwell::OptimizationLevel;
@@ -21,8 +20,7 @@ mod typing;
 mod verifier;
 mod interpreter;
 
-use crate::{ast::{Repr, ReprCtx}, parser::Parser, typing::tir, interpreter::Scope};
-use error::EyeError;
+use crate::{ast::{Repr, ReprCtx}, parser::Parser, typing::tir, interpreter::Scope, error::EyeResult};
 use std::{path::Path, sync::atomic::AtomicBool};
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -37,17 +35,30 @@ macro_rules! log {
 }
 use log;
 
-fn main() -> Result<(), EyeError> {
-    let src_file = "./eye/test.eye";
-    let src = std::fs::read_to_string(Path::new(src_file))
+fn main() {
+    let src_file = std::env::args().skip(1).next().or(Some("./eye/test.eye".to_owned())).unwrap();
+    use colored::*;
+    match run_file(&src_file) {
+        Ok(res) => println!("{}{}", "Successfully ran and returned ".green(), res),
+        Err(err) => println!("{}{:?}", "Failed to run: ".red(), err)
+    }
+}
+
+fn run_file(src_file: &str) -> EyeResult<interpreter::Value> {
+
+    let src = std::fs::read_to_string(Path::new(&src_file))
         .expect(&format!("Could not open source file: {}", src_file));
 
     let tokens = lexer::TokenStream::from_source(&src)?;
 
     let mut parser = Parser::new(tokens.tokens);
 
-    let module = parser.parse()?;
+    let mut module = parser.parse()?;
     log!("Module: {:?}", module);
+
+    // HACK: intrinsics are inserted into the module so the resolver can find them
+    interpreter::insert_intrinsics(&mut module);
+    
 
     log!("\nAST code reconstruction:\n");
     let mut ast_repr_ctx = ReprCtx::new("  ");
@@ -67,12 +78,14 @@ fn main() -> Result<(), EyeError> {
 
     log!("... reduced! TIR: {:?}", tir);
 
-    println!("Result: {:?}", interpreter::eval_function(&mut Scope::from_module(tir.clone()), &tir.functions.get(&tir::SymbolKey::new("main".to_owned())).expect("Main not found"), vec![]));
-
     //let ctx = Context::create();
     //let main = codegen::generate_module(&module, &ctx)?;
     //let result = unsafe { main.call() };
     //println!("Result of main: {}", result);
 
-    Ok(())
+    Ok(interpreter::eval_function(
+        &mut Scope::from_module(tir.clone()),
+        &tir.functions.get(&tir::SymbolKey::new("main".to_owned())).expect("Main not found"),
+        vec![])
+    )
 }

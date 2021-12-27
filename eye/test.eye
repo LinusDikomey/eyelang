@@ -1,8 +1,3 @@
-print(s: string, newline: bool) -> { }
-read(s: string) -> string { }
-parse(s: string) -> i32 { }
-
-
 sayHello(newline: bool) -> { print("Hello", newline); }
 bye -> { print("Bye"); }
 

@@ -1,7 +1,7 @@
 use core::panic;
 use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}};
 
-use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, Expression, LValue}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
+use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, LValue}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -33,7 +33,6 @@ pub enum Value {
 
     Struct(HashMap<String, Value>),
 }
-
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Value::*;
@@ -75,6 +74,35 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
         }
+    }
+}
+impl Value {
+    pub fn get_type(&self) -> Option<UnresolvedType> {
+        use Primitive::*;
+        Some(UnresolvedType::Primitive(match self {
+            Value::Bool(_) => Bool,
+            Value::String(_) => String,
+
+            Value::U8(_) => Integer(IntType::U8),
+            Value::U16(_) => Integer(IntType::U16),
+            Value::U32(_) => Integer(IntType::U32),
+            Value::U64(_) => Integer(IntType::U64),
+            Value::U128(_) => Integer(IntType::U128),
+
+            Value::I8(_) => Integer(IntType::I8),
+            Value::I16(_) => Integer(IntType::I16),
+            Value::I32(_) => Integer(IntType::I32),
+            Value::I64(_) => Integer(IntType::I64),
+            Value::I128(_) => Integer(IntType::I128),
+
+            Value::F32(_) => Float(FloatType::F32),
+            Value::F64(_) => Float(FloatType::F64),
+
+            Value::Unit => Void,
+            Value::Unassigned | Value::UnsizedInt(_) | Value::UnsizedFloat(_) 
+                => panic!("Unassigned/unsized values shouldn't be typechecked"),
+            Value::Struct(_) | Value::Function(_) | Value::Type(_) => return None
+        }))
     }
 }
 
@@ -189,6 +217,15 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
     }
 
     let v = eval_block(&mut scope, &f.ast.body).value();
+    if let Some(ty) = v.get_type() {
+        let expected = as_unresolved(&f.header().return_type);
+        if ty != expected {
+            panic!("Mismatched return type, expected: {:?}, found: {:?}",
+                expected,
+                ty
+            )
+        }
+    }
     v
 }
 
@@ -230,7 +267,10 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
                 scope.values.insert(name.clone(), val);
             },
             BlockItem::Assign(l_val, expr) => {
-                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, None)); //TODO set expected type from value
+                let val = eval_lvalue(&mut scope, l_val);
+                let ty = val.get_type();
+                // the lvalue has to be evaluated again so scope isn't borrowed when evaluating the expression
+                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, ty.as_ref()));
             },
             BlockItem::Expression(expr) => {
                 get_or_ret!(eval_expr(&mut scope, expr, None));
@@ -322,6 +362,21 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 _ => panic!("Tried to call non-function value as function")
             }
         }
+        Negate(inner) => {
+            macro_rules! un_op {
+                ($val: expr, $($p: tt)*) => {
+                    match $val {
+                        $(
+                            Value::$p(x) => Value::$p(-x),
+                        )*
+                        _ => panic!("Invalid operation '-' for value: {:?}", $val)
+                    }
+                }
+            }
+            un_op!{get_or_ret!(eval_expr(scope, inner, expected)),
+                I8 I16 I32 I64 I128 F32 F64
+            }
+        }
         BinOp(op, sides) => {
             let (lhs, rhs) = &**sides;
             if let Operator::LT | Operator::LE | Operator::GT | Operator::GE = op {
@@ -351,13 +406,16 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
             } else { expected.map(|t| t.clone()) };
             let rhs = get_or_ret!(eval_expr(scope, rhs, rhs_expected.as_ref()));
             macro_rules! op_match {
-                ($($p: tt)*) => {
+                (num: $($p: tt),*; eq: $($eq_only: tt),*) => {
                     match (op, lhs, rhs) {
                         $((Operator::Add, Value::$p(l), Value::$p(r)) => Value::$p(l + r),)*
                         $((Operator::Sub, Value::$p(l), Value::$p(r)) => Value::$p(l - r),)*
                         $((Operator::Mul, Value::$p(l), Value::$p(r)) => Value::$p(l * r),)*
                         $((Operator::Div, Value::$p(l), Value::$p(r)) => Value::$p(l / r),)*
                         
+                        $((Operator::Equals, Value::$p(l), Value::$p(r)) => Value::Bool(l == r),)*
+                        $((Operator::Equals, Value::$eq_only(l), Value::$eq_only(r)) => Value::Bool(l == r),)*
+
                         $((Operator::LT, Value::$p(l), Value::$p(r)) => Value::Bool(l <  r),)*
                         $((Operator::LE, Value::$p(l), Value::$p(r)) => Value::Bool(l <= r),)*
                         $((Operator::GT, Value::$p(l), Value::$p(r)) => Value::Bool(l >  r),)*
@@ -368,14 +426,156 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                     }
                 }
             }
-            op_match!(U8 U16 U32 U64 U128 I8 I16 I32 I64 I128 F32 F64)
+            op_match!(
+                num: U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64;
+                eq: String, Bool 
+            )
         }
         MemberAccess(expr, member_name) => {
             match get_or_ret!(eval_expr(scope, expr, None)) {
                 Value::Struct(members) => {
                     members[member_name].clone()
                 }
-                _ => panic!("Can't access non-struct member {}", member_name)
+                val => panic!("Can't access non-struct member {} of {:?}", member_name, val)
+            }
+        }
+        Cast(target_ty, expr) => {
+            macro_rules! cast {
+                ($v: expr, $target: expr, $($from: tt => $to: tt : $to_t: pat,)*) => {
+                    let v = $v;
+                    let t = $target;
+                    match (&v, &t) {
+                        $(
+                            (Value::$from(x), $to_t) => Value::$to(*x as _),
+                        )*
+                        _ => panic!("Invalid cast from {:?} to {}", v, t)
+                    }
+                }
+            }
+
+            cast!{get_or_ret!(eval_expr(scope, expr, None)), target_ty,
+                U8 => U8: Primitive::Integer(IntType::U8),
+                U8 => U16: Primitive::Integer(IntType::U16),
+                U8 => U32: Primitive::Integer(IntType::U32),
+                U8 => U64: Primitive::Integer(IntType::U64),
+                U8 => U128: Primitive::Integer(IntType::U128),
+                U8 => U8: Primitive::Integer(IntType::I8),
+                U8 => U16: Primitive::Integer(IntType::I16),
+                U8 => U32: Primitive::Integer(IntType::I32),
+                U8 => U64: Primitive::Integer(IntType::I64),
+                U8 => U128: Primitive::Integer(IntType::I128),
+                U8 => F32: Primitive::Float(FloatType::F32),
+                U8 => F64: Primitive::Float(FloatType::F64),
+                U16 => U8: Primitive::Integer(IntType::U8),
+                U16 => U16: Primitive::Integer(IntType::U16),
+                U16 => U32: Primitive::Integer(IntType::U32),
+                U16 => U64: Primitive::Integer(IntType::U64),
+                U16 => U128: Primitive::Integer(IntType::U128),
+                U16 => U8: Primitive::Integer(IntType::I8),
+                U16 => U16: Primitive::Integer(IntType::I16),
+                U16 => U32: Primitive::Integer(IntType::I32),
+                U16 => U64: Primitive::Integer(IntType::I64),
+                U16 => U128: Primitive::Integer(IntType::I128),
+                U16 => F32: Primitive::Float(FloatType::F32),
+                U16 => F64: Primitive::Float(FloatType::F64),
+                U32 => U8: Primitive::Integer(IntType::U8),
+                U32 => U16: Primitive::Integer(IntType::U16),
+                U32 => U32: Primitive::Integer(IntType::U32),
+                U32 => U64: Primitive::Integer(IntType::U64),
+                U32 => U128: Primitive::Integer(IntType::U128),
+                U32 => U8: Primitive::Integer(IntType::I8),
+                U32 => U16: Primitive::Integer(IntType::I16),
+                U32 => U32: Primitive::Integer(IntType::I32),
+                U32 => U64: Primitive::Integer(IntType::I64),
+                U32 => U128: Primitive::Integer(IntType::I128),
+                U32 => F32: Primitive::Float(FloatType::F32),
+                U32 => F64: Primitive::Float(FloatType::F64),
+                U64 => U8: Primitive::Integer(IntType::U8),
+                U64 => U16: Primitive::Integer(IntType::U16),
+                U64 => U32: Primitive::Integer(IntType::U32),
+                U64 => U64: Primitive::Integer(IntType::U64),
+                U64 => U128: Primitive::Integer(IntType::U128),
+                U64 => U8: Primitive::Integer(IntType::I8),
+                U64 => U16: Primitive::Integer(IntType::I16),
+                U64 => U32: Primitive::Integer(IntType::I32),
+                U64 => U64: Primitive::Integer(IntType::I64),
+                U64 => U128: Primitive::Integer(IntType::I128),
+                U64 => F32: Primitive::Float(FloatType::F32),
+                U64 => F64: Primitive::Float(FloatType::F64),
+                U128 => U8: Primitive::Integer(IntType::U8),
+                U128 => U16: Primitive::Integer(IntType::U16),
+                U128 => U32: Primitive::Integer(IntType::U32),
+                U128 => U64: Primitive::Integer(IntType::U64),
+                U128 => U128: Primitive::Integer(IntType::U128),
+                U128 => U8: Primitive::Integer(IntType::I8),
+                U128 => U16: Primitive::Integer(IntType::I16),
+                U128 => U32: Primitive::Integer(IntType::I32),
+                U128 => U64: Primitive::Integer(IntType::I64),
+                U128 => U128: Primitive::Integer(IntType::I128),
+                U128 => F32: Primitive::Float(FloatType::F32),
+                U128 => F64: Primitive::Float(FloatType::F64),
+
+                I8 => U8: Primitive::Integer(IntType::U8),
+                I8 => U16: Primitive::Integer(IntType::U16),
+                I8 => U32: Primitive::Integer(IntType::U32),
+                I8 => U64: Primitive::Integer(IntType::U64),
+                I8 => U128: Primitive::Integer(IntType::U128),
+                I8 => U8: Primitive::Integer(IntType::I8),
+                I8 => U16: Primitive::Integer(IntType::I16),
+                I8 => U32: Primitive::Integer(IntType::I32),
+                I8 => U64: Primitive::Integer(IntType::I64),
+                I8 => U128: Primitive::Integer(IntType::I128),
+                I8 => F32: Primitive::Float(FloatType::F32),
+                I8 => F64: Primitive::Float(FloatType::F64),
+                I16 => U8: Primitive::Integer(IntType::U8),
+                I16 => U16: Primitive::Integer(IntType::U16),
+                I16 => U32: Primitive::Integer(IntType::U32),
+                I16 => U64: Primitive::Integer(IntType::U64),
+                I16 => U128: Primitive::Integer(IntType::U128),
+                I16 => U8: Primitive::Integer(IntType::I8),
+                I16 => U16: Primitive::Integer(IntType::I16),
+                I16 => U32: Primitive::Integer(IntType::I32),
+                I16 => U64: Primitive::Integer(IntType::I64),
+                I16 => U128: Primitive::Integer(IntType::I128),
+                I16 => F32: Primitive::Float(FloatType::F32),
+                I16 => F64: Primitive::Float(FloatType::F64),
+                I32 => U8: Primitive::Integer(IntType::U8),
+                I32 => U16: Primitive::Integer(IntType::U16),
+                I32 => U32: Primitive::Integer(IntType::U32),
+                I32 => U64: Primitive::Integer(IntType::U64),
+                I32 => U128: Primitive::Integer(IntType::U128),
+                I32 => U8: Primitive::Integer(IntType::I8),
+                I32 => U16: Primitive::Integer(IntType::I16),
+                I32 => U32: Primitive::Integer(IntType::I32),
+                I32 => U64: Primitive::Integer(IntType::I64),
+                I32 => U128: Primitive::Integer(IntType::I128),
+                I32 => F32: Primitive::Float(FloatType::F32),
+                I32 => F64: Primitive::Float(FloatType::F64),
+                I64 => U8: Primitive::Integer(IntType::U8),
+                I64 => U16: Primitive::Integer(IntType::U16),
+                I64 => U32: Primitive::Integer(IntType::U32),
+                I64 => U64: Primitive::Integer(IntType::U64),
+                I64 => U128: Primitive::Integer(IntType::U128),
+                I64 => U8: Primitive::Integer(IntType::I8),
+                I64 => U16: Primitive::Integer(IntType::I16),
+                I64 => U32: Primitive::Integer(IntType::I32),
+                I64 => U64: Primitive::Integer(IntType::I64),
+                I64 => U128: Primitive::Integer(IntType::I128),
+                I64 => F32: Primitive::Float(FloatType::F32),
+                I64 => F64: Primitive::Float(FloatType::F64),
+                I128 => U8: Primitive::Integer(IntType::U8),
+                I128 => U16: Primitive::Integer(IntType::U16),
+                I128 => U32: Primitive::Integer(IntType::U32),
+                I128 => U64: Primitive::Integer(IntType::U64),
+                I128 => U128: Primitive::Integer(IntType::U128),
+                I128 => U8: Primitive::Integer(IntType::I8),
+                I128 => U16: Primitive::Integer(IntType::I16),
+                I128 => U32: Primitive::Integer(IntType::I32),
+                I128 => U64: Primitive::Integer(IntType::I64),
+                I128 => U128: Primitive::Integer(IntType::I128),
+                I128 => F32: Primitive::Float(FloatType::F32),
+                I128 => F64: Primitive::Float(FloatType::F64),
+
             }
         }
     };
@@ -416,7 +616,7 @@ fn eval_lvalue<'a>(scope: &'a mut Scope, l_val: &LValue) -> &'a mut Value {
         LValue::Member(inner, member) => {
             match eval_lvalue(scope, inner) {
                 Value::Struct(members) => members.get_mut(member).expect("Member not found"),
-                _ => panic!("Can't access non-struct type member")
+                val => panic!("Can't access non-struct type member '{}' of value: {:?}", member, val)
             }
         }
     }
@@ -427,4 +627,26 @@ fn as_unresolved(ty: &TypeRef) -> UnresolvedType {
         TypeRef::Primitive(prim) => UnresolvedType::Primitive(*prim),
         TypeRef::Resolved(res) => UnresolvedType::Unresolved(res.clone().into_inner())
     }
+}
+
+
+pub fn insert_intrinsics(module: &mut ast::Module) {
+    module.functions.insert("print".to_owned(), ast::Function {
+        body: ast::Block { items: Vec::new(), defs: Vec::new() },
+        params: vec![
+            ("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String)),
+            ("newline".to_owned(), ast::UnresolvedType::Primitive(Primitive::Bool))
+        ],
+        return_type: ast::UnresolvedType::Primitive(Primitive::Void)
+    });
+    module.functions.insert("read".to_owned(), ast::Function {
+        body: ast::Block { items: Vec::new(), defs: Vec::new() },
+        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        return_type: ast::UnresolvedType::Primitive(Primitive::String)
+    });
+    module.functions.insert("parse".to_owned(), ast::Function {
+        body: ast::Block { items: Vec::new(), defs: Vec::new() },
+        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        return_type: ast::UnresolvedType::Primitive(Primitive::Integer(IntType::I32))
+    });
 }

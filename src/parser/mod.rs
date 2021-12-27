@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{log, ast::*, error::{CompileError, EyeError, EyeResult}, lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType}}, types::Primitive};
+use crate::{log, ast::*, error::{CompileError, EyeError, EyeResult}, lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}}, types::Primitive};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -299,6 +299,9 @@ impl Parser {
     fn parse_factor(&mut self) -> Result<Expression, EyeError> {
         let first = self.step()?;
         let mut expr = match_or_unexpected!(first,
+            TokenType::Operator(Operator::Sub) => {
+                Expression::Negate(Box::new(self.parse_factor()?))
+            },
             TokenType::LParen => {
                 let factor = self.parse_expression()?;
                 tok_expect!(self.step()?, TokenType::RParen);
@@ -328,6 +331,10 @@ impl Parser {
                     None
                 };
                 Expression::If(Box::new(cond), then_block, else_block)
+            },
+            TokenType::Keyword(Keyword::Primitive(p)) => {
+                let inner = self.parse_expression()?;
+                Expression::Cast(p, Box::new(inner))
             }
         );
         loop {
