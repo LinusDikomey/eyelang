@@ -1,46 +1,48 @@
 use std::fmt;
 
+use crate::ast::{Repr, Representer};
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Primitive {
     Integer(IntType),
     Float(FloatType),
     String,
     Bool,
-    Void
+    Unit
 }
 impl Primitive {
-    pub fn display(&self) -> &str {
-        use Primitive::*;
-        match self {
-            Integer(i) => i.display(),
-            Float(f) => f.display(),
-            String => "string",
-            Bool => "bool",
-            Void => "void"
-        }
-    }
-    pub fn size(&self) -> u32 {
+    pub fn _size(&self) -> u32 {
         use Primitive::*;
         match self {
             Integer(i) => i.size(),
             Float(f) => f.size(),
             Primitive::String => todo!(),
             Primitive::Bool => 1,
-            Primitive::Void => 0            
+            Primitive::Unit => 0            
         }
     }
 }
 impl fmt::Display for Primitive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Primitive::*;
         let s = match self {
-            Integer(int) => int.display(),
-            Float(float) => float.display(),
-            String => "string",
-            Bool => "bool",
-            Void => "()"
+            Primitive::Integer(int) => int.display(),
+            Primitive::Float(float) => float.display(),
+            Primitive::String => "string",
+            Primitive::Bool => "bool",
+            Primitive::Unit => "()"
         };
         write!(f, "{}", s)
+    }
+}
+impl<C: Representer> Repr<C> for Primitive {
+    fn repr(&self, c: &C) {
+        match self { 
+            Primitive::Integer(int) => int.repr(c),
+            Primitive::Float(float) => float.repr(c),
+            Primitive::String => c.write_add("string"),
+            Primitive::Bool => c.write_add("bool"),
+            Primitive::Unit => c.write_add("()"),
+        }
     }
 }
 
@@ -48,6 +50,23 @@ impl fmt::Display for Primitive {
 pub enum IntType {
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
+}
+impl<C: Representer> Repr<C> for IntType {
+    fn repr(&self, c: &C) {
+        use IntType::*;
+        c.write_add(match self {
+            I8 => "i8",
+            I16 => "i16",
+            I32 => "i32",
+            I64 => "i64",
+            I128 => "i128",
+            U8 => "u8",
+            U16 => "u16",
+            U32 => "u32",
+            U64 => "u64",
+            U128 => "u128",
+        });
+    }
 }
 
 impl IntType {
@@ -125,5 +144,14 @@ impl FloatType {
             F32 => 4,
             F64 => 8
         }
+    }
+}
+
+impl<C: Representer> Repr<C> for FloatType {
+    fn repr(&self, c: &C) {
+        c.write_add(match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64"
+        });
     }
 }

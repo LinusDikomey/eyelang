@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_else)]
+#![feature(iter_intersperse, let_else, box_patterns)]
 
 /*
 use inkwell::OptimizationLevel;
@@ -20,7 +20,7 @@ mod typing;
 mod verifier;
 mod interpreter;
 
-use crate::{ast::{Repr, ReprCtx}, parser::Parser, typing::tir, interpreter::Scope, error::EyeResult};
+use crate::{ast::{Repr, ReprPrinter}, parser::Parser, typing::tir, interpreter::Scope, error::EyeResult};
 use std::{path::Path, sync::atomic::AtomicBool};
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -36,10 +36,28 @@ macro_rules! log {
 use log;
 
 fn main() {
-    let src_file = std::env::args().skip(1).next().or(Some("./eye/test.eye".to_owned())).unwrap();
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    let mut src_file = None;
+    for arg in &args {
+        match arg.as_str() {
+            "-l" | "--log" => LOG.store(true, std::sync::atomic::Ordering::SeqCst),
+            unknown if unknown.starts_with("-") => eprintln!("Unrecognized argument {unknown}"),
+            positional => if src_file.is_none() {
+                src_file = Some(positional)
+            } else {
+                panic!("Too many positional arguments")
+            },
+        }
+    }
+
+    let src_file = src_file.unwrap_or("./eye/test.eye");
+
     use colored::*;
     match run_file(&src_file) {
-        Ok(res) => println!("{}{}", "Successfully ran and returned ".green(), res),
+        Ok(res) => {
+            let t = res.get_type().unwrap_or(ast::UnresolvedType::Primitive(types::Primitive::Unit));
+            println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), res, t);
+        }
         Err(err) => println!("{}{:?}", "Failed to run: ".red(), err)
     }
 }
@@ -55,24 +73,19 @@ fn run_file(src_file: &str) -> EyeResult<interpreter::Value> {
 
     let mut module = parser.parse()?;
     log!("Module: {:?}", module);
+    
+
+    println!("\nAST code reconstruction:\n");
+    let mut ast_repr_ctx = ReprPrinter::new("  ");
+    module.repr(&mut ast_repr_ctx);
+    println!("\n---------- End of AST reconstruction ----------\n\n");
 
     // HACK: intrinsics are inserted into the module so the resolver can find them
     interpreter::insert_intrinsics(&mut module);
-    
 
-    log!("\nAST code reconstruction:\n");
-    let mut ast_repr_ctx = ReprCtx::new("  ");
-    module.repr(&mut ast_repr_ctx);
-    
     log!("\n\nReducing module to TIR...");
 
     let tir = typing::reduce(&module)?;
-
-    for (name, ty) in &tir.types {
-        log!("Type {} has a size of {} bytes", name.name(), match ty {
-            typing::tir::Type::Struct(s) => s.size(&tir)
-        })
-    }
 
     //verifier::verify(&module)?;
 

@@ -1,10 +1,9 @@
-use std::{borrow::Borrow, collections::HashMap};
+use std::{borrow::Borrow, collections::HashMap, fmt};
 use crate::{lexer::tokens::{FloatLiteral, IntLiteral, Operator}, types::Primitive};
-use crate::log;
 
-/// used to represent ast nodes as the original code 
-pub trait Repr {
-    fn repr(&self, c: &ReprCtx);
+/// Represent ast nodes as the original code 
+pub trait Repr<C: Representer> {
+    fn repr(&self, c: &C);
 }
 
 /*enum ReprWriter<'a, W: std::fmt::Write> {
@@ -12,33 +11,58 @@ pub trait Repr {
     Parent(&'a mut ReprCtx<'a, W>)
 }*/
 
-pub struct ReprCtx<'a> {
+pub trait Representer {
+    fn child(&self) -> Self;
+    fn begin_line(&self);
+    fn write_start<B: Borrow<str>>(&self, s: B);
+    fn write_add<B: Borrow<str>>(&self, s: B);
+    fn space(&self) {
+        self.write_add(" ");
+    }
+    fn writeln<B: Borrow<str>>(&self, s: B);
+}
+
+pub struct ReprPrinter<'a> {
     indent: &'a str,
     count: u32
 }
-impl<'a> ReprCtx<'a> {
+impl<'a> ReprPrinter<'a> {
     pub fn new(indent: &'a str) -> Self {
         Self { indent, count: 0 }
     }
-    pub fn child(&self) -> ReprCtx<'_> {
+}
+impl Representer for ReprPrinter<'_> {
+    fn child(&self) -> Self {
         Self {
             indent: self.indent,
             count: self.count + 1
         }
     }
-    pub fn write<S: Borrow<str>>(&self, str: S) {
-        print!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
+
+    fn begin_line(&self) {
+        print!("{}", self.indent.repeat(self.count as usize));
     }
-    pub fn writeln<S: Borrow<str>>(&self, str: S) {
-        log!("{}{}", self.indent.repeat(self.count as usize), str.borrow());
+
+    fn write_start<B: Borrow<str>>(&self, s: B) {
+        print!("{}{}", self.indent.repeat(self.count as usize), s.borrow());
+    }
+
+    fn write_add<B: Borrow<str>>(&self, s: B) {
+        print!("{}", s.borrow())
+    }
+
+    fn writeln<B: Borrow<str>>(&self, s: B) {
+        println!("{}{}", self.indent.repeat(self.count as usize), s.borrow());
     }
 }
 
-#[derive(Debug, Clone)]
+/*#[derive(Debug, Clone)]
 pub enum UnresolvedTypeDefinition {
     Struct(StructDefinition)
 }
+*/
 
+/*
 pub struct Scope<'p> {
     parent: Option<&'p Scope<'p>>,
     functions: HashMap<String, Function>,
@@ -47,43 +71,18 @@ pub struct Scope<'p> {
     expected_return: UnresolvedType
 
 }
+*/
 
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub functions: HashMap<String, Function>,
-    pub types: HashMap<String, UnresolvedTypeDefinition>
+    pub definitions: HashMap<String, Definition>
 }
 
-impl Module {
-    pub fn to_scope<'p>(self) -> Scope<'p> {
-        Scope {
-            parent: None,
-            functions: self.functions,
-            types: self.types,
-            variables: HashMap::new(),
-            expected_return: UnresolvedType::Primitive(Primitive::Void),
-        }
-    }
-}
-impl Repr for Module {
-    fn repr(&self, c: &ReprCtx) {
-        for (name, ty) in &self.types {
-            match ty {
-                UnresolvedTypeDefinition::Struct(s) => {
-                    c.writeln(format!("struct {} {{", name));
-                    let struct_c = c.child();
-                    for (name, ty) in &s.members {
-                        struct_c.writeln(format!("{} {},", name, ty.display()))
-                    }
-                    c.writeln("}");
-                }
-            }
-        }
-        for (name, func) in &self.functions {
-            c.writeln(format!("{} :: {} {{", name, func.return_type.display()));
-            let body_c = c.child();
-            body_c.writeln("TODO: function body");
-            c.writeln("}");
+impl<C: Representer> Repr<C> for Module {
+    fn repr(&self, c: &C) {
+        for (name, def) in &self.definitions {
+            def.repr(c, name);
+            c.writeln("");
         }
     }
 }
@@ -216,32 +215,107 @@ pub enum ResolvedType {
 
 #[derive(Debug, Clone)]
 pub enum Item {
-    Definition(Definition),
+    Definition(String, Definition),
     Block(BlockItem)
 }
 
 #[derive(Debug, Clone)]
 pub enum Definition {
-    Function(String, Function),
-    Struct(String, StructDefinition),
+    Function(Function),
+    Struct(StructDefinition),
+}
+impl Definition {
+    fn repr<C: Representer>(&self, c: &C, name: &str) {
+        match self {
+            Self::Function(func) => func.repr(c, name),
+            Self::Struct(struc) => struc.repr(c, name)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
     pub members: Vec<(String, UnresolvedType)>,
 }
+impl StructDefinition {
+    fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.writeln(format!("{} :: {{", name));
+        let child = c.child();
+        for (i, (name, ty)) in self.members.iter().enumerate() {
+            child.begin_line();
+            child.write_add(name.as_str());
+            child.space();
+            child.write_add(format!("{ty}"));
+            child.write_add(if i == (self.members.len() - 1) { "\n" } else { ",\n" });
+        }
+        c.write_start("}");
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub params: Vec<(String, UnresolvedType)>,
+    pub vararg: Option<(String, UnresolvedType)>,
     pub return_type: UnresolvedType,
-    pub body: Block
+    pub body: BlockOrExpr,
+}
+impl Function {
+    fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.write_add(name);
+        if self.params.len() > 0 {
+            c.write_add("(");
+            for (i, (name, param)) in self.params.iter().enumerate() {
+                c.write_add(name.as_str());
+                c.space();
+                param.repr(c);
+                if i != self.params.len() - 1 {
+                    c.write_add(", ");
+                }
+            }
+            c.write_add(")");
+        }
+        c.write_add(" -> ");
+        c.write_add(format!("{}", self.return_type));
+        c.space();
+        self.body.repr(c);
+        c.writeln("");
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BlockOrExpr {
+    Block(Block),
+    Expr(Expression)
+}
+impl<C: Representer> Repr<C> for BlockOrExpr {
+    fn repr(&self, c: &C) {
+        match self {
+            BlockOrExpr::Block(block) => block.repr(c),
+            BlockOrExpr::Expr(expr) => {
+                c.write_add(": ");
+                expr.repr(c);
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Block {
     pub items: Vec<BlockItem>,
-    pub defs: Vec<Definition>
+    pub defs: HashMap<String, Definition>
+}
+impl<C: Representer> Repr<C> for Block {
+    fn repr(&self, c: &C) {
+        c.write_add("{\n");
+        let child = c.child();
+        for (name, def) in &self.defs {
+            def.repr(&child, name);
+        }
+        for item in &self.items {
+            item.repr(&child);
+        }
+        c.write_start("}");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -249,7 +323,42 @@ pub enum BlockItem {
     Block(Block),
     Declare(String, Option<UnresolvedType>, Option<Expression>),
     Assign(LValue, Expression),
-    Expression(Expression)
+    Expression(Expression),
+}
+impl<C: Representer> Repr<C> for BlockItem {
+    fn repr(&self, c: &C) {
+        match self {
+            Self::Block(block) => block.repr(c),
+            Self::Declare(name, ty, expr) => {
+                c.write_start(name.as_str());
+                if let Some(ty) = ty {
+                    c.write_add(": ");
+                    c.write_add(format!("{ty}"));
+                    if expr.is_some() {
+                        c.space();
+                    }
+                } else {
+                    debug_assert!(expr.is_some());
+                    c.write_add(" :");
+                }
+                if let Some(expr) = expr {
+                    c.write_add("= ");
+                    expr.repr(c);
+                }
+            }
+            Self::Assign(l_val, expr) => {
+                c.begin_line();
+                l_val.repr(c);
+                c.write_add(" = ");
+                expr.repr(c);
+            }
+            Self::Expression(expr) => {
+                c.begin_line();
+                expr.repr(c);
+            }
+        }
+        c.write_add(";\n");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -260,12 +369,90 @@ pub enum Expression {
     StringLiteral(String),
     BoolLiteral(bool),
     Variable(String),
-    If(Box<Expression>, Block, Option<Block>),
+    If(Box<If>),
     FunctionCall(Box<Expression>, Vec<Expression>),
     Negate(Box<Expression>),
     BinOp(Operator, Box<(Expression, Expression)>),
     MemberAccess(Box<Expression>, String),
     Cast(Primitive, Box<Expression>)
+}
+impl<C: Representer> Repr<C> for Expression {
+    fn repr(&self, c: &C) {
+        match self {
+            Self::Return(val) => {
+                c.write_add("ret");
+                if let Some(val) = val {
+                    c.space();
+                    val.repr(c);
+                }
+            }
+            Self::IntLiteral(lit) => c.write_add(format!("{lit}")),
+            Self::FloatLiteral(lit) => c.write_add(format!("{lit}")),
+            Self::StringLiteral(s) => {
+                c.write_add("\"");
+                c.write_add(s.as_str().replace("\n", "\\n"));
+                c.write_add("\"");
+            }
+            Self::BoolLiteral(b) => c.write_add(if *b { "true" } else { "false" }),
+            Self::Variable(name) => c.write_add(name.as_str()),
+            Self::If(box If { cond, then, else_ }) => {
+                c.write_add("if ");
+                cond.repr(c);
+                c.space();
+                then.repr(c);
+                if let Some(else_block) = else_ {
+                    c.write_add(" else ");
+                    else_block.repr(c);
+
+                    if let BlockOrExpr::Expr(_) = else_block {
+                        c.write_add(";");
+                    }
+                }
+            }
+            Self::FunctionCall(func, args) => {
+                func.repr(c);
+                c.write_add("(");
+                for (i, arg) in args.iter().enumerate() {
+                    arg.repr(c);
+                    if i != (args.len() - 1) {
+                        c.write_add(", ");
+                    }
+                }
+                c.write_add(")");
+            }
+            Self::Negate(expr) => {
+                c.write_add("-");
+                expr.repr(c);
+            }
+            Self::BinOp(op, exprs) => {
+                c.write_add("(");
+                let (l, r) = &**exprs;
+                l.repr(c);
+                c.space();
+                op.repr(c);
+                c.space();
+                r.repr(c);
+                c.write_add(")");
+            }
+            Self::MemberAccess(expr, member) => {
+                expr.repr(c);
+                c.write_add(".");
+                c.write_add(member.as_str());
+            }
+            Self::Cast(ty, expr) => {
+                ty.repr(c);
+                c.space();
+                expr.repr(c);
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct If {
+    pub cond: Expression,
+    pub then: BlockOrExpr,
+    pub else_: Option<BlockOrExpr>
 }
 
 #[derive(Debug, Clone)]
@@ -273,18 +460,37 @@ pub enum LValue {
     Variable(String),
     Member(Box<LValue>, String)
 }
+impl<C: Representer> Repr<C> for LValue {
+    fn repr(&self, c: &C) {
+        match self {
+            Self::Variable(var) => c.write_add(var.as_str()),
+            Self::Member(l_val, member) => {
+                l_val.repr(c);
+                c.write_add(".");
+                c.write_add(member.as_str());
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnresolvedType {
     Primitive(Primitive),
     Unresolved(String)
 }
-
-impl UnresolvedType {
-    pub fn display(&self) -> &str {
+impl<R: Representer> Repr<R> for UnresolvedType {
+    fn repr(&self, c: &R) {
         match self {
-            UnresolvedType::Primitive(p) => p.display(),
-            UnresolvedType::Unresolved(name) => &name
+            Self::Primitive(p) => p.repr(c),
+            Self::Unresolved(name) => c.write_add(name.as_str())
+        }
+    }
+}
+impl fmt::Display for UnresolvedType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnresolvedType::Primitive(p) => p.fmt(f),
+            UnresolvedType::Unresolved(name) => write!(f, "{name}")
         }
     }
 }

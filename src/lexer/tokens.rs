@@ -1,6 +1,6 @@
-use std::u128;
+use std::{u128, fmt};
 
-use crate::{error::EyeError, types::{FloatType, IntType, Primitive}};
+use crate::{error::EyeError, types::{FloatType, IntType, Primitive}, ast::{Repr, Representer}};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +34,6 @@ impl Token {
     }
 
     pub fn get_val(&self) -> String {
-        assert_ne!(self.val, "");
         self.val.clone()
     }
 }
@@ -85,8 +84,13 @@ impl IntLiteral {
         Ok(Self { unsigned_val, sign, ty: None })
     }
 
-    pub fn fits_into_type(&self, ty: &IntType) -> bool {
+    pub fn _fits_into_type(&self, ty: &IntType) -> bool {
         self.unsigned_val <= if self.sign {ty.min_val()} else {ty.max_val()}
+    }
+}
+impl fmt::Display for IntLiteral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", if self.sign { "-" } else { "" }, self.unsigned_val)
     }
 }
 
@@ -100,18 +104,23 @@ impl FloatLiteral {
         Ok(Self { val: token.get_val().parse::<f64>().unwrap(), ty: None })
     }
 
-    pub fn fits_into_type(&self, ty: &FloatType) -> bool {
+    pub fn _fits_into_type(&self, ty: &FloatType) -> bool {
         match ty {
             FloatType::F32 => true, //TODO: boundary checks
             FloatType::F64 => true,
         }
     }
 }
+impl fmt::Display for FloatLiteral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.val)
+    }
+}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Keyword {
     Primitive(Primitive),
-    Yeet,
+    Ret,
     True,
     False,
     Struct,
@@ -142,8 +151,7 @@ impl Keyword {
             "bool" => Some(Keyword::Primitive(Primitive::Bool)),
             "string" => Some(Keyword::Primitive(Primitive::String)),
 
-            "yeet" => Some(Keyword::Yeet),
-            "ret" => Some(Keyword::Yeet),
+            "ret" => Some(Keyword::Ret),
             "true" => Some(Keyword::True),
             "false" => Some(Keyword::False),
             "struct" => Some(Keyword::Struct),
@@ -176,5 +184,20 @@ impl Operator {
             Add | Sub => 50,
             Mul | Div => 60,
         }
+    }
+}
+impl<C: Representer> Repr<C> for Operator {
+    fn repr(&self, c: &C) {
+        c.write_add(match self {
+            Operator::Equals => "==",
+            Operator::Add => "+",
+            Operator::Sub => "-",
+            Operator::Mul => "*",
+            Operator::Div => "/",
+            Operator::LT => "<",
+            Operator::GT => ">",
+            Operator::LE => "<=",
+            Operator::GE => ">=",
+        })
     }
 }

@@ -44,6 +44,7 @@ pub enum Intrinsic {
 #[derive(Debug, Clone)]
 pub struct FunctionHeader {
     pub params: Vec<(String, TypeRef)>,
+    pub vararg: Option<(String, TypeRef)>,
     pub return_type: TypeRef
 }
 
@@ -57,8 +58,8 @@ pub struct Struct {
     pub members: Vec<(String, TypeRef)>
 }
 impl Struct {
-    pub fn size(&self, module: &Module) -> u32 {
-        self.members.iter().map(|(_, m)| m.size(module)).sum()
+    pub fn _size(&self, module: &Module) -> u32 {
+        self.members.iter().map(|(_, m)| m._size(module)).sum()
     }
 }
 impl fmt::Display for Struct {
@@ -73,12 +74,12 @@ pub enum TypeRef {
     Resolved(SymbolKey)
 }
 impl TypeRef {
-    pub fn size(&self, module: &Module) -> u32 {
+    pub fn _size(&self, module: &Module) -> u32 {
         match self {
-            TypeRef::Primitive(p) => p.size(),
+            TypeRef::Primitive(p) => p._size(),
             TypeRef::Resolved(key) => {
                 match &module.types[key] {
-                    Type::Struct(s) => s.size(module)
+                    Type::Struct(s) => s._size(module)
                 }
             }
         }

@@ -24,8 +24,7 @@ pub enum CompileError {
     FloatLiteralOutOfRange,
     UseOfUnassignedVariable,
     MissingReturnValue,
-    DuplicateTypeDefinition,
-    DuplicateFunctionDefinition,
+    DuplicateDefinition,
     InvalidTopLevelBlockItem,
     UnknownEscapeCode
 }

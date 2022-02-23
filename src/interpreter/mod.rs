@@ -1,7 +1,7 @@
 use core::panic;
 use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}};
 
-use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, LValue}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
+use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -98,7 +98,7 @@ impl Value {
             Value::F32(_) => Float(FloatType::F32),
             Value::F64(_) => Float(FloatType::F64),
 
-            Value::Unit => Void,
+            Value::Unit => Unit,
             Value::Unassigned | Value::UnsizedInt(_) | Value::UnsizedFloat(_) 
                 => panic!("Unassigned/unsized values shouldn't be typechecked"),
             Value::Struct(_) | Value::Function(_) | Value::Type(_) => return None
@@ -175,15 +175,12 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
         Some(intrinsic) => {
             let val = match intrinsic {
                 tir::Intrinsic::Print => {
-                    let newline = match args.len() {
-                        1 => true,
-                        2 => {
-                            let Value::Bool(newline) = &args[1] else { panic!("invalid print() arg")};
-                            *newline
-                        }
-                        _ => panic!("Invalid print() arg count")
-                    };
-                    print!("{}{}", &args[0], if newline {"\n"} else {""});
+                    if args.len() == 0 {
+                        panic!("print() with zero args doesn't make sense");
+                    }
+                    for arg in args {
+                        print!("{}", arg);
+                    }
                     Value::Unit
                 },
                 tir::Intrinsic::Read => {
@@ -216,7 +213,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
         scope.values.insert(arg_name.clone(), arg_val);
     }
 
-    let v = eval_block(&mut scope, &f.ast.body).value();
+    let v = eval_block_or_expr(&mut scope, &f.ast.body).value();
     if let Some(ty) = v.get_type() {
         let expected = as_unresolved(&f.header().return_type);
         if ty != expected {
@@ -249,6 +246,17 @@ macro_rules! get_or_ret {
             ret@ValueOrReturn::Return(_) => return ret
         }
     };
+}
+
+fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr) -> ValueOrReturn {
+    match b {
+        ast::BlockOrExpr::Block(block) => eval_block(scope, block),
+        ast::BlockOrExpr::Expr(expr) => {
+            let mut scope: Scope = Scope::with_parent(scope);
+            let return_type = scope.expected_return_type().clone();
+            eval_expr(&mut scope, expr, Some(&return_type))
+        }
+    }
 }
 
 fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
@@ -316,15 +324,15 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
         StringLiteral(s) => Value::String(s.clone()),
         BoolLiteral(b) => Value::Bool(*b),
         Variable(name) => scope.resolve(name).0.clone(),
-        If(cond, then_block, else_block) => {
+        If(box ast::If { cond, then, else_ }) => {
             let Value::Bool(cond_true) = get_or_ret!(
                 eval_expr(scope, cond, Some(&UnresolvedType::Primitive(Primitive::Bool)))
             ) else { panic!("bool expected in if condition!") };
             if cond_true {
-                get_or_ret!(eval_block(scope, then_block))
+                get_or_ret!(eval_block_or_expr(scope, then))
             } else {
-                if let Some(else_block) = else_block {
-                    get_or_ret!(eval_block(scope, else_block))
+                if let Some(else_block) = else_ {
+                    get_or_ret!(eval_block_or_expr(scope, else_block))
                 } else {
                     Value::Unit
                 }
@@ -341,9 +349,18 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                             args.len(), 
                         );
                     }
-                    for (arg, (_, ty)) in args.iter().zip(&func.header().params) {
+                    let mut args = args.iter();
+                    for (_, ty) in &func.header().params {
+                        let arg  = args.next().expect("Not enough arguments to function");
                         arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
                     }
+
+                    if let Some((_, ty)) = &func.header().vararg {
+                        for arg in args {
+                            arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
+                        }
+                    }
+                    
                     eval_function(scope.outer(), &func, arg_vals) //TODO: proper scope
                 }
                 Value::Type(tir::Type::Struct(struc)) => {
@@ -631,22 +648,22 @@ fn as_unresolved(ty: &TypeRef) -> UnresolvedType {
 
 
 pub fn insert_intrinsics(module: &mut ast::Module) {
-    module.functions.insert("print".to_owned(), ast::Function {
-        body: ast::Block { items: Vec::new(), defs: Vec::new() },
-        params: vec![
-            ("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String)),
-            ("newline".to_owned(), ast::UnresolvedType::Primitive(Primitive::Bool))
-        ],
-        return_type: ast::UnresolvedType::Primitive(Primitive::Void)
-    });
-    module.functions.insert("read".to_owned(), ast::Function {
-        body: ast::Block { items: Vec::new(), defs: Vec::new() },
+    module.definitions.insert("print".to_owned(), Definition::Function(ast::Function {
+        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
+        params: Vec::new(),
+        vararg: Some(("args".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))),
+        return_type: ast::UnresolvedType::Primitive(Primitive::Unit)
+    }));
+    module.definitions.insert("read".to_owned(), Definition::Function(ast::Function {
+        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
         params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        vararg: None,
         return_type: ast::UnresolvedType::Primitive(Primitive::String)
-    });
-    module.functions.insert("parse".to_owned(), ast::Function {
-        body: ast::Block { items: Vec::new(), defs: Vec::new() },
+    }));
+    module.definitions.insert("parse".to_owned(), Definition::Function(ast::Function {
+        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
         params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        vararg: None,
         return_type: ast::UnresolvedType::Primitive(Primitive::Integer(IntType::I32))
-    });
+    }));
 }
