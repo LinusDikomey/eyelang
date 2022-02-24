@@ -1,5 +1,5 @@
 use std::{fmt, collections::HashMap};
-use crate::types::Primitive;
+use crate::{types::Primitive, ir::Instruction};
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct SymbolKey {
@@ -28,6 +28,7 @@ pub struct Module {
 pub struct Function {
     pub header: FunctionHeader,
     pub ast: crate::ast::Function, // temporary solution?
+    pub ir: Vec<Instruction>,
     pub intrinsic: Option<Intrinsic>
 }
 impl Function {

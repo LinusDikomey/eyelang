@@ -36,10 +36,11 @@ impl Lexer {
     fn parse(&mut self) -> Result<(), EyeError> {
         while self.index < self.chars.len() {
             self.skip_junk();
-            if self.index >= self.chars.len() { break }
+            if self.is_at_end() { break; }
 
-            let token = self.parse_token()?;
-            self.tokens.push(token);
+            if let Some(token) = self.parse_token()? {
+                self.tokens.push(token);
+            }
         }
         Ok(())
     }
@@ -48,12 +49,15 @@ impl Lexer {
         SourcePos::new(self.line, self.col)
     }
 
-    fn parse_token(&mut self) -> Result<Token, EyeError> {
+    fn parse_token(&mut self) -> Result<Option<Token>, EyeError> {
         let start = SourcePos::new(self.line, self.col);
         
         let mut val = String::new();
 
         let ty = loop {
+            if self.is_at_end() {
+                return Ok(None);
+            }
             break match self.current() {
                 '#' => {
                     if let Some('*') = self.peek() {
@@ -200,7 +204,7 @@ impl Lexer {
         self.step();
         let end = SourcePos::new(self.line, self.col);
 
-        Ok(Token::new(ty, val, start, end))
+        Ok(Some(Token::new(ty, val, start, end)))
     }
     
     fn parse_multiline_comment(&mut self) -> EyeResult<usize> {
@@ -225,13 +229,19 @@ impl Lexer {
     }
 
     fn skip_junk(&mut self) {
-        while let ' ' | '\r' | '\n' = self.current() { 
+        if self.is_at_end() { return; }
+        while let ' ' | '\r' | '\n' = self.current() {
             if self.step().is_none() { // end of file, no more checking for junk tokens
-                return
+                return;
             }
+            if self.is_at_end() { return; }
         }
     }
 
+    fn is_at_end(&self) -> bool {
+        self.index >= self.chars.len()
+    }
+    
     fn current(&self) -> char {
         self.chars[self.index]
     }

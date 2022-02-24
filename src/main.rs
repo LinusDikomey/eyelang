@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_else, box_patterns)]
+#![feature(iter_intersperse, let_else, box_patterns, variant_count)]
 
 /*
 use inkwell::OptimizationLevel;
@@ -19,6 +19,7 @@ mod types;
 mod typing;
 mod verifier;
 mod interpreter;
+mod ir;
 
 use crate::{ast::{Repr, ReprPrinter}, parser::Parser, typing::tir, interpreter::Scope, error::EyeResult};
 use std::{path::Path, sync::atomic::AtomicBool};

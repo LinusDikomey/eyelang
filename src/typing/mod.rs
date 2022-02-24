@@ -112,7 +112,7 @@ impl<'a> TypingCtx<'a> {
             "parse" => Some(Intrinsic::Parse),
             _ => None
         };
-        Ok(Function { header, ast: def.clone(), intrinsic })
+        Ok(Function { header, ast: def.clone(), intrinsic, ir: Vec::new() })
     }
 }
 
