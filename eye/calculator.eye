@@ -9,15 +9,15 @@ main -> {
 calc(mode string, a i32, b i32) -> i32 {
     if mode == "+" {
         ret a + b;
-    };
+    }
     if mode == "-" {
         ret a - b;
-    };
+    }
     if mode == "*" {
         ret a * b;
-    };
+    }
     if mode == "/" {
         ret a / b;
-    };
+    }
     ret -1;
 }

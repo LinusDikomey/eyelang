@@ -1,9 +1,9 @@
-sayHello(newline bool) -> { print("Hello", if newline: "\n" else "";); }
+sayHello(newline bool) ->: print("Hello", if newline: "\n" else "");
 bye -> { print("Bye"); }
 
 add(x i32, y i32) -> i32: x + y;
 
-abs(x i32) -> i32: if x < 0: -x else x;;
+abs(x i32) -> i32: if x < 0: -x else x;
 
 main -> {
     print(abs(-4), "\n");
@@ -24,7 +24,7 @@ main -> {
     if inp < 5:
         print("Your number is smaller than 5\n")
     else
-        print("Your number is 5 or larger\n");
+        print("Your number is 5 or larger\n")
 
     y: i32 = inp / 2;
     print("Half your number is: ", y, "\n");

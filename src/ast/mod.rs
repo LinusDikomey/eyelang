@@ -291,10 +291,7 @@ impl<C: Representer> Repr<C> for BlockOrExpr {
     fn repr(&self, c: &C) {
         match self {
             BlockOrExpr::Block(block) => block.repr(c),
-            BlockOrExpr::Expr(expr) => {
-                c.write_add(": ");
-                expr.repr(c);
-            },
+            BlockOrExpr::Expr(expr) => expr.repr(c)
         }
     }
 }
@@ -398,15 +395,15 @@ impl<C: Representer> Repr<C> for Expression {
             Self::If(box If { cond, then, else_ }) => {
                 c.write_add("if ");
                 cond.repr(c);
-                c.space();
+                if let BlockOrExpr::Block(_) = then {
+                    c.space();
+                } else {
+                    c.write_add(": ");
+                }
                 then.repr(c);
                 if let Some(else_block) = else_ {
                     c.write_add(" else ");
                     else_block.repr(c);
-
-                    if let BlockOrExpr::Expr(_) = else_block {
-                        c.write_add(";");
-                    }
                 }
             }
             Self::FunctionCall(func, args) => {

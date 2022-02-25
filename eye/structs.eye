@@ -15,11 +15,7 @@ main -> u8 {
 }
 
 abs(x i32) -> u32 {
-    if x < 0 {
-        ret u32 -x;
-    } else {
-        ret u32 x;
-    }
+    ret u32 if x < 0: -x else x;
 }
 
 assert(b bool) -> {

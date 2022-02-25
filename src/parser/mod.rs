@@ -93,10 +93,10 @@ impl Parser {
 
     /// stpes over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
-    pub fn step_assert(&mut self, ty: TokenType) -> Result<&Token, EyeError> {
-        let tok = self.step()?;
+    pub fn step_assert(&mut self, ty: TokenType) -> &Token {
+        let tok = self.step().expect("step_assert failed");
         debug_assert_eq!(tok.ty, ty);
-        Ok(tok)
+        tok
     }
 
     pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Result<&Token, EyeError> {
@@ -177,13 +177,13 @@ impl Parser {
         let block_item = match self.current()?.ty {
             TokenType::LBrace => Parsed::Item(Item::Block(BlockItem::Block(self.parse_block()?))),
             TokenType::Keyword(Keyword::If) => {
-                self.step_assert(TokenType::Keyword(Keyword::If))?;
+                self.step_assert(TokenType::Keyword(Keyword::If));
                 Parsed::Item(Item::Block(BlockItem::Expression(
                     Expression::If(Box::new(self.parse_if_from_cond()?))
                 )))
             }
             TokenType::Ident => {
-                let name = self.step_assert(TokenType::Ident)?.get_val();
+                let name = self.step_assert(TokenType::Ident).get_val();
                 match self.step().map(|t| t.ty) {
                     Ok(TokenType::LParen) => match self.parse_params() {
                         Ok(params) => {
@@ -402,11 +402,10 @@ impl Parser {
         let cond = self.parse_expression()?;
         let then = self.parse_block_or_expr()?;
         
-        let else_or_semicolon = self.step()?;
-        let else_ = match_or_unexpected!{else_or_semicolon,
-            TokenType::Semicolon => None,
-            TokenType::Keyword(Keyword::Else) => {
-                let else_pos = else_or_semicolon.end;
+        let else_ = if let Some(tok) = self.peek() {
+            if tok.ty == TokenType::Keyword(Keyword::Else) {
+                let tok = self.step_assert(TokenType::Keyword(Keyword::Else));
+                let else_pos = tok.end;
                 let next = self.peek().ok_or(EyeError::CompileError(
                     CompileError::UnexpectedEndOfFile,
                     else_pos,
@@ -415,14 +414,10 @@ impl Parser {
                 
                 match next.ty {
                     TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block()?)),
-                    _ => {
-                        let expr = self.parse_expression()?;
-                        self.step_expect(TokenType::Semicolon)?;
-                        Some(BlockOrExpr::Expr(expr))
-                    }
+                    _ => Some(BlockOrExpr::Expr(self.parse_expression()?))
                 }
-            }
-        };
+            } else { None }
+        } else { None };
 
         Ok(ast::If { cond, then, else_ })
     }
