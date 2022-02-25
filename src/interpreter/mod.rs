@@ -291,12 +291,9 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
 fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&UnresolvedType>) -> ValueOrReturn {
     use ast::Expression::*;
     let val = match expr {
-        Return(ret) => {
-            return ValueOrReturn::Return(match ret {
-                Some(ret) => eval_expr(scope, ret, Some(&scope.expected_return_type().clone())).value(),
-                None => Value::Unit
-            });
-        },
+        Return(ret) => return ValueOrReturn::Return(
+            eval_expr(scope, ret, Some(&scope.expected_return_type().clone())).value(),
+        ),
         IntLiteral(lit) => {
             match lit.ty {
                 Some(IntType::I8) => Value::I8(lit.unsigned_val as i8 * if lit.sign {-1} else {1}),

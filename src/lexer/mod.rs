@@ -79,7 +79,7 @@ impl Lexer {
                     self.skip_junk();
                     continue;
                 }
-                ';' => TokenType::Semicolon,
+                //';' => TokenType::Semicolon,
                 ':' => {
                     match self.peek() {
                         Some(':') => { self.step(); TokenType::DoubleColon },

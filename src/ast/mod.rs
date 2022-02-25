@@ -360,7 +360,7 @@ impl<C: Representer> Repr<C> for BlockItem {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Return(Option<Box<Expression>>),
+    Return(Box<Expression>),
     IntLiteral(IntLiteral),
     FloatLiteral(FloatLiteral),
     StringLiteral(String),
@@ -378,10 +378,8 @@ impl<C: Representer> Repr<C> for Expression {
         match self {
             Self::Return(val) => {
                 c.write_add("ret");
-                if let Some(val) = val {
-                    c.space();
-                    val.repr(c);
-                }
+                c.space();
+                val.repr(c);
             }
             Self::IntLiteral(lit) => c.write_add(format!("{lit}")),
             Self::FloatLiteral(lit) => c.write_add(format!("{lit}")),

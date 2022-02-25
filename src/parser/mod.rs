@@ -37,7 +37,7 @@ macro_rules! match_or_unexpected {
     }};
 }
 
-pub struct TokenTypes<const N: usize>([TokenType; N]);
+pub struct TokenTypes<const N: usize>(pub [TokenType; N]);
 impl From<TokenType> for TokenTypes<1> {
     fn from(x: TokenType) -> Self {
         Self([x])
@@ -110,6 +110,14 @@ impl Parser {
             ));
         }
         Ok(tok)
+    }
+
+    pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Option<&Token> {
+        if let Some(next) = self.peek() {
+            next.is(expected).then(|| self.step().unwrap())
+        } else {
+            None
+        }
     }
 
     pub fn peek(&mut self) -> Option<&Token> {
@@ -194,9 +202,6 @@ impl Parser {
                                         _ => self.parse_type()?
                                     };
                                     let body = self.parse_block_or_expr()?;
-                                    if let BlockOrExpr::Expr(_) = &body {
-                                        self.step_expect(TokenType::Semicolon)?;
-                                    }
                                     Parsed::Item(Item::Definition(name, Definition::Function(Function {
                                         params, vararg: None, body, return_type
                                     })))
@@ -213,9 +218,6 @@ impl Parser {
                             _ => self.parse_type()?
                         };
                         let body = self.parse_block_or_expr()?;
-                        if let BlockOrExpr::Expr(_) = &body {
-                            self.step_expect(TokenType::Semicolon)?;
-                        }
                         Parsed::Item(Item::Definition(name, Definition::Function(Function {
                             params: Vec::new(), vararg: None, body, return_type
                         })))
@@ -237,16 +239,12 @@ impl Parser {
                     },
                     Ok(TokenType::Colon) => {
                         let ty = self.parse_type()?;
-                        let val = match_or_unexpected!{self.step()?, 
-                            TokenType::Assign => Some(self.parse_expression()?),
-                            TokenType::Semicolon => None
-                        };
-                        tok_expect!(self.step()?, TokenType::Semicolon);
+                        let val = self.step_if(TokenType::Assign).is_some()
+                            .then(|| self.parse_expression()).transpose()?;
                         Parsed::Item(Item::Block(BlockItem::Declare(name, Some(ty), val)))
                     },
                     Ok(TokenType::Declare) => {
                         let val = self.parse_expression()?;
-                        tok_expect!(self.step()?, TokenType::Semicolon);
                         Parsed::Item(Item::Block(BlockItem::Declare(name, None, Some(val))))
                     }
                     Ok(TokenType::Dot) => {
@@ -260,12 +258,10 @@ impl Parser {
                             }
                         }
                         let val = self.parse_expression()?;
-                        tok_expect!(self.step()?, TokenType::Semicolon);
                         Parsed::Item(Item::Block(BlockItem::Assign(l_value, val)))
                     }
                     Ok(TokenType::Assign) => {
                         let val = self.parse_expression()?;
-                        tok_expect!(self.step()?, TokenType::Semicolon);
                         Parsed::Item(Item::Block(BlockItem::Assign(LValue::Variable(name), val)))
                     }
                     _ => Parsed::None
@@ -279,7 +275,6 @@ impl Parser {
             self.set_position(pre_item_pos);
             match self.parse_expression() {
                 Ok(expr) => {
-                    tok_expect!(self.step()?, TokenType::Semicolon);
                     Ok(Item::Block(BlockItem::Expression(expr)))
                 }
                 Err(err) => {
@@ -327,14 +322,7 @@ impl Parser {
                 tok_expect!(self.step()?, TokenType::RParen);
                 factor
             },
-            TokenType::Keyword(Keyword::Ret) => {
-                let return_val = if self.current()?.ty == TokenType::Semicolon {
-                    None
-                } else {
-                    Some(Box::new(self.parse_expression()?))
-                };
-                Expression::Return(return_val)
-            },
+            TokenType::Keyword(Keyword::Ret) => Expression::Return(Box::new(self.parse_expression()?)),
             TokenType::IntLiteral              => Expression::IntLiteral(IntLiteral::from_tok(first)?),
             TokenType::FloatLiteral            => Expression::FloatLiteral(FloatLiteral::from_tok(first)?),
             TokenType::StringLiteral           => Expression::StringLiteral(first.get_val()),

@@ -1,6 +1,6 @@
-use std::{u128, fmt};
+use std::{u128, fmt, ops::RangeBounds};
 
-use crate::{error::EyeError, types::{FloatType, IntType, Primitive}, ast::{Repr, Representer}};
+use crate::{error::EyeError, types::{FloatType, IntType, Primitive}, ast::{Repr, Representer}, parser::TokenTypes};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -36,11 +36,15 @@ impl Token {
     pub fn get_val(&self) -> String {
         self.val.clone()
     }
+
+    pub fn is<const N: usize>(&self, types: impl Into<TokenTypes<N>>) -> bool {
+        types.into().0.contains(&self.ty)
+    }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum TokenType {
-    Semicolon,
+    //Semicolon,
     Colon,
     DoubleColon,
     Comma,
