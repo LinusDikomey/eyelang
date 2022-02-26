@@ -276,6 +276,9 @@ impl Function {
         }
         c.write_add(" -> ");
         c.write_add(format!("{}", self.return_type));
+        if let BlockOrExpr::Expr(_) = &self.body {
+            c.write_add(":");
+        }
         c.space();
         self.body.repr(c);
         c.writeln("");
@@ -354,7 +357,7 @@ impl<C: Representer> Repr<C> for BlockItem {
                 expr.repr(c);
             }
         }
-        c.write_add(";\n");
+        c.write_add("\n");
     }
 }
 

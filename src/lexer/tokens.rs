@@ -1,4 +1,4 @@
-use std::{u128, fmt, ops::RangeBounds};
+use std::{u128, fmt};
 
 use crate::{error::EyeError, types::{FloatType, IntType, Primitive}, ast::{Repr, Representer}, parser::TokenTypes};
 
@@ -130,7 +130,7 @@ pub enum Keyword {
     Struct,
     If,
     Else,
-    While,
+    While
 }
 
 impl Keyword {

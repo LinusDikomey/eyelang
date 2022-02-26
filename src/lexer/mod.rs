@@ -179,7 +179,7 @@ impl Lexer {
                 'A'..='Z' | 'a'..='z' => { // keyword/identifier
                     let mut keyword_or_literal = String::from(self.current());
                     while match self.peek() {
-                        Some('A'..='Z' | 'a'..='z' | '0'..='9') => true,
+                        Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') => true,
                         _ => false
                         
                     } {

@@ -331,7 +331,7 @@ impl Parser {
             TokenType::Ident                   => Expression::Variable(first.get_val()),
             TokenType::Keyword(Keyword::If) => Expression::If(Box::new(self.parse_if_from_cond()?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
-                let inner = self.parse_expression()?;
+                let inner = self.parse_factor()?;
                 Expression::Cast(p, Box::new(inner))
             }
         );
@@ -341,16 +341,14 @@ impl Parser {
                     // function call
                     tok_expect!(self.step()?, TokenType::LParen);
                     let mut args = Vec::new();
-                    loop {
-                        match self.peek().map(|t| t.ty) {
-                            Some(TokenType::RParen) => { self.step().unwrap(); break },
-                            _ => ()
+                    if self.step_if(TokenType::RParen).is_none() {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            match_or_unexpected!(self.step()?,
+                                TokenType::Comma => (),
+                                TokenType::RParen => break
+                            )
                         }
-                        args.push(self.parse_expression()?);
-                        match_or_unexpected!(self.step()?,
-                            TokenType::Comma => (),
-                            TokenType::RParen => break
-                        )
                     }
                     expr = Expression::FunctionCall(Box::new(expr), args);
                 }

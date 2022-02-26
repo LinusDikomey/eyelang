@@ -99,9 +99,10 @@ impl Value {
             Value::F64(_) => Float(FloatType::F64),
 
             Value::Unit => Unit,
-            Value::Unassigned | Value::UnsizedInt(_) | Value::UnsizedFloat(_) 
+
+            Value::UnsizedInt(_) | Value::UnsizedFloat(_) 
                 => panic!("Unassigned/unsized values shouldn't be typechecked"),
-            Value::Struct(_) | Value::Function(_) | Value::Type(_) => return None
+            Value::Unassigned | Value::Struct(_) | Value::Function(_) | Value::Type(_) => return None
         }))
     }
 }
@@ -213,7 +214,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
         scope.values.insert(arg_name.clone(), arg_val);
     }
 
-    let v = eval_block_or_expr(&mut scope, &f.ast.body).value();
+    let v = eval_block_or_expr(&mut scope, &f.ast.body, Some(&as_unresolved(&f.header().return_type))).value();
     if let Some(ty) = v.get_type() {
         let expected = as_unresolved(&f.header().return_type);
         if ty != expected {
@@ -248,13 +249,11 @@ macro_rules! get_or_ret {
     };
 }
 
-fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr) -> ValueOrReturn {
+fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<&UnresolvedType>) -> ValueOrReturn {
     match b {
         ast::BlockOrExpr::Block(block) => eval_block(scope, block),
         ast::BlockOrExpr::Expr(expr) => {
-            let mut scope: Scope = Scope::with_parent(scope);
-            let return_type = scope.expected_return_type().clone();
-            eval_expr(&mut scope, expr, Some(&return_type))
+            eval_expr(scope, expr, expected)
         }
     }
 }
@@ -326,10 +325,10 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 eval_expr(scope, cond, Some(&UnresolvedType::Primitive(Primitive::Bool)))
             ) else { panic!("bool expected in if condition!") };
             if cond_true {
-                get_or_ret!(eval_block_or_expr(scope, then))
+                get_or_ret!(eval_block_or_expr(scope, then, expected))
             } else {
                 if let Some(else_block) = else_ {
-                    get_or_ret!(eval_block_or_expr(scope, else_block))
+                    get_or_ret!(eval_block_or_expr(scope, else_block, expected))
                 } else {
                     Value::Unit
                 }
@@ -393,7 +392,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
         }
         BinOp(op, sides) => {
             let (lhs, rhs) = &**sides;
-            if let Operator::LT | Operator::LE | Operator::GT | Operator::GE = op {
+            if let Operator::LT | Operator::LE | Operator::GT | Operator::GE | Operator::Equals = op {
                 expected = None;
             };
             let lhs = get_or_ret!(eval_expr(scope, lhs, expected));
@@ -473,11 +472,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 U8 => U32: Primitive::Integer(IntType::U32),
                 U8 => U64: Primitive::Integer(IntType::U64),
                 U8 => U128: Primitive::Integer(IntType::U128),
-                U8 => U8: Primitive::Integer(IntType::I8),
-                U8 => U16: Primitive::Integer(IntType::I16),
-                U8 => U32: Primitive::Integer(IntType::I32),
-                U8 => U64: Primitive::Integer(IntType::I64),
-                U8 => U128: Primitive::Integer(IntType::I128),
+                U8 => I8: Primitive::Integer(IntType::I8),
+                U8 => I16: Primitive::Integer(IntType::I16),
+                U8 => I32: Primitive::Integer(IntType::I32),
+                U8 => I64: Primitive::Integer(IntType::I64),
+                U8 => I128: Primitive::Integer(IntType::I128),
                 U8 => F32: Primitive::Float(FloatType::F32),
                 U8 => F64: Primitive::Float(FloatType::F64),
                 U16 => U8: Primitive::Integer(IntType::U8),
@@ -485,11 +484,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 U16 => U32: Primitive::Integer(IntType::U32),
                 U16 => U64: Primitive::Integer(IntType::U64),
                 U16 => U128: Primitive::Integer(IntType::U128),
-                U16 => U8: Primitive::Integer(IntType::I8),
-                U16 => U16: Primitive::Integer(IntType::I16),
-                U16 => U32: Primitive::Integer(IntType::I32),
-                U16 => U64: Primitive::Integer(IntType::I64),
-                U16 => U128: Primitive::Integer(IntType::I128),
+                U16 => I8: Primitive::Integer(IntType::I8),
+                U16 => I16: Primitive::Integer(IntType::I16),
+                U16 => I32: Primitive::Integer(IntType::I32),
+                U16 => I64: Primitive::Integer(IntType::I64),
+                U16 => I128: Primitive::Integer(IntType::I128),
                 U16 => F32: Primitive::Float(FloatType::F32),
                 U16 => F64: Primitive::Float(FloatType::F64),
                 U32 => U8: Primitive::Integer(IntType::U8),
@@ -497,11 +496,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 U32 => U32: Primitive::Integer(IntType::U32),
                 U32 => U64: Primitive::Integer(IntType::U64),
                 U32 => U128: Primitive::Integer(IntType::U128),
-                U32 => U8: Primitive::Integer(IntType::I8),
-                U32 => U16: Primitive::Integer(IntType::I16),
-                U32 => U32: Primitive::Integer(IntType::I32),
-                U32 => U64: Primitive::Integer(IntType::I64),
-                U32 => U128: Primitive::Integer(IntType::I128),
+                U32 => I8: Primitive::Integer(IntType::I8),
+                U32 => I16: Primitive::Integer(IntType::I16),
+                U32 => I32: Primitive::Integer(IntType::I32),
+                U32 => I64: Primitive::Integer(IntType::I64),
+                U32 => I128: Primitive::Integer(IntType::I128),
                 U32 => F32: Primitive::Float(FloatType::F32),
                 U32 => F64: Primitive::Float(FloatType::F64),
                 U64 => U8: Primitive::Integer(IntType::U8),
@@ -509,11 +508,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 U64 => U32: Primitive::Integer(IntType::U32),
                 U64 => U64: Primitive::Integer(IntType::U64),
                 U64 => U128: Primitive::Integer(IntType::U128),
-                U64 => U8: Primitive::Integer(IntType::I8),
-                U64 => U16: Primitive::Integer(IntType::I16),
-                U64 => U32: Primitive::Integer(IntType::I32),
-                U64 => U64: Primitive::Integer(IntType::I64),
-                U64 => U128: Primitive::Integer(IntType::I128),
+                U64 => I8: Primitive::Integer(IntType::I8),
+                U64 => I16: Primitive::Integer(IntType::I16),
+                U64 => I32: Primitive::Integer(IntType::I32),
+                U64 => I64: Primitive::Integer(IntType::I64),
+                U64 => I128: Primitive::Integer(IntType::I128),
                 U64 => F32: Primitive::Float(FloatType::F32),
                 U64 => F64: Primitive::Float(FloatType::F64),
                 U128 => U8: Primitive::Integer(IntType::U8),
@@ -521,11 +520,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 U128 => U32: Primitive::Integer(IntType::U32),
                 U128 => U64: Primitive::Integer(IntType::U64),
                 U128 => U128: Primitive::Integer(IntType::U128),
-                U128 => U8: Primitive::Integer(IntType::I8),
-                U128 => U16: Primitive::Integer(IntType::I16),
-                U128 => U32: Primitive::Integer(IntType::I32),
-                U128 => U64: Primitive::Integer(IntType::I64),
-                U128 => U128: Primitive::Integer(IntType::I128),
+                U128 => I8: Primitive::Integer(IntType::I8),
+                U128 => I16: Primitive::Integer(IntType::I16),
+                U128 => I32: Primitive::Integer(IntType::I32),
+                U128 => I64: Primitive::Integer(IntType::I64),
+                U128 => I128: Primitive::Integer(IntType::I128),
                 U128 => F32: Primitive::Float(FloatType::F32),
                 U128 => F64: Primitive::Float(FloatType::F64),
 
@@ -534,11 +533,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 I8 => U32: Primitive::Integer(IntType::U32),
                 I8 => U64: Primitive::Integer(IntType::U64),
                 I8 => U128: Primitive::Integer(IntType::U128),
-                I8 => U8: Primitive::Integer(IntType::I8),
-                I8 => U16: Primitive::Integer(IntType::I16),
-                I8 => U32: Primitive::Integer(IntType::I32),
-                I8 => U64: Primitive::Integer(IntType::I64),
-                I8 => U128: Primitive::Integer(IntType::I128),
+                I8 => I8: Primitive::Integer(IntType::I8),
+                I8 => I16: Primitive::Integer(IntType::I16),
+                I8 => I32: Primitive::Integer(IntType::I32),
+                I8 => I64: Primitive::Integer(IntType::I64),
+                I8 => I128: Primitive::Integer(IntType::I128),
                 I8 => F32: Primitive::Float(FloatType::F32),
                 I8 => F64: Primitive::Float(FloatType::F64),
                 I16 => U8: Primitive::Integer(IntType::U8),
@@ -546,11 +545,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 I16 => U32: Primitive::Integer(IntType::U32),
                 I16 => U64: Primitive::Integer(IntType::U64),
                 I16 => U128: Primitive::Integer(IntType::U128),
-                I16 => U8: Primitive::Integer(IntType::I8),
-                I16 => U16: Primitive::Integer(IntType::I16),
-                I16 => U32: Primitive::Integer(IntType::I32),
-                I16 => U64: Primitive::Integer(IntType::I64),
-                I16 => U128: Primitive::Integer(IntType::I128),
+                I16 => I8: Primitive::Integer(IntType::I8),
+                I16 => I16: Primitive::Integer(IntType::I16),
+                I16 => I32: Primitive::Integer(IntType::I32),
+                I16 => I64: Primitive::Integer(IntType::I64),
+                I16 => I128: Primitive::Integer(IntType::I128),
                 I16 => F32: Primitive::Float(FloatType::F32),
                 I16 => F64: Primitive::Float(FloatType::F64),
                 I32 => U8: Primitive::Integer(IntType::U8),
@@ -558,11 +557,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 I32 => U32: Primitive::Integer(IntType::U32),
                 I32 => U64: Primitive::Integer(IntType::U64),
                 I32 => U128: Primitive::Integer(IntType::U128),
-                I32 => U8: Primitive::Integer(IntType::I8),
-                I32 => U16: Primitive::Integer(IntType::I16),
-                I32 => U32: Primitive::Integer(IntType::I32),
-                I32 => U64: Primitive::Integer(IntType::I64),
-                I32 => U128: Primitive::Integer(IntType::I128),
+                I32 => I8: Primitive::Integer(IntType::I8),
+                I32 => I16: Primitive::Integer(IntType::I16),
+                I32 => I32: Primitive::Integer(IntType::I32),
+                I32 => I64: Primitive::Integer(IntType::I64),
+                I32 => I128: Primitive::Integer(IntType::I128),
                 I32 => F32: Primitive::Float(FloatType::F32),
                 I32 => F64: Primitive::Float(FloatType::F64),
                 I64 => U8: Primitive::Integer(IntType::U8),
@@ -570,11 +569,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 I64 => U32: Primitive::Integer(IntType::U32),
                 I64 => U64: Primitive::Integer(IntType::U64),
                 I64 => U128: Primitive::Integer(IntType::U128),
-                I64 => U8: Primitive::Integer(IntType::I8),
-                I64 => U16: Primitive::Integer(IntType::I16),
-                I64 => U32: Primitive::Integer(IntType::I32),
-                I64 => U64: Primitive::Integer(IntType::I64),
-                I64 => U128: Primitive::Integer(IntType::I128),
+                I64 => I8: Primitive::Integer(IntType::I8),
+                I64 => I16: Primitive::Integer(IntType::I16),
+                I64 => I32: Primitive::Integer(IntType::I32),
+                I64 => I64: Primitive::Integer(IntType::I64),
+                I64 => I128: Primitive::Integer(IntType::I128),
                 I64 => F32: Primitive::Float(FloatType::F32),
                 I64 => F64: Primitive::Float(FloatType::F64),
                 I128 => U8: Primitive::Integer(IntType::U8),
@@ -582,11 +581,11 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                 I128 => U32: Primitive::Integer(IntType::U32),
                 I128 => U64: Primitive::Integer(IntType::U64),
                 I128 => U128: Primitive::Integer(IntType::U128),
-                I128 => U8: Primitive::Integer(IntType::I8),
-                I128 => U16: Primitive::Integer(IntType::I16),
-                I128 => U32: Primitive::Integer(IntType::I32),
-                I128 => U64: Primitive::Integer(IntType::I64),
-                I128 => U128: Primitive::Integer(IntType::I128),
+                I128 => I8: Primitive::Integer(IntType::I8),
+                I128 => I16: Primitive::Integer(IntType::I16),
+                I128 => I32: Primitive::Integer(IntType::I32),
+                I128 => I64: Primitive::Integer(IntType::I64),
+                I128 => I128: Primitive::Integer(IntType::I128),
                 I128 => F32: Primitive::Float(FloatType::F32),
                 I128 => F64: Primitive::Float(FloatType::F64),
 

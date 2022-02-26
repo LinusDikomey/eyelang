@@ -1,4 +1,4 @@
-main -> {
+main -> u8 {
     mode := read("Enter operation: ")
     a := parse(read("First number: "))
     b := parse(read("Second number: "))
@@ -7,17 +7,9 @@ main -> {
 }
 
 calc(mode string, a i32, b i32) -> i32 {
-    if mode == "+" {
-        ret a + b
-    }
-    if mode == "-" {
-        ret a - b
-    }
-    if mode == "*" {
-        ret a * b
-    }
-    if mode == "/" {
-        ret a / b
-    }
-    ret -1
+    ret if mode == "+": a + b
+    else if mode == "-": a - b
+    else if mode == "*": a * b
+    else if mode == "/": a / b
+    else -1
 }
