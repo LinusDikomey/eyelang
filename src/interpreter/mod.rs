@@ -1,15 +1,15 @@
 use core::panic;
-use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}};
+use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}, mem::ManuallyDrop};
 
-use crate::{typing::tir::{self, Module, TypeRef}, ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator};
+use crate::{ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator, ir::{self, TypeRef}};
 
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Unassigned,
 
-    Function(tir::Function),
-    Type(tir::Type),
+    Function(ir::Function),
+    Type(ir::Type),
 
     I8(i8),
     I16(i16),
@@ -44,7 +44,7 @@ impl fmt::Display for Value {
                     .map(|p| format!("{}: {}", p.0, p.1))
                     .intersperse(", ".to_owned()).collect::<std::string::String>(),
                 func.header().return_type),
-            Type(tir::Type::Struct(struc)) => write!(f, "{}", struc),
+            Type(ir::Type::Struct(_, struc)) => write!(f, "{}", struc),
         
             I8(x) => write!(f, "{}", x),
             I16(x) => write!(f, "{}", x),
@@ -77,26 +77,26 @@ impl fmt::Display for Value {
     }
 }
 impl Value {
-    pub fn get_type(&self) -> Option<UnresolvedType> {
+    pub fn get_type(&self) -> Option<TypeRef> {
         use Primitive::*;
-        Some(UnresolvedType::Primitive(match self {
+        Some(TypeRef::Primitive(match self {
             Value::Bool(_) => Bool,
             Value::String(_) => String,
 
-            Value::U8(_) => Integer(IntType::U8),
-            Value::U16(_) => Integer(IntType::U16),
-            Value::U32(_) => Integer(IntType::U32),
-            Value::U64(_) => Integer(IntType::U64),
-            Value::U128(_) => Integer(IntType::U128),
+            Value::U8(_) => U8,
+            Value::U16(_) => U16,
+            Value::U32(_) => U32,
+            Value::U64(_) => U64,
+            Value::U128(_) => U128,
 
-            Value::I8(_) => Integer(IntType::I8),
-            Value::I16(_) => Integer(IntType::I16),
-            Value::I32(_) => Integer(IntType::I32),
-            Value::I64(_) => Integer(IntType::I64),
-            Value::I128(_) => Integer(IntType::I128),
+            Value::I8(_) => I8,
+            Value::I16(_) => I16,
+            Value::I32(_) => I32,
+            Value::I64(_) => I64,
+            Value::I128(_) => I128,
 
-            Value::F32(_) => Float(FloatType::F32),
-            Value::F64(_) => Float(FloatType::F64),
+            Value::F32(_) => F32,
+            Value::F64(_) => F64,
 
             Value::Unit => Unit,
 
@@ -110,7 +110,7 @@ impl Value {
 pub struct Scope {
     parent: Option<*mut Scope>,
     values: HashMap<String, Value>,
-    expected_return_type: Option<UnresolvedType>
+    expected_return_type: Option<TypeRef>
 }
 impl Scope {
     pub fn new() -> Self {
@@ -119,13 +119,26 @@ impl Scope {
     pub fn with_parent(parent: &mut Scope) -> Self {
         Self { parent: Some(parent as _), values: HashMap::new(), expected_return_type: None }
     }
-    pub fn from_module(module: Module) -> Self {
+    pub fn from_module(module: ir::IrModule) -> Self {
         let mut s = Scope::new();
-        for (name, func) in module.functions {
-            s.values.insert(name.into_inner(), Value::Function(func));
-        }
-        for (name, ty) in module.types {
-            s.values.insert(name.into_inner(), Value::Type(ty));
+
+        let mut funcs = ManuallyDrop::new(module.funcs);
+        let mut types = ManuallyDrop::new(module.types);
+
+        // SAFETY: funcs and types are taken out and left uninitialized. They are all taken exactly once because
+        // they are all defined in the symbols map.
+        #[allow(invalid_value)]
+        for (name, (symbol_ty, key)) in module.symbols {
+            s.values.insert(name, match symbol_ty {
+                ir::SymbolType::Func => Value::Function(std::mem::replace(
+                    &mut funcs[key.idx()],
+                    unsafe { std::mem::MaybeUninit::uninit().assume_init() }
+                )),
+                ir::SymbolType::Type => Value::Type(std::mem::replace(
+                    &mut types[key.idx()],
+                    unsafe { std::mem::MaybeUninit::uninit().assume_init() }
+                )),
+            });
         }
         s
     }
@@ -159,8 +172,8 @@ impl Scope {
         }
     }
 
-    pub fn expected_return_type(&self) -> &UnresolvedType {
-        match &self.expected_return_type {
+    pub fn expected_return_type(&self) -> TypeRef {
+        match self.expected_return_type {
             Some(ty) => ty,
             None => if let Some(parent) = self.parent {
                 unsafe { &*parent }.expected_return_type()
@@ -169,13 +182,25 @@ impl Scope {
             }
         }
     }
+
+    /// temporary function for resolving ast types
+    fn resolve_type(&self, name: &str) -> TypeRef {
+        if let Some(Value::Type(ir::Type::Struct(key, _))) = self.values.get(name) {
+            return TypeRef::Resolved(*key);
+        } else {
+            if let Some(parent) = self.parent {
+                return unsafe { &*parent }.resolve_type(name);
+            }
+        }
+        panic!("Missing type {name:?}")
+    }
 }
 
-pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>) -> Value {
+pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) -> Value {
     match &f.intrinsic {
         Some(intrinsic) => {
             let val = match intrinsic {
-                tir::Intrinsic::Print => {
+                ir::Intrinsic::Print => {
                     if args.len() == 0 {
                         panic!("print() with zero args doesn't make sense");
                     }
@@ -184,7 +209,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
                     }
                     Value::Unit
                 },
-                tir::Intrinsic::Read => {
+                ir::Intrinsic::Read => {
                     match args.len() {
                         0 => {}
                         1 => {
@@ -196,7 +221,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
                     }
                     Value::String(stdin().lock().lines().next().unwrap().unwrap())
                 }
-                tir::Intrinsic::Parse => {
+                ir::Intrinsic::Parse => {
                     assert_eq!(args.len(), 1);
                     let Value::String(s) = &args[0] else { panic!("Invalid parse() argument") };
                     Value::I32(s.parse().unwrap())
@@ -209,14 +234,14 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &tir::Function, args: Vec<Value>)
     assert_eq!(f.header.params.len(), args.len());
 
     let mut scope = Scope::with_parent(scope);
-    scope.expected_return_type = Some(as_unresolved(&f.header().return_type));
+    scope.expected_return_type = Some(f.header().return_type);
     for ((arg_name, _), arg_val) in f.header.params.iter().zip(args) {
         scope.values.insert(arg_name.clone(), arg_val);
     }
 
-    let v = eval_block_or_expr(&mut scope, &f.ast.body, Some(&as_unresolved(&f.header().return_type))).value();
+    let v = eval_block_or_expr(&mut scope, &f.ast.body, Some(f.header().return_type)).value();
     if let Some(ty) = v.get_type() {
-        let expected = as_unresolved(&f.header().return_type);
+        let expected = f.header().return_type;
         if ty != expected {
             panic!("Mismatched return type, expected: {:?}, found: {:?}",
                 expected,
@@ -249,7 +274,14 @@ macro_rules! get_or_ret {
     };
 }
 
-fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<&UnresolvedType>) -> ValueOrReturn {
+fn to_type_ref(unresolved: &UnresolvedType, scope: &Scope) -> TypeRef {
+    match unresolved {
+        UnresolvedType::Primitive(p) => TypeRef::Primitive(*p),
+        UnresolvedType::Unresolved(name) => scope.resolve_type(name)
+    }
+}
+
+fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<TypeRef>) -> ValueOrReturn {
     match b {
         ast::BlockOrExpr::Block(block) => eval_block(scope, block),
         ast::BlockOrExpr::Expr(expr) => {
@@ -267,7 +299,8 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
             },
             BlockItem::Declare(name, ty, expr) => {
                 let val = if let Some(e) = expr {
-                    get_or_ret!(eval_expr(&mut scope, e, ty.as_ref()))
+                    let expected = ty.as_ref().map(|ty| to_type_ref(ty, &scope));
+                    get_or_ret!(eval_expr(&mut scope, e, expected))
                 } else {
                     Value::Unassigned 
                 };
@@ -277,7 +310,7 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
                 let val = eval_lvalue(&mut scope, l_val);
                 let ty = val.get_type();
                 // the lvalue has to be evaluated again so scope isn't borrowed when evaluating the expression
-                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, ty.as_ref()));
+                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, ty));
             },
             BlockItem::Expression(expr) => {
                 get_or_ret!(eval_expr(&mut scope, expr, None));
@@ -287,11 +320,11 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
     ValueOrReturn::Value(Value::Unit)
 }
 
-fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&UnresolvedType>) -> ValueOrReturn {
+fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<TypeRef>) -> ValueOrReturn {
     use ast::Expression::*;
     let val = match expr {
         Return(ret) => return ValueOrReturn::Return(
-            eval_expr(scope, ret, Some(&scope.expected_return_type().clone())).value(),
+            eval_expr(scope, ret, Some(scope.expected_return_type())).value(),
         ),
         IntLiteral(lit) => {
             match lit.ty {
@@ -322,7 +355,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
         Variable(name) => scope.resolve(name).0.clone(),
         If(box ast::If { cond, then, else_ }) => {
             let Value::Bool(cond_true) = get_or_ret!(
-                eval_expr(scope, cond, Some(&UnresolvedType::Primitive(Primitive::Bool)))
+                eval_expr(scope, cond, Some(TypeRef::Primitive(Primitive::Bool)))
             ) else { panic!("bool expected in if condition!") };
             if cond_true {
                 get_or_ret!(eval_block_or_expr(scope, then, expected))
@@ -348,18 +381,18 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                     let mut args = args.iter();
                     for (_, ty) in &func.header().params {
                         let arg  = args.next().expect("Not enough arguments to function");
-                        arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
+                        arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(*ty))));
                     }
 
                     if let Some((_, ty)) = &func.header().vararg {
                         for arg in args {
-                            arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
+                            arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(*ty))));
                         }
                     }
                     
                     eval_function(scope.outer(), &func, arg_vals) //TODO: proper scope
                 }
-                Value::Type(tir::Type::Struct(struc)) => {
+                Value::Type(ir::Type::Struct(_, struc)) => {
                     if args.len() != struc.members.len() {
                         panic!("Invalid constructor argument count, expected: {}, found: {}",
                             struc.members.len(),
@@ -368,7 +401,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
                     }
                     let mut values = HashMap::new();
                     for (arg, (name, ty)) in args.iter().zip(&struc.members) {
-                        values.insert(name.clone(), get_or_ret!(eval_expr(scope, arg, Some(&as_unresolved(ty)))));
+                        values.insert(name.clone(), get_or_ret!(eval_expr(scope, arg, Some(*ty))));
                     }
                     Value::Struct(values)
                 }
@@ -399,25 +432,25 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
             let rhs_expected = if expected.is_none() {
                 use Value::*;
                 match lhs {
-                    U8(_) => Some(Primitive::Integer(IntType::U8)),
-                    U16(_) => Some(Primitive::Integer(IntType::U16)),
-                    U32(_) => Some(Primitive::Integer(IntType::U32)),
-                    U64(_) => Some(Primitive::Integer(IntType::U64)),
-                    U128(_) => Some(Primitive::Integer(IntType::U128)),
+                    U8(_) => Some(Primitive::U8),
+                    U16(_) => Some(Primitive::U16),
+                    U32(_) => Some(Primitive::U32),
+                    U64(_) => Some(Primitive::U64),
+                    U128(_) => Some(Primitive::U128),
                     
-                    I8(_) => Some(Primitive::Integer(IntType::I8)),
-                    I16(_) => Some(Primitive::Integer(IntType::I16)),
-                    I32(_) => Some(Primitive::Integer(IntType::I32)),
-                    I64(_) => Some(Primitive::Integer(IntType::I64)),
-                    I128(_) => Some(Primitive::Integer(IntType::I128)),
+                    I8(_) => Some(Primitive::I8),
+                    I16(_) => Some(Primitive::I16),
+                    I32(_) => Some(Primitive::I32),
+                    I64(_) => Some(Primitive::I64),
+                    I128(_) => Some(Primitive::I128),
 
-                    F32(_) => Some(Primitive::Float(FloatType::F32)),
-                    F64(_) => Some(Primitive::Float(FloatType::F64)),
+                    F32(_) => Some(Primitive::F32),
+                    F64(_) => Some(Primitive::F64),
 
                     _ => None
-                }.map(|p| UnresolvedType::Primitive(p))
+                }.map(TypeRef::Primitive)
             } else { expected.map(|t| t.clone()) };
-            let rhs = get_or_ret!(eval_expr(scope, rhs, rhs_expected.as_ref()));
+            let rhs = get_or_ret!(eval_expr(scope, rhs, rhs_expected));
             macro_rules! op_match {
                 (num: $($p: tt),*; eq: $($eq_only: tt),*) => {
                     match (op, lhs, rhs) {
@@ -467,127 +500,127 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
             }
 
             cast!{get_or_ret!(eval_expr(scope, expr, None)), target_ty,
-                U8 => U8: Primitive::Integer(IntType::U8),
-                U8 => U16: Primitive::Integer(IntType::U16),
-                U8 => U32: Primitive::Integer(IntType::U32),
-                U8 => U64: Primitive::Integer(IntType::U64),
-                U8 => U128: Primitive::Integer(IntType::U128),
-                U8 => I8: Primitive::Integer(IntType::I8),
-                U8 => I16: Primitive::Integer(IntType::I16),
-                U8 => I32: Primitive::Integer(IntType::I32),
-                U8 => I64: Primitive::Integer(IntType::I64),
-                U8 => I128: Primitive::Integer(IntType::I128),
-                U8 => F32: Primitive::Float(FloatType::F32),
-                U8 => F64: Primitive::Float(FloatType::F64),
-                U16 => U8: Primitive::Integer(IntType::U8),
-                U16 => U16: Primitive::Integer(IntType::U16),
-                U16 => U32: Primitive::Integer(IntType::U32),
-                U16 => U64: Primitive::Integer(IntType::U64),
-                U16 => U128: Primitive::Integer(IntType::U128),
-                U16 => I8: Primitive::Integer(IntType::I8),
-                U16 => I16: Primitive::Integer(IntType::I16),
-                U16 => I32: Primitive::Integer(IntType::I32),
-                U16 => I64: Primitive::Integer(IntType::I64),
-                U16 => I128: Primitive::Integer(IntType::I128),
-                U16 => F32: Primitive::Float(FloatType::F32),
-                U16 => F64: Primitive::Float(FloatType::F64),
-                U32 => U8: Primitive::Integer(IntType::U8),
-                U32 => U16: Primitive::Integer(IntType::U16),
-                U32 => U32: Primitive::Integer(IntType::U32),
-                U32 => U64: Primitive::Integer(IntType::U64),
-                U32 => U128: Primitive::Integer(IntType::U128),
-                U32 => I8: Primitive::Integer(IntType::I8),
-                U32 => I16: Primitive::Integer(IntType::I16),
-                U32 => I32: Primitive::Integer(IntType::I32),
-                U32 => I64: Primitive::Integer(IntType::I64),
-                U32 => I128: Primitive::Integer(IntType::I128),
-                U32 => F32: Primitive::Float(FloatType::F32),
-                U32 => F64: Primitive::Float(FloatType::F64),
-                U64 => U8: Primitive::Integer(IntType::U8),
-                U64 => U16: Primitive::Integer(IntType::U16),
-                U64 => U32: Primitive::Integer(IntType::U32),
-                U64 => U64: Primitive::Integer(IntType::U64),
-                U64 => U128: Primitive::Integer(IntType::U128),
-                U64 => I8: Primitive::Integer(IntType::I8),
-                U64 => I16: Primitive::Integer(IntType::I16),
-                U64 => I32: Primitive::Integer(IntType::I32),
-                U64 => I64: Primitive::Integer(IntType::I64),
-                U64 => I128: Primitive::Integer(IntType::I128),
-                U64 => F32: Primitive::Float(FloatType::F32),
-                U64 => F64: Primitive::Float(FloatType::F64),
-                U128 => U8: Primitive::Integer(IntType::U8),
-                U128 => U16: Primitive::Integer(IntType::U16),
-                U128 => U32: Primitive::Integer(IntType::U32),
-                U128 => U64: Primitive::Integer(IntType::U64),
-                U128 => U128: Primitive::Integer(IntType::U128),
-                U128 => I8: Primitive::Integer(IntType::I8),
-                U128 => I16: Primitive::Integer(IntType::I16),
-                U128 => I32: Primitive::Integer(IntType::I32),
-                U128 => I64: Primitive::Integer(IntType::I64),
-                U128 => I128: Primitive::Integer(IntType::I128),
-                U128 => F32: Primitive::Float(FloatType::F32),
-                U128 => F64: Primitive::Float(FloatType::F64),
+                U8 => U8: Primitive::U8,
+                U8 => U16: Primitive::U16,
+                U8 => U32: Primitive::U32,
+                U8 => U64: Primitive::U64,
+                U8 => U128: Primitive::U128,
+                U8 => I8: Primitive::I8,
+                U8 => I16: Primitive::I16,
+                U8 => I32: Primitive::I32,
+                U8 => I64: Primitive::I64,
+                U8 => I128: Primitive::I128,
+                U8 => F32: Primitive::F32,
+                U8 => F64: Primitive::F64,
+                U16 => U8: Primitive::U8,
+                U16 => U16: Primitive::U16,
+                U16 => U32: Primitive::U32,
+                U16 => U64: Primitive::U64,
+                U16 => U128: Primitive::U128,
+                U16 => I8: Primitive::I8,
+                U16 => I16: Primitive::I16,
+                U16 => I32: Primitive::I32,
+                U16 => I64: Primitive::I64,
+                U16 => I128: Primitive::I128,
+                U16 => F32: Primitive::F32,
+                U16 => F64: Primitive::F64,
+                U32 => U8: Primitive::U8,
+                U32 => U16: Primitive::U16,
+                U32 => U32: Primitive::U32,
+                U32 => U64: Primitive::U64,
+                U32 => U128: Primitive::U128,
+                U32 => I8: Primitive::I8,
+                U32 => I16: Primitive::I16,
+                U32 => I32: Primitive::I32,
+                U32 => I64: Primitive::I64,
+                U32 => I128: Primitive::I128,
+                U32 => F32: Primitive::F32,
+                U32 => F64: Primitive::F64,
+                U64 => U8: Primitive::U8,
+                U64 => U16: Primitive::U16,
+                U64 => U32: Primitive::U32,
+                U64 => U64: Primitive::U64,
+                U64 => U128: Primitive::U128,
+                U64 => I8: Primitive::I8,
+                U64 => I16: Primitive::I16,
+                U64 => I32: Primitive::I32,
+                U64 => I64: Primitive::I64,
+                U64 => I128: Primitive::I128,
+                U64 => F32: Primitive::F32,
+                U64 => F64: Primitive::F64,
+                U128 => U8: Primitive::U8,
+                U128 => U16: Primitive::U16,
+                U128 => U32: Primitive::U32,
+                U128 => U64: Primitive::U64,
+                U128 => U128: Primitive::U128,
+                U128 => I8: Primitive::I8,
+                U128 => I16: Primitive::I16,
+                U128 => I32: Primitive::I32,
+                U128 => I64: Primitive::I64,
+                U128 => I128: Primitive::I128,
+                U128 => F32: Primitive::F32,
+                U128 => F64: Primitive::F64,
 
-                I8 => U8: Primitive::Integer(IntType::U8),
-                I8 => U16: Primitive::Integer(IntType::U16),
-                I8 => U32: Primitive::Integer(IntType::U32),
-                I8 => U64: Primitive::Integer(IntType::U64),
-                I8 => U128: Primitive::Integer(IntType::U128),
-                I8 => I8: Primitive::Integer(IntType::I8),
-                I8 => I16: Primitive::Integer(IntType::I16),
-                I8 => I32: Primitive::Integer(IntType::I32),
-                I8 => I64: Primitive::Integer(IntType::I64),
-                I8 => I128: Primitive::Integer(IntType::I128),
-                I8 => F32: Primitive::Float(FloatType::F32),
-                I8 => F64: Primitive::Float(FloatType::F64),
-                I16 => U8: Primitive::Integer(IntType::U8),
-                I16 => U16: Primitive::Integer(IntType::U16),
-                I16 => U32: Primitive::Integer(IntType::U32),
-                I16 => U64: Primitive::Integer(IntType::U64),
-                I16 => U128: Primitive::Integer(IntType::U128),
-                I16 => I8: Primitive::Integer(IntType::I8),
-                I16 => I16: Primitive::Integer(IntType::I16),
-                I16 => I32: Primitive::Integer(IntType::I32),
-                I16 => I64: Primitive::Integer(IntType::I64),
-                I16 => I128: Primitive::Integer(IntType::I128),
-                I16 => F32: Primitive::Float(FloatType::F32),
-                I16 => F64: Primitive::Float(FloatType::F64),
-                I32 => U8: Primitive::Integer(IntType::U8),
-                I32 => U16: Primitive::Integer(IntType::U16),
-                I32 => U32: Primitive::Integer(IntType::U32),
-                I32 => U64: Primitive::Integer(IntType::U64),
-                I32 => U128: Primitive::Integer(IntType::U128),
-                I32 => I8: Primitive::Integer(IntType::I8),
-                I32 => I16: Primitive::Integer(IntType::I16),
-                I32 => I32: Primitive::Integer(IntType::I32),
-                I32 => I64: Primitive::Integer(IntType::I64),
-                I32 => I128: Primitive::Integer(IntType::I128),
-                I32 => F32: Primitive::Float(FloatType::F32),
-                I32 => F64: Primitive::Float(FloatType::F64),
-                I64 => U8: Primitive::Integer(IntType::U8),
-                I64 => U16: Primitive::Integer(IntType::U16),
-                I64 => U32: Primitive::Integer(IntType::U32),
-                I64 => U64: Primitive::Integer(IntType::U64),
-                I64 => U128: Primitive::Integer(IntType::U128),
-                I64 => I8: Primitive::Integer(IntType::I8),
-                I64 => I16: Primitive::Integer(IntType::I16),
-                I64 => I32: Primitive::Integer(IntType::I32),
-                I64 => I64: Primitive::Integer(IntType::I64),
-                I64 => I128: Primitive::Integer(IntType::I128),
-                I64 => F32: Primitive::Float(FloatType::F32),
-                I64 => F64: Primitive::Float(FloatType::F64),
-                I128 => U8: Primitive::Integer(IntType::U8),
-                I128 => U16: Primitive::Integer(IntType::U16),
-                I128 => U32: Primitive::Integer(IntType::U32),
-                I128 => U64: Primitive::Integer(IntType::U64),
-                I128 => U128: Primitive::Integer(IntType::U128),
-                I128 => I8: Primitive::Integer(IntType::I8),
-                I128 => I16: Primitive::Integer(IntType::I16),
-                I128 => I32: Primitive::Integer(IntType::I32),
-                I128 => I64: Primitive::Integer(IntType::I64),
-                I128 => I128: Primitive::Integer(IntType::I128),
-                I128 => F32: Primitive::Float(FloatType::F32),
-                I128 => F64: Primitive::Float(FloatType::F64),
+                I8 => U8: Primitive::U8,
+                I8 => U16: Primitive::U16,
+                I8 => U32: Primitive::U32,
+                I8 => U64: Primitive::U64,
+                I8 => U128: Primitive::U128,
+                I8 => I8: Primitive::I8,
+                I8 => I16: Primitive::I16,
+                I8 => I32: Primitive::I32,
+                I8 => I64: Primitive::I64,
+                I8 => I128: Primitive::I128,
+                I8 => F32: Primitive::F32,
+                I8 => F64: Primitive::F64,
+                I16 => U8: Primitive::U8,
+                I16 => U16: Primitive::U16,
+                I16 => U32: Primitive::U32,
+                I16 => U64: Primitive::U64,
+                I16 => U128: Primitive::U128,
+                I16 => I8: Primitive::I8,
+                I16 => I16: Primitive::I16,
+                I16 => I32: Primitive::I32,
+                I16 => I64: Primitive::I64,
+                I16 => I128: Primitive::I128,
+                I16 => F32: Primitive::F32,
+                I16 => F64: Primitive::F64,
+                I32 => U8: Primitive::U8,
+                I32 => U16: Primitive::U16,
+                I32 => U32: Primitive::U32,
+                I32 => U64: Primitive::U64,
+                I32 => U128: Primitive::U128,
+                I32 => I8: Primitive::I8,
+                I32 => I16: Primitive::I16,
+                I32 => I32: Primitive::I32,
+                I32 => I64: Primitive::I64,
+                I32 => I128: Primitive::I128,
+                I32 => F32: Primitive::F32,
+                I32 => F64: Primitive::F64,
+                I64 => U8: Primitive::U8,
+                I64 => U16: Primitive::U16,
+                I64 => U32: Primitive::U32,
+                I64 => U64: Primitive::U64,
+                I64 => U128: Primitive::U128,
+                I64 => I8: Primitive::I8,
+                I64 => I16: Primitive::I16,
+                I64 => I32: Primitive::I32,
+                I64 => I64: Primitive::I64,
+                I64 => I128: Primitive::I128,
+                I64 => F32: Primitive::F32,
+                I64 => F64: Primitive::F64,
+                I128 => U8: Primitive::U8,
+                I128 => U16: Primitive::U16,
+                I128 => U32: Primitive::U32,
+                I128 => U64: Primitive::U64,
+                I128 => U128: Primitive::U128,
+                I128 => I8: Primitive::I8,
+                I128 => I16: Primitive::I16,
+                I128 => I32: Primitive::I32,
+                I128 => I64: Primitive::I64,
+                I128 => I128: Primitive::I128,
+                I128 => F32: Primitive::F32,
+                I128 => F64: Primitive::F64,
 
             }
         }
@@ -595,29 +628,39 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<&Un
 
     //println!("Adjusting expr val: {:?}, expected: {:?}", val, expected);
     let val = match val {
-        Value::UnsizedInt(int_val) => match expected {
-            Some(UnresolvedType::Primitive(Primitive::Integer(int))) => match int {
-                IntType::U8 => Value::U8(int_val.try_into().unwrap()),
-                IntType::U16 => Value::U16(int_val.try_into().unwrap()),
-                IntType::U32 => Value::U32(int_val.try_into().unwrap()),
-                IntType::U64 => Value::U64(int_val.try_into().unwrap()),
-                IntType::U128 => Value::U128(int_val.try_into().unwrap()),
-
-                IntType::I8 => Value::I8(int_val.try_into().unwrap()),
-                IntType::I16 => Value::I16(int_val.try_into().unwrap()),
-                IntType::I32 => Value::I32(int_val.try_into().unwrap()),
-                IntType::I64 => Value::I64(int_val.try_into().unwrap()),
-                IntType::I128 => Value::I128(int_val),
-            }
-            None => Value::I128(int_val),
-            x => panic!("Invalid assignment, expected: {:?}, found: {:?}", x, val),
+        Value::UnsizedInt(int_val) => {
+            expected
+            .map_or(Some(Value::I128(int_val)), |expected| {
+                let TypeRef::Primitive(p) = expected else { return None };
+                let Some(int_ty) = p.as_int() else { return None };
+                Some(match int_ty {
+                    IntType::U8 => Value::U8(int_val.try_into().unwrap()),
+                    IntType::U16 => Value::U16(int_val.try_into().unwrap()),
+                    IntType::U32 => Value::U32(int_val.try_into().unwrap()),
+                    IntType::U64 => Value::U64(int_val.try_into().unwrap()),
+                    IntType::U128 => Value::U128(int_val.try_into().unwrap()),
+    
+                    IntType::I8 => Value::I8(int_val.try_into().unwrap()),
+                    IntType::I16 => Value::I16(int_val.try_into().unwrap()),
+                    IntType::I32 => Value::I32(int_val.try_into().unwrap()),
+                    IntType::I64 => Value::I64(int_val.try_into().unwrap()),
+                    IntType::I128 => Value::I128(int_val),
+                })
+            })
+            .unwrap_or_else(|| panic!("Invalid assignment, expected: {:?}, found: {:?}", expected, val))
         }
-        Value::UnsizedFloat(float_val) => match expected {
-            Some(UnresolvedType::Primitive(Primitive::Float(FloatType::F32))) => Value::F32(float_val as f32),
-            Some(UnresolvedType::Primitive(Primitive::Float(FloatType::F64))) => Value::F64(float_val),
-            None => Value::F64(float_val),
-            _ => panic!("Invalid assignment")
-        },
+        Value::UnsizedFloat(float_val) => {
+            expected.map_or(Some(Value::F64(float_val)), |expected| {
+                let TypeRef::Primitive(p) = expected else { return None };
+                let Some(float_ty) = p.as_float() else { return None };
+                Some(match float_ty {
+                    FloatType::F32 => Value::F32(float_val as f32),
+                    FloatType::F64 => Value::F64(float_val)
+                })
+            })
+            .unwrap_or_else(|| panic!("Invalid assignment, expected: {:?}, found: {:?}", expected, val))
+
+        }
         other => other
     };
     ValueOrReturn::Value(val)
@@ -635,12 +678,12 @@ fn eval_lvalue<'a>(scope: &'a mut Scope, l_val: &LValue) -> &'a mut Value {
     }
 }
 
-fn as_unresolved(ty: &TypeRef) -> UnresolvedType {
+/*fn as_unresolved(ty: &ir::TypeRef) -> UnresolvedType {
     match ty {
-        TypeRef::Primitive(prim) => UnresolvedType::Primitive(*prim),
-        TypeRef::Resolved(res) => UnresolvedType::Unresolved(res.clone().into_inner())
+        ir::TypeRef::Primitive(prim) => UnresolvedType::Primitive(*prim),
+        ir::TypeRef::Resolved(res) => UnresolvedType::Unresolved(res)
     }
-}
+}*/
 
 
 pub fn insert_intrinsics(module: &mut ast::Module) {
@@ -660,6 +703,6 @@ pub fn insert_intrinsics(module: &mut ast::Module) {
         body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
         params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
         vararg: None,
-        return_type: ast::UnresolvedType::Primitive(Primitive::Integer(IntType::I32))
+        return_type: ast::UnresolvedType::Primitive(Primitive::I32)
     }));
 }

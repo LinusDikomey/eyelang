@@ -1,35 +1,114 @@
-use std::{collections::HashMap, fmt::{self, Debug}};
+use std::{fmt, collections::HashMap};
 
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolKey(u64);
+use crate::types::Primitive;
 
-pub struct SymbolTable {
-    ids: HashMap<String, SymbolKey>,
-    names: Vec<String> // index with symbol keys
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum SymbolType {
+    Func,
+    Type
 }
-impl SymbolTable {
-    pub fn new() -> Self {
-        Self {
-            ids: HashMap::new(),
-            names: Vec::new()
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct SymbolKey(u64);
+impl SymbolKey {
+    pub fn new(idx: u64) -> Self {
+        Self(idx)
+    }
+    
+    pub fn idx(&self) -> usize { self.0 as usize }
+}
+
+/*
+#[derive(Debug, Clone)]
+pub struct Module {
+    pub functions: HashMap<SymbolKey, Function>,
+    pub types: HashMap<SymbolKey, Type>
+}
+*/
+
+#[derive(Debug, Clone)]
+pub struct Function {
+    pub header: FunctionHeader,
+    pub ast: crate::ast::Function, // temporary solution?
+    pub ir: Vec<Instruction>,
+    pub intrinsic: Option<Intrinsic>
+}
+impl Function {
+    pub fn header(&self) -> &FunctionHeader { &self.header }
+}
+
+#[derive(Debug, Clone)]
+pub enum Intrinsic {
+    Print,
+    Read,
+    Parse
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionHeader {
+    pub params: Vec<(String, TypeRef)>,
+    pub vararg: Option<(String, TypeRef)>,
+    pub return_type: TypeRef
+}
+
+#[derive(Debug, Clone)]
+pub enum Type {
+    Struct(SymbolKey, Struct)
+}
+
+#[derive(Debug, Clone)]
+pub struct Struct {
+    pub members: Vec<(String, TypeRef)>
+}
+impl Struct {
+    pub fn _size(&self, module: &IrModule) -> u32 {
+        self.members.iter().map(|(_, m)| m._size(module)).sum()
+    }
+}
+impl fmt::Display for Struct {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ":: {{\n{}}}", self.members.iter().map(|m| format!("{} {},\n", m.0, m.1)).collect::<String>())
+    }
+}
+
+//TODO: fit type ref into u64 by offsetting symbol key references by the amount of primitives
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeRef {
+    Primitive(Primitive),
+    Resolved(SymbolKey)
+}
+impl TypeRef {
+    pub fn _size(&self, module: &IrModule) -> u32 {
+        match self {
+            TypeRef::Primitive(p) => p._size(),
+            TypeRef::Resolved(key) => {
+                match &module.types[key.idx()] {
+                    Type::Struct(_, s) => s._size(module)
+                }
+            }
         }
     }
-
-    pub fn add(&mut self, name: String) -> SymbolKey {
-        self.names.push(name.clone());
-        let key = SymbolKey((self.names.len() - 1) as u64);
-        self.ids.insert(name, key);
-        key
+}
+impl fmt::Display for TypeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeRef::Primitive(prim) => write!(f, "Primitive({})", prim),
+            TypeRef::Resolved(key) => write!(f, "Resolved({})", key.idx())
+        }
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct IrModule {
-    defs: HashMap<SymbolKey, Definition>
+    pub funcs: Vec<Function>,
+    pub types: Vec<Type>,
+    pub symbols: HashMap<String, (SymbolType, SymbolKey)>
 }
 
+#[derive(Clone, Debug)]
 pub enum Definition {
-    Function(Vec<Instruction>),
-    Struct(Vec<SymbolKey>)
+    Function(Function),
+    Type(Type)
 }
 
 pub struct IrFunc(Vec<Instruction>);
@@ -43,42 +122,25 @@ pub struct Instruction {
 }
 
 #[derive(Clone, Copy)]
-/// 24-bit numbers for start and end token
-pub struct TokenSpan([u8; 6]);
+pub struct TokenSpan {
+    pub start: u32,
+    pub end: u32
+}
+
 impl TokenSpan {
+    pub const MAX: u32 = 16_777_215;
     pub fn new(start: u32, end: u32) -> Self {
-        debug_assert!(start < 16777216);
-        debug_assert!(end   < 16777216);
-        Self([
-            (start >> 16) as u8,
-            (start >>  8) as u8,
-            (start >>  0) as u8,
-            (end   >> 16) as u8,
-            (end   >>  8) as u8,
-            (end   >>  0) as u8,
-        ])
-    }
-    
-    pub fn start(&self) -> u32 {
-          self.0[0] as u32 >> 16
-        | self.0[1] as u32 >>  8
-        | self.0[2] as u32 >>  0
-    }
-    
-    pub fn end(&self) -> u32 {
-        self.0[3] as u32 >> 16
-      | self.0[4] as u32 >>  8
-      | self.0[5] as u32 >>  0
+        Self { start, end }
     }
 }
 impl fmt::Display for TokenSpan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start(), self.end())
+        write!(f, "{}..{}", self.start, self.end)
     }
 }
-impl Debug for TokenSpan {
+impl fmt::Debug for TokenSpan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TokenSpan({}, {})", self.start(), self.end())
+        write!(f, "TokenSpan({}, {})", self.start, self.end)
     }
 }
 
@@ -117,7 +179,7 @@ pub union Data {
     float: f64,
     bin_op: (Ref, Ref)
 }
-impl Debug for Data {
+impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", unsafe { self.int })
     }

@@ -1,27 +1,15 @@
 #![feature(iter_intersperse, let_else, box_patterns, variant_count)]
 
-/*
-use inkwell::OptimizationLevel;
-use inkwell::builder::Builder;
-use inkwell::context::Context;
-use inkwell::execution_engine::{ExecutionEngine, JitFunction};
-use inkwell::module::Module;
-use inkwell::targets::{InitializationConfig, Target};
-use std::error::Error;
-*/
-
 mod ast;
-mod codegen;
 mod error;
 mod lexer;
 mod parser;
 mod types;
-mod typing;
-mod verifier;
 mod interpreter;
 mod ir;
+mod irgen;
 
-use crate::{ast::{Repr, ReprPrinter}, parser::Parser, typing::tir, interpreter::Scope, error::EyeResult};
+use crate::{parser::Parser, interpreter::Scope, error::EyeResult, ast::repr::Repr};
 use std::{path::Path, sync::atomic::AtomicBool};
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -56,7 +44,7 @@ fn main() {
     use colored::*;
     match run_file(&src_file) {
         Ok(res) => {
-            let t = res.get_type().unwrap_or(ast::UnresolvedType::Primitive(types::Primitive::Unit));
+            let t = res.get_type().unwrap_or(ir::TypeRef::Primitive(types::Primitive::Unit));
             println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), res, t);
         }
         Err(err) => println!("{}{:?}", "Failed to run: ".red(), err)
@@ -68,16 +56,15 @@ fn run_file(src_file: &str) -> EyeResult<interpreter::Value> {
     let src = std::fs::read_to_string(Path::new(&src_file))
         .expect(&format!("Could not open source file: {}", src_file));
 
-    let tokens = lexer::TokenStream::from_source(&src)?;
+    let tokens = lexer::parse(&src)?;
 
-    let mut parser = Parser::new(tokens.tokens);
-
+    let mut parser = Parser::new(tokens, &src);
     let mut module = parser.parse()?;
     log!("Module: {:?}", module);
     
 
     println!("\nAST code reconstruction:\n");
-    let mut ast_repr_ctx = ReprPrinter::new("  ");
+    let mut ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
     module.repr(&mut ast_repr_ctx);
     println!("\n---------- End of AST reconstruction ----------\n\n");
 
@@ -86,20 +73,25 @@ fn run_file(src_file: &str) -> EyeResult<interpreter::Value> {
 
     log!("\n\nReducing module to TIR...");
 
-    let tir = typing::reduce(&module)?;
+    let ir = irgen::reduce(&module)?;
 
     //verifier::verify(&module)?;
 
-    log!("... reduced! TIR: {:?}", tir);
+    log!("... reduced! TIR: {:?}", ir);
 
     //let ctx = Context::create();
     //let main = codegen::generate_module(&module, &ctx)?;
     //let result = unsafe { main.call() };
     //println!("Result of main: {}", result);
 
+    let (ir::SymbolType::Func, main_key) = ir.symbols.get("main")
+        .expect("No main symbol found")
+        else { panic!("Main has to be a function, found type") };
+    let main = &ir.funcs[main_key.idx()];
+
     Ok(interpreter::eval_function(
-        &mut Scope::from_module(tir.clone()),
-        &tir.functions.get(&tir::SymbolKey::new("main".to_owned())).expect("Main not found"),
+        &mut Scope::from_module(ir.clone()),
+        main,
         vec![])
     )
 }

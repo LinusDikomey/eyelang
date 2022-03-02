@@ -1,12 +1,10 @@
-use crate::lexer::tokens::{SourcePos, TokenType};
-
-
-
+use crate::lexer::tokens::TokenType;
 pub type EyeResult<T> = Result<T, EyeError>;
 
 #[derive(Debug)]
 pub enum EyeError {
-    CompileError(CompileError, SourcePos, SourcePos),
+    FileSizeExceeeded,
+    CompileError(CompileError, u32, u32),
     CompileErrorNoPos(CompileError) //TODO: improve compiler to make position hints everywhere possible
 }
 
@@ -26,5 +24,7 @@ pub enum CompileError {
     MissingReturnValue,
     DuplicateDefinition,
     InvalidTopLevelBlockItem,
-    UnknownEscapeCode
+    UnknownEscapeCode,
+    TypeExpectedFoundFunction,
+    FunctionExpectedFoundType
 }

@@ -1,39 +1,44 @@
 pub mod tokens;
 
 use tokens::Token;
-
 use crate::error::{CompileError, EyeError, EyeResult};
-
 use self::tokens::{Keyword, Operator, SourcePos, TokenType};
 
-#[derive(Debug)]
-pub struct TokenStream {
-    pub tokens: Vec<Token>
+#[derive(Debug, Clone, Copy)]
+pub struct Span {
+    start: u32,
+    end: u32
 }
 
-impl TokenStream {
-
-    pub fn from_source(source: &str) -> Result<Self, EyeError> {
-        let mut lexer = Lexer { chars: source.chars().collect(), index: 0, line: 1, col: 1, tokens: Vec::new() };
-        
-        lexer.parse()?;
-
-        Ok(Self { tokens: lexer.tokens })
+pub fn parse(src: &str) -> EyeResult<Vec<Token>> {
+    if src.len() > u32::MAX as usize {
+        return Err(EyeError::FileSizeExceeeded);
     }
 
+    let char_collect = std::time::Instant::now();
+    let chars = src.char_indices().map(|(i, c)| (i as u32, c)).collect();
+    dbg!(char_collect.elapsed());
+    Lexer {
+        src,
+        chars,
+        index: 0,
+        line: 0,
+        col: 0,
+        tokens: Vec::new()
+    }.parse()
 }
 
-struct Lexer {
-    chars: Vec<char>,
+struct Lexer<'a> {
+    src: &'a str,
+    chars: Vec<(u32, char)>,
     index: usize,
     line: u64,
     col: u64,
     tokens: Vec<Token>
 }
 
-impl Lexer {
-
-    fn parse(&mut self) -> Result<(), EyeError> {
+impl<'a> Lexer<'a> {
+    fn parse(mut self) -> EyeResult<Vec<Token>> {
         while self.index < self.chars.len() {
             self.skip_junk();
             if self.is_at_end() { break; }
@@ -42,19 +47,21 @@ impl Lexer {
                 self.tokens.push(token);
             }
         }
-        Ok(())
+        Ok(self.tokens)
     }
 
-    fn pos(&self) -> SourcePos {
+    fn src_pos(&self) -> SourcePos {
         SourcePos::new(self.line, self.col)
     }
 
-    fn parse_token(&mut self) -> Result<Option<Token>, EyeError> {
-        let start = SourcePos::new(self.line, self.col);
-        
-        let mut val = String::new();
+    fn pos(&self) -> u32 {
+        self.chars.get(self.index).unwrap_or_else(|| self.chars.last().unwrap_or(&(0, '_'))).0
+    }
 
+    fn parse_token(&mut self) -> Result<Option<Token>, EyeError> {
+        let mut start;
         let ty = loop {
+            start = self.pos();
             if self.is_at_end() {
                 return Ok(None);
             }
@@ -121,7 +128,6 @@ impl Lexer {
                 }),
                 
                 '0'..='9' => { // int/float literal
-                    val.push(self.current());
                     let mut is_float = false;
                     while match self.peek() {
                         Some('0'..='9') => true,
@@ -130,7 +136,7 @@ impl Lexer {
                                 return Err(EyeError::CompileError(
                                     CompileError::UnexpectedCharacter('.', String::from("Multiple dots in float literal aren't allowed")),
                                     start,
-                                    SourcePos::new(self.line, self.col)
+                                    self.pos()
                                 ));
                             }
                             is_float = true;
@@ -139,7 +145,7 @@ impl Lexer {
                         _ => false
                         
                     } {
-                        val.push(self.step().unwrap())
+                        self.step().unwrap();
                     }
                     if is_float {
                         TokenType::FloatLiteral
@@ -150,7 +156,7 @@ impl Lexer {
                 '"' => { // string literal
                     while self.peek() != Some('"') {
                         match self.step() {
-                            Some('\\') => {
+                            /*Some('\\') => {
                                 val.push(match self.step() {
                                     Some('n') => '\n',
                                     Some('t') => '\t',
@@ -164,8 +170,8 @@ impl Lexer {
                                         CompileError::UnexpectedEndOfFile, self.pos(), self.pos())
                                     )
                                 });
-                            }
-                            Some(c) => val.push(c),
+                            }*/
+                            Some(_) => {}
                             None => return Err(EyeError::CompileError(
                                 CompileError::UnexpectedEndOfFile,
                                 start,
@@ -177,34 +183,29 @@ impl Lexer {
                     TokenType::StringLiteral
                 },
                 'A'..='Z' | 'a'..='z' => { // keyword/identifier
-                    let mut keyword_or_literal = String::from(self.current());
-                    while match self.peek() {
-                        Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') => true,
-                        _ => false
-                        
-                    } {
-                        keyword_or_literal.push(self.step().unwrap())
+                    loop {
+                        match self.peek() {
+                            Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') => { self.step().unwrap(); }
+                            _ => break
+                        }
                     }
-
-                    if let Some(keyword) = Keyword::from_string(&keyword_or_literal) {
+                    if let Some(keyword) = Keyword::from_string(&self.src[start as usize ..= self.pos() as usize]) {
                         TokenType::Keyword(keyword)
                     } else {
-                        val = keyword_or_literal;
                         TokenType::Ident
                     }
                 },
                 _ => return Err(EyeError::CompileError(
                     CompileError::UnexpectedCharacter(self.current(), String::from("Unexpected character")),
                     start,
-                    start.next()
+                    start + 1
                 ))
             };
         };
         
         self.step();
-        let end = SourcePos::new(self.line, self.col);
-
-        Ok(Some(Token::new(ty, val, start, end)))
+        let end = self.pos();
+        Ok(Some(Token::new(ty, start, end)))
     }
     
     fn parse_multiline_comment(&mut self) -> EyeResult<usize> {
@@ -243,7 +244,7 @@ impl Lexer {
     }
     
     fn current(&self) -> char {
-        self.chars[self.index]
+        self.chars[self.index].1
     }
 
     fn step(&mut self) -> Option<char> {
@@ -262,15 +263,6 @@ impl Lexer {
     }
 
     fn peek(&self) -> Option<char> {
-        self.peek_count(1)
-    }
-
-    fn peek_count(&self, count: usize) -> Option<char> {
-        let peek_index = self.index + count;
-        if peek_index < self.chars.len() {
-            Some(self.chars[peek_index])
-        } else {
-            None
-        }
+        (self.index + 1 < self.chars.len()).then(|| self.chars[self.index + 1].1)
     }
 }
