@@ -23,14 +23,14 @@ pub enum Definition {
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
-    pub members: Vec<(String, UnresolvedType)>,
+    pub members: Vec<(String, UnresolvedType, u32, u32)>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
-    pub params: Vec<(String, UnresolvedType)>,
-    pub vararg: Option<(String, UnresolvedType)>,
-    pub return_type: UnresolvedType,
+    pub params: Vec<(String, UnresolvedType, u32, u32)>,
+    pub vararg: Option<(String, UnresolvedType, u32, u32)>,
+    pub return_type: (UnresolvedType, u32, u32),
     pub body: BlockOrExpr,
 }
 

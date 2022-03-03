@@ -84,7 +84,7 @@ impl Function {
         c.write_add(name);
         if self.params.len() > 0 {
             c.write_add("(");
-            for (i, (name, param)) in self.params.iter().enumerate() {
+            for (i, (name, param, _, _)) in self.params.iter().enumerate() {
                 c.write_add(name.as_str());
                 c.space();
                 param.repr(c);
@@ -95,7 +95,7 @@ impl Function {
             c.write_add(")");
         }
         c.write_add(" -> ");
-        self.return_type.repr(c);
+        self.return_type.0.repr(c);
         if let BlockOrExpr::Expr(_) = &self.body {
             c.write_add(":");
         }
@@ -109,7 +109,7 @@ impl StructDefinition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         c.writeln(format!("{} :: {{", name));
         let child = c.child();
-        for (i, (name, ty)) in self.members.iter().enumerate() {
+        for (i, (name, ty, _, _)) in self.members.iter().enumerate() {
             child.begin_line();
             child.write_add(name.as_str());
             child.space();

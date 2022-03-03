@@ -1,6 +1,5 @@
-use crate::{ast, error::{CompileError, EyeError, EyeResult}, ir::{SymbolType, SymbolKey}};
+use crate::{ast, error::{EyeResult, Error, Errors, CompileError}, ir::{SymbolType, SymbolKey}};
 use std::collections::HashMap;
-
 use crate::ir::*;
 
 struct IrBuilder {
@@ -48,7 +47,7 @@ impl TypingCtx {
         Ok(())
     }*/
 
-    fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, ast: &ast::Module) -> EyeResult<TypeRef> {
+    fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, ast: &ast::Module, errors: &mut Errors) -> Result<TypeRef, Error> {
         //TODO: check if this is recursing with some kind of stack and return recursive type def error.
         Ok(match unresolved {
             ast::UnresolvedType::Primitive(prim) => TypeRef::Primitive(*prim),
@@ -57,15 +56,13 @@ impl TypingCtx {
                     if let SymbolType::Type = symbol_ty {
                         TypeRef::Resolved(*key)
                     } else {
-                        return Err(EyeError::CompileErrorNoPos(CompileError::TypeExpectedFoundFunction));
+                        return Err(Error::TypeExpectedFoundFunction);
                     }
                 } else {
                     if let Some(ast::Definition::Struct(def)) = ast.definitions.get(name) {
-                        TypeRef::Resolved(self.define_type(name, def, ast)?)
+                        TypeRef::Resolved(self.define_type(name, def, ast, errors))
                     } else {
-                        return Err(EyeError::CompileErrorNoPos(CompileError::UnknownType(
-                            name.clone()
-                        )));
+                        return Err(Error::UnknownType);
                     }
                 }
             }
@@ -74,35 +71,48 @@ impl TypingCtx {
 
     //fn resolve_func(&self, name: &str) -> 
 
-    fn define_type(&mut self, name: &str, def: &ast::StructDefinition, ast: &ast::Module) -> EyeResult<SymbolKey> {
-        let members = def.members.iter().map(|(name, ty)| {
-            Ok((
+    fn define_type(&mut self, name: &str, def: &ast::StructDefinition, ast: &ast::Module, errors: &mut Errors) -> SymbolKey {
+        let members = def.members.iter().map(|(name, ty, start, end)| {
+            (
                 name.clone(), 
-                self.resolve_type(ty, ast)?
-            ))
-        }).collect::<Result<Vec<_>, _>>()?;
+                match self.resolve_type(ty, ast, errors) {
+                    Ok(ty) => ty,
+                    Err(err) => {
+                        errors.emit(err, *start, *end);
+                        TypeRef::Invalid
+                    }
+                }
+            )
+        }).collect();
         let key = SymbolKey::new(self.types.len() as u64);
         self.types.push(Type::Struct(key, Struct { members }));
         let previous = self.symbols.insert(name.to_owned(), (SymbolType::Type, key));
         debug_assert!(previous.is_none(), "Duplicate type definnition inserted");
-        Ok(key)
+        key
     }
 
-    fn define_func_header<'a>(&mut self, func: &ast::Function, ast: &ast::Module) -> EyeResult<FunctionHeader> {    
+    fn define_func_header<'a>(&mut self, func: &ast::Function, ast: &ast::Module, errors: &mut Errors) -> EyeResult<FunctionHeader> {    
         let params = func
             .params
             .iter()
-            .map(|(name, arg)| {
-                let t = self.resolve_type(arg, ast)?;
-                Ok((name.clone(), t))
+            .map(|(name, arg, start, end)| {
+                let t = match self.resolve_type(arg, ast, errors) {
+                    Ok(t) => t,
+                    Err(err) => {
+                        errors.emit(err, *start, *end);
+                        TypeRef::Invalid
+                    }
+                };
+                (name.clone(), t)
             })
-            .collect::<EyeResult<Vec<_>>>()?;
-        let vararg = if let Some((name, ty)) = &func.vararg {
-            Some((name.clone(), self.resolve_type(ty, ast)?))
+            .collect();
+        let vararg = if let Some((name, ty, start, end)) = &func.vararg {
+            Some((name.clone(), self.resolve_type(ty, ast, errors).map_err(|err| CompileError { err, start: *start, end: *end })?))
         } else {
             None
         };
-        let return_type = self.resolve_type(&func.return_type, ast)?;
+        let return_type = self.resolve_type(&func.return_type.0, ast, errors)
+            .map_err(|err| CompileError { err, start: func.return_type.1, end: func.return_type.2 })?;
         Ok(FunctionHeader { params, return_type, vararg })
     }
 
@@ -146,7 +156,7 @@ impl TypingCtx {
     }
 }
 
-pub fn reduce(ast: &ast::Module) -> EyeResult<IrModule> {
+pub fn reduce(ast: &ast::Module, errors: &mut Errors) -> EyeResult<IrModule> {
     let mut ctx = TypingCtx::new();
 
     for (name, def) in &ast.definitions {
@@ -154,10 +164,10 @@ pub fn reduce(ast: &ast::Module) -> EyeResult<IrModule> {
 
         match def {
             ast::Definition::Struct(struc) => {
-                ctx.define_type(name, struc, ast)?;
+                ctx.define_type(name, struc, ast, errors);
             }
             ast::Definition::Function(func) => {
-                let header = ctx.define_func_header(func, ast)?;
+                let header = ctx.define_func_header(func, ast, errors)?;
                 ctx.define_func(name, func, header)?;
             }
         }

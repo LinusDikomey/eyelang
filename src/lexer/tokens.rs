@@ -1,24 +1,6 @@
 use std::{u128, fmt};
 
-use crate::{error::EyeError, types::{Primitive, IntType, FloatType}, parser::TokenTypes};
-
-
-#[derive(Debug, Clone, Copy)]
-pub struct SourcePos {
-    pub line: u64,
-    pub col: u64
-}
-
-impl SourcePos {
-    pub fn new(line: u64, col: u64) -> Self {
-        Self { line, col }
-    }
-
-    /// returns the next source pos, can be used for single character errors
-    pub fn next(&self) -> Self {
-        Self { line: self.line, col: self.col + 1 }
-    }
-}
+use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes};
 
 #[derive(Debug)]
 pub struct Token {
@@ -76,14 +58,14 @@ pub struct IntLiteral {
     pub ty: Option<IntType>
 }
 impl IntLiteral {
-    pub fn from_tok(token: &Token, src: &str) -> Result<Self, EyeError> {
+    pub fn from_tok(token: &Token, src: &str) -> Self {
         let val = &token.get_val(src);
         let (unsigned_val, sign) = if val.starts_with("-") {
             (val[1..].parse::<u128>().unwrap(), true)
         } else {
             (val.parse::<u128>().unwrap(), false)
         };
-        Ok(Self { unsigned_val, sign, ty: None })
+        Self { unsigned_val, sign, ty: None }
     }
 
     pub fn _fits_into_type(&self, ty: &IntType) -> bool {
@@ -102,8 +84,8 @@ pub struct FloatLiteral {
     pub ty: Option<FloatType>
 }
 impl FloatLiteral {
-    pub fn from_tok(token: &Token, src: &str) -> Result<Self, EyeError> {
-        Ok(Self { val: token.get_val(src).parse::<f64>().unwrap(), ty: None })
+    pub fn from_tok(token: &Token, src: &str) -> Self {
+        Self { val: token.get_val(src).parse::<f64>().unwrap(), ty: None }
     }
 
     pub fn _fits_into_type(&self, ty: &FloatType) -> bool {
@@ -133,7 +115,7 @@ pub enum Keyword {
 
 impl Keyword {
 
-    pub fn from_string(s: &str) -> Option<Keyword> {
+    pub fn from_str(s: &str) -> Option<Keyword> {
         match s {
             "i8"   => Some(Keyword::Primitive(Primitive::I8)),
             "i16"  => Some(Keyword::Primitive(Primitive::I16)),

@@ -1,31 +1,24 @@
 pub mod tokens;
 
 use tokens::Token;
-use crate::error::{CompileError, EyeError, EyeResult};
-use self::tokens::{Keyword, Operator, SourcePos, TokenType};
+use crate::error::{Errors, Error};
+use self::tokens::{Keyword, Operator, TokenType};
 
-#[derive(Debug, Clone, Copy)]
-pub struct Span {
-    start: u32,
-    end: u32
-}
-
-pub fn parse(src: &str) -> EyeResult<Vec<Token>> {
+pub fn parse(src: &str, errors: &mut Errors) -> Option<Vec<Token>> {
     if src.len() > u32::MAX as usize {
-        return Err(EyeError::FileSizeExceeeded);
+        errors.emit(Error::FileSizeExceeeded, 0, 0);
+        return None;
     }
 
-    let char_collect = std::time::Instant::now();
     let chars = src.char_indices().map(|(i, c)| (i as u32, c)).collect();
-    dbg!(char_collect.elapsed());
-    Lexer {
+    Some(Lexer {
         src,
         chars,
         index: 0,
         line: 0,
         col: 0,
         tokens: Vec::new()
-    }.parse()
+    }.parse(errors))
 }
 
 struct Lexer<'a> {
@@ -38,44 +31,40 @@ struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    fn parse(mut self) -> EyeResult<Vec<Token>> {
+    fn parse(mut self, errors: &mut Errors) -> Vec<Token> {
         while self.index < self.chars.len() {
             self.skip_junk();
             if self.is_at_end() { break; }
 
-            if let Some(token) = self.parse_token()? {
+            if let Some(token) = self.parse_token(errors) {
                 self.tokens.push(token);
             }
         }
-        Ok(self.tokens)
-    }
-
-    fn src_pos(&self) -> SourcePos {
-        SourcePos::new(self.line, self.col)
+        self.tokens
     }
 
     fn pos(&self) -> u32 {
         self.chars.get(self.index).unwrap_or_else(|| self.chars.last().unwrap_or(&(0, '_'))).0
     }
 
-    fn parse_token(&mut self) -> Result<Option<Token>, EyeError> {
+    fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
         let mut start;
         let ty = loop {
             start = self.pos();
             if self.is_at_end() {
-                return Ok(None);
+                return None;
             }
             break match self.current() {
                 '#' => {
                     if let Some('*') = self.peek() {
                         self.step();
-                        self.parse_multiline_comment()?;
+                        self.parse_multiline_comment(errors);
                     } else {
                         while let Some(c) = self.step() {
                             match c {
                                 '#' if matches!(self.peek(), Some('*')) => {
                                     self.step();
-                                    if self.parse_multiline_comment()? > 0 { break; }
+                                    if self.parse_multiline_comment(errors) > 0 { break; }
                                 }
                                 '\n' => break,
                                 _ => {}
@@ -133,11 +122,11 @@ impl<'a> Lexer<'a> {
                         Some('0'..='9') => true,
                         Some('.') => {
                             if is_float {
-                                return Err(EyeError::CompileError(
-                                    CompileError::UnexpectedCharacter('.', String::from("Multiple dots in float literal aren't allowed")),
-                                    start,
+                                errors.emit(
+                                    Error::MultipleDotsInFloatLiteral,
+                                    self.pos(),
                                     self.pos()
-                                ));
+                                );
                             }
                             is_float = true;
                             true
@@ -172,11 +161,14 @@ impl<'a> Lexer<'a> {
                                 });
                             }*/
                             Some(_) => {}
-                            None => return Err(EyeError::CompileError(
-                                CompileError::UnexpectedEndOfFile,
-                                start,
-                                self.pos()
-                            ))
+                            None => {
+                                errors.emit(
+                                    Error::UnexpectedEndOfFile,
+                                    start,
+                                    self.pos()
+                                );
+                                break;
+                            }
                         }
                     }
                     self.step();
@@ -189,26 +181,32 @@ impl<'a> Lexer<'a> {
                             _ => break
                         }
                     }
-                    if let Some(keyword) = Keyword::from_string(&self.src[start as usize ..= self.pos() as usize]) {
+                    if let Some(keyword) = Keyword::from_str(&self.src[start as usize ..= self.pos() as usize]) {
                         TokenType::Keyword(keyword)
                     } else {
                         TokenType::Ident
                     }
                 },
-                _ => return Err(EyeError::CompileError(
-                    CompileError::UnexpectedCharacter(self.current(), String::from("Unexpected character")),
-                    start,
-                    start + 1
-                ))
+                _ => {
+                    let pos = self.pos();
+                    self.step();
+                    self.skip_junk();
+                    errors.emit(
+                        Error::UnexpectedCharacter,
+                        pos,
+                        pos
+                    );
+                    continue;
+                }
             };
         };
-        
-        self.step();
         let end = self.pos();
-        Ok(Some(Token::new(ty, start, end)))
+        self.step();
+        Some(Token::new(ty, start, end))
     }
     
-    fn parse_multiline_comment(&mut self) -> EyeResult<usize> {
+    fn parse_multiline_comment(&mut self, errors: &mut Errors) -> usize {
+        let start = self.pos() - 2;
         let mut newlines = 0;
         loop {
             match self.step() {
@@ -218,15 +216,22 @@ impl<'a> Lexer<'a> {
                 }
                 Some('#') if matches!(self.peek(), Some('*')) => {
                     self.step();
-                    newlines += self.parse_multiline_comment()?;
+                    newlines += self.parse_multiline_comment(errors);
                 }
                 Some('\n') => newlines += 1,
-                None => return Err(EyeError::CompileError(CompileError::UnexpectedEndOfFile, self.pos(), self.pos())),
+                None => {
+                    errors.emit(
+                        Error::UnexpectedEndOfFile,
+                        start,
+                        self.pos()
+                    );
+                    break;
+                }
                 _ => {}
 
             }
         }
-        Ok(newlines)
+        newlines
     }
 
     fn skip_junk(&mut self) {

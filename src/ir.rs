@@ -75,7 +75,8 @@ impl fmt::Display for Struct {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Primitive(Primitive),
-    Resolved(SymbolKey)
+    Resolved(SymbolKey),
+    Invalid,
 }
 impl TypeRef {
     pub fn _size(&self, module: &IrModule) -> u32 {
@@ -86,6 +87,7 @@ impl TypeRef {
                     Type::Struct(_, s) => s._size(module)
                 }
             }
+            TypeRef::Invalid => 0
         }
     }
 }
@@ -93,7 +95,8 @@ impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TypeRef::Primitive(prim) => write!(f, "Primitive({})", prim),
-            TypeRef::Resolved(key) => write!(f, "Resolved({})", key.idx())
+            TypeRef::Resolved(key) => write!(f, "Resolved({})", key.idx()),
+            TypeRef::Invalid => write!(f, "Invalid")
         }
     }
 }

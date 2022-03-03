@@ -690,19 +690,19 @@ pub fn insert_intrinsics(module: &mut ast::Module) {
     module.definitions.insert("print".to_owned(), Definition::Function(ast::Function {
         body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
         params: Vec::new(),
-        vararg: Some(("args".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))),
-        return_type: ast::UnresolvedType::Primitive(Primitive::Unit)
+        vararg: Some(("args".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)),
+        return_type: (ast::UnresolvedType::Primitive(Primitive::Unit), 0, 0)
     }));
     module.definitions.insert("read".to_owned(), Definition::Function(ast::Function {
         body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
-        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
         vararg: None,
-        return_type: ast::UnresolvedType::Primitive(Primitive::String)
+        return_type: (ast::UnresolvedType::Primitive(Primitive::String), 0, 0)
     }));
     module.definitions.insert("parse".to_owned(), Definition::Function(ast::Function {
         body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
-        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String))],
+        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
         vararg: None,
-        return_type: ast::UnresolvedType::Primitive(Primitive::I32)
+        return_type: (ast::UnresolvedType::Primitive(Primitive::I32), 0, 0)
     }));
 }
