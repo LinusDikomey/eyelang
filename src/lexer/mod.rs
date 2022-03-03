@@ -46,9 +46,9 @@ impl<'a> Lexer<'a> {
     fn pos(&self) -> u32 {
         self.chars.get(self.index).unwrap_or_else(|| self.chars.last().unwrap_or(&(0, '_'))).0
     }
-
     fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
         let mut start;
+        
         let ty = loop {
             start = self.pos();
             if self.is_at_end() {

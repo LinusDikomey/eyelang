@@ -43,14 +43,17 @@ fn main() {
     }
 
     let src_file = src_file.unwrap_or("./eye/test.eye");
+    run_file(&mut (std::io::stdin().lock(), std::io::stdout()), src_file, reconstruct_ast);
+}
 
+fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str, reconstruct_ast: bool) {
     use colored::*;
-    let src = std::fs::read_to_string(Path::new(&src_file))
-        .expect(&format!("Could not open source file: {}", src_file));
+    let src = std::fs::read_to_string(Path::new(&file))
+        .expect(&format!("Could not open source file: {}", file));
 
-    println!("{} {} ...", "Compiling".green(), src_file.underline().bright_blue());
+    println!("{} {} ...", "Compiling".green(), file.underline().bright_blue());
     
-    match run(&src, reconstruct_ast) {
+    match run(io, &src, reconstruct_ast) {
         Ok(res) => {
             let t = res.get_type().unwrap_or(ir::TypeRef::Primitive(types::Primitive::Unit));
             println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), res, t);
@@ -61,12 +64,12 @@ fn main() {
                 errors.error_count().to_string().underline().bright_red(),
                 "errors".red()
             );
-            errors.print(&src, src_file);
+            errors.print(&src, file);
         }
     }
 }
 
-fn run(src: &str, reconstruct_ast: bool) -> Result<interpreter::Value, Errors> {
+fn run<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), src: &str, reconstruct_ast: bool) -> Result<interpreter::Value, Errors> {
     let mut errors = Errors::new();
     let Some(tokens) = lexer::parse(&src, &mut errors)
         else { return Err(errors) };
@@ -133,8 +136,41 @@ fn run(src: &str, reconstruct_ast: bool) -> Result<interpreter::Value, Errors> {
     let main = &ir.funcs[main_key.idx()];
 
     Ok(interpreter::eval_function(
+        io,
         &mut Scope::from_module(ir.clone()),
         main,
         vec![])
     )
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_eye_files() {
+        const EXPECTED: &'static str = 
+"4
+Vec before assignment: 1 2.5 3
+Vec after assignment: 1 3.1 3
+x: 1
+Hello, John Doe
+You entered: 123456789
+Your number is 5 or larger
+Half your number is: 61728394
+Some calculations:
+Printing from test()
+Calling return value from test()
+Bye";
+        let mut output = Vec::new();
+        super::run_file(&mut(std::io::Cursor::new(Vec::<u8>::new()), std::io::Cursor::new(&mut output)), "eye/test.eye", true);
+        let string = String::from_utf8(output).unwrap();
+        println!("{string}");
+        assert_eq!(string, EXPECTED);
+
+        let input = b"123\n";
+        let mut output = Vec::new();
+        super::run(&mut(std::io::Cursor::new(input), &mut output), "main ->: print(parse(read(\"Input number: \"))+i32(1))", false).unwrap();
+        println!("{:?}", String::from_utf8(output.clone()));
+        assert_eq!(b"Input number: 124".as_slice(), output.as_slice());
+    }
 }

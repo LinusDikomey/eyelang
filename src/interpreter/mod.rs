@@ -1,5 +1,5 @@
 use core::panic;
-use std::{fmt, collections::HashMap, io::{stdin, BufRead, Write}, mem::ManuallyDrop};
+use std::{fmt, collections::HashMap, mem::ManuallyDrop};
 
 use crate::{ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator, ir::{self, TypeRef}};
 
@@ -196,7 +196,7 @@ impl Scope {
     }
 }
 
-pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) -> Value {
+pub fn eval_function<'a, R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, f: &ir::Function, args: Vec<Value>) -> Value {
     match &f.intrinsic {
         Some(intrinsic) => {
             let val = match intrinsic {
@@ -205,7 +205,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) 
                         panic!("print() with zero args doesn't make sense");
                     }
                     for arg in args {
-                        print!("{}", arg);
+                        write!(io.1, "{arg}").unwrap();
                     }
                     Value::Unit
                 },
@@ -214,12 +214,17 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) 
                         0 => {}
                         1 => {
                             let Value::String(s) = &args[0] else { panic!("Invalid read() arg") };
-                            print!("{}", s);
-                            std::io::stdout().flush().unwrap();
+                            write!(io.1, "{s}").unwrap();
+                            io.1.flush().unwrap();
                         }
                         _ => panic!("Invalid read() arg count")
                     }
-                    Value::String(stdin().lock().lines().next().unwrap().unwrap())
+                    let mut buf = String::new();
+                    io.0.read_line(&mut buf).unwrap();
+                    if let Some(b'\n') = buf.bytes().last() {
+                        buf.pop().expect("newline byte expected");
+                    }
+                    Value::String(buf)
                 }
                 ir::Intrinsic::Parse => {
                     assert_eq!(args.len(), 1);
@@ -239,7 +244,7 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) 
         scope.values.insert(arg_name.clone(), arg_val);
     }
 
-    let v = eval_block_or_expr(&mut scope, &f.ast.body, Some(f.header().return_type)).value();
+    let v = eval_block_or_expr(io, &mut scope, &f.ast.body, Some(f.header().return_type)).value();
     if let Some(ty) = v.get_type() {
         let expected = f.header().return_type;
         if ty != expected {
@@ -249,6 +254,9 @@ pub fn eval_function<'a>(scope: &mut Scope, f: &ir::Function, args: Vec<Value>) 
             )
         }
     }
+
+    io.1.flush().unwrap();
+
     v
 }
 
@@ -281,26 +289,26 @@ fn to_type_ref(unresolved: &UnresolvedType, scope: &Scope) -> TypeRef {
     }
 }
 
-fn eval_block_or_expr(scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<TypeRef>) -> ValueOrReturn {
+fn eval_block_or_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<TypeRef>) -> ValueOrReturn {
     match b {
-        ast::BlockOrExpr::Block(block) => eval_block(scope, block),
+        ast::BlockOrExpr::Block(block) => eval_block(io, scope, block),
         ast::BlockOrExpr::Expr(expr) => {
-            eval_expr(scope, expr, expected)
+            eval_expr(io, scope, expr, expected)
         }
     }
 }
 
-fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
+fn eval_block<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
     let mut scope: Scope = Scope::with_parent(scope);
     for item in &block.items {
         match item {
             BlockItem::Block(block) => {
-                get_or_ret!(eval_block(&mut scope, block));
+                get_or_ret!(eval_block(io, &mut scope, block));
             },
             BlockItem::Declare(name, ty, expr) => {
                 let val = if let Some(e) = expr {
                     let expected = ty.as_ref().map(|ty| to_type_ref(ty, &scope));
-                    get_or_ret!(eval_expr(&mut scope, e, expected))
+                    get_or_ret!(eval_expr(io, &mut scope, e, expected))
                 } else {
                     Value::Unassigned 
                 };
@@ -310,21 +318,21 @@ fn eval_block(scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
                 let val = eval_lvalue(&mut scope, l_val);
                 let ty = val.get_type();
                 // the lvalue has to be evaluated again so scope isn't borrowed when evaluating the expression
-                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(&mut scope, expr, ty));
+                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(io, &mut scope, expr, ty));
             },
             BlockItem::Expression(expr) => {
-                get_or_ret!(eval_expr(&mut scope, expr, None));
+                get_or_ret!(eval_expr(io, &mut scope, expr, None));
             }
         }
     }
     ValueOrReturn::Value(Value::Unit)
 }
 
-fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<TypeRef>) -> ValueOrReturn {
+fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, expr: &ast::Expression, mut expected: Option<TypeRef>) -> ValueOrReturn {
     use ast::Expression::*;
     let val = match expr {
         Return(ret) => return ValueOrReturn::Return(
-            eval_expr(scope, ret, Some(scope.expected_return_type())).value(),
+            eval_expr(io, scope, ret, Some(scope.expected_return_type())).value(),
         ),
         IntLiteral(lit) => {
             match lit.ty {
@@ -355,20 +363,20 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
         Variable(name) => scope.resolve(name).0.clone(),
         If(box ast::If { cond, then, else_ }) => {
             let Value::Bool(cond_true) = get_or_ret!(
-                eval_expr(scope, cond, Some(TypeRef::Primitive(Primitive::Bool)))
+                eval_expr(io, scope, cond, Some(TypeRef::Primitive(Primitive::Bool)))
             ) else { panic!("bool expected in if condition!") };
             if cond_true {
-                get_or_ret!(eval_block_or_expr(scope, then, expected))
+                get_or_ret!(eval_block_or_expr(io, scope, then, expected))
             } else {
                 if let Some(else_block) = else_ {
-                    get_or_ret!(eval_block_or_expr(scope, else_block, expected))
+                    get_or_ret!(eval_block_or_expr(io, scope, else_block, expected))
                 } else {
                     Value::Unit
                 }
             }
         }
         FunctionCall(expr, args) => {
-            let func = get_or_ret!(eval_expr(scope, expr, None));
+            let func = get_or_ret!(eval_expr(io, scope, expr, None));
             let mut arg_vals = Vec::with_capacity(args.len());
             match func {
                 Value::Function(func) => {
@@ -381,16 +389,16 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
                     let mut args = args.iter();
                     for (_, ty) in &func.header().params {
                         let arg  = args.next().expect("Not enough arguments to function");
-                        arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(*ty))));
+                        arg_vals.push(get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
                     }
 
                     if let Some((_, ty)) = &func.header().vararg {
                         for arg in args {
-                            arg_vals.push(get_or_ret!(eval_expr(scope, arg, Some(*ty))));
+                            arg_vals.push(get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
                         }
                     }
                     
-                    eval_function(scope.outer(), &func, arg_vals) //TODO: proper scope
+                    eval_function(io, scope.outer(), &func, arg_vals) //TODO: proper scope
                 }
                 Value::Type(ir::Type::Struct(_, struc)) => {
                     if args.len() != struc.members.len() {
@@ -401,7 +409,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
                     }
                     let mut values = HashMap::new();
                     for (arg, (name, ty)) in args.iter().zip(&struc.members) {
-                        values.insert(name.clone(), get_or_ret!(eval_expr(scope, arg, Some(*ty))));
+                        values.insert(name.clone(), get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
                     }
                     Value::Struct(values)
                 }
@@ -419,7 +427,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
                     }
                 }
             }
-            un_op!{get_or_ret!(eval_expr(scope, inner, expected)),
+            un_op!{get_or_ret!(eval_expr(io, scope, inner, expected)),
                 I8 I16 I32 I64 I128 F32 F64
             }
         }
@@ -428,7 +436,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
             if let Operator::LT | Operator::LE | Operator::GT | Operator::GE | Operator::Equals = op {
                 expected = None;
             };
-            let lhs = get_or_ret!(eval_expr(scope, lhs, expected));
+            let lhs = get_or_ret!(eval_expr(io, scope, lhs, expected));
             let rhs_expected = if expected.is_none() {
                 use Value::*;
                 match lhs {
@@ -450,7 +458,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
                     _ => None
                 }.map(TypeRef::Primitive)
             } else { expected.map(|t| t.clone()) };
-            let rhs = get_or_ret!(eval_expr(scope, rhs, rhs_expected));
+            let rhs = get_or_ret!(eval_expr(io, scope, rhs, rhs_expected));
             macro_rules! op_match {
                 (num: $($p: tt),*; eq: $($eq_only: tt),*) => {
                     match (op, lhs, rhs) {
@@ -478,7 +486,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
             )
         }
         MemberAccess(expr, member_name) => {
-            match get_or_ret!(eval_expr(scope, expr, None)) {
+            match get_or_ret!(eval_expr(io, scope, expr, None)) {
                 Value::Struct(members) => {
                     members[member_name].clone()
                 }
@@ -499,7 +507,7 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
                 }
             }
 
-            cast!{get_or_ret!(eval_expr(scope, expr, None)), target_ty,
+            cast!{get_or_ret!(eval_expr(io, scope, expr, None)), target_ty,
                 U8 => U8: Primitive::U8,
                 U8 => U16: Primitive::U16,
                 U8 => U32: Primitive::U32,
@@ -626,7 +634,6 @@ fn eval_expr(scope: &mut Scope, expr: &ast::Expression, mut expected: Option<Typ
         }
     };
 
-    //println!("Adjusting expr val: {:?}, expected: {:?}", val, expected);
     let val = match val {
         Value::UnsizedInt(int_val) => {
             expected

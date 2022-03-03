@@ -341,7 +341,7 @@ impl<'a> Parser<'a> {
             TokenType::IntLiteral              => Expression::IntLiteral(IntLiteral::from_tok(first, self.src)),
             TokenType::FloatLiteral            => Expression::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
             TokenType::StringLiteral           => Expression::StringLiteral(
-                self.src[first.start as usize + 1 .. first.end as usize - 1]
+                self.src[first.start as usize + 1 ..= first.end as usize - 1]
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
                     .replace("\\r", "\r")

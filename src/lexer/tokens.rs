@@ -15,7 +15,7 @@ impl Token {
     }
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
-        &src[self.start as usize .. self.end as usize]
+        &src[self.start as usize ..= self.end as usize]
     }
 
     pub fn is<const N: usize>(&self, types: impl Into<TokenTypes<N>>) -> bool {

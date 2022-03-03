@@ -8,15 +8,15 @@ abs(x i32) -> i32: if x < 0: -x else x
 main -> {
     print(abs(-4), "\n")
     v := Vec3(1.0, 2.5, 3.0)
-    print("Vec before assignment: ", v, "\n")
+    print("Vec before assignment: ", v.x, " ", v.y, " ", v.z, "\n")
     v.y = 3.1
-    print("Vec after assignment: ", v, "\n")
+    print("Vec after assignment: ", v.x, " ", v.y, " ", v.z, "\n")
     print("x: ", v.x, "\n")
-    name := read("What's your name? ")
+    name := "John Doe"
     sayHello(false)
     print(", ")
     print(name, "\n")
-    inp := parse(read("Enter number: "))
+    inp := parse("123456789")
     print("You entered: ", inp, "\n")
     
     x := 4

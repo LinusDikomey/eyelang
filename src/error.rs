@@ -4,6 +4,7 @@ use colored::Colorize;
 
 pub type EyeResult<T> = Result<T, CompileError>;
 
+#[derive(Debug)]
 pub struct Errors {
     errors: Vec<CompileError>,
 }
