@@ -5,6 +5,8 @@ InvalidTypes :: {
     valid u32,
     invalid u33,
     also_invalid u34,
+    multiline_invalid
+    u35,
 }
 
 

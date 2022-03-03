@@ -1,3 +1,5 @@
+use std::{iter::{Peekable, Enumerate}, str::Lines};
+
 use colored::Colorize;
 
 pub type EyeResult<T> = Result<T, CompileError>;
@@ -51,6 +53,8 @@ impl Errors {
             } else {
                 (&src[s..=e]).into()
             };
+            assert!(src_loc.len() > 0, "empty source location in error");
+
             let mut surrounding_start = s;
             while surrounding_start > 0 && (s - surrounding_start) < 40 && src.bytes().nth(surrounding_start - 1).unwrap() != b'\n' {
                 surrounding_start -= 1;
@@ -59,13 +63,41 @@ impl Errors {
             while surrounding_end < src.len() - 1 && (surrounding_end - e) < 20 && src.bytes().nth(surrounding_end + 1).unwrap() != b'\n' {
                 surrounding_end += 1;
             }
-            println!("{}: {} '{}'", "error".bright_red(), format!("{:?}", error.err).bright_red(), src_loc.cyan());
+            let pre = &src[surrounding_start..s];
+            let post = &src[(e+1)..=surrounding_end];
+
+            println!("{}: {}", "error".bright_red(), format!("{:?}", error.err).bright_red());
             println!("{} {}", "at:".cyan(), format!("{file}:{line}:{col}").underline());
-            let spaces = std::cmp::max(4, line.to_string().len());
+            let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
             let p = format!("{} | ", " ".repeat(spaces)).cyan();
-            let line_p = format!("{line:#4} | ").cyan();
-            println!("{p}\n{line_p}{}", &src[surrounding_start..=surrounding_end]);
-            println!("{p}{}{}", " ".repeat(src[surrounding_start..s].chars().count()), "^".repeat(src_loc.chars().count()).bright_red());
+
+            println!("{p}");
+
+            let mut lines = src_loc.lines().enumerate().peekable();
+
+            let first = lines.next().unwrap();
+            
+            let post_if_last = |lines: &mut Peekable<Enumerate<Lines>>| {
+                if lines.peek().is_some() {
+                    println!();
+                } else {
+                    println!("{post}")
+                }
+            };
+
+            print!("{}{}{}", format!("{line:#4} | ").cyan(), pre, first.1);
+            post_if_last(&mut lines);
+
+            println!("{p}{}{}", " ".repeat(pre.chars().count()), "^".repeat(first.1.chars().count()).bright_red());
+
+            while let Some((i, line_str)) = lines.next() {
+                let line = line + i;
+                
+                print!("{}{}", format!("{line:#4} | ").cyan(), line_str);
+                post_if_last(&mut lines);
+
+                println!("{p}{}", "^".repeat(line_str.chars().count()).bright_red());
+            }
             println!();
         }
     }
