@@ -15,8 +15,6 @@ pub fn parse(src: &str, errors: &mut Errors) -> Option<Vec<Token>> {
         src,
         chars,
         index: 0,
-        line: 0,
-        col: 0,
         tokens: Vec::new()
     }.parse(errors))
 }
@@ -25,8 +23,6 @@ struct Lexer<'a> {
     src: &'a str,
     chars: Vec<(u32, char)>,
     index: usize,
-    line: u64,
-    col: u64,
     tokens: Vec<Token>
 }
 
@@ -44,11 +40,30 @@ impl<'a> Lexer<'a> {
     }
 
     fn pos(&self) -> u32 {
-        self.chars.get(self.index).unwrap_or_else(|| self.chars.last().unwrap_or(&(0, '_'))).0
+        self.chars.get(self.index)
+            .map(|(x, _)| *x)
+            .unwrap_or_else(||
+                self.chars
+                    .last()
+                    .map(|(pos, c)| *pos + c.len_utf8() as u32)
+                    .unwrap_or(0)
+            )
     }
     fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
         let mut start;
-        
+
+        let mut invalid_chars = None;
+        fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors) {
+            if let Some((start, end)) = *invalid {
+                errors.emit(
+                    Error::UnexpectedCharacters,
+                    start,
+                    end
+                );
+            }
+            *invalid = None;
+        }
+
         let ty = loop {
             start = self.pos();
             if self.is_at_end() {
@@ -56,13 +71,14 @@ impl<'a> Lexer<'a> {
             }
             break match self.current() {
                 '#' => {
-                    if let Some('*') = self.peek() {
+                    emit_invalid(&mut invalid_chars, errors);
+                    if let Some('-') = self.peek() {
                         self.step();
                         self.parse_multiline_comment(errors);
                     } else {
                         while let Some(c) = self.step() {
                             match c {
-                                '#' if matches!(self.peek(), Some('*')) => {
+                                '#' if matches!(self.peek(), Some('-')) => {
                                     self.step();
                                     if self.parse_multiline_comment(errors) > 0 { break; }
                                 }
@@ -188,18 +204,20 @@ impl<'a> Lexer<'a> {
                     }
                 },
                 _ => {
-                    let pos = self.pos();
+                    let start = self.pos();
                     self.step();
+                    let end = self.pos() - 1;
+                    if let Some((_, chars_end)) = &mut invalid_chars {
+                        *chars_end = end;
+                    } else {
+                        invalid_chars = Some((start, end));
+                    }
                     self.skip_junk();
-                    errors.emit(
-                        Error::UnexpectedCharacter,
-                        pos,
-                        pos
-                    );
                     continue;
                 }
             };
         };
+        emit_invalid(&mut invalid_chars, errors);
         let end = self.pos();
         self.step();
         Some(Token::new(ty, start, end))
@@ -210,11 +228,11 @@ impl<'a> Lexer<'a> {
         let mut newlines = 0;
         loop {
             match self.step() {
-                Some('*') if matches!(self.peek(), Some('#')) => {
+                Some('-') if matches!(self.peek(), Some('#')) => {
                     self.step();
                     break;
                 }
-                Some('#') if matches!(self.peek(), Some('*')) => {
+                Some('#') if matches!(self.peek(), Some('-')) => {
                     self.step();
                     newlines += self.parse_multiline_comment(errors);
                 }
@@ -253,12 +271,6 @@ impl<'a> Lexer<'a> {
     }
 
     fn step(&mut self) -> Option<char> {
-        if self.current() == '\n' {
-            self.line += 1;
-            self.col = 1;
-        } else {
-            self.col += 1;
-        }
         self.index += 1;
         if self.index < self.chars.len() {
             Some(self.current())

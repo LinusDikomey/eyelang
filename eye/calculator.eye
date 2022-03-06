@@ -19,11 +19,11 @@ calc(mode string, a i32, b i32) -> i32 {
 shl(x i32, amount i32) -> i32: if amount <= 0: x else shl(x, amount - 1) * 2
 shr(x i32, amount i32) -> i32: if amount <= 0: x else shr(x, amount - 1) / 2
 
-#*
+#-
 test(x u32) ->:
     while x > 0 {
         print("Test\n")
         x = x - 1
     }
 
-*#
+-#

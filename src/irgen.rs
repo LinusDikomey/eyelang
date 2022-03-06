@@ -85,7 +85,7 @@ impl TypingCtx {
             )
         }).collect();
         let key = SymbolKey::new(self.types.len() as u64);
-        self.types.push(Type::Struct(key, Struct { members }));
+        self.types.push(Type::Struct(Struct { members }));
         let previous = self.symbols.insert(name.to_owned(), (SymbolType::Type, key));
         debug_assert!(previous.is_none(), "Duplicate type definnition inserted");
         key
@@ -156,7 +156,7 @@ impl TypingCtx {
     }
 }
 
-pub fn reduce(ast: &ast::Module, errors: &mut Errors) -> EyeResult<IrModule> {
+pub fn reduce(ast: &ast::Module, errors: &mut Errors) -> EyeResult<Module> {
     let mut ctx = TypingCtx::new();
 
     for (name, def) in &ast.definitions {
@@ -172,5 +172,5 @@ pub fn reduce(ast: &ast::Module, errors: &mut Errors) -> EyeResult<IrModule> {
             }
         }
     }
-    Ok(IrModule { funcs: ctx.funcs, types: ctx.types, symbols: ctx.symbols })
+    Ok(Module { funcs: ctx.funcs, types: ctx.types, symbols: ctx.symbols })
 }

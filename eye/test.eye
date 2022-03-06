@@ -52,14 +52,14 @@ Transform :: {
 
 commentTest -> {
     # this is a comment
-    #*
+    #-
     This is a
     multiline comment
-    *#
-    #* nested #* multiline *# comment *#
+    -#
+    #- nested #- multiline -# comment -#
 
-    # Multiline in #*
+    # Multiline in #-
     comment
-    *#
-    # #* *# Still a comment after multiline
+    -#
+    # #--# Still a comment after multiline
 }

@@ -54,9 +54,9 @@ fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str,
     println!("{} {} ...", "Compiling".green(), file.underline().bright_blue());
     
     match run(io, &src, reconstruct_ast) {
-        Ok(res) => {
+        Ok((module, res)) => {
             let t = res.get_type().unwrap_or(ir::TypeRef::Primitive(types::Primitive::Unit));
-            println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), res, t);
+            println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), res.adapt_fmt(&module), t);
         }
         Err(errors) => {
             println!("{} {} {}",
@@ -69,7 +69,8 @@ fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str,
     }
 }
 
-fn run<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), src: &str, reconstruct_ast: bool) -> Result<interpreter::Value, Errors> {
+fn run<'a, R: std::io::BufRead, W: std::io::Write>
+(io: &mut (R, W), src: &str, reconstruct_ast: bool) -> Result<(ir::Module, interpreter::Value), Errors> {
     let mut errors = Errors::new();
     let Some(tokens) = lexer::parse(&src, &mut errors)
         else { return Err(errors) };
@@ -135,12 +136,14 @@ fn run<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), src: &str, recon
         else { panic!("Main has to be a function, found type") };
     let main = &ir.funcs[main_key.idx()];
 
-    Ok(interpreter::eval_function(
+    let val = interpreter::eval_function(
         io,
-        &mut Scope::from_module(ir.clone()),
+        &mut Scope::from_module(&ir),
         main,
-        vec![])
-    )
+        &[]
+    );
+
+    Ok((ir, val))
 }
 
 

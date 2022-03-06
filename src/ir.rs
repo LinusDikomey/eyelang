@@ -26,7 +26,7 @@ pub struct Module {
 }
 */
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Function {
     pub header: FunctionHeader,
     pub ast: crate::ast::Function, // temporary solution?
@@ -51,9 +51,9 @@ pub struct FunctionHeader {
     pub return_type: TypeRef
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Type {
-    Struct(SymbolKey, Struct)
+    Struct(Struct)
 }
 
 #[derive(Debug, Clone)]
@@ -61,8 +61,15 @@ pub struct Struct {
     pub members: Vec<(String, TypeRef)>
 }
 impl Struct {
-    pub fn _size(&self, module: &IrModule) -> u32 {
+    pub fn _size(&self, module: &Module) -> u32 {
         self.members.iter().map(|(_, m)| m._size(module)).sum()
+    }
+
+    pub fn member_index(&self, name: &str) -> Option<usize> {
+        self.members.iter()
+            .enumerate()
+            .find(|(_, (member_name, _))| member_name == name)
+            .map(|(i, _)| i)
     }
 }
 impl fmt::Display for Struct {
@@ -79,12 +86,12 @@ pub enum TypeRef {
     Invalid,
 }
 impl TypeRef {
-    pub fn _size(&self, module: &IrModule) -> u32 {
+    pub fn _size(&self, module: &Module) -> u32 {
         match self {
             TypeRef::Primitive(p) => p._size(),
             TypeRef::Resolved(key) => {
                 match &module.types[key.idx()] {
-                    Type::Struct(_, s) => s._size(module)
+                    Type::Struct(s) => s._size(module)
                 }
             }
             TypeRef::Invalid => 0
@@ -94,28 +101,25 @@ impl TypeRef {
 impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeRef::Primitive(prim) => write!(f, "Primitive({})", prim),
-            TypeRef::Resolved(key) => write!(f, "Resolved({})", key.idx()),
+            TypeRef::Primitive(prim) => write!(f, "{}", prim),
+            TypeRef::Resolved(key) => write!(f, "{}", key.idx()),
             TypeRef::Invalid => write!(f, "Invalid")
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct IrModule {
+#[derive(Debug)]
+pub struct Module {
     pub funcs: Vec<Function>,
     pub types: Vec<Type>,
     pub symbols: HashMap<String, (SymbolType, SymbolKey)>
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum Definition {
     Function(Function),
     Type(Type)
 }
-
-pub struct IrFunc(Vec<Instruction>);
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {

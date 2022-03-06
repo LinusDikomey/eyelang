@@ -36,10 +36,13 @@ impl Errors {
             let until_start = if s >= src.len() { src } else { &src[..s] };
             let mut line = 1;
             let mut col = 1;
-            for c in until_start.chars() {
+            let mut start_of_line_byte = 0;
+            for (i, c) in until_start.char_indices() {
                 if c == '\n' {
                     line += 1;
                     col = 1;
+
+                    start_of_line_byte = i+1;
                 } else {
                     col += 1;
                 }
@@ -56,16 +59,19 @@ impl Errors {
             };
             assert!(src_loc.len() > 0, "empty source location in error");
 
-            let mut surrounding_start = s;
-            while surrounding_start > 0 && (s - surrounding_start) < 40 && src.bytes().nth(surrounding_start - 1).unwrap() != b'\n' {
-                surrounding_start -= 1;
-            }
-            let mut surrounding_end = std::cmp::min(src.len() - 1, e);
-            while surrounding_end < src.len() - 1 && (surrounding_end - e) < 20 && src.bytes().nth(surrounding_end + 1).unwrap() != b'\n' {
-                surrounding_end += 1;
-            }
-            let pre = &src[surrounding_start..s];
-            let post = &src[(e+1)..=surrounding_end];
+            let pre = &src[start_of_line_byte..s];
+
+            // find end of the line to print the rest of the line
+            let post = if src.as_bytes()[e] == b'\n' || e == src.len() {
+                ""
+            } else {
+                let mut surrounding_end = std::cmp::min(src.len(), e);
+                while surrounding_end < src.len() && src.as_bytes()[surrounding_end] != b'\n' {
+                    surrounding_end += 1;
+                }
+                &src[(e+1)..surrounding_end]
+            };
+            
 
             println!("{}: {}", "error".bright_red(), format!("{:?}", error.err).bright_red());
             println!("{} {}", "at:".cyan(), format!("{file}:{line}:{col}").underline());
@@ -115,7 +121,7 @@ pub struct CompileError {
 pub enum Error {
     FileSizeExceeeded,
     UnexpectedEndOfFile,
-    UnexpectedCharacter,
+    UnexpectedCharacters,
     UnexpectedToken,
     UnknownType,
     UnknownFunction,

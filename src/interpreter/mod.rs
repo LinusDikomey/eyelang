@@ -1,15 +1,20 @@
 use core::panic;
-use std::{fmt, collections::HashMap, mem::ManuallyDrop};
+use std::{fmt, collections::HashMap};
 
-use crate::{ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr}, types::{IntType, FloatType, Primitive}, lexer::tokens::Operator, ir::{self, TypeRef}};
+use crate::{
+    ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr},
+    types::{IntType, FloatType, Primitive},
+    lexer::tokens::Operator,
+    ir::{self, TypeRef, SymbolKey}
+};
 
 #[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Unassigned,
 
-    Function(ir::Function),
-    Type(ir::Type),
+    Function(SymbolKey),
+    Type(SymbolKey),
 
     I8(i8),
     I16(i16),
@@ -31,21 +36,39 @@ pub enum Value {
     String(String),
     Bool(bool),
 
-    Struct(HashMap<String, Value>),
+    Struct(Box<(SymbolKey, Vec<Value>)>), // Box<HashMap<String, Value>>
 }
-impl fmt::Display for Value {
+pub struct ValueFmtAdaptor<'a> {
+    value: &'a Value,
+    module: &'a ir::Module
+}
+impl fmt::Display for ValueFmtAdaptor<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value.fmt_with_module(f, self.module)
+    }
+}
+impl Value {
+    pub fn adapt_fmt<'a>(&'a self, module: &'a ir::Module) -> ValueFmtAdaptor<'a> {
+        ValueFmtAdaptor { value: self, module }
+    }
+    pub fn fmt_with_module(&self, f: &mut fmt::Formatter<'_>, module: &ir::Module) -> fmt::Result {
         use Value::*;
         match self {
             Unit => write!(f, "()"),
             Unassigned => write!(f, "[UNASSIGNED]"),
-            Function(func) => write!(f, "({}) -> {}", 
-                func.header().params.iter()
-                    .map(|p| format!("{}: {}", p.0, p.1))
-                    .intersperse(", ".to_owned()).collect::<std::string::String>(),
-                func.header().return_type),
-            Type(ir::Type::Struct(_, struc)) => write!(f, "{}", struc),
-        
+            Function(key) => {
+                let func = &module.funcs[key.idx()];
+                write!(f, "({}) -> {}", 
+                    func.header().params.iter()
+                        .map(|p| format!("{}: {}", p.0, p.1))
+                        .intersperse(", ".to_owned()).collect::<std::string::String>(),
+                    func.header().return_type
+                )
+            }
+            Type(key) => {
+                let ir::Type::Struct(struc) = &module.types[key.idx()];
+                write!(f, "{}", struc)
+            }
             I8(x) => write!(f, "{}", x),
             I16(x) => write!(f, "{}", x),
             I32(x) => write!(f, "{}", x),
@@ -66,17 +89,22 @@ impl fmt::Display for Value {
             String(s) => write!(f, "{}", s),
             Bool(b) => write!(f, "{}", b),
         
-            Struct(fields) => {
+            Struct(box (symbol, fields)) => {
+                let ir::Type::Struct(struc) = &module.types[symbol.idx()];
                 write!(f, "{{")?;
-                for (i, (name, val)) in fields.iter().enumerate() {
-                    write!(f, "{}{}: {}", if i == 0 {""} else {", "}, name, val)?;
+                for ((i, val), (name, _)) in fields.iter().enumerate().zip(&struc.members) {
+                    if i != 0 {
+                        f.write_str(", ")?;
+                    }
+                    f.write_str(name)?;
+                    f.write_str(": ")?;
+                    val.fmt_with_module(f, module)?;
                 }
                 write!(f, "}}")
             }
         }
     }
-}
-impl Value {
+    
     pub fn get_type(&self) -> Option<TypeRef> {
         use Primitive::*;
         Some(TypeRef::Primitive(match self {
@@ -107,40 +135,39 @@ impl Value {
     }
 }
 
-pub struct Scope {
-    parent: Option<*mut Scope>,
+pub struct Scope<'m> {
+    parent: Option<*mut Scope<'m>>,
     values: HashMap<String, Value>,
+    module: &'m ir::Module,
     expected_return_type: Option<TypeRef>
 }
-impl Scope {
-    pub fn new() -> Self {
-        Self { parent: None, values: HashMap::new(), expected_return_type: None }
+impl<'m> Scope<'m> {
+    /*pub fn new() -> Self {
+        Self { parent: None, values: HashMap::new(), mo, expected_return_type: None }
+    }*/
+    pub fn with_parent<'p>(parent: &mut Scope<'m>) -> Self {
+        Self {
+            parent: Some(parent as _),
+            values: HashMap::new(),
+            module: parent.module,
+            expected_return_type: None
+        }
     }
-    pub fn with_parent(parent: &mut Scope) -> Self {
-        Self { parent: Some(parent as _), values: HashMap::new(), expected_return_type: None }
-    }
-    pub fn from_module(module: ir::IrModule) -> Self {
-        let mut s = Scope::new();
+    pub fn from_module(module: &'m ir::Module) -> Self {
+        let mut values = HashMap::new();
 
-        let mut funcs = ManuallyDrop::new(module.funcs);
-        let mut types = ManuallyDrop::new(module.types);
-
-        // SAFETY: funcs and types are taken out and left uninitialized. They are all taken exactly once because
-        // they are all defined in the symbols map.
-        #[allow(invalid_value)]
-        for (name, (symbol_ty, key)) in module.symbols {
-            s.values.insert(name, match symbol_ty {
-                ir::SymbolType::Func => Value::Function(std::mem::replace(
-                    &mut funcs[key.idx()],
-                    unsafe { std::mem::MaybeUninit::uninit().assume_init() }
-                )),
-                ir::SymbolType::Type => Value::Type(std::mem::replace(
-                    &mut types[key.idx()],
-                    unsafe { std::mem::MaybeUninit::uninit().assume_init() }
-                )),
+        for (name, (symbol_ty, key)) in &module.symbols {
+            values.insert(name.to_owned(), match symbol_ty {
+                ir::SymbolType::Func => Value::Function(*key),
+                ir::SymbolType::Type => Value::Type(*key),
             });
         }
-        s
+        Scope {
+            parent: None,
+            values,
+            module,
+            expected_return_type: None
+        }
     }
     pub fn resolve(&self, name: &str) -> (&Value, &Self) {
         if let Some(v) = self.values.get(name) {
@@ -153,9 +180,12 @@ impl Scope {
             }
         }
     }
-    pub fn resolve_mut(&mut self, name: &str) -> &mut Value {
+
+    /// Resolves a value and returns a mutable reference to it. Also returns
+    /// a reference to the module for preventing borrowing problems.
+    pub fn resolve_mut<'a>(&'a mut self, name: &str) -> (&'a mut Value, &'m ir::Module) {
         if let Some(v) = self.values.get_mut(name) {
-            v
+            (v, self.module)
         } else {
             if let Some(parent) = &mut self.parent {
                 unsafe { &mut **parent }.resolve_mut(name)
@@ -165,7 +195,7 @@ impl Scope {
         }
     }
 
-    pub fn outer(&mut self) -> &mut Scope {
+    pub fn outer(&mut self) -> &mut Scope<'m> {
         match self.parent {
             Some(parent) => unsafe { &mut *parent }.outer(),
             None => self
@@ -185,7 +215,7 @@ impl Scope {
 
     /// temporary function for resolving ast types
     fn resolve_type(&self, name: &str) -> TypeRef {
-        if let Some(Value::Type(ir::Type::Struct(key, _))) = self.values.get(name) {
+        if let Some(Value::Type(key)) = self.values.get(name) {
             return TypeRef::Resolved(*key);
         } else {
             if let Some(parent) = self.parent {
@@ -196,7 +226,8 @@ impl Scope {
     }
 }
 
-pub fn eval_function<'a, R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, f: &ir::Function, args: Vec<Value>) -> Value {
+pub fn eval_function<R: std::io::BufRead, W: std::io::Write>
+(io: &mut (R, W), scope: &mut Scope, f: &ir::Function, args: &[Value]) -> Value {
     match &f.intrinsic {
         Some(intrinsic) => {
             let val = match intrinsic {
@@ -205,7 +236,7 @@ pub fn eval_function<'a, R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W)
                         panic!("print() with zero args doesn't make sense");
                     }
                     for arg in args {
-                        write!(io.1, "{arg}").unwrap();
+                        write!(io.1, "{}", arg.adapt_fmt(scope.module)).unwrap();
                     }
                     Value::Unit
                 },
@@ -241,7 +272,7 @@ pub fn eval_function<'a, R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W)
     let mut scope = Scope::with_parent(scope);
     scope.expected_return_type = Some(f.header().return_type);
     for ((arg_name, _), arg_val) in f.header.params.iter().zip(args) {
-        scope.values.insert(arg_name.clone(), arg_val);
+        scope.values.insert(arg_name.clone(), arg_val.clone());
     }
 
     let v = eval_block_or_expr(io, &mut scope, &f.ast.body, Some(f.header().return_type)).value();
@@ -265,7 +296,7 @@ enum ValueOrReturn {
     Value(Value),
     Return(Value)
 }
-impl<'a> ValueOrReturn {
+impl ValueOrReturn {
     fn value(self) -> Value {
         match self {
             Self::Value(v) | Self::Return(v) => v
@@ -289,7 +320,8 @@ fn to_type_ref(unresolved: &UnresolvedType, scope: &Scope) -> TypeRef {
     }
 }
 
-fn eval_block_or_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, b: &ast::BlockOrExpr, expected: Option<TypeRef>) -> ValueOrReturn {
+fn eval_block_or_expr<'a, R: std::io::BufRead, W: std::io::Write>
+(io: &mut (R, W), scope: &'a mut Scope, b: &ast::BlockOrExpr, expected: Option<TypeRef>) -> ValueOrReturn {
     match b {
         ast::BlockOrExpr::Block(block) => eval_block(io, scope, block),
         ast::BlockOrExpr::Expr(expr) => {
@@ -298,8 +330,9 @@ fn eval_block_or_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), s
     }
 }
 
-fn eval_block<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, block: &ast::Block) -> ValueOrReturn {
-    let mut scope: Scope = Scope::with_parent(scope);
+fn eval_block<'a, 'm, R: std::io::BufRead, W: std::io::Write>
+(io: &mut (R, W), scope: &'a mut Scope<'m>, block: &ast::Block) -> ValueOrReturn {
+    let mut scope = Scope::with_parent(scope);
     for item in &block.items {
         match item {
             BlockItem::Block(block) => {
@@ -315,10 +348,10 @@ fn eval_block<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &m
                 scope.values.insert(name.clone(), val);
             },
             BlockItem::Assign(l_val, expr) => {
-                let val = eval_lvalue(&mut scope, l_val);
+                let val = eval_lvalue(&mut scope, l_val).0;
                 let ty = val.get_type();
                 // the lvalue has to be evaluated again so scope isn't borrowed when evaluating the expression
-                *eval_lvalue(&mut scope, l_val) = get_or_ret!(eval_expr(io, &mut scope, expr, ty));
+                *eval_lvalue(&mut scope, l_val).0 = get_or_ret!(eval_expr(io, &mut scope, expr, ty));
             },
             BlockItem::Expression(expr) => {
                 get_or_ret!(eval_expr(io, &mut scope, expr, None));
@@ -328,7 +361,8 @@ fn eval_block<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &m
     ValueOrReturn::Value(Value::Unit)
 }
 
-fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mut Scope, expr: &ast::Expression, mut expected: Option<TypeRef>) -> ValueOrReturn {
+fn eval_expr<R: std::io::BufRead, W: std::io::Write>
+(io: &mut (R, W), scope: &mut Scope, expr: &ast::Expression, mut expected: Option<TypeRef>) -> ValueOrReturn {
     use ast::Expression::*;
     let val = match expr {
         Return(ret) => return ValueOrReturn::Return(
@@ -380,6 +414,7 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mu
             let mut arg_vals = Vec::with_capacity(args.len());
             match func {
                 Value::Function(func) => {
+                    let func = &scope.module.funcs[func.idx() as usize];
                     if func.intrinsic.is_none() && args.len() != func.header().params.len() {
                         panic!("Invalid arg count, expected: {}, found: {}", 
                             func.header().params.len(),
@@ -398,20 +433,21 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mu
                         }
                     }
                     
-                    eval_function(io, scope.outer(), &func, arg_vals) //TODO: proper scope
+                    eval_function(io, scope.outer(), &func, &arg_vals) //TODO: proper scope
                 }
-                Value::Type(ir::Type::Struct(_, struc)) => {
+                Value::Type(key) => {
+                    let ir::Type::Struct(struc) = &scope.module.types[key.idx()];
                     if args.len() != struc.members.len() {
                         panic!("Invalid constructor argument count, expected: {}, found: {}",
                             struc.members.len(),
                             args.len(),
                         );
                     }
-                    let mut values = HashMap::new();
-                    for (arg, (name, ty)) in args.iter().zip(&struc.members) {
-                        values.insert(name.clone(), get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
+                    let mut values = Vec::new();
+                    for (arg, (_, ty)) in args.iter().zip(&struc.members) {
+                        values.push(get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
                     }
-                    Value::Struct(values)
+                    Value::Struct(Box::new((key, values)))
                 }
                 _ => panic!("Tried to call non-function value as function")
             }
@@ -487,10 +523,16 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mu
         }
         MemberAccess(expr, member_name) => {
             match get_or_ret!(eval_expr(io, scope, expr, None)) {
-                Value::Struct(members) => {
-                    members[member_name].clone()
+                Value::Struct(box (type_key, members)) => {
+                    let ir::Type::Struct(struc) = &scope.module.types[type_key.idx()];
+                    debug_assert_eq!(members.len(), struc.members.len());
+                    let i = struc.members.iter()
+                        .enumerate()
+                        .find(|(_, (name, _))| name == member_name)
+                        .expect("Unknown member").0;
+                    members[i].clone()
                 }
-                val => panic!("Can't access non-struct member {} of {:?}", member_name, val)
+                val => panic!("Can't access member {} of non-struct {:?}", member_name, val)
             }
         }
         Cast(target_ty, expr) => {
@@ -673,12 +715,18 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), scope: &mu
     ValueOrReturn::Value(val)
 }
 
-fn eval_lvalue<'a>(scope: &'a mut Scope, l_val: &LValue) -> &'a mut Value {
+fn eval_lvalue<'a, 'm>(scope: &'a mut Scope<'m>, l_val: &LValue) -> (&'a mut Value, &'m ir::Module) {
     match l_val {
         LValue::Variable(var) => scope.resolve_mut(var),
         LValue::Member(inner, member) => {
             match eval_lvalue(scope, inner) {
-                Value::Struct(members) => members.get_mut(member).expect("Member not found"),
+                (Value::Struct(box (type_key, members)), module) => {
+                    let ir::Type::Struct(struc) = &module.types[type_key.idx()];
+                    (
+                        &mut members[struc.member_index(member).unwrap_or_else(|| panic!("Invalid member {member}"))],
+                        module
+                    )
+                }
                 val => panic!("Can't access non-struct type member '{}' of value: {:?}", member, val)
             }
         }
