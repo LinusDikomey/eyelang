@@ -7,7 +7,7 @@ mod parser;
 mod types;
 mod interpreter;
 mod ir;
-mod irgen;
+mod typecheck;
 
 use crate::{parser::Parser, interpreter::Scope, error::Errors, ast::repr::Repr};
 use std::{path::Path, sync::atomic::AtomicBool};
@@ -117,7 +117,7 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>
     // HACK: intrinsics are inserted into the module so the resolver can find them
     interpreter::insert_intrinsics(&mut module);
 
-    let ir = match irgen::reduce(&module, &mut errors) {
+    let ir = match typecheck::check(&module, &mut errors) {
         Ok(ir) => ir,
         Err(err) => {
             errors.emit(err.err, err.start, err.end);
@@ -161,9 +161,12 @@ You entered: 123456789
 Your number is 5 or larger
 Half your number is: 61728394
 Some calculations:
-Printing from test()
-Calling return value from test()
 Bye";
+
+// these lines before bye don't work without func type annotations:
+//Printing from test()
+//Calling return value from test()
+
         let mut output = Vec::new();
         super::run_file(&mut(std::io::Cursor::new(Vec::<u8>::new()), std::io::Cursor::new(&mut output)), "eye/test.eye", true);
         let string = String::from_utf8(output).unwrap();
@@ -172,7 +175,7 @@ Bye";
 
         let input = b"123\n";
         let mut output = Vec::new();
-        super::run(&mut(std::io::Cursor::new(input), &mut output), "main ->: print(parse(read(\"Input number: \"))+i32(1))", false).unwrap();
+        super::run(&mut(std::io::Cursor::new(input), &mut output), "main ->: print(string(parse(read(\"Input number: \"))+i32(1)))", false).unwrap();
         println!("{:?}", String::from_utf8(output.clone()));
         assert_eq!(b"Input number: 124".as_slice(), output.as_slice());
     }

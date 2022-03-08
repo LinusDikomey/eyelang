@@ -7,7 +7,10 @@ pub enum Primitive {
     F32, F64,
     String,
     Bool,
-    Unit
+    Func,
+    Type,
+    Unit,
+    Never
 }
 impl Primitive {
     pub fn _size(&self) -> u32 {
@@ -18,9 +21,9 @@ impl Primitive {
             I32  | U32 | F32 => 4,
             I64  | U64 | F64 => 8,
             I128 | U128      => 16,
-            Primitive::String => todo!(),
-            Primitive::Bool => 1,
-            Primitive::Unit => 0            
+            String | Func | Type => todo!(),
+            Bool => 1,
+            Unit | Never => 0,           
         }
     }
 
@@ -68,7 +71,10 @@ impl fmt::Display for Primitive {
             F64 => "f64",
             Primitive::String => "string",
             Primitive::Bool => "bool",
-            Primitive::Unit => "()"
+            Primitive::Func => "[func]",
+            Primitive::Type => "[type]",
+            Primitive::Unit => "()",
+            Primitive::Never => "!"
         };
         write!(f, "{}", s)
     }
@@ -78,6 +84,22 @@ impl fmt::Display for Primitive {
 pub enum IntType {
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
+}
+impl Into<Primitive> for IntType {
+    fn into(self) -> Primitive {
+        match self {
+            Self::I8 => Primitive::I8,
+            Self::I16 => Primitive::I16,
+            Self::I32 => Primitive::I32,
+            Self::I64 => Primitive::I64,
+            Self::I128 => Primitive::I128,
+            Self::U8 => Primitive::U8,
+            Self::U16 => Primitive::U16,
+            Self::U32 => Primitive::U32,
+            Self::U64 => Primitive::U64,
+            Self::U128 => Primitive::U128,
+        }
+    }
 }
 
 impl IntType {
@@ -142,6 +164,15 @@ impl IntType {
 pub enum FloatType {
     F32, F64,
 }
+impl Into<Primitive> for FloatType {
+    fn into(self) -> Primitive {
+        match self {
+            Self::F32 => Primitive::F32,
+            Self::F64 => Primitive::F64
+        }
+    }
+}
+
 impl FloatType {
     pub fn display(&self) -> &str {
         use FloatType::*;

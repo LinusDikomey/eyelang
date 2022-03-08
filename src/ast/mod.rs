@@ -31,6 +31,7 @@ pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
     pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub return_type: (UnresolvedType, u32, u32),
+    pub var_count: u32,
     pub body: BlockOrExpr,
 }
 
@@ -57,7 +58,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum BlockItem {
     Block(Block),
-    Declare(String, Option<UnresolvedType>, Option<Expression>),
+    Declare(String, u32, Option<UnresolvedType>, Option<Expression>),
     Assign(LValue, Expression),
     Expression(Expression),
 }
@@ -87,8 +88,29 @@ pub struct If {
 
 #[derive(Debug, Clone)]
 pub enum LValue {
-    Variable(String),
+    Variable(u32, String),
     Member(Box<LValue>, String)
+}
+impl LValue {
+    pub fn start(&self) -> u32 {
+        let mut current = self;
+        loop {
+            match current {
+                Self::Variable(start, _) => return *start,
+                Self::Member(left, _) => current = &left
+            };
+        }
+    }
+    pub fn idents(&self) -> Vec<&str> {
+        match self {
+            Self::Variable(_, ident) => vec![ident],
+            Self::Member(left, ident) => {
+                let mut v = left.idents();
+                v.push(ident);
+                v
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

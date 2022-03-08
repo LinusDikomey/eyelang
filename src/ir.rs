@@ -1,5 +1,4 @@
 use std::{fmt, collections::HashMap};
-
 use crate::types::Primitive;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]

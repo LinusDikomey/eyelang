@@ -5,6 +5,11 @@ add(x i32, y i32) -> i32: x + y
 
 abs(x i32) -> i32: if x < 0: -x else x
 
+bla(x i32, y i32) -> {
+    z := 3
+    w := 5
+}
+
 main -> {
     print(abs(-4), "\n")
     v := Vec3(1.0, 2.5, 3.0)
@@ -29,14 +34,17 @@ main -> {
     y: i32 = inp / 2
     print("Half your number is: ", y, "\n")
     print("Some calculations:\n")
-    test()("Calling return value from test()\n")
+    # test()("Calling return value from test()\n")
     bye()
 }
 
-test -> string {
+# can't write func type as return type right now so this doesn't work
+#-
+test -> func {
     print("Printing from test()\n")
     ret print
 }
+-#
 
 Vec3 :: {
     x f32,

@@ -123,6 +123,7 @@ pub enum Error {
     UnexpectedEndOfFile,
     UnexpectedCharacters,
     UnexpectedToken,
+    UnknownIdent,
     UnknownType,
     UnknownFunction,
     UnknownVariable,
@@ -136,8 +137,15 @@ pub enum Error {
     DuplicateDefinition,
     InvalidTopLevelBlockItem,
     UnknownEscapeCode,
-    TypeExpectedFoundFunction,
-    FunctionExpectedFoundType
+    TypeExpected,
+    FunctionExpected,
+    IntExpected,
+    FloatExpected,
+    MismatchedType,
+    ExpectedVarFoundDefinition,
+    InvalidArgCount,
+    CantNegateType,
+    NonexistantMember
 }
 impl Error {
     pub fn at(self, start: u32, end: u32) -> CompileError {

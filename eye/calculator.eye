@@ -1,8 +1,8 @@
 main -> {
+    x := 1
     mode := read("Enter operation: ")
     a := parse(read("First number: "))
     b := parse(read("Second number: "))
-    
     print("Result: ", calc(mode, a, b))
 }
 

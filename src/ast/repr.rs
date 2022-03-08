@@ -138,7 +138,7 @@ impl<C: Representer> Repr<C> for BlockItem {
     fn repr(&self, c: &C) {
         match self {
             Self::Block(block) => block.repr(c),
-            Self::Declare(name, ty, expr) => {
+            Self::Declare(name, _idx, ty, expr) => {
                 c.write_start(name.as_str());
                 if let Some(ty) = ty {
                     c.write_add(": ");
@@ -243,7 +243,7 @@ impl<C: Representer> Repr<C> for Expression {
 impl<C: Representer> Repr<C> for LValue {
     fn repr(&self, c: &C) {
         match self {
-            Self::Variable(var) => c.write_add(var.as_str()),
+            Self::Variable(_, var) => c.write_add(var.as_str()),
             Self::Member(l_val, member) => {
                 l_val.repr(c);
                 c.write_add(".");
@@ -274,7 +274,10 @@ impl<C: Representer> Repr<C> for Primitive {
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
             Self::String => c.write_add("string"),
             Self::Bool => c.write_add("bool"),
+            Self::Func => c.write_add("[func]"),
+            Self::Type => c.write_add("[type]"),
             Self::Unit => c.write_add("()"),
+            Self::Never => c.write_add("!")
         }
     }
 }
