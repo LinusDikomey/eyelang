@@ -7,5 +7,11 @@ main -> {
     ty := SmallPoint
     instance := ty(3, 5)
     print(instance, "\n")
-    print(instance.x)
+    print(instance.x, "\n")
+
+    unit := ()
+    print("unit type: ", unit, "\n")
+
+    unit2: () = if 1 < 2: unit else ()
+    ret unit2
 }

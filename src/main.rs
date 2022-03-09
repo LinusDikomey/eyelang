@@ -104,7 +104,7 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>
         if count == 1 { "" } else { "s" }
     );
 
-    log!("Module: {:?}", module);
+    log!("Module: {:#?}", module);
     
 
     if reconstruct_ast {
@@ -125,7 +125,7 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>
         }
     };
 
-    log!("... reduced! TIR: {:?}", ir);
+    log!("... reduced! IR: {}", ir);
 
     if errors.has_errors() {
         return Err(errors);

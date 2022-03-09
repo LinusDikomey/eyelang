@@ -186,6 +186,7 @@ impl<C: Representer> Repr<C> for Expression {
                 c.write_add("\"");
             }
             Self::BoolLiteral(b) => c.write_add(if *b { "true" } else { "false" }),
+            Self::Unit => c.write_add("()"),
             Self::Variable(name) => c.write_add(name.as_str()),
             Self::If(box If { cond, then, else_ }) => {
                 c.write_add("if ");

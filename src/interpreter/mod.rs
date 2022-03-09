@@ -338,7 +338,7 @@ fn eval_block<'a, 'm, R: std::io::BufRead, W: std::io::Write>
             BlockItem::Block(block) => {
                 get_or_ret!(eval_block(io, &mut scope, block));
             },
-            BlockItem::Declare(name, index, ty, expr) => {
+            BlockItem::Declare(name, _index, ty, expr) => {
                 let val = if let Some(e) = expr {
                     let expected = ty.as_ref().map(|ty| to_type_ref(ty, &scope));
                     get_or_ret!(eval_expr(io, &mut scope, e, expected))
@@ -370,19 +370,19 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>
         ),
         IntLiteral(lit) => {
             match lit.ty {
-                Some(IntType::I8) => Value::I8(lit.unsigned_val as i8 * if lit.sign {-1} else {1}),
-                Some(IntType::I16) => Value::I16(lit.unsigned_val as i16 * if lit.sign {-1} else {1}),
-                Some(IntType::I32) => Value::I32(lit.unsigned_val as i32 * if lit.sign {-1} else {1}),
-                Some(IntType::I64) => Value::I64(lit.unsigned_val as i64 * if lit.sign {-1} else {1}),
-                Some(IntType::I128) => Value::I128(lit.unsigned_val as i128 * if lit.sign {-1} else {1}),
+                Some(IntType::I8) => Value::I8(lit.val as i8),
+                Some(IntType::I16) => Value::I16(lit.val as i16),
+                Some(IntType::I32) => Value::I32(lit.val as i32),
+                Some(IntType::I64) => Value::I64(lit.val as i64),
+                Some(IntType::I128) => Value::I128(lit.val as i128),
 
-                Some(IntType::U8) => Value::U8(lit.unsigned_val as u8),
-                Some(IntType::U16) => Value::U16(lit.unsigned_val as u16),
-                Some(IntType::U32) => Value::U32(lit.unsigned_val as u32),
-                Some(IntType::U64) => Value::U64(lit.unsigned_val as u64),
-                Some(IntType::U128) => Value::U128(lit.unsigned_val as u128),
+                Some(IntType::U8) => Value::U8(lit.val as u8),
+                Some(IntType::U16) => Value::U16(lit.val as u16),
+                Some(IntType::U32) => Value::U32(lit.val as u32),
+                Some(IntType::U64) => Value::U64(lit.val as u64),
+                Some(IntType::U128) => Value::U128(lit.val as u128),
 
-                None => Value::UnsizedInt(lit.unsigned_val as i128 * if lit.sign {-1} else {1})
+                None => Value::UnsizedInt(lit.val as i128)
             }
         },
         FloatLiteral(lit) => {
@@ -394,6 +394,7 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>
         },
         StringLiteral(s) => Value::String(s.clone()),
         BoolLiteral(b) => Value::Bool(*b),
+        Unit => Value::Unit,
         Variable(name) => scope.resolve(name).0.clone(),
         If(box ast::If { cond, then, else_ }) => {
             let Value::Bool(cond_true) = get_or_ret!(
@@ -732,7 +733,7 @@ fn eval_lvalue<'a, 'm>(scope: &'a mut Scope<'m>, l_val: &LValue) -> (&'a mut Val
                         module
                     )
                 }
-                val => panic!("Can't access non-struct type member '{}' of value: {:?}", member, val)
+                val => panic!("Can't access non-struct type member '{}' of value: {:?}", member, val.0)
             }
         }
     }
@@ -755,14 +756,14 @@ pub fn insert_intrinsics(module: &mut ast::Module) {
         return_type: (ast::UnresolvedType::Primitive(Primitive::Unit), 0, 0)
     }));
     module.definitions.insert("read".to_owned(), Definition::Function(ast::Function {
-        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
+        body: BlockOrExpr::Expr(ast::Expression::StringLiteral(String::new())),
         params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
         vararg: None,
         var_count: 0,
         return_type: (ast::UnresolvedType::Primitive(Primitive::String), 0, 0)
     }));
     module.definitions.insert("parse".to_owned(), Definition::Function(ast::Function {
-        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
+        body: BlockOrExpr::Expr(ast::Expression::IntLiteral(crate::lexer::tokens::IntLiteral { val: 0, ty: Some(IntType::I32) } )),
         params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
         vararg: None,
         var_count: 0,

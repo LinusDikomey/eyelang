@@ -53,28 +53,24 @@ pub enum TokenType {
 
 #[derive(Debug, Clone)]
 pub struct IntLiteral {
-    pub unsigned_val: u128,
-    pub sign: bool,
+    pub val: u128,
     pub ty: Option<IntType>
 }
 impl IntLiteral {
     pub fn from_tok(token: &Token, src: &str) -> Self {
         let val = &token.get_val(src);
-        let (unsigned_val, sign) = if val.starts_with("-") {
-            (val[1..].parse::<u128>().unwrap(), true)
-        } else {
-            (val.parse::<u128>().unwrap(), false)
-        };
-        Self { unsigned_val, sign, ty: None }
+        let val = val.parse::<u128>().unwrap();
+
+        Self { val, ty: None }
     }
 
-    pub fn _fits_into_type(&self, ty: &IntType) -> bool {
+    /*pub fn _fits_into_type(&self, ty: &IntType) -> bool {
         self.unsigned_val <= if self.sign {ty.min_val()} else {ty.max_val()}
-    }
+    }*/
 }
 impl fmt::Display for IntLiteral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", if self.sign { "-" } else { "" }, self.unsigned_val)
+        write!(f, "{}", self.val)
     }
 }
 
@@ -149,11 +145,12 @@ impl Keyword {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operator {
-    Equals,     // ==
     Add,
     Sub,
     Mul,
     Div,
+
+    Equals,     // ==
     LT,
     GT,
     LE,

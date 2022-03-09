@@ -341,9 +341,13 @@ impl<'a> Parser<'a> {
                 Expression::Negate(Box::new(self.parse_factor(var_index)?))
             },
             TokenType::LParen => {
-                let factor = self.parse_expression(var_index)?;
-                self.toks.step_expect(TokenType::RParen)?;
-                factor
+                if self.toks.step_if(TokenType::RParen).is_some() {
+                    Expression::Unit
+                } else {
+                    let factor = self.parse_expression(var_index)?;
+                    self.toks.step_expect(TokenType::RParen)?;
+                    factor
+                }
             },
             TokenType::Keyword(Keyword::Ret) => Expression::Return(Box::new(self.parse_expression(var_index)?)),
             TokenType::IntLiteral              => Expression::IntLiteral(IntLiteral::from_tok(first, self.src)),

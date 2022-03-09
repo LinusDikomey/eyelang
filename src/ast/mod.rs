@@ -70,6 +70,7 @@ pub enum Expression {
     FloatLiteral(FloatLiteral),
     StringLiteral(String),
     BoolLiteral(bool),
+    Unit,
     Variable(String),
     If(Box<If>),
     FunctionCall(Box<Expression>, Vec<Expression>),
