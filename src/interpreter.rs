@@ -2,7 +2,7 @@ use core::panic;
 use std::{fmt, collections::HashMap};
 
 use crate::{
-    ast::{self, BlockItem, UnresolvedType, LValue, Definition, BlockOrExpr},
+    ast::{self, BlockItem, UnresolvedType, LValue},
     types::{IntType, FloatType, Primitive},
     lexer::tokens::Operator,
     ir::{self, TypeRef, SymbolKey}
@@ -745,28 +745,3 @@ fn eval_lvalue<'a, 'm>(scope: &'a mut Scope<'m>, l_val: &LValue) -> (&'a mut Val
         ir::TypeRef::Resolved(res) => UnresolvedType::Unresolved(res)
     }
 }*/
-
-
-pub fn insert_intrinsics(module: &mut ast::Module) {
-    module.definitions.insert("print".to_owned(), Definition::Function(ast::Function {
-        body: BlockOrExpr::Block(ast::Block { items: Vec::new(), defs: HashMap::new() }),
-        params: Vec::new(),
-        vararg: Some(("args".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)),
-        var_count: 0,
-        return_type: (ast::UnresolvedType::Primitive(Primitive::Unit), 0, 0)
-    }));
-    module.definitions.insert("read".to_owned(), Definition::Function(ast::Function {
-        body: BlockOrExpr::Expr(ast::Expression::StringLiteral(String::new())),
-        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        vararg: None,
-        var_count: 0,
-        return_type: (ast::UnresolvedType::Primitive(Primitive::String), 0, 0)
-    }));
-    module.definitions.insert("parse".to_owned(), Definition::Function(ast::Function {
-        body: BlockOrExpr::Expr(ast::Expression::IntLiteral(crate::lexer::tokens::IntLiteral { val: 0, ty: Some(IntType::I32) } )),
-        params: vec![("s".to_owned(), ast::UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        vararg: None,
-        var_count: 0,
-        return_type: (ast::UnresolvedType::Primitive(Primitive::I32), 0, 0)
-    }));
-}

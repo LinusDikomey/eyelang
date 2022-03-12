@@ -1,5 +1,12 @@
 use std::collections::HashMap;
-use crate::{log, ast::{self, *}, error::{CompileError, EyeResult, Error}, lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}}, types::Primitive, ir::TokenSpan};
+use crate::{
+    log,
+    ast::{self, *},
+    error::{CompileError, EyeResult, Error},
+    lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}},
+    types::Primitive,
+    ir::TokenSpan
+};
 
 pub struct Parser<'a> {
     src: &'a str,

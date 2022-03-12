@@ -181,7 +181,7 @@ impl<'a> Lexer<'a> {
                                 errors.emit(
                                     Error::UnexpectedEndOfFile,
                                     start,
-                                    self.pos()
+                                    self.pos()-1
                                 );
                                 break;
                             }
@@ -241,7 +241,7 @@ impl<'a> Lexer<'a> {
                     errors.emit(
                         Error::UnexpectedEndOfFile,
                         start,
-                        self.pos()
+                        self.pos()-1
                     );
                     break;
                 }

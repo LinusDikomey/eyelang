@@ -7,8 +7,6 @@ pub enum Primitive {
     F32, F64,
     String,
     Bool,
-    Func,
-    Type,
     Unit,
     Never
 }
@@ -21,7 +19,7 @@ impl Primitive {
             I32  | U32 | F32 => 4,
             I64  | U64 | F64 => 8,
             I128 | U128      => 16,
-            String | Func | Type => todo!(),
+            String => todo!(),
             Bool => 1,
             Unit | Never => 0,           
         }
@@ -71,8 +69,6 @@ impl fmt::Display for Primitive {
             F64 => "f64",
             Primitive::String => "string",
             Primitive::Bool => "bool",
-            Primitive::Func => "[func]",
-            Primitive::Type => "[type]",
             Primitive::Unit => "()",
             Primitive::Never => "!"
         };
@@ -137,8 +133,8 @@ impl IntType {
         }
     }
 
-    pub fn bit_count(&self) -> u8 {
-        self.size() as u8 * 8
+    pub fn bit_count(&self) -> u32 {
+        self.size() * 8
     }
 
     /// returns the smallest possible value
@@ -187,5 +183,9 @@ impl FloatType {
             F32 => 4,
             F64 => 8
         }
+    }
+
+    pub fn bit_count(&self) -> u32 {
+        self.size() * 8
     }
 }

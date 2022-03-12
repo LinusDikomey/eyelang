@@ -275,8 +275,6 @@ impl<C: Representer> Repr<C> for Primitive {
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
             Self::String => c.write_add("string"),
             Self::Bool => c.write_add("bool"),
-            Self::Func => c.write_add("[func]"),
-            Self::Type => c.write_add("[type]"),
             Self::Unit => c.write_add("()"),
             Self::Never => c.write_add("!")
         }

@@ -4,25 +4,27 @@ bye -> { print("Bye") }
 add(x i32, y i32) -> i32: x + y
 
 abs(x i32) -> i32: if x < 0: -x else x
-
 bla(x i32, y i32) -> {
     z := 3
     w := 5
 }
 
 main -> {
-    print(abs(-4), "\n")
+    print(string(abs(-4)), "\n")
     v := Vec3(1.0, 2.5, 3.0)
-    print("Vec before assignment: ", v.x, " ", v.y, " ", v.z, "\n")
+
+    print("Vec before assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
+
     v.y = 3.1
-    print("Vec after assignment: ", v.x, " ", v.y, " ", v.z, "\n")
-    print("x: ", v.x, "\n")
+    print("Vec after assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
+    print("x: ", string(v.x), "\n")
+
     name := "John Doe"
     sayHello(false)
     print(", ")
     print(name, "\n")
     inp := parse("123456789")
-    print("You entered: ", inp, "\n")
+    print("You entered: ", string(inp), "\n")
     
     x := 4
 
@@ -32,7 +34,7 @@ main -> {
         print("Your number is 5 or larger\n")
 
     y: i32 = inp / 2
-    print("Half your number is: ", y, "\n")
+    print("Half your number is: ", string(y), "\n")
     print("Some calculations:\n")
     # test()("Calling return value from test()\n")
     bye()

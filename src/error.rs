@@ -108,6 +108,26 @@ impl Errors {
             println!();
         }
     }
+
+    pub fn emit_unwrap<T>(&mut self, res: Result<T, CompileError>, otherwise: T) -> T {
+        match res {
+            Ok(t) => t,
+            Err(err) => {
+                self.emit(err.err, err.start, err.end);
+                otherwise
+            }
+        }
+    }
+
+    pub fn emit_unwrap_or<T>(&mut self, res: Result<T, CompileError>, otherwise: impl Fn() -> T) -> T {
+        match res {
+            Ok(t) => t,
+            Err(err) => {
+                self.emit(err.err, err.start, err.end);
+                otherwise()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +165,8 @@ pub enum Error {
     ExpectedVarFoundDefinition,
     InvalidArgCount,
     CantNegateType,
-    NonexistantMember
+    NonexistantMember,
+    TypeMustBeKnownHere
 }
 impl Error {
     pub fn at(self, start: u32, end: u32) -> CompileError {

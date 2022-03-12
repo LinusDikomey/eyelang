@@ -1,26 +1,37 @@
 use crate::{
     ast::{self, StructDefinition, BlockItem, LValue},
-    error::{EyeResult, Error, Errors, CompileError},
-    ir::{SymbolType, SymbolKey},
+    error::{Error, Errors, CompileError},
     types::Primitive, lexer::tokens::Operator
 };
-use std::{collections::HashMap, ptr::NonNull, fmt};
-use crate::ir::*;
+use std::{collections::HashMap, ptr::NonNull};
+use super::{*, typing::*};
 
 #[derive(Clone, Copy)]
 struct BlockIndex(u32);
+impl BlockIndex {
+    fn bytes(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+}
 
 struct IrBuilder {
     ir: Vec<Instruction>,
-    current_block: Option<u32>,
+    current_block: u32,
+    next_block: u32,
     types: TypeTable,
     extra_data: Vec<u8>
 }
 impl IrBuilder {
     pub fn new() -> Self {
         Self {
-            ir: Vec::new(),
-            current_block: None,
+            ir: vec![Instruction {
+                data: Data { int32: 0 },
+                tag: Tag::BlockBegin,
+                span: TokenSpan::new(0, 0),
+                ty: TypeTableIndex::NONE
+            }],
+            current_block: 0,
+            next_block: 1,
             types: TypeTable::new(),
             extra_data: Vec::new()
         }
@@ -32,123 +43,41 @@ impl IrBuilder {
         Ref::index(idx)
     }
 
-    pub fn extra_data_vals<'a>(&mut self, bytes: impl IntoIterator<Item = u8>) -> u32 {
-        let idx = self.extra_data.len() as u32;
-        self.extra_data.extend(bytes);
-        idx
-    }
-
-    pub fn extra_data<'a>(&mut self, bytes: impl IntoIterator<Item = &'a u8>) -> u32 {
+    pub fn extra_data<'a>(&mut self, bytes: &[u8]) -> u32 {
         let idx = self.extra_data.len() as u32;
         self.extra_data.extend(bytes);
         idx
     }
 
     pub fn extra_len(&mut self, bytes: &[u8]) -> (u32, u32) {
-        (self.extra_data(bytes.into_iter()), bytes.len() as u32)
+        (self.extra_data(bytes), bytes.len() as u32)
     }
 
-    pub fn begin_block(&mut self, ty: TypeTableIndex) -> BlockIndex {
-        let index = self.current_block.map_or(0, |x| x+1);
-        let block = BlockIndex(index);
-        self.current_block = Some(index);
-        self.ir.push(Instruction { data: Data { int32: index }, tag: Tag::BlockBegin, ty, span: TokenSpan::new(0, 0)  });
+    pub fn create_block(&mut self) -> BlockIndex {
+        let idx = BlockIndex(self.next_block);
+        self.next_block += 1;
+        idx
+    }
+
+    pub fn begin_block(&mut self, idx: BlockIndex) {
+        debug_assert!(
+            matches!(self.ir[self.ir.len() - 1].tag, Tag::Branch | Tag::Goto | Tag::Ret),
+            "Can't begin next block without exiting previous one (Branch/Goto/Ret)"
+        );
+
+        self.current_block = idx.0;
+        self.ir.push(Instruction {
+            data: Data { int32: idx.0 },
+            tag: Tag::BlockBegin,
+            ty: TypeTableIndex::NONE,
+            span: TokenSpan::new(0, 0)  }
+        );
+    }
+
+    pub fn _create_and_begin_block(&mut self) -> BlockIndex {
+        let block = self.create_block();
+        self.begin_block(block);
         block
-    }
-}
-
-/// A type that may not be (completely) known yet. 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TypeInfo {
-    Unknown,
-    Int,
-    Float,
-    Func(SymbolKey),
-    Type(SymbolKey),
-    Primitive(Primitive),
-    Resolved(SymbolKey),
-    Invalid,
-}
-impl fmt::Display for TypeInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeInfo::Unknown => write!(f, "{{unknown}}"),
-            TypeInfo::Int => write!(f, "{{int}}"),
-            TypeInfo::Float => write!(f, "{{float}}"),
-            TypeInfo::Func(key) => write!(f, "{{func {}}}", key.idx()),
-            TypeInfo::Type(key) => write!(f, "{{type-type {}}}", key.idx()),
-            TypeInfo::Primitive(p) => write!(f, "{p}"),
-            TypeInfo::Resolved(key) => write!(f, "{{type {}}}", key.idx()),
-            TypeInfo::Invalid => write!(f, "{{invalid}}"),
-        }
-    }
-}
-impl TypeInfo {
-    fn as_type_ref(self) -> Option<TypeRef> {
-        let mut v = Vec::new();
-        v.push(3);
-        v.push(4);
-
-        match self {
-            Self::Unknown => None,
-            Self::Int => Some(TypeRef::Primitive(Primitive::I32)),
-            Self::Float => Some(TypeRef::Primitive(Primitive::F32)),
-            Self::Func(_) => Some(TypeRef::Primitive(Primitive::Func)),
-            Self::Type(_) => Some(TypeRef::Primitive(Primitive::Type)),
-            TypeInfo::Primitive(p) => Some(TypeRef::Primitive(p)),
-            TypeInfo::Resolved(r) => Some(TypeRef::Resolved(r)),
-            TypeInfo::Invalid => Some(TypeRef::Invalid),
-        }
-    }
-
-    fn merge(&self, other: TypeInfo) -> Result<Self, Error> {
-        self.merge_is_other(other, false)
-    }
-
-    fn merge_is_other(&self, other: TypeInfo, is_other: bool) -> Result<Self, Error> {
-        let res = match self {
-            Self::Unknown => Ok(other),
-            Self::Int => {
-                match other {
-                    Self::Int => Ok(other),
-                    Self::Primitive(p) if p.as_int().is_some() => Ok(other),
-                    Self::Unknown => Ok(Self::Int),
-                    _ => Err(Error::IntExpected)
-                }
-            }
-            Self::Float => {
-                match other {
-                    Self::Float => Ok(other),
-                    Self::Primitive(p) if p.as_float().is_some() => Ok(other),
-                    Self::Unknown => Ok(Self::Float),
-                    _ => Err(Error::FloatExpected)
-                }
-            }
-            TypeInfo::Primitive(_) | TypeInfo::Resolved(_) | TypeInfo::Func(_) | TypeInfo::Type(_) => {
-                (other == *self)
-                    .then(|| *self)
-                    .ok_or(Error::MismatchedType)
-            }
-            TypeInfo::Invalid => Ok(*self), // also invalid type 'spreading'
-        };
-        match res {
-            Ok(t) => Ok(t),
-            Err(err) => if is_other {
-                crate::log!("Merge failed {self:?} {other:?}");
-                Err(err)
-            } else {
-                other.merge_is_other(*self, true)
-            }
-        }
-    }
-}
-impl From<TypeRef> for TypeInfo {
-    fn from(ty: TypeRef) -> Self {
-        match ty {
-            TypeRef::Primitive(p) => Self::Primitive(p),
-            TypeRef::Resolved(r) => Self::Resolved(r),
-            TypeRef::Invalid => Self::Invalid,
-        }
     }
 }
 
@@ -156,7 +85,7 @@ impl From<TypeRef> for TypeInfo {
 enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
-    Var { ty: TypeTableIndex, val: Ref }
+    Var { ty: TypeTableIndex, var: Ref }
 }
 
 struct ScopeInfo<'a> {
@@ -200,18 +129,15 @@ fn resolve(
         match symbol {
             Symbol::Func(f) => Ok((types.add(TypeInfo::Func(*f)), None)),
             Symbol::Type(t) => Ok((types.add(TypeInfo::Type(*t)), None)),
-            Symbol::Var { ty, val } => {
-                if *val == Ref::val(RefVal::Undef) {
-                    errors.emit(Error::UseOfUnassignedVariable, 0, 0);
-                }
-                Ok((*ty, Some(*val)))
+            Symbol::Var { ty, var } => {
+                Ok((*ty, Some(*var)))
             }
         }
     } else {
         if let Some(def) = info.defs.map(|defs| defs.get(name)).flatten() {
             Ok(match def {
                 ast::Definition::Function(func) => {
-                    let header = define_func_header(info, ctx, func, errors).map_err(|err| err.err)?;
+                    let header = define_func_header(info, ctx, name.to_owned(), func, errors);
                     let key = SymbolKey::new(ctx.funcs.len() as u64);
                     ctx.funcs.push(FunctionOrHeader::Header(header));
                     let prev = info.symbols.insert(name.to_owned(), Symbol::Func(key));
@@ -250,7 +176,7 @@ fn resolve_noinfer(
         if let Some(def) = info.defs.map(|defs| defs.get(name)).flatten() {
             Ok(match def {
                 ast::Definition::Function(func) => {
-                    let header = define_func_header(info, ctx, func, errors).map_err(|err| err.err)?;
+                    let header = define_func_header(info, ctx, name.to_owned(), func, errors);
                     let key = SymbolKey::new(ctx.funcs.len() as u64);
                     ctx.funcs.push(FunctionOrHeader::Header(header));
                     let prev = info.symbols.insert(name.to_owned(), Symbol::Func(key));
@@ -321,7 +247,7 @@ fn define_type(info: &mut ScopeInfo, ctx: &mut TypingCtx, mut types: Option<&mut
     key
 }
 
-fn define_func_header<'a>(info: &mut ScopeInfo, ctx: &mut TypingCtx, func: &ast::Function, errors: &mut Errors) -> EyeResult<FunctionHeader> {    
+fn define_func_header<'a>(info: &mut ScopeInfo, ctx: &mut TypingCtx, name: String, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {    
     let params = func
         .params
         .iter()
@@ -342,78 +268,13 @@ fn define_func_header<'a>(info: &mut ScopeInfo, ctx: &mut TypingCtx, func: &ast:
             resolve_type_noinfer(info, ctx, ty, errors)
                 .map_err(|err| CompileError { err, start: *start, end: *end })?
         ))
-    }).transpose()?;
+    }).transpose();
+    let vararg = errors.emit_unwrap(vararg, None);
+
     let return_type = resolve_type_noinfer(info, ctx, &func.return_type.0, errors)
-        .map_err(|err| CompileError { err, start: func.return_type.1, end: func.return_type.2 })?;
-    Ok(FunctionHeader { params, return_type, vararg })
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TypeIdx(u32);
-impl TypeIdx {
-    fn new(idx: usize) -> Self {
-        Self(idx as u32)
-    }
-    fn get(&self) -> usize {
-        self.0 as usize
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct TypeTable {
-    types: Vec<TypeInfo>,
-    indices: Vec<TypeIdx>
-}
-impl TypeTable {
-    pub fn new() -> Self {
-        Self {
-            types: Vec::new(),
-            indices: Vec::new()
-        }
-    }
-
-    pub fn get_type(&self, idx: TypeTableIndex) -> (TypeInfo, TypeIdx) {
-        let type_idx = self.indices[idx.idx()];
-        (self.types[type_idx.get()], type_idx)
-    }
-
-    pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
-        let type_idx = TypeIdx::new(self.types.len());
-        self.types.push(info);
-        let table_idx = TypeTableIndex::new(self.indices.len() as u32);
-        self.indices.push(type_idx);
-        table_idx
-    }
-
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
-        let idx = idx.idx();
-        let type_idx = self.indices[idx];
-        let ty = &mut self.types[type_idx.get()];
-        *ty = match ty.merge(info) {
-            Ok(ty) => ty,
-            Err(err) => {
-                errors.emit(err, 0, 0);
-                TypeInfo::Invalid
-            }
-        };
-    }
-
-    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors) {
-        let a_idx = self.indices[a.idx()];
-        let b_idx = &mut self.indices[b.idx()];
-        let prev_b_ty = self.types[b_idx.get()];
-        *b_idx = a_idx; // make b point to a's type
-
-        let a_ty = &mut self.types[a_idx.get()];
-        // merge b's previous type into a
-        *a_ty = match a_ty.merge(prev_b_ty) {
-            Ok(ty) => ty,
-            Err(err) => {
-                errors.emit(err, 0, 0);
-                TypeInfo::Invalid
-            }
-        }
-    }
+        .map_err(|err| CompileError { err, start: func.return_type.1, end: func.return_type.2 });
+    let return_type = errors.emit_unwrap(return_type, TypeRef::Invalid);
+    FunctionHeader { params, return_type, vararg, name }
 }
 
 struct Scope<'s> {
@@ -448,7 +309,7 @@ impl<'s> Scope<'s> {
         define_type(&mut self.info, self.ctx, types, name, def, errors)
     }
 
-    fn define_func<'outer>(&'outer mut self, errors: &mut Errors, name: &str, def: &ast::Function, header: FunctionHeader) -> EyeResult<SymbolKey> {
+    fn define_func<'outer>(&'outer mut self, errors: &mut Errors, name: &str, def: &ast::Function, header: FunctionHeader) -> SymbolKey {
         let intrinsic = match name {
             "print" => Some(Intrinsic::Print),
             "read" => Some(Intrinsic::Read),
@@ -457,13 +318,14 @@ impl<'s> Scope<'s> {
         };
         let mut builder = IrBuilder::new();
         let mut scope: Scope<'_> = self.child(None);
-        for (name, ty) in &header.params {
+        for (i, (name, ty)) in header.params.iter().enumerate() {
             let ty = builder.types.add((*ty).into());
-            let param = builder.add(Data { none: () }, Tag::Param, ty);
-            scope.declare_var(&mut builder, name.clone(), ty, param);
+            let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
+            scope.info.symbols.insert(name.clone(), Symbol::Var { ty, var: param });
         }
         let expected = builder.types.add(header.return_type.into());
-        scope.reduce_block_or_expr(errors, &mut builder, &def.body, expected, expected);
+        let val = scope.reduce_block_or_expr(errors, &mut builder, &def.body, expected, expected);
+        builder.add(Data { un_op: val }, Tag::Ret, expected);
 
         let func = FunctionOrHeader::Func(Function {
             header,
@@ -471,10 +333,11 @@ impl<'s> Scope<'s> {
             intrinsic,
             ir: builder.ir,
             extra: builder.extra_data,
-            types: builder.types
+            types: builder.types,
+            block_count: builder.next_block
         });
         
-        Ok(match self.info.symbols.get(name) {
+        match self.info.symbols.get(name) {
             None => {
                 let key = SymbolKey::new(self.ctx.funcs.len() as u64);
                 self.ctx.funcs.push(func);
@@ -490,11 +353,13 @@ impl<'s> Scope<'s> {
                 *key
             }
             Some(Symbol::Type(_) | Symbol::Var { .. }) => unreachable!()
-        })
+        }
     }
 
-    fn declare_var(&mut self, _ir: &mut IrBuilder, name: String, ty: TypeTableIndex, val: Ref) {
-        self.info.symbols.insert(name, Symbol::Var { ty, val });
+    fn declare_var(&mut self, ir: &mut IrBuilder, name: String, ty: TypeTableIndex) -> Ref {
+        let var = ir.add(Data { ty }, Tag::Decl, ty);
+        self.info.symbols.insert(name, Symbol::Var { ty, var });
+        var
     }
 
     fn assign(&mut self, errors: &mut Errors, ir: &mut IrBuilder, l_val: &ast::LValue, assign_val: &ast::Expression, ret: TypeTableIndex) -> Result<(), Error> {
@@ -505,34 +370,40 @@ impl<'s> Scope<'s> {
             if let Some(symbol) = unsafe { current.as_mut() }.symbols.get_mut(idents.next().unwrap()) {
                 match symbol {
                     Symbol::Func(_) | Symbol::Type(_) => return Err(Error::ExpectedVarFoundDefinition),
-                    Symbol::Var { ty, val } => {
-                        
+                    Symbol::Var { ty, var } => {
+                        let mut current_var = *var;
                         let expected = match l_val {
                             LValue::Variable(_, _) => *ty,
                             LValue::Member(_, _) => {
                                 let mut current_ty = ir.types.get_type(*ty).0;
-                                for ident in l_val.idents().into_iter() {
-                                    current_ty = match current_ty {
+                                for ident in idents {
+                                    (current_ty, current_var) = match current_ty {
                                         TypeInfo::Resolved(key) => {
                                             let Type::Struct(struct_) = &mut self.ctx.types[key.idx()];
-                                            if let Some((_, member_ty)) = struct_.members.iter().find(|(name, _)| name == ident) {
-                                                (*member_ty).into()
+                                            if let Some((i, (_, member_ty))) = struct_.members.iter().enumerate().find(|(_, (name, _))| name == ident) {
+                                                
+                                                ((*member_ty).into(), ir.add(Data { member: (current_var, i as u32) }, Tag::Member, *ty))
                                             } else {
                                                 errors.emit(Error::NonexistantMember, 0, 0);
-                                                TypeInfo::Invalid
+                                                (TypeInfo::Invalid, Ref::val(RefVal::Undef))
                                             }
                                         }
                                         TypeInfo::Invalid => break,
+                                        TypeInfo::Unknown => {
+                                            errors.emit(Error::TypeMustBeKnownHere, 0, 0);
+                                            (TypeInfo::Invalid, Ref::val(RefVal::Undef))
+                                        }
                                         _ => {
                                             errors.emit(Error::NonexistantMember, 0, 0);
-                                            TypeInfo::Invalid
+                                            (TypeInfo::Invalid, Ref::val(RefVal::Undef))
                                         }
                                     }
                                 }
                                 ir.types.add(current_ty)
                             }
                         };
-                        *val = self.reduce_expr(errors, ir, assign_val, expected, ret);
+                        let expr_val = self.reduce_expr(errors, ir, assign_val, expected, ret);
+                        ir.add(Data { bin_op: (current_var, expr_val) }, Tag::Store, expected);
                         return Ok(())
                     }
                 }
@@ -546,25 +417,29 @@ impl<'s> Scope<'s> {
         };
     }
 
-    fn reduce_block_or_expr(&mut self, errors: &mut Errors, ir: &mut IrBuilder, be: &ast::BlockOrExpr, expected: TypeTableIndex, ret: TypeTableIndex) -> BlockIndex {
+    fn reduce_block_or_expr(
+        &mut self,
+        errors: &mut Errors,
+        ir: &mut IrBuilder,
+        be: &ast::BlockOrExpr,
+        expected: TypeTableIndex,
+        ret: TypeTableIndex
+    ) -> Ref {
         match be {
-            ast::BlockOrExpr::Block(block) => self.reduce_block(errors, ir, block, expected, ret),
-            ast::BlockOrExpr::Expr(expr) => {
-                let block_index = ir.begin_block(expected);
-                self.reduce_expr(errors, ir, expr, expected, ret);
-                block_index
+            ast::BlockOrExpr::Block(block) => {
+                self.reduce_block(errors, ir, block, expected, ret);
+                Ref::val(RefVal::Unit)
             }
+            ast::BlockOrExpr::Expr(expr) => self.reduce_expr(errors, ir, expr, expected, ret)
         }
     }
 
-    fn reduce_block(&mut self, errors: &mut Errors, ir: &mut IrBuilder, block: &ast::Block, expected: TypeTableIndex, ret: TypeTableIndex) -> BlockIndex {
-        let block_index = ir.begin_block(expected);
+    fn reduce_block(&mut self, errors: &mut Errors, ir: &mut IrBuilder, block: &ast::Block, _expected: TypeTableIndex, ret: TypeTableIndex) {
         let mut scope = self.child(Some(&block.defs));
         //ir.types.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
         for item in &block.items {
             scope.reduce_stmt(errors, ir, item, ret);
         }
-        block_index
     }
 
     fn reduce_stmt(&mut self, errors: &mut Errors, ir: &mut IrBuilder, stmt: &BlockItem, ret: TypeTableIndex) {
@@ -583,13 +458,11 @@ impl<'s> Scope<'s> {
                 }.map_or(TypeInfo::Unknown, Into::into);
                 let ty = ir.types.add(ty);
 
-                let val_ref = val.as_ref().map_or(
-                    Ref::val(RefVal::Undef),
-                    |val| self.reduce_expr(errors, ir, val, ty, ret)
-                );
+                let var = self.declare_var(ir, name.clone(), ty);
 
-                self.declare_var(ir, name.clone(), ty, val_ref);
-                ir.add(Data { un_op: val_ref }, Tag::Declare, ty);
+                if let Some(val) = val {
+                    self.reduce_expr_store_into_var(errors, ir, val, var, ty, ret);
+                }
             }
             BlockItem::Assign(var, val) => {
                 self.assign(errors, ir, var, val, ret)
@@ -602,9 +475,37 @@ impl<'s> Scope<'s> {
             }
         }
     }
+    
+    // there are multiple 'expr' functions here so that 'Decl' instructions aren't duplicated.
+    // Otherwise the lhs and rhs of a declaration or assignment might both declare a variable.
 
     fn reduce_expr(&mut self, errors: &mut Errors, ir: &mut IrBuilder, expr: &ast::Expression, expected: TypeTableIndex, ret: TypeTableIndex) -> Ref {
-        match expr {
+        self.reduce_expr_any(errors, ir, expr, expected, ret,
+            |ir| ir.add(Data { ty: expected }, Tag::Decl, expected), // declare new var
+            |_, r| r,
+            |r| r
+        )
+    }
+    fn reduce_expr_store_into_var(&mut self, errors: &mut Errors, ir: &mut IrBuilder, expr: &ast::Expression, var: Ref, expected: TypeTableIndex, ret: TypeTableIndex) {
+        self.reduce_expr_any(errors, ir, expr, expected, ret,
+            |_| var,
+            |ir, r| { ir.add(Data { bin_op: (var, r) }, Tag::Store, expected); }, // store non-variable value
+            |_| () // value is already stored
+        );
+    }
+
+    fn reduce_expr_any<T>(
+        &mut self,
+        errors: &mut Errors,
+        ir: &mut IrBuilder,
+        expr: &ast::Expression,
+        expected: TypeTableIndex,
+        ret: TypeTableIndex,
+        get_var: impl Fn(&mut IrBuilder) -> Ref,
+        default: impl Fn(&mut IrBuilder, Ref) -> T,
+        stored_val: impl Fn(Ref) -> T,
+    ) -> T {
+        let r = match expr {
             ast::Expression::Return(ret_val) => {
                 let r = self.reduce_expr(errors, ir, ret_val, ret, ret);
                 ir.types.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
@@ -613,11 +514,7 @@ impl<'s> Scope<'s> {
             ast::Expression::IntLiteral(lit) => {
                 let int_ty = lit.ty.map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
                 ir.types.specify(expected, int_ty, errors);
-                if lit.val == 0 {
-                    Ref::val(RefVal::Zero)
-                } else if lit.val == 1 {
-                    Ref::val(RefVal::One)
-                } else if lit.val <= std::u64::MAX as u128 {
+                if lit.val <= std::u64::MAX as u128 {
                     ir.add(Data { int: lit.val as u64 }, Tag::Int, expected)
                 } else {
                     let extra = ir.extra_data(&lit.val.to_le_bytes());
@@ -643,10 +540,9 @@ impl<'s> Scope<'s> {
                 Ref::val(RefVal::Unit)
             }
             ast::Expression::Variable(name) => match self.resolve(&mut ir.types, name, errors) {
-                Ok((ty, val)) => {
-                    // specify in both direction
+                Ok((ty, var)) => {
                     ir.types.merge(ty, expected, errors);
-                    val.unwrap_or(Ref::val(RefVal::Undef))
+                    var.map(|var| ir.add(Data { un_op: var }, Tag::Load, ty)).unwrap_or(Ref::val(RefVal::Undef))
                 }
                 Err(err) => {
                     errors.emit(err, 0, 0);
@@ -656,21 +552,45 @@ impl<'s> Scope<'s> {
             ast::Expression::If(if_) => {
                 let ast::If { cond, then, else_ } = &**if_;
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
-                self.reduce_expr(errors, ir, cond, b, ret)
-                //todo!();
-                /*if let Some(else_) = else_ {
-                    let then_block = self.reduce_block_or_expr(errors, ir, then, expected, ret);
-                    let else_block = self.reduce_block_or_expr(errors, ir, else_, expected, ret);
-                    let after = ir.begin_block(ir.types.add(TypeInfo::Primitive(Primitive::Unit)));
-                    
+                let cond = self.reduce_expr(errors, ir, cond, b, ret);
+                let then_block = ir.create_block();
+                let other_block = ir.create_block();
+
+                let branch_extra = ir.extra_data(&then_block.0.to_le_bytes());
+                ir.extra_data(&other_block.0.to_le_bytes());
+
+                let never_ty = ir.types.add(TypeInfo::Primitive(Primitive::Never));
+                ir.add(Data { branch: (cond, branch_extra) }, Tag::Branch, never_ty);
+                ir.begin_block(then_block);
+                
+                let val = if let Some(else_) = else_ {
+                    let after_block = ir.create_block();
+                    let then_val = self.reduce_block_or_expr(errors, ir, then, expected, ret);
+                    ir.add(Data { int32: after_block.0 }, Tag::Goto, never_ty);
+                    ir.begin_block(other_block);
+                    let else_val = self.reduce_block_or_expr(errors, ir, else_, expected, ret);
+                    ir.add(Data { int32: after_block.0 }, Tag::Goto, never_ty);
+                    ir.begin_block(after_block);
+
+                    let extra = ir.extra_data(&then_block.bytes());
+                    ir.extra_data(&then_val.to_bytes());
+                    ir.extra_data(&other_block.bytes());
+                    ir.extra_data(&else_val.to_bytes());
+                    ir.add(Data { extra_len: (extra, 2) }, Tag::Phi, expected)
                 } else {
-                    self.reduce_block_or_expr(errors, ir, then, TypeInfo::Unknown, ret);
-                    TypeInfo::Primitive(Primitive::Unit)
-                }*/
+                    ir.types.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                    let then_ty = ir.types.add(TypeInfo::Unknown);
+                    self.reduce_block_or_expr(errors, ir, then, then_ty, ret);
+                    ir.add(Data { int32: other_block.0 }, Tag::Goto, never_ty);
+                    ir.begin_block(other_block);
+
+                    Ref::val(RefVal::Unit)
+                };
+                val
             }
             ast::Expression::FunctionCall(func_expr, args) => {
                 let func_ty = ir.types.add(TypeInfo::Unknown);
-                self.reduce_expr(errors, ir, func_expr, func_ty, ret);
+                dbg!(self.reduce_expr(errors, ir, func_expr, func_ty, ret));
                 match ir.types.get_type(func_ty).0 {
                     TypeInfo::Invalid => ir.add(Data { none: () }, Tag::Invalid, func_ty),
                     TypeInfo::Func(key) => {
@@ -683,7 +603,7 @@ impl<'s> Scope<'s> {
                         };
                         if invalid_arg_count {
                             errors.emit(Error::InvalidArgCount, 0, 0);
-                            ir.add(Data { none: () }, Tag::Invalid, expected)
+                            Ref::val(RefVal::Undef)
                         } else {
                             let params = header.params.iter().map(|(_, ty)| *ty);
                             let params = if let Some((_, vararg_ty)) = &header.vararg {
@@ -691,15 +611,38 @@ impl<'s> Scope<'s> {
                             } else {
                                 params.collect::<Vec<_>>()
                             };
-                            let bytes = args.iter().zip(params).map(|(arg, ty)| {
+                            let mut bytes = Vec::with_capacity(8 + 4 * args.len());
+                            bytes.extend(&key.bytes());
+                            for (arg, ty) in args.iter().zip(params) {
                                 let ty = ir.types.add(ty.into());
-                                self.reduce_expr(errors, ir, arg, ty, ret).to_bytes()
-                            }).flatten().collect::<Vec<_>>();
-                            let extra = ir.extra_data_vals(bytes);
+                                let expr = self.reduce_expr(errors, ir, arg, ty, ret);
+                                bytes.extend(&expr.to_bytes());
+                            }
+                            let extra = ir.extra_data(&bytes);
                             ir.add(Data { extra_len: (extra, args.len() as u32) }, Tag::Call, expected)
                         }
                     }
-                    TypeInfo::Type(ty) => todo!(), //{ crate::log!("TODO: Struct init unchecked"); TypeInfo::Resolved(ty) } //TODO: check struct init params
+                    TypeInfo::Type(ty) => {
+                        let Type::Struct(struct_) = &self.ctx.types[ty.idx()];
+                        ir.types.specify(expected, TypeInfo::Resolved(ty), errors);
+
+                        if args.len() != struct_.members.len() {
+                            errors.emit(Error::InvalidArgCount, 0, 0);
+                            Ref::val(RefVal::Undef)
+                        } else {
+                            let val = get_var(ir);
+                            let member_types: Vec<TypeInfo> = struct_.members.iter()
+                            .map(|(_, ty)| (*ty).into())
+                            .collect();
+                            for (i, (member_val, member_ty)) in args.iter().zip(member_types).enumerate() {
+                                let member_ty = ir.types.add(member_ty);
+                                let member_val = self.reduce_expr(errors, ir, member_val, member_ty, ret);
+                                let member = ir.add(Data { member: (val, i as u32) }, Tag::Member, member_ty);
+                                ir.add(Data { bin_op: (member, member_val) }, Tag::Store, member_ty);
+                            }
+                            return stored_val(val);
+                        }
+                    }
                     _ => {
                         println!("Function expected, found: {func_ty:?}");
                         errors.emit(Error::FunctionExpected, 0, 0);
@@ -734,7 +677,6 @@ impl<'s> Scope<'s> {
             }
             ast::Expression::BinOp(op, sides) => {
                 let (l, r) = &**sides;
-                // binary operations always require the same type on both sides right now
                 let is_logical = matches!(op, 
                     Operator::Equals
                     | Operator::LT
@@ -743,6 +685,7 @@ impl<'s> Scope<'s> {
                     | Operator::GE
                 );
 
+                // binary operations always require the same type on both sides right now
                 let inner_ty = if is_logical { ir.types.add(TypeInfo::Unknown) } else { expected };
                 let l = self.reduce_expr(errors, ir, l, inner_ty, ret);
                 let r = self.reduce_expr(errors, ir, r, inner_ty, ret);
@@ -769,20 +712,22 @@ impl<'s> Scope<'s> {
                         if let Some((i, (_, ty))) = struct_.members.iter().enumerate().find(|(_, (name, _))| name == member) {
                             ((*ty).into(), i)
                         } else {
-                            println!("left_ty1: {left_ty:?}");
                             errors.emit(Error::NonexistantMember, 0, 0);
                             (TypeInfo::Invalid, 0)
                         }
                     }
                     TypeInfo::Invalid => (TypeInfo::Invalid, 0),
+                    TypeInfo::Unknown => {
+                        errors.emit(Error::TypeMustBeKnownHere, 0, 0);
+                        (TypeInfo::Invalid, 0)
+                    }
                     _ => {
-                        println!("left_ty2: {left_ty:?}");
                         errors.emit(Error::NonexistantMember, 0, 0);
                         (TypeInfo::Invalid, 0)
                     }
                 };
                 ir.types.specify(expected, ty, errors);
-                ir.add(Data { member: (left, idx as u32) }, Tag::Member, expected)
+                ir.add(Data { member: (left, idx as u32) }, Tag::Member, expected) //TODO: probably load here
             }
             ast::Expression::Cast(target, val) => {
                 ir.types.specify(expected, TypeInfo::Primitive(*target), errors);
@@ -791,11 +736,12 @@ impl<'s> Scope<'s> {
                 //TODO: check table for available casts
                 ir.add(Data { cast: (val, *target) }, Tag::Cast, expected)
             }
-        }
+        };
+        default(ir, r)
     }
 }
 
-pub fn check(ast: &ast::Module, errors: &mut Errors) -> EyeResult<Module> {
+pub fn reduce(ast: &ast::Module, errors: &mut Errors) -> Module {
     let mut ctx = TypingCtx { funcs: Vec::new(), types: Vec::new() };
     let mut scope = Scope::new(&mut ctx, Some(&ast.definitions));
 
@@ -816,9 +762,9 @@ pub fn check(ast: &ast::Module, errors: &mut Errors) -> EyeResult<Module> {
                         }
                     }
                     Some(Symbol::Type(_) | Symbol::Var { .. }) => unreachable!(),
-                    None => define_func_header(&mut scope.info, scope.ctx, func, errors)?
+                    None => define_func_header(&mut scope.info, scope.ctx, name.clone(), func, errors)
                 };
-                scope.define_func(errors, name, func, header)?;
+                scope.define_func(errors, name, func, header);
             }
         }
     }
@@ -838,5 +784,5 @@ pub fn check(ast: &ast::Module, errors: &mut Errors) -> EyeResult<Module> {
             FunctionOrHeader::Header(_) => unreachable!()
         })
         .collect();
-    Ok(Module { funcs, types: ctx.types, symbols })
+    Module { name: "MainModule".to_owned(), funcs, types: ctx.types, symbols }
 }
