@@ -428,9 +428,9 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>
                         arg_vals.push(get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
                     }
 
-                    if let Some((_, ty)) = &func.header().vararg {
+                    if func.header().varargs {
                         for arg in args {
-                            arg_vals.push(get_or_ret!(eval_expr(io, scope, arg, Some(*ty))));
+                            arg_vals.push(get_or_ret!(eval_expr(io, scope, arg, None)));
                         }
                     }
                     

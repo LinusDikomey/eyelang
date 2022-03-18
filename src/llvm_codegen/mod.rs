@@ -61,16 +61,16 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) {
     let funcs = module.funcs.iter()
         .map(|func| {
             let ret = llvm_ty(ctx, &types, &func.header().return_type);
-            let params = func.header().params.iter().map(|(_name, ty)| llvm_ty(ctx, &types, ty));
+            let mut params = func.header().params.iter().map(|(_name, ty)| llvm_ty(ctx, &types, ty)).collect::<Vec<_>>();
 
-            let (mut params, vararg): (Vec<_>, _) = if let Some((_, vararg)) = &func.header.vararg {
+            /*let (mut params, vararg): (Vec<_>, _) = if let Some((_, vararg)) = &func.header.vararg {
                 let vararg_ty = llvm_ty(ctx, &types, vararg);
                 (params.chain(std::iter::once(vararg_ty)).collect(), TRUE)
             } else {
                 (params.collect(), FALSE)
-            };
+            };*/
 
-            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, vararg);
+            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, if func.header.varargs {TRUE} else {FALSE});
             let name = ffi::CString::new(func.header().name.as_bytes()).unwrap();
             LLVMAddFunction(llvm_module, name.as_ptr(), func_ty)
         })

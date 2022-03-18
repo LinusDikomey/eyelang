@@ -322,7 +322,7 @@ fn define_func_header<'a>(info: &mut ScopeInfo, ctx: &mut TypingCtx, name: Strin
             (name.clone(), t)
         })
         .collect();
-    let vararg = func.vararg.as_ref().map(|(name, ty, start, end)| {
+    /*let vararg = func.vararg.as_ref().map(|(name, ty, start, end)| {
         Ok((
             name.clone(),
             resolve_type_noinfer(info, ctx, ty, errors)
@@ -330,11 +330,12 @@ fn define_func_header<'a>(info: &mut ScopeInfo, ctx: &mut TypingCtx, name: Strin
         ))
     }).transpose();
     let vararg = errors.emit_unwrap(vararg, None);
+    */
 
     let return_type = resolve_type_noinfer(info, ctx, &func.return_type.0, errors)
         .map_err(|err| CompileError { err, start: func.return_type.1, end: func.return_type.2 });
     let return_type = errors.emit_unwrap(return_type, TypeRef::Invalid);
-    FunctionHeader { params, return_type, vararg, name }
+    FunctionHeader { params, return_type, varargs: func.varargs, name }
 }
 
 enum ExprResult {
@@ -699,7 +700,7 @@ impl<'s> Scope<'s> {
                     TypeInfo::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
                         ir.types.specify(expected, header.return_type.into(), errors);
-                        let invalid_arg_count = if let Some(_) = &header.vararg {
+                        let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
                         } else {
                             args.len() != header.params.len()
@@ -708,16 +709,16 @@ impl<'s> Scope<'s> {
                             errors.emit(Error::InvalidArgCount, 0, 0);
                             Ref::val(RefVal::Undef)
                         } else {
-                            let params = header.params.iter().map(|(_, ty)| *ty);
-                            let params = if let Some((_, vararg_ty)) = &header.vararg {
-                                params.chain(std::iter::repeat(*vararg_ty)).take(args.len()).collect::<Vec<_>>()
+                            let params = header.params.iter().map(|(_, ty)| Some(*ty));
+                            let params = if header.varargs {
+                                params.chain(std::iter::repeat(None)).take(args.len()).collect::<Vec<_>>()
                             } else {
                                 params.collect::<Vec<_>>()
                             };
                             let mut bytes = Vec::with_capacity(8 + 4 * args.len());
                             bytes.extend(&key.bytes());
                             for (arg, ty) in args.iter().zip(params) {
-                                let ty = ir.types.add(ty.into());
+                                let ty = ir.types.add(ty.map(|ty| ty.into()).unwrap_or(TypeInfo::Unknown));
                                 let expr = self.reduce_expr(errors, ir, arg, ty, ret);
                                 bytes.extend(&expr.to_bytes());
                             }

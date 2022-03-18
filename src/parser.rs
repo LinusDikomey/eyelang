@@ -212,7 +212,7 @@ impl<'a> Parser<'a> {
                 let name = ident.get_val(self.src);
                 match self.toks.step().map(|t| t.ty) {
                     Ok(TokenType::LParen) => match self.parse_params() {
-                        Ok(params) => {
+                        Ok((params, varargs)) => {
                             match self.toks.step().map(|t| t.ty) {
                                 Ok(TokenType::Arrow) => {
                                     let ret_type_start = self.toks.current().unwrap().start;
@@ -234,7 +234,7 @@ impl<'a> Parser<'a> {
                                         self.parse_block_or_expr(&mut var_count)
                                     }).transpose()?;
                                     Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                                        params, vararg: None, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
+                                        params, varargs, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
                                     })))
                                 },
                                 Ok(_) => Parsed::None,
@@ -262,7 +262,7 @@ impl<'a> Parser<'a> {
                             self.parse_block_or_expr(&mut var_count)
                         }).transpose()?;
                         Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                            params: Vec::new(), vararg: None, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
+                            params: Vec::new(), varargs: false, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
                         })))
                     },
                     Ok(TokenType::DoubleColon) => {
@@ -337,13 +337,19 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_params(&mut self) -> EyeResult<Vec<(String, UnresolvedType, u32, u32)>> {
+    fn parse_params(&mut self) -> EyeResult<(Vec<(String, UnresolvedType, u32, u32)>, bool)> {
         let mut params = Vec::new();
+        let mut vararg = false;
         match self.toks.peek() {
-            Some(tok) if tok.ty == TokenType::RParen => return Ok(params),
+            Some(tok) if tok.ty == TokenType::RParen => return Ok((params, vararg)),
             _ => ()
         }
         loop {
+            if self.toks.step_if(TokenType::TripleDot).is_some() {
+                vararg = true;
+                self.toks.step_expect(TokenType::RParen)?;
+                break;
+            }
             let name_tok = self.toks.step_expect(TokenType::Ident)?;
             let start = name_tok.start;
             let name = name_tok.get_val(self.src).to_owned();
@@ -354,7 +360,7 @@ impl<'a> Parser<'a> {
                 TokenType::Comma => ()
             );
         }
-        Ok(params)
+        Ok((params, vararg))
     }
 
     fn parse_expression(&mut self, var_index: &mut u32) -> EyeResult<Expression> {

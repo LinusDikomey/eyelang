@@ -177,7 +177,8 @@ pub enum Intrinsic {
 pub struct FunctionHeader {
     pub name: String,
     pub params: Vec<(String, TypeRef)>,
-    pub vararg: Option<(String, TypeRef)>,
+    //pub vararg: Option<(String, TypeRef)>,
+    pub varargs: bool,
     pub return_type: TypeRef
 }
 

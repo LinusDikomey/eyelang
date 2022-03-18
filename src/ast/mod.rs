@@ -29,7 +29,8 @@ pub struct StructDefinition {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
-    pub vararg: Option<(String, UnresolvedType, u32, u32)>,
+    //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
+    pub varargs: bool,
     pub return_type: (UnresolvedType, u32, u32),
     pub var_count: u32,
     pub body: Option<BlockOrExpr>,
@@ -132,21 +133,21 @@ pub fn insert_intrinsics(module: &mut Module) {
     module.definitions.insert("print".to_owned(), Definition::Function(Function {
         body: Some(BlockOrExpr::Block(Block { items: Vec::new(), defs: HashMap::new() })),
         params: Vec::new(),
-        vararg: Some(("args".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)),
+        varargs: true, //Some(("args".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)),
         var_count: 0,
         return_type: (UnresolvedType::Primitive(Primitive::Unit), 0, 0)
     }));
     module.definitions.insert("read".to_owned(), Definition::Function(Function {
         body: Some(BlockOrExpr::Expr(Expression::StringLiteral(String::new()))),
         params: vec![("s".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        vararg: None,
+        varargs: false,
         var_count: 0,
         return_type: (UnresolvedType::Primitive(Primitive::String), 0, 0)
     }));
     module.definitions.insert("parse".to_owned(), Definition::Function(Function {
         body: Some(BlockOrExpr::Expr(Expression::IntLiteral(crate::lexer::tokens::IntLiteral { val: 0, ty: Some(crate::types::IntType::I32) } ))),
         params: vec![("s".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        vararg: None,
+        varargs: false,
         var_count: 0,
         return_type: (UnresolvedType::Primitive(Primitive::I32), 0, 0)
     }));

@@ -100,7 +100,20 @@ impl<'a> Lexer<'a> {
                     }
                 },
                 ',' => TokenType::Comma,
-                '.' => TokenType::Dot,
+                '.' => {
+                    if let Some('.') = self.peek() {
+                        self.step();
+                        if let Some('.') = self.peek() {
+                            self.step();
+                            TokenType::TripleDot
+                        } else {
+                            self.unstep();
+                            TokenType::Dot
+                        }
+                    } else {
+                        TokenType::Dot
+                    }
+                }
                 
                 '(' => TokenType::LParen,
                 ')' => TokenType::RParen,
@@ -281,5 +294,9 @@ impl<'a> Lexer<'a> {
 
     fn peek(&self) -> Option<char> {
         (self.index + 1 < self.chars.len()).then(|| self.chars[self.index + 1].1)
+    }
+
+    fn unstep(&mut self) {
+        self.index -= 1;
     }
 }

@@ -29,6 +29,7 @@ pub enum TokenType {
     DoubleColon,
     Comma,
     Dot,
+    TripleDot,
 
     LParen,
     RParen,
