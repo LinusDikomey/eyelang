@@ -1,6 +1,36 @@
-use llvm::{execution_engine, target, core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, analysis::LLVMVerifyModule};
+use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, analysis::LLVMVerifyModule, LLVMModule};
 use crate::{ir::{self, Type}, types::Primitive};
-use std::{mem, ffi, ptr};
+use std::{ffi, ptr, ops::{Deref, DerefMut}};
+
+pub struct Module(LLVMModuleRef);
+impl Module {
+    pub fn into_inner(self) -> LLVMModuleRef {
+        let ptr = self.0;
+        std::mem::forget(self);
+        ptr
+    }
+}
+impl Deref for Module {
+    type Target = LLVMModule;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0 }
+    }
+}
+impl DerefMut for Module {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut*self.0 }
+    }
+}
+impl Drop for Module {
+    fn drop(&mut self) {
+        crate::log!("Disposing Module...");
+        unsafe { LLVMDisposeModule(self.0) };
+        crate::log!("...disposed!");
+    }
+}
+
+pub mod backend;
 
 const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
@@ -35,7 +65,7 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &ir::TypeRef) 
     }
 }
 
-pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) {
+pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
     // Set up the module
     let module_name = ffi::CString::new(module.name.as_bytes()).unwrap();
     let llvm_module = LLVMModuleCreateWithNameInContext(module_name.as_ptr(), ctx);
@@ -97,35 +127,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) {
 
     // done building
     LLVMDisposeBuilder(builder);
-
-    // build an execution engine
-    let mut ee = mem::MaybeUninit::uninit().assume_init();
-    let mut out = ptr::null_mut();
-
-    // robust code should check that these calls complete successfully
-    // each of these calls is necessary to setup an execution engine which compiles to native
-    // code
-    execution_engine::LLVMLinkInMCJIT();
-    target::LLVM_InitializeNativeTarget();
-    target::LLVM_InitializeNativeAsmPrinter();
-
-    // takes ownership of the module
-    execution_engine::LLVMCreateExecutionEngineForModule(&mut ee, llvm_module, &mut out);
-
-    let addr = execution_engine::LLVMGetFunctionAddress(ee, "main\0".as_ptr() as _);
-    if addr == 0 {
-        panic!("Main symbol not found");
-    }
-
-    let f: extern "C" fn() -> u64 = mem::transmute(addr);
-
-    let res = f();
-
-    println!("Main function returned {}", res);
-
-    // Clean up the rest.
-    execution_engine::LLVMDisposeExecutionEngine(ee);
-
+    Module(llvm_module)
 }
 
 

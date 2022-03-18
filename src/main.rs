@@ -7,6 +7,7 @@ mod parser;
 mod types;
 mod interpreter;
 mod ir;
+mod link;
 
 #[cfg(feature = "llvm-backend")]
 mod llvm_codegen;
@@ -15,11 +16,11 @@ mod llvm_codegen;
 extern crate llvm_sys as llvm;
 
 use crate::{parser::Parser, interpreter::Scope, error::{Errors, Error}, ast::repr::Repr};
-use std::{path::Path, sync::atomic::AtomicBool};
+use std::{path::Path, sync::atomic::AtomicBool, process::Command};
 
 static LOG: AtomicBool = AtomicBool::new(false);
 
- macro_rules! log {
+macro_rules! log {
     () => {
         if $crate::LOG.load(std::sync::atomic::Ordering::Relaxed) { println!() }
     };
@@ -34,7 +35,14 @@ use log;
 enum Backend {
     TreeWalkInterpreter,
     #[cfg(feature = "llvm-backend")]
-    LLVM
+    LLVM(LLVMAction)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LLVMAction {
+    Jit,
+    Build,
+    Run
 }
 
 fn main() {
@@ -44,7 +52,7 @@ fn main() {
     let mut backend;
     #[cfg(feature = "llvm-backend")]
     {
-        backend = Backend::LLVM;
+        backend = Backend::LLVM(LLVMAction::Run);
     }
     #[cfg(not(feature = "llvm-backend"))]
     {
@@ -56,6 +64,8 @@ fn main() {
             "-i" | "--interpret" => backend = Backend::TreeWalkInterpreter,
             "-l" | "--log" => LOG.store(true, std::sync::atomic::Ordering::SeqCst),
             "-r" | "--reconstruct-ast" => reconstruct_ast = true,
+            "-j" | "--jit" => backend = Backend::LLVM(LLVMAction::Jit),
+            "-b" | "--build" => backend = Backend::LLVM(LLVMAction::Build),
             unknown if unknown.starts_with("-") => eprintln!("Unrecognized argument {unknown}"),
             positional => if src_file.is_none() {
                 src_file = Some(positional)
@@ -71,12 +81,19 @@ fn main() {
 
 fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str, reconstruct_ast: bool, backend: Backend) {
     use colored::*;
-    let src = std::fs::read_to_string(Path::new(&file))
+    let path = Path::new(&file);
+    let src = std::fs::read_to_string(path)
         .expect(&format!("Could not open source file: {}", file));
 
     println!("{} {} ...", "Compiling".green(), file.underline().bright_blue());
     
-    match run(io, &src, reconstruct_ast, backend) {
+    let no_extension = path.with_extension("");
+    let file = no_extension.file_name()
+        .expect("Failed to retrieve filename for input file")
+        .to_str()
+        .expect("Invalid filename");
+
+    match run(io, &src, reconstruct_ast, backend, file) {
         Ok(()) => {}
         Err(errors) => {
             println!("{} {} {}",
@@ -93,7 +110,8 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
     io: &mut (R, W),
     src: &str,
     reconstruct_ast: bool,
-    backend: Backend
+    backend: Backend,
+    file_without_extension: &str
 ) -> Result<(), Errors> {
     let mut errors = Errors::new();
     let Some(tokens) = lexer::parse(&src, &mut errors)
@@ -174,15 +192,30 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
             println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), val.adapt_fmt(&ir), t);
         }
         #[cfg(feature = "llvm-backend")]
-        Backend::LLVM => unsafe {
+        Backend::LLVM(action) => unsafe {
             let context = llvm::core::LLVMContextCreate();
-            llvm_codegen::module(context, &ir);
+            let llvm_module = llvm_codegen::module(context, &ir);
+            if action == LLVMAction::Build {
+                let ret_val = llvm_codegen::backend::run_jit(llvm_module);
+                println!("\nResult of main function: {ret_val}");
+            } else {
+                let obj_file = format!("{file_without_extension}.o");
+                llvm_codegen::backend::emit_bitcode(None, llvm_module, &obj_file);
+                link::link(&obj_file, file_without_extension);
+                std::fs::remove_file(obj_file).expect("Failed to delete object file");
+                if action == LLVMAction::Run {
+                    Command::new(format!("./{file_without_extension}"))
+                    .spawn()
+                    .expect("Failed to run")
+                    .wait()
+                    .expect("Running process failed");
+                }
+            }
             llvm::core::LLVMContextDispose(context);
         }
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -211,7 +244,8 @@ Bye";
             &mut(std::io::Cursor::new(input), &mut output),
             "main ->: print(string(parse(read(\"Input number: \"))+i32(1)))",
             false,
-            crate::Backend::TreeWalkInterpreter
+            crate::Backend::TreeWalkInterpreter,
+            "test"
         ).unwrap();
         println!("{:?}", String::from_utf8(output.clone()));
         assert_eq!(b"Input number: 124".as_slice(), output.as_slice());
