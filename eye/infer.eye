@@ -12,9 +12,12 @@ main -> i8 {
 
     num := parse(read("Enter a number: "))
     if num < 5 {
+        y = y + 1
         if num < 0 {
+            y = y + 3
             print("Wow, your number is negative!")
         } else {
+            y = y + 4
             print("Your number is smaller than 5")
         }
     } else {
@@ -25,4 +28,4 @@ main -> i8 {
     ret test(y, 3)
 }
 
-test(i i64, b i32) -> i8: 3
+test(i i64, b i32) -> i8: i8(i)

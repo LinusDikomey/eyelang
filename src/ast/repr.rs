@@ -96,11 +96,17 @@ impl Function {
         }
         c.write_add(" -> ");
         self.return_type.0.repr(c);
-        if let BlockOrExpr::Expr(_) = &self.body {
-            c.write_add(":");
+        match &self.body {
+            Some(body@BlockOrExpr::Expr(_)) => {
+                c.write_add(": ");
+                body.repr(c);
+            }
+            Some(body) => {
+                c.space();
+                body.repr(c);
+            }
+            None => c.write_add(" extern")
         }
-        c.space();
-        self.body.repr(c);
         c.writeln("");
     }
 }

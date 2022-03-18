@@ -8,4 +8,9 @@ fibs(n i32) -> {
     print("The ", string(n), "th fibonacci number is ", string(fib(n)), "\n")
 }
 
-main ->: fibs(parse(read("How many fibonacci numbers: ")))
+Point :: { x i32, y i32 }
+
+main -> i32 {
+    x := Point(3, 5)
+    ret fib(x.x + x.y)
+}

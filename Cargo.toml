@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-# default = [ "llvm-backend" ]
+default = [ "llvm-backend" ]
 llvm-backend = ["llvm-sys"]
 
 [dependencies]
-colored = "2.0"
+colored = "2.0.0"
 llvm-sys = { version = "130.0.3", optional = true }

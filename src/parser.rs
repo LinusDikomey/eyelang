@@ -216,12 +216,23 @@ impl<'a> Parser<'a> {
                             match self.toks.step().map(|t| t.ty) {
                                 Ok(TokenType::Arrow) => {
                                     let ret_type_start = self.toks.current().unwrap().start;
-                                    let (return_type, ret_type_end) = match self.toks.peek().map(|t| t.ty) {
-                                        Some(TokenType::LBrace | TokenType::Colon) => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start),
-                                        _ => (self.parse_type()?, self.toks.previous().unwrap().end)
+                                    let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
+                                        Some(TokenType::LBrace | TokenType::Colon) =>
+                                            (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
+                                        Some(TokenType::Keyword(Keyword::Extern)) => {
+                                            self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
+                                            (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, true)
+                                        }
+                                        _ => {
+                                            let ty = self.parse_type()?;
+                                            let end = self.toks.previous().unwrap().end;
+                                            (ty, end, self.toks.step_if(TokenType::Keyword(Keyword::Extern)).is_some())
+                                        }
                                     };
                                     let mut var_count = 1 + params.len() as u32;
-                                    let body = self.parse_block_or_expr(&mut var_count)?;
+                                    let body = (!is_extern).then(|| {
+                                        self.parse_block_or_expr(&mut var_count)
+                                    }).transpose()?;
                                     Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
                                         params, vararg: None, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
                                     })))
@@ -234,12 +245,22 @@ impl<'a> Parser<'a> {
                     },
                     Ok(TokenType::Arrow) => {
                         let ret_type_start = self.toks.current().unwrap().start;
-                        let (return_type, ret_type_end) = match self.toks.peek().map(|t| t.ty) {
-                            Some(TokenType::LBrace | TokenType::Colon) => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start),
-                            _ => (self.parse_type()?, self.toks.previous().unwrap().end)
+                        let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
+                            Some(TokenType::LBrace | TokenType::Colon) => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
+                            Some(TokenType::Keyword(Keyword::Extern)) => {
+                                self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
+                                (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, true)
+                            }
+                            _ => {
+                                let ty = self.parse_type()?;
+                                let end = self.toks.previous().unwrap().end;
+                                (ty, end, self.toks.step_if(TokenType::Keyword(Keyword::Extern)).is_some())
+                            }
                         };
                         let mut var_count = 1; // return type, no params
-                        let body = self.parse_block_or_expr(&mut var_count)?;
+                        let body = (!is_extern).then(|| {
+                            self.parse_block_or_expr(&mut var_count)
+                        }).transpose()?;
                         Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
                             params: Vec::new(), vararg: None, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
                         })))

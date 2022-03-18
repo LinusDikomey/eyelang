@@ -1,7 +1,7 @@
+#![allow(unused)]
+
 use std::{iter::{Peekable, Enumerate}, str::Lines};
-
 use colored::Colorize;
-
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]

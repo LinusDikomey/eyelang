@@ -106,40 +106,43 @@ pub enum Keyword {
     Struct,
     If,
     Else,
-    While
+    While,
+    Extern
 }
 
 impl Keyword {
 
     pub fn from_str(s: &str) -> Option<Keyword> {
-        match s {
-            "i8"   => Some(Keyword::Primitive(Primitive::I8)),
-            "i16"  => Some(Keyword::Primitive(Primitive::I16)),
-            "i32"  => Some(Keyword::Primitive(Primitive::I32)),
-            "i64"  => Some(Keyword::Primitive(Primitive::I64)),
-            "i128" => Some(Keyword::Primitive(Primitive::I128)),
+        Some(match s {
+            "i8"   => Keyword::Primitive(Primitive::I8),
+            "i16"  => Keyword::Primitive(Primitive::I16),
+            "i32"  => Keyword::Primitive(Primitive::I32),
+            "i64"  => Keyword::Primitive(Primitive::I64),
+            "i128" => Keyword::Primitive(Primitive::I128),
             
-            "u8"   => Some(Keyword::Primitive(Primitive::U8)),
-            "u16"  => Some(Keyword::Primitive(Primitive::U16)),
-            "u32"  => Some(Keyword::Primitive(Primitive::U32)),
-            "u64"  => Some(Keyword::Primitive(Primitive::U64)),
-            "u128" => Some(Keyword::Primitive(Primitive::U128)),
+            "u8"   => Keyword::Primitive(Primitive::U8),
+            "u16"  => Keyword::Primitive(Primitive::U16),
+            "u32"  => Keyword::Primitive(Primitive::U32),
+            "u64"  => Keyword::Primitive(Primitive::U64),
+            "u128" => Keyword::Primitive(Primitive::U128),
             
-            "f32" => Some(Keyword::Primitive(Primitive::F32)),
-            "f64" => Some(Keyword::Primitive(Primitive::F64)),
+            "f32" => Keyword::Primitive(Primitive::F32),
+            "f64" => Keyword::Primitive(Primitive::F64),
             
-            "bool" => Some(Keyword::Primitive(Primitive::Bool)),
-            "string" => Some(Keyword::Primitive(Primitive::String)),
+            "bool" => Keyword::Primitive(Primitive::Bool),
+            "string" => Keyword::Primitive(Primitive::String),
 
-            "ret" => Some(Keyword::Ret),
-            "true" => Some(Keyword::True),
-            "false" => Some(Keyword::False),
-            "struct" => Some(Keyword::Struct),
-            "if" => Some(Keyword::If),
-            "else" => Some(Keyword::Else),
-            "while" => Some(Keyword::While),
-            _ => None
-        }
+            "ret" => Keyword::Ret,
+            "true" => Keyword::True,
+            "false" => Keyword::False,
+            "struct" => Keyword::Struct,
+            "if" => Keyword::If,
+            "else" => Keyword::Else,
+            "while" => Keyword::While,
+
+            "extern" => Keyword::Extern,
+            _ => return None
+        })
     }
 }
 

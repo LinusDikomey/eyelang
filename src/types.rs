@@ -99,22 +99,6 @@ impl Into<Primitive> for IntType {
 }
 
 impl IntType {
-    pub fn display(&self) -> &str {
-        use IntType::*;
-        match self {
-            I8 => "i8",
-            U8 => "u8",
-            I16 => "i16",
-            U16 => "u16",
-            I32 => "i32",
-            U32 => "u32",
-            I64 => "i64",
-            U64 => "u64",
-            I128 => "i128",
-            U128 => "u128",
-        }
-    }
-
     pub fn size(&self) -> u32 {
         use IntType::*;
         match self {
@@ -138,7 +122,7 @@ impl IntType {
     }
 
     /// returns the smallest possible value
-    pub fn min_val(&self) -> u128 {
+    pub fn _min_val(&self) -> u128 {
         if self.is_signed() {
             2_u128.pow(self.bit_count() as u32 - 1)
         } else {
@@ -147,7 +131,7 @@ impl IntType {
     }
 
     /// returns the largest possible value
-    pub fn max_val(&self) -> u128 {
+    pub fn _max_val(&self) -> u128 {
         if self.is_signed() {
             2_u128.pow(self.bit_count() as u32 - 1) - 1
         } else {
@@ -168,15 +152,7 @@ impl Into<Primitive> for FloatType {
         }
     }
 }
-
 impl FloatType {
-    pub fn display(&self) -> &str {
-        use FloatType::*;
-        match self {
-            F32 => "f32",
-            F64 => "f64"
-        }
-    }
     pub fn size(&self) -> u32 {
         use FloatType::*;
         match self {

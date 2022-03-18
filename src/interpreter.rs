@@ -66,7 +66,7 @@ impl Value {
                 )
             }
             Type(key) => {
-                let ir::Type::Struct(struc) = &module.types[key.idx()];
+                let ir::TypeDef::Struct(struc) = &module.types[key.idx()];
                 write!(f, "{}", struc)
             }
             I8(x) => write!(f, "{}", x),
@@ -90,7 +90,7 @@ impl Value {
             Bool(b) => write!(f, "{}", b),
         
             Struct(box (symbol, fields)) => {
-                let ir::Type::Struct(struc) = &module.types[symbol.idx()];
+                let ir::TypeDef::Struct(struc) = &module.types[symbol.idx()];
                 write!(f, "{{")?;
                 for ((i, val), (name, _)) in fields.iter().enumerate().zip(&struc.members) {
                     if i != 0 {
@@ -275,7 +275,7 @@ pub fn eval_function<R: std::io::BufRead, W: std::io::Write>
         scope.values.insert(arg_name.clone(), arg_val.clone());
     }
 
-    let v = eval_block_or_expr(io, &mut scope, &f.ast.body, Some(f.header().return_type)).value();
+    let v = eval_block_or_expr(io, &mut scope, f.ast.body.as_ref().expect("Can't interpret extern functions"), Some(f.header().return_type)).value();
     if let Some(ty) = v.get_type() {
         let expected = f.header().return_type;
         if ty != expected {
@@ -437,7 +437,7 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>
                     eval_function(io, scope.outer(), &func, &arg_vals) //TODO: proper scope
                 }
                 Value::Type(key) => {
-                    let ir::Type::Struct(struc) = &scope.module.types[key.idx()];
+                    let ir::TypeDef::Struct(struc) = &scope.module.types[key.idx()];
                     if args.len() != struc.members.len() {
                         panic!("Invalid constructor argument count, expected: {}, found: {}",
                             struc.members.len(),
@@ -525,7 +525,7 @@ fn eval_expr<R: std::io::BufRead, W: std::io::Write>
         MemberAccess(expr, member_name) => {
             match get_or_ret!(eval_expr(io, scope, expr, None)) {
                 Value::Struct(box (type_key, members)) => {
-                    let ir::Type::Struct(struc) = &scope.module.types[type_key.idx()];
+                    let ir::TypeDef::Struct(struc) = &scope.module.types[type_key.idx()];
                     debug_assert_eq!(members.len(), struc.members.len());
                     let i = struc.members.iter()
                         .enumerate()
@@ -727,7 +727,7 @@ fn eval_lvalue<'a, 'm>(scope: &'a mut Scope<'m>, l_val: &LValue) -> (&'a mut Val
         LValue::Member(inner, member) => {
             match eval_lvalue(scope, inner) {
                 (Value::Struct(box (type_key, members)), module) => {
-                    let ir::Type::Struct(struc) = &module.types[type_key.idx()];
+                    let ir::TypeDef::Struct(struc) = &module.types[type_key.idx()];
                     (
                         &mut members[struc.member_index(member).unwrap_or_else(|| panic!("Invalid member {member}"))],
                         module

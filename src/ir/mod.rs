@@ -6,8 +6,9 @@ use crate::types::Primitive;
 mod gen;
 mod typing;
 
-use typing::TypeTable;
 pub use gen::reduce;
+pub use typing::Type;
+use typing::FinalTypeTable;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum SymbolType {
@@ -30,11 +31,8 @@ impl SymbolKey {
 pub struct Function {
     pub header: FunctionHeader,
     pub ast: crate::ast::Function, // temporary solution?
-    pub ir: Vec<Instruction>,
-    pub extra: Vec<u8>,
-    pub intrinsic: Option<Intrinsic>,
-    pub types: TypeTable,
-    pub block_count: u32
+    pub ir: Option<FunctionIr>,
+    pub intrinsic: Option<Intrinsic>
 }
 impl Function {
     pub fn header(&self) -> &FunctionHeader { &self.header }
@@ -58,102 +56,114 @@ impl fmt::Display for Function {
             }
         };
 
-        for (i, inst) in self.ir.iter().enumerate() {
-            if inst.tag == Tag::BlockBegin {
-                writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
-                continue;
-            }
-            write!(f, "    {:>4} = {} ", format!("%{i}").cyan(), format!("{:?}", inst.tag).green())?;
-            unsafe { match inst.tag.union_val() {
-                DataVariant::Int => write!(f, "{}", inst.data.int)?,
-                DataVariant::Int32 => write!(f, "{}", inst.data.int32)?,
-                DataVariant::Block => write!(f, "{}", format!("b{}", inst.data.int32).bright_blue())?,
-                //DataVariant::Extra(len) => write!(f, "{:?}", &self.extra[inst.data.extra as usize .. len as usize])?,
-                DataVariant::LargeInt => {
-                    let bytes = &self.extra[
-                        inst.data.extra as usize
-                        .. (inst.data.extra + 16) as usize
-                    ];
-                    let mut bytes_arr = [0; 16];
-                    bytes_arr.copy_from_slice(bytes);
-                    write!(f, "{:?}", u128::from_le_bytes(bytes_arr))?;
+        if let Some(ir) = &self.ir {
+            for (i, inst) in ir.inst.iter().enumerate() {
+                if inst.tag == Tag::BlockBegin {
+                    writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
+                    continue;
                 }
-                DataVariant::ExtraBytes => {
-                    let bytes = &self.extra[
-                        inst.data.extra_len.0 as usize
-                        .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
-                    ];
-                    write!(f, "{:?}", bytes)?;
-                }
-                DataVariant::Call => {
-                    let start = inst.data.extra_len.0 as usize;
-                    let mut bytes = [0; 8];
-                    bytes.copy_from_slice(&self.extra[start..start+8]);
-                    let func = SymbolKey(u64::from_le_bytes(bytes));
-                    let refs = (0..inst.data.extra_len.1).map(|i| {
-                        let mut ref_bytes = [0; 4];
-                        let begin = 8 + start + (4 * i) as usize;
-                        ref_bytes.copy_from_slice(&self.extra[begin..begin+4]);
-                        Ref::from_bytes(ref_bytes)
-                    });
-                    write!(f, "f{}(", func.0)?;
-                    for (i, r) in refs.enumerate() {
-                        if i != 0 {
-                            write!(f, ", ")?;
-                        }
-                        write_ref(f, r)?;
+                write!(f, "    {:>4} = {} ", format!("%{i}").cyan(), format!("{:?}", inst.tag).green())?;
+                unsafe { match inst.tag.union_val() {
+                    DataVariant::Int => write!(f, "{}", inst.data.int)?,
+                    DataVariant::Int32 => write!(f, "{}", inst.data.int32)?,
+                    DataVariant::Block => write!(f, "{}", format!("b{}", inst.data.int32).bright_blue())?,
+                    //DataVariant::Extra(len) => write!(f, "{:?}", &self.extra[inst.data.extra as usize .. len as usize])?,
+                    DataVariant::LargeInt => {
+                        let bytes = &ir.extra[
+                            inst.data.extra as usize
+                            .. (inst.data.extra + 16) as usize
+                        ];
+                        let mut bytes_arr = [0; 16];
+                        bytes_arr.copy_from_slice(bytes);
+                        write!(f, "{:?}", u128::from_le_bytes(bytes_arr))?;
                     }
-                    write!(f, ")")?;
-                }
-                DataVariant::ExtraBranchRefs => {
-                    for i in 0..inst.data.extra_len.1 {
-                        if i != 0 {
-                            write!(f, ", ")?;
-                        }
-                        let mut current_bytes = [0; 4];
-                        let begin = (inst.data.extra_len.0 + i * 8) as usize;
-                        current_bytes.copy_from_slice(&self.extra[begin..begin + 4]);
-                        let block = u32::from_le_bytes(current_bytes);
-                        current_bytes.copy_from_slice(&self.extra[begin + 4 .. begin + 8]);
-                        current_bytes.copy_from_slice(&self.extra[begin + 4 .. begin + 8]);
-                        let r = Ref::from_bytes(current_bytes);
-                        write!(f, "[{} ", format!("b{block}").bright_blue())?;
-                        write_ref(f, r)?;
-                        write!(f, "]")?;
+                    DataVariant::String => {
+                        let bytes = &ir.extra[
+                            inst.data.extra_len.0 as usize
+                            .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
+                        ];
+                        write!(f, "{:?}", bytes)?;
                     }
+                    DataVariant::Call => {
+                        let start = inst.data.extra_len.0 as usize;
+                        let mut bytes = [0; 8];
+                        bytes.copy_from_slice(&ir.extra[start..start+8]);
+                        let func = SymbolKey(u64::from_le_bytes(bytes));
+                        let refs = (0..inst.data.extra_len.1).map(|i| {
+                            let mut ref_bytes = [0; 4];
+                            let begin = 8 + start + (4 * i) as usize;
+                            ref_bytes.copy_from_slice(&ir.extra[begin..begin+4]);
+                            Ref::from_bytes(ref_bytes)
+                        });
+                        write!(f, "f{}(", func.0)?;
+                        for (i, r) in refs.enumerate() {
+                            if i != 0 {
+                                write!(f, ", ")?;
+                            }
+                            write_ref(f, r)?;
+                        }
+                        write!(f, ")")?;
+                    }
+                    DataVariant::ExtraBranchRefs => {
+                        for i in 0..inst.data.extra_len.1 {
+                            if i != 0 {
+                                write!(f, ", ")?;
+                            }
+                            let mut current_bytes = [0; 4];
+                            let begin = (inst.data.extra_len.0 + i * 8) as usize;
+                            current_bytes.copy_from_slice(&ir.extra[begin..begin + 4]);
+                            let block = u32::from_le_bytes(current_bytes);
+                            current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
+                            current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
+                            let r = Ref::from_bytes(current_bytes);
+                            write!(f, "[{} ", format!("b{block}").bright_blue())?;
+                            write_ref(f, r)?;
+                            write!(f, "]")?;
+                        }
+                    }
+                    DataVariant::Float => write!(f, "{}", inst.data.float)?,
+                    DataVariant::UnOp => write_ref(f, inst.data.un_op)?,
+                    DataVariant::BinOp => {
+                        write_ref(f, inst.data.bin_op.0)?;
+                        write!(f, ", ")?;
+                        write_ref(f, inst.data.bin_op.1)?;
+                    }
+                    DataVariant::Type => write!(f, "{}", ir.types.get(inst.data.ty))?,
+                    DataVariant::Member => {
+                        write_ref(f, inst.data.member.0)?;
+                        write!(f, ", [member {}]", inst.data.member.1)?;
+                    }
+                    DataVariant::Cast => {
+                        write_ref(f, inst.data.cast.0)?;
+                        write!(f, " as {}", inst.data.cast.1)?;
+                    }
+                    DataVariant::Branch => {
+                        write_ref(f, inst.data.branch.0)?;
+                        let i = inst.data.branch.1 as usize;
+                        let mut bytes = [0; 4];
+                        bytes.copy_from_slice(&ir.extra[i..i+4]);
+                        let a = u32::from_le_bytes(bytes);
+                        bytes.copy_from_slice(&ir.extra[i+4..i+8]);
+                        let b = u32::from_le_bytes(bytes);
+                        write!(f, " b{a} or b{b}")?;
+                    }
+                }}
+                if inst.ty.is_present() {
+                    writeln!(f, " :: {}", format!("{}", ir.types.get(inst.ty)).magenta())?;
+                } else {
+                    writeln!(f)?;
                 }
-                DataVariant::Float => write!(f, "{}", inst.data.float)?,
-                DataVariant::UnOp => write_ref(f, inst.data.un_op)?,
-                DataVariant::BinOp => {
-                    write_ref(f, inst.data.bin_op.0)?;
-                    write!(f, ", ")?;
-                    write_ref(f, inst.data.bin_op.1)?;
-                }
-                DataVariant::Type => write!(f, "{}", self.types.get_type(inst.data.ty).0)?,
-                DataVariant::Member => {
-                    write_ref(f, inst.data.member.0)?;
-                    write!(f, ", [member {}]", inst.data.member.1)?;
-                }
-                DataVariant::Cast => {
-                    write_ref(f, inst.data.cast.0)?;
-                    write!(f, " as {}", inst.data.cast.1)?;
-                }
-                DataVariant::Branch => {
-                    write_ref(f, inst.data.branch.0)?;
-                    let i = inst.data.branch.1 as usize;
-                    let mut bytes = [0; 4];
-                    bytes.copy_from_slice(&self.extra[i..i+4]);
-                    let a = u32::from_le_bytes(bytes);
-                    bytes.copy_from_slice(&self.extra[i+4..i+8]);
-                    let b = u32::from_le_bytes(bytes);
-                    write!(f, " b{a} or b{b}")?;
-                }
-                DataVariant::None => {}
-            }}
-            writeln!(f, " :: {}", format!("{}", self.types.get_type(inst.ty).0).magenta())?;
+            }   
         }
         Ok(())
     }
+}
+
+pub struct FunctionIr {
+    pub inst: Vec<Instruction>,
+    pub extra: Vec<u8>,
+    pub types: FinalTypeTable,
+    pub block_count: u32
 }
 
 #[derive(Debug, Clone)]
@@ -172,12 +182,12 @@ pub struct FunctionHeader {
 }
 
 #[derive(Debug)]
-pub enum Type {
+pub enum TypeDef {
     Struct(Struct)
 }
-impl fmt::Display for Type {
+impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Type::Struct(struct_) = self;
+        let TypeDef::Struct(struct_) = self;
         for (name, ty) in &struct_.members {
             writeln!(f, "\t{name} {ty}")?;
         }
@@ -187,7 +197,8 @@ impl fmt::Display for Type {
 
 #[derive(Debug, Clone)]
 pub struct Struct {
-    pub members: Vec<(String, TypeRef)>
+    pub members: Vec<(String, TypeRef)>,
+    pub name: String
 }
 impl Struct {
     pub fn _size(&self, module: &Module) -> u32 {
@@ -220,7 +231,7 @@ impl TypeRef {
             TypeRef::Primitive(p) => p._size(),
             TypeRef::Resolved(key) => {
                 match &module.types[key.idx()] {
-                    Type::Struct(s) => s._size(module)
+                    TypeDef::Struct(s) => s._size(module)
                 }
             }
             TypeRef::Invalid => 0
@@ -240,7 +251,7 @@ impl fmt::Display for TypeRef {
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
-    pub types: Vec<Type>,
+    pub types: Vec<TypeDef>,
     pub symbols: HashMap<String, (SymbolType, SymbolKey)>
 }
 impl fmt::Display for Module {
@@ -248,7 +259,7 @@ impl fmt::Display for Module {
         for (name, (symbol_ty, key)) in &self.symbols {
             let name = name.yellow();
             match symbol_ty {
-                SymbolType::Func => writeln!(f, "{begin} {name}(f{}): {}{end} {name}\n",
+                SymbolType::Func => writeln!(f, "{begin} f{}: {name}{}{end} {name}\n",
                     key.0,
                     self.funcs[key.idx()],
                     begin = "begin func".blue(),
@@ -302,7 +313,6 @@ impl fmt::Debug for TokenSpan {
 pub enum Tag {
     BlockBegin,
     Ret,
-    Invalid,
     Param,
     Int,
     LargeInt,
@@ -338,7 +348,6 @@ impl Tag {
         match self {
             Tag::BlockBegin => Int32,
             Tag::Ret => UnOp,
-            Tag::Invalid => None,
             Tag::Param => Int32,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
@@ -346,7 +355,7 @@ impl Tag {
             Tag::Decl => Type,
             Tag::Load => UnOp,
             Tag::Store => BinOp,
-            Tag::String => ExtraBytes,
+            Tag::String => String,
             Tag::Call => Call,
             Tag::Neg => UnOp,
             Tag::Add | Tag::Sub | Tag::Mul | Tag::Div
@@ -451,7 +460,7 @@ enum DataVariant {
     LargeInt,
     Block,
     Branch,
-    ExtraBytes,
+    String,
     Call,
     ExtraBranchRefs,
     Float,
@@ -459,15 +468,15 @@ enum DataVariant {
     BinOp,
     Type,
     Member,
-    Cast,
-    None
+    Cast
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct TypeTableIndex(u32);
 impl TypeTableIndex {
     pub const NONE: Self = Self(u32::MAX);
-    
+
     pub fn new(idx: u32) -> Self { Self(idx) }
     pub fn idx(self) -> usize { self.0 as usize }
+    pub fn is_present(self) -> bool { self.0 != u32::MAX }
 }

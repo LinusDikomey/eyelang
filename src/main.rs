@@ -14,10 +14,10 @@ mod llvm_codegen;
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
-use crate::{parser::Parser, interpreter::Scope, error::Errors, ast::repr::Repr};
+use crate::{parser::Parser, interpreter::Scope, error::{Errors, Error}, ast::repr::Repr};
 use std::{path::Path, sync::atomic::AtomicBool};
 
-static LOG: AtomicBool = AtomicBool::new(true);
+static LOG: AtomicBool = AtomicBool::new(false);
 
  macro_rules! log {
     () => {
@@ -44,7 +44,7 @@ fn main() {
     let mut backend;
     #[cfg(feature = "llvm-backend")]
     {
-        backend = Backend::Compiler(CompilerBackend::LLVM);
+        backend = Backend::LLVM;
     }
     #[cfg(not(feature = "llvm-backend"))]
     {
@@ -150,11 +150,16 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
         return Err(errors);
     }
 
-    let (ir::SymbolType::Func, main_key) = ir.symbols.get("main")
-        .expect("No main symbol found")
-        else { panic!("Main has to be a function, found type") };
-    let main = &ir.funcs[main_key.idx()];
-
+    let main = if let Some((ty, id)) = ir.symbols.get("main") {
+        if *ty != ir::SymbolType::Func {
+            errors.emit(Error::FunctionExpected, 0, 0);
+            return Err(errors)
+        }
+        &ir.funcs[id.idx()]
+    } else {
+        errors.emit(Error::MissingMain, 0, 0);
+        return Err(errors);
+    };
     
     match backend {
         Backend::TreeWalkInterpreter => {

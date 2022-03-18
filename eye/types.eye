@@ -6,11 +6,11 @@ main -> {
     # ty := if read("Do you want a SmallPoint? (y/n): ") == "y": SmallPoint else Point
     ty := SmallPoint
     instance := ty(3, 5)
-    print(instance, "\n")
-    print(instance.x, "\n")
+    print(string(instance), "\n")
+    print(string(instance.x), "\n")
 
     unit := ()
-    print("unit type: ", unit, "\n")
+    print("unit type: ", string(unit), "\n")
 
     unit2: () = if 1 < 2: unit else ()
     ret unit2

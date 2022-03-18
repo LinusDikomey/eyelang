@@ -14,9 +14,9 @@ impl TypeTable {
         }
     }
 
-    pub fn get_type(&self, idx: TypeTableIndex) -> (TypeInfo, TypeIdx) {
+    pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
         let type_idx = self.indices[idx.idx()];
-        (self.types[type_idx.get()], type_idx)
+        self.types[type_idx.get()]
     }
 
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
@@ -56,11 +56,44 @@ impl TypeTable {
             }
         }
     }
+
+    pub fn finalize(self) -> FinalTypeTable {
+        let types = self.indices.iter()
+            .map(|&i| self.types[i.0 as usize].finalize())
+            .collect();
+        FinalTypeTable { types }
+    }
+}
+
+pub struct FinalTypeTable {
+    types: Vec<Type>
+}
+impl FinalTypeTable {
+    pub fn get(&self, idx: TypeTableIndex) -> Type {
+        assert!(idx.0 != u32::MAX, "Tried to get none-type table index");
+        // for generic types this will get a bit more complicated but the base
+        // principle of indexing into the Vec should stay
+        self.types[idx.idx()]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Type {
+    Prim(Primitive),
+    Id(SymbolKey)
+}
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Prim(p) => write!(f, "{p}"),
+            Self::Id(id) => write!(f, "{{t{}}}", id.idx()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TypeIdx(u32);
-impl TypeIdx {
+struct TypeIdx(u32);
+impl TypeIdx {    
     fn new(idx: usize) -> Self {
         Self(idx as u32)
     }
@@ -81,20 +114,6 @@ pub enum TypeInfo {
     Primitive(Primitive),
     Resolved(SymbolKey),
     Invalid,
-}
-impl fmt::Display for TypeInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeInfo::Unknown => write!(f, "{{unknown}}"),
-            TypeInfo::Int => write!(f, "{{int}}"),
-            TypeInfo::Float => write!(f, "{{float}}"),
-            TypeInfo::Func(key) => write!(f, "{{func {}}}", key.idx()),
-            TypeInfo::Type(key) => write!(f, "{{type-type {}}}", key.idx()),
-            TypeInfo::Primitive(p) => write!(f, "{p}"),
-            TypeInfo::Resolved(key) => write!(f, "{{type {}}}", key.idx()),
-            TypeInfo::Invalid => write!(f, "{{invalid}}"),
-        }
-    }
 }
 impl TypeInfo {
     fn merge(&self, other: TypeInfo) -> Result<Self, Error> {
@@ -135,6 +154,16 @@ impl TypeInfo {
             } else {
                 other.merge_is_other(*self, true)
             }
+        }
+    }
+
+    fn finalize(self) -> Type {
+        match self {
+            Self::Unknown | Self::Invalid | Self::Func(_) | Self::Type(_) => Type::Prim(Primitive::Unit),
+            Self::Int => Type::Prim(Primitive::I32),
+            Self::Float => Type::Prim(Primitive::F32),
+            Self::Primitive(p) => Type::Prim(p),
+            Self::Resolved(id) => Type::Id(id),
         }
     }
 }
