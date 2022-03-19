@@ -282,7 +282,7 @@ fn resolve_type_noinfer(info: &mut ScopeInfo, ctx: &mut TypingCtx, unresolved: &
     }
 }
 
-fn define_type(info: &mut ScopeInfo, ctx: &mut TypingCtx, mut types: Option<&mut TypeTable>, name: &str, def: &ast::StructDefinition, errors: &mut Errors) -> SymbolKey {
+fn define_type(info: &mut ScopeInfo, ctx: &mut TypingCtx, mut types: Option<&mut TypeTable>, name: &str, def: &StructDefinition, errors: &mut Errors) -> SymbolKey {
     let members = def.members.iter().map(|(name, ty, start, end)| {
         let resolved = if let Some(types) = &mut types {
             resolve_type(info, ctx, types, ty, errors)
@@ -444,7 +444,7 @@ impl<'s> Scope<'s> {
         var
     }
 
-    fn assign(&mut self, errors: &mut Errors, ir: &mut IrBuilder, l_val: &ast::LValue, assign_val: &ast::Expression, ret: TypeTableIndex) -> Result<(), Error> {
+    fn assign(&mut self, errors: &mut Errors, ir: &mut IrBuilder, l_val: &LValue, assign_val: &ast::Expression, ret: TypeTableIndex) -> Result<(), Error> {
         let mut current = NonNull::from(&mut self.info);
         
         loop {

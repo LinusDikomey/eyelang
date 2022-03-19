@@ -67,10 +67,10 @@ impl fmt::Display for Primitive {
             U128 => "u128",
             F32 => "f32",
             F64 => "f64",
-            Primitive::String => "string",
-            Primitive::Bool => "bool",
-            Primitive::Unit => "()",
-            Primitive::Never => "!"
+            String => "string",
+            Bool => "bool",
+            Unit => "()",
+            Never => "!"
         };
         write!(f, "{}", s)
     }

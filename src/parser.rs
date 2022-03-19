@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use crate::{
     log,
-    ast::{self, *},
+    ast::*,
     error::{CompileError, EyeResult, Error},
     lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}},
     types::Primitive,
@@ -451,7 +451,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the if keyword has already been parsed
-    fn parse_if_from_cond(&mut self, var_index: &mut u32) -> EyeResult<ast::If> {
+    fn parse_if_from_cond(&mut self, var_index: &mut u32) -> EyeResult<If> {
         let cond = self.parse_expression(var_index)?;
         let then = self.parse_block_or_expr(var_index)?;
         
@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
             } else { None }
         } else { None };
 
-        Ok(ast::If { cond, then, else_ })
+        Ok(If { cond, then, else_ })
     }
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {

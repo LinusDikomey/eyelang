@@ -1,4 +1,5 @@
 #![feature(iter_intersperse, let_else, box_patterns, variant_count)]
+#![warn(unused_qualifications)]
 
 mod ast;
 mod error;
@@ -28,64 +29,67 @@ macro_rules! log {
         if $crate::LOG.load(std::sync::atomic::Ordering::Relaxed) { println!($s, $($arg),*) }
     }
 }
+use clap::StructOpt;
 use colored::Colorize;
 use log;
 
-#[derive(Clone, Copy)]
-enum Backend {
-    TreeWalkInterpreter,
-    #[cfg(feature = "llvm-backend")]
-    LLVM(LLVMAction)
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
+enum Cmd {
+    /// Build an executable and run it immediately.
+    Run,
+    /// Build an executable.
+    Build,
+    /// Compile and run using LLVMs JIT compiler. Might produce different results.
+    Jit,
+    /// Interpret using a basic AST walk interpreter. This is just for testing and many programs will work differently.
+    Interpret,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum LLVMAction {
-    Jit,
-    Build,
-    Run
+#[derive(clap::Parser)]
+#[clap(version, about, long_about = None)]
+pub struct Args {
+    #[clap(arg_enum)]
+    cmd: Cmd,
+    //#[clap(short, long, default_value_t = "eye/test.eye")]
+    file: String,
+    /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
+    #[clap(short, long)]
+    reconstruct_src: bool,
+    
+    /// Enable debug logginf
+    #[clap(short, long)]
+    log: bool,
+
+    /// Used for providing a custom link command. Use '[OBJ]' and '[OUT]' as placeholders for object and out file.
+    /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
+    #[clap(long)]
+    link_cmd: Option<String>,
+}
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            cmd: Cmd::Run,
+            file: "eye/test.eye".to_owned(),
+            reconstruct_src: false,
+            log: false,
+            link_cmd: None,
+        }
+    }
 }
 
 fn main() {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let mut src_file = None;
-    let mut reconstruct_ast = false;
-    let mut backend;
-    #[cfg(feature = "llvm-backend")]
-    {
-        backend = Backend::LLVM(LLVMAction::Run);
-    }
-    #[cfg(not(feature = "llvm-backend"))]
-    {
-        backend = Backend::TreeWalkInterpreter;
-    }
-    
-    for arg in &args {
-        match arg.as_str() {
-            "-i" | "--interpret" => backend = Backend::TreeWalkInterpreter,
-            "-l" | "--log" => LOG.store(true, std::sync::atomic::Ordering::SeqCst),
-            "-r" | "--reconstruct-ast" => reconstruct_ast = true,
-            "-j" | "--jit" => backend = Backend::LLVM(LLVMAction::Jit),
-            "-b" | "--build" => backend = Backend::LLVM(LLVMAction::Build),
-            unknown if unknown.starts_with("-") => eprintln!("Unrecognized argument {unknown}"),
-            positional => if src_file.is_none() {
-                src_file = Some(positional)
-            } else {
-                panic!("Too many positional arguments")
-            },
-        }
-    }
-
-    let src_file = src_file.unwrap_or("eye/test.eye");
-    run_file(&mut (std::io::stdin().lock(), std::io::stdout()), src_file, reconstruct_ast, backend);
+    let args = Args::parse();
+    LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
+    run_file(&mut (std::io::stdin().lock(), std::io::stdout()), &args);
 }
 
-fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str, reconstruct_ast: bool, backend: Backend) {
+fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), args: &Args) {
     use colored::*;
-    let path = Path::new(&file);
+    let path = Path::new(&args.file);
     let src = std::fs::read_to_string(path)
-        .expect(&format!("Could not open source file: {}", file));
+        .expect(&format!("Could not open source file: {}", args.file));
 
-    println!("{} {} ...", "Compiling".green(), file.underline().bright_blue());
+    println!("{} {} ...", "Compiling".green(), args.file.underline().bright_blue());
     
     let no_extension = path.with_extension("");
     let file = no_extension.file_name()
@@ -93,7 +97,7 @@ fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str,
         .to_str()
         .expect("Invalid filename");
 
-    match run(io, &src, reconstruct_ast, backend, file) {
+    match run(io, &src, args, file) {
         Ok(()) => {}
         Err(errors) => {
             println!("{} {} {}",
@@ -109,9 +113,8 @@ fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), file: &str,
 fn run<'a, R: std::io::BufRead, W: std::io::Write>(
     io: &mut (R, W),
     src: &str,
-    reconstruct_ast: bool,
-    backend: Backend,
-    file_without_extension: &str
+    args: &Args,
+    output_name: &str
 ) -> Result<(), Errors> {
     let mut errors = Errors::new();
     let Some(tokens) = lexer::parse(&src, &mut errors)
@@ -149,7 +152,7 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
     log!("Module: {:#?}", module);
     
 
-    if reconstruct_ast {
+    if args.reconstruct_src {
         println!("\nAST code reconstruction:\n");
         let mut ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
         module.repr(&mut ast_repr_ctx);
@@ -179,8 +182,8 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
         return Err(errors);
     };
     
-    match backend {
-        Backend::TreeWalkInterpreter => {
+    match args.cmd {
+        Cmd::Interpret => {
             let val = interpreter::eval_function(
                 io,
                 &mut Scope::from_module(&ir),
@@ -192,26 +195,40 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
             println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), val.adapt_fmt(&ir), t);
         }
         #[cfg(feature = "llvm-backend")]
-        Backend::LLVM(action) => unsafe {
+        Cmd::Run | Cmd::Build | Cmd::Jit => unsafe {
             let context = llvm::core::LLVMContextCreate();
             let llvm_module = llvm_codegen::module(context, &ir);
-            if action == LLVMAction::Build {
+            if args.cmd == Cmd::Jit {
+                println!("{}", "JIT running...\n".green());
                 let ret_val = llvm_codegen::backend::run_jit(llvm_module);
+                llvm::core::LLVMContextDispose(context);
+
                 println!("\nResult of main function: {ret_val}");
             } else {
-                let obj_file = format!("{file_without_extension}.o");
+                match std::fs::create_dir("eyebuild") {
+                    Ok(()) => {}
+                    Err(err) => if err.kind() != std::io::ErrorKind::AlreadyExists {
+                        panic!("Failed to create build directory: {err}")
+                    }
+                }
+                let obj_file = format!("eyebuild/{output_name}.o");
+                let exe_file = format!("./eyebuild/{output_name}");
                 llvm_codegen::backend::emit_bitcode(None, llvm_module, &obj_file);
-                link::link(&obj_file, file_without_extension);
-                std::fs::remove_file(obj_file).expect("Failed to delete object file");
-                if action == LLVMAction::Run {
-                    Command::new(format!("./{file_without_extension}"))
-                    .spawn()
-                    .expect("Failed to run")
-                    .wait()
-                    .expect("Running process failed");
+                llvm::core::LLVMContextDispose(context);
+
+                link::link(&obj_file, &exe_file, args);
+                if args.cmd == Cmd::Run {
+                    println!("{}", format!("Running {}...\n", &args.file).green());
+
+                    Command::new(exe_file)
+                        .spawn()
+                        .expect("Failed to run")
+                        .wait()
+                        .expect("Running process failed");
+                } else {
+                    println!("{}", format!("Built {}", &args.file).green());
                 }
             }
-            llvm::core::LLVMContextDispose(context);
         }
     }
     Ok(())
@@ -219,6 +236,8 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_eye_files() {
         const EXPECTED: &'static str = 
@@ -233,18 +252,27 @@ Half your number is: 61728394
 Some calculations:
 Bye";
         let mut output = Vec::new();
-        super::run_file(&mut(std::io::Cursor::new(Vec::<u8>::new()), std::io::Cursor::new(&mut output)), "eye/test.eye", true, crate::Backend::TreeWalkInterpreter);
+        run_file(&mut(std::io::Cursor::new(Vec::<u8>::new()), std::io::Cursor::new(&mut output)), &Args {
+            cmd: Cmd::Interpret,
+            file: "eye/test.eye".to_owned(),
+            reconstruct_src: true,
+            link_cmd: None,
+            log: false
+        });
         let string = String::from_utf8(output).unwrap();
         println!("{string}");
         assert_eq!(string, EXPECTED);
 
         let input = b"123\n";
         let mut output = Vec::new();
-        super::run(
+        run(
             &mut(std::io::Cursor::new(input), &mut output),
             "main ->: print(string(parse(read(\"Input number: \"))+i32(1)))",
-            false,
-            crate::Backend::TreeWalkInterpreter,
+            &Args {
+                cmd: Cmd::Interpret,
+                file: "eye/test.eye".to_owned(),
+                ..Default::default()
+            },
             "test"
         ).unwrap();
         println!("{:?}", String::from_utf8(output.clone()));

@@ -1,11 +1,11 @@
-use std::{ffi::{self, CStr, CString}, mem, ptr};
+use std::{ffi::{CStr, CString}, mem, ptr};
 
 use llvm::{execution_engine, target, target_machine};
 
 use super::TRUE;
 
 
-pub unsafe fn emit_bitcode(target: Option<&ffi::CStr>, module: super::Module, out: &str) {
+pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &str) {
     let target_triple = if let Some(triple) = target {
         triple.as_ptr()
     } else {

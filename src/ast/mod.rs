@@ -145,7 +145,7 @@ pub fn insert_intrinsics(module: &mut Module) {
         return_type: (UnresolvedType::Primitive(Primitive::String), 0, 0)
     }));
     module.definitions.insert("parse".to_owned(), Definition::Function(Function {
-        body: Some(BlockOrExpr::Expr(Expression::IntLiteral(crate::lexer::tokens::IntLiteral { val: 0, ty: Some(crate::types::IntType::I32) } ))),
+        body: Some(BlockOrExpr::Expr(Expression::IntLiteral(IntLiteral { val: 0, ty: Some(crate::types::IntType::I32) } ))),
         params: vec![("s".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)],
         varargs: false,
         var_count: 0,

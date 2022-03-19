@@ -9,4 +9,5 @@ llvm-backend = ["llvm-sys"]
 
 [dependencies]
 colored = "2.0.0"
+clap = { version = "3.1.6", features = ["derive"] }
 llvm-sys = { version = "130.0.3", optional = true }
