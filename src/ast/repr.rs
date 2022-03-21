@@ -74,7 +74,8 @@ impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         match self {
             Self::Function(func) => func.repr(c, name),
-            Self::Struct(struc) => struc.repr(c, name)
+            Self::Struct(struc) => struc.repr(c, name),
+            Self::Module(_) => {}
         }
     }
 }
@@ -243,6 +244,7 @@ impl<C: Representer> Repr<C> for Expression {
                 c.space();
                 expr.repr(c);
             },
+            Self::Root => c.write_add("root")
         }
     }
 }

@@ -2,6 +2,8 @@
 
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use colored::Colorize;
+
+use crate::{lexer::Span, ast::{Modules, ModuleId}};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -15,8 +17,12 @@ impl Errors {
         }
     }
 
-    pub fn emit(&mut self, err: Error, start: u32, end: u32) {
-        self.errors.push(CompileError { err, start, end })
+    pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
+        self.errors.push(CompileError { err, span: Span { start, end, module } })
+    }
+
+    pub fn emit_err(&mut self, err: CompileError) {
+        self.errors.push(err)
     }
 
     pub fn has_errors(&self) -> bool {
@@ -27,10 +33,12 @@ impl Errors {
         self.errors.len()
     }
 
-    pub fn print(&self, src: &str, file: &str) {
+    pub fn print(&self, modules: &Modules) {
         for error in &self.errors {
-            let s = error.start as usize;
-            let e = error.end as usize;
+            let (src, file) = modules.src(error.span.module);
+
+            let s = error.span.start as usize;
+            let e = error.span.end as usize;
 
             // calculate line and position in line
             let until_start = if s >= src.len() { src } else { &src[..s] };
@@ -74,7 +82,7 @@ impl Errors {
             
 
             println!("{}: {}", "error".bright_red(), format!("{:?}", error.err).bright_red());
-            println!("{} {}", "at:".cyan(), format!("{file}:{line}:{col}").underline());
+            println!("{} {}", "at:".cyan(), format!("{}:{line}:{col}", file.to_string_lossy()).underline());
             let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
             let p = format!("{} | ", " ".repeat(spaces)).cyan();
 
@@ -113,7 +121,7 @@ impl Errors {
         match res {
             Ok(t) => t,
             Err(err) => {
-                self.emit(err.err, err.start, err.end);
+                self.emit(err.err, err.span.start, err.span.end, err.span.module);
                 otherwise
             }
         }
@@ -123,7 +131,7 @@ impl Errors {
         match res {
             Ok(t) => t,
             Err(err) => {
-                self.emit(err.err, err.start, err.end);
+                self.emit(err.err, err.span.start, err.span.end, err.span.module);
                 otherwise()
             }
         }
@@ -133,8 +141,7 @@ impl Errors {
 #[derive(Debug, Clone, Copy)]
 pub struct CompileError {
     pub err: Error,
-    pub start: u32,
-    pub end: u32
+    pub span: Span
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,25 +162,28 @@ pub enum Error {
     UseOfUnassignedVariable,
     MissingReturnValue,
     DuplicateDefinition,
+    ModuleNameConflictsWithDefinition,
     InvalidTopLevelBlockItem,
     UnknownEscapeCode,
     TypeExpected,
-    FunctionExpected,
+    FunctionOrTypeExpected,
     IntExpected,
     FloatExpected,
     MismatchedType,
     ExpectedVarFoundDefinition,
+    ExpectedValueFoundDefinition,
+    ExpectedValueOrModuleFoundDefiniton,
     InvalidArgCount,
     CantNegateType,
     NonexistantMember,
-    TypeMustBeKnownHere
+    TypeMustBeKnownHere,
+    MissingMainFile
 }
 impl Error {
-    pub fn at(self, start: u32, end: u32) -> CompileError {
+    pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {
         CompileError {
             err: self,
-            start,
-            end
+            span: Span::new(start, end, module)
         }
     }
 }

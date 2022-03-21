@@ -1,6 +1,6 @@
-use std::{fmt, collections::HashMap};
+use std::fmt;
 use colored::Colorize;
-use crate::types::Primitive;
+use crate::{types::Primitive, lexer::Span};
 
 
 mod gen;
@@ -11,29 +11,20 @@ pub use typing::Type;
 use typing::FinalTypeTable;
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub enum SymbolType {
-    Func,
-    Type
-}
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
 impl SymbolKey {
-    #[inline(always)]
-    pub fn new(idx: u64) -> Self {
-        Self(idx)
-    }
     #[inline(always)]
     pub fn idx(&self) -> usize { self.0 as usize }
     pub fn bytes(&self) -> [u8; 8] { self.0.to_le_bytes() }
 }
 
 pub struct Function {
+    pub name: String,
     pub header: FunctionHeader,
     pub ast: crate::ast::Function, // temporary solution?
-    pub ir: Option<FunctionIr>,
-    pub intrinsic: Option<Intrinsic>
+    pub ir: Option<FunctionIr>
 }
+
 impl Function {
     pub fn header(&self) -> &FunctionHeader { &self.header }
 }
@@ -167,13 +158,6 @@ pub struct FunctionIr {
 }
 
 #[derive(Debug, Clone)]
-pub enum Intrinsic {
-    Print,
-    Read,
-    Parse
-}
-
-#[derive(Debug, Clone)]
 pub struct FunctionHeader {
     pub name: String,
     pub params: Vec<(String, TypeRef)>,
@@ -189,10 +173,7 @@ pub enum TypeDef {
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let TypeDef::Struct(struct_) = self;
-        for (name, ty) in &struct_.members {
-            writeln!(f, "\t{name} {ty}")?;
-        }
-        Ok(())
+        write!(f, "{struct_}")
     }
 }
 
@@ -205,17 +186,13 @@ impl Struct {
     pub fn _size(&self, module: &Module) -> u32 {
         self.members.iter().map(|(_, m)| m._size(module)).sum()
     }
-
-    pub fn member_index(&self, name: &str) -> Option<usize> {
-        self.members.iter()
-            .enumerate()
-            .find(|(_, (member_name, _))| member_name == name)
-            .map(|(i, _)| i)
-    }
 }
 impl fmt::Display for Struct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, ":: {{\n{}}}", self.members.iter().map(|m| format!("{} {},\n", m.0, m.1)).collect::<String>())
+        for (name, member) in &self.members {
+            writeln!(f, "  {name} {member}")?;
+        }
+        Ok(())
     }
 }
 
@@ -253,26 +230,24 @@ pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
     pub types: Vec<TypeDef>,
-    pub symbols: HashMap<String, (SymbolType, SymbolKey)>
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (name, (symbol_ty, key)) in &self.symbols {
-            let name = name.yellow();
-            match symbol_ty {
-                SymbolType::Func => writeln!(f, "{begin} f{}: {name}{}{end} {name}\n",
-                    key.0,
-                    self.funcs[key.idx()],
-                    begin = "begin func".blue(),
-                    end = "end func".blue(),
-                )?,
-                SymbolType::Type => writeln!(f, "t{}: {begin} {name}: \n{}{end} {name}\n",
-                    key.0,
-                    self.types[key.idx()],
-                    begin = "begin type".blue(),
-                    end = "end type".blue()
-                )?
-            }
+        for TypeDef::Struct(struct_) in &self.types {
+            let name = &struct_.name;
+            writeln!(f, "{begin} {name}\n{}{end} {name}\n",
+                struct_,
+                begin = "begin type".blue(),
+                end  = "end type".blue()
+            )?
+        }
+        for func in &self.funcs {
+            let name = func.name.yellow();
+            writeln!(f, "{begin} {name}{}{end} {name}\n",
+                func,
+                begin = "begin func".blue(),
+                end = "end func".blue(),
+            )?;
         }
         Ok(())
     }
@@ -283,30 +258,7 @@ pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
     pub ty: TypeTableIndex,
-    pub span: TokenSpan
-}
-
-#[derive(Clone, Copy)]
-pub struct TokenSpan {
-    pub start: u32,
-    pub end: u32
-}
-
-impl TokenSpan {
-    pub const MAX: u32 = 16_777_215;
-    pub fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-}
-impl fmt::Display for TokenSpan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}..{}", self.start, self.end)
-    }
-}
-impl fmt::Debug for TokenSpan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "TokenSpan({}, {})", self.start, self.end)
-    }
+    pub span: Span
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -375,7 +327,9 @@ const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Ref(u32);
 impl Ref {
-    pub fn val(val: RefVal) -> Self {
+    pub const UNDEF: Self = Self::val(RefVal::Undef);
+
+    pub const fn val(val: RefVal) -> Self {
         Self(val as u32)
     }
     pub fn index(idx: u32) -> Self {

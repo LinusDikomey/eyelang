@@ -335,7 +335,7 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             ir::Tag::Member => {
                 let r = get_ref(&instructions, data.member.0);
                 let mut elems = [zero_i32, LLVMConstInt(LLVMInt32TypeInContext(ctx), data.member.1 as u64, FALSE)];
-                LLVMBuildGEP(builder, r, elems.as_mut_ptr(), 2, NONE)
+                LLVMBuildInBoundsGEP(builder, r, elems.as_mut_ptr(), 2, NONE)
             }
             ir::Tag::Cast => {
                 let (val, ty) = get_ref_and_type(&instructions, data.cast.0);

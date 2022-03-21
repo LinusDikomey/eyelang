@@ -3,9 +3,8 @@ use crate::{
     log,
     ast::*,
     error::{CompileError, EyeResult, Error},
-    lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}},
-    types::Primitive,
-    ir::TokenSpan
+    lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}, Span},
+    types::Primitive
 };
 
 pub struct Parser<'a> {
@@ -16,7 +15,8 @@ pub struct Parser<'a> {
 struct Tokens {
     tokens: Vec<Token>,
     index: usize,
-    len: usize
+    len: usize,
+    module: ModuleId
 }
 
 impl Tokens {
@@ -27,8 +27,7 @@ impl Tokens {
             let end = self.tokens.last().unwrap().end;
             Err(CompileError {
                 err: Error::UnexpectedEndOfFile,
-                start: end,
-                end: end
+                span: Span::new(end, end, self.module)
             })
         }
     }
@@ -57,8 +56,7 @@ impl Tokens {
             let end = self.tokens.last().unwrap().end;
             Err(CompileError {
                 err: Error::UnexpectedEndOfFile,
-                start: end,
-                end: end
+                span: Span::new(end, end, self.module),
             })
         }
     }
@@ -73,12 +71,12 @@ impl Tokens {
 
     pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Result<&Token, CompileError> {
         let expected = expected.into().0;
+        let module = self.module;
         let tok = self.step()?;
         if expected.iter().find(|expected_tok| **expected_tok == tok.ty).is_none() {
             return Err(CompileError {
                 err: Error::UnexpectedToken, //(tok.ty, expected.into_iter().map(|tok| format!("{tok:?}")).collect()),
-                start: tok.start,
-                end: tok.end
+                span: Span::new(tok.start, tok.end, module)
             });
         }
         Ok(tok)
@@ -102,14 +100,13 @@ impl Tokens {
 }
 
 macro_rules! match_or_unexpected {
-    ($tok_expr: expr, $($match_arm: pat => $res: expr),*) => {{
+    ($tok_expr: expr, $module: expr, $($match_arm: pat => $res: expr),*) => {{
         let tok = $tok_expr;
         match tok.ty {
             $($match_arm => $res,)*
             _ => return Err(CompileError {
                 err:  Error::UnexpectedToken, // (tok.ty, vec![$(String::from(stringify!($match_arm)), )*]),
-                start: tok.start,
-                end: tok.end
+                span: Span::new(tok.start, tok.end, $module),
             })
         }
     }};
@@ -128,13 +125,9 @@ impl<const N: usize> From<[TokenType; N]> for TokenTypes<N> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: Vec<Token>, src: &'a str) -> Self {
-        assert!(tokens.len() <= TokenSpan::MAX as usize,
-            "Maximum number of tokens exceeded, try decreasing your source file size. Max is {} but found {}",
-            TokenSpan::MAX, tokens.len()
-        );
+    pub fn new(tokens: Vec<Token>, src: &'a str, module: ModuleId) -> Self {
         let len = tokens.len();
-        Self { src, toks: Tokens { tokens, index: 0, len } }
+        Self { src, toks: Tokens { tokens, index: 0, len, module } }
     }
 
     pub fn parse(&mut self) -> Result<Module, CompileError> {
@@ -149,11 +142,10 @@ impl<'a> Parser<'a> {
             match self.parse_item(&mut 0)? {
                 Item::Block(_) => return Err(CompileError {
                     err: Error::InvalidTopLevelBlockItem,
-                    start,
-                    end: self.toks.current().unwrap().end
+                    span: Span::new(start, self.toks.current().unwrap().end, self.toks.module)
                 }),
                 Item::Definition(name, def) => if let Some(_existing) = definitions.insert(name, def) {
-                    return Err(Error::DuplicateDefinition.at(start, self.toks.current().unwrap().end));
+                    return Err(Error::DuplicateDefinition.at(start, self.toks.current().unwrap().end, self.toks.module));
                 }
             }
         }
@@ -161,7 +153,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block_or_expr(&mut self, var_index: &mut u32) -> EyeResult<BlockOrExpr> {
-        match_or_unexpected!(self.toks.peek().ok_or(Error::UnexpectedEndOfFile.at(self.toks.last_src_pos(), self.toks.last_src_pos()))?,
+        match_or_unexpected!(
+            self.toks.peek()
+                .ok_or(Error::UnexpectedEndOfFile.at(
+                    self.toks.last_src_pos(),
+                    self.toks.last_src_pos(),
+                    self.toks.module
+                ))?,
+            self.toks.module,
             TokenType::LBrace => self.parse_block(var_index).map(BlockOrExpr::Block),
             TokenType::Colon => {
                 self.toks.step_expect(TokenType::Colon)?;
@@ -181,7 +180,8 @@ impl<'a> Parser<'a> {
             match self.parse_item(var_index)? {
                 Item::Block(item) => items.push(item),
                 Item::Definition(name, def) => if let Some(_existing) = defs.insert(name, def) {
-                    return Err(Error::DuplicateDefinition.at(start, self.toks.current().unwrap().end));
+                    let end = self.toks.current().unwrap().end;
+                    return Err(Error::DuplicateDefinition.at(start, end, self.toks.module));
                 }
             }
         }
@@ -234,7 +234,10 @@ impl<'a> Parser<'a> {
                                         self.parse_block_or_expr(&mut var_count)
                                     }).transpose()?;
                                     Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                                        params, varargs, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
+                                        params,
+                                        varargs,
+                                        body,
+                                        return_type: (return_type, ret_type_start, ret_type_end), var_count
                                     })))
                                 },
                                 Ok(_) => Parsed::None,
@@ -246,7 +249,8 @@ impl<'a> Parser<'a> {
                     Ok(TokenType::Arrow) => {
                         let ret_type_start = self.toks.current().unwrap().start;
                         let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
-                            Some(TokenType::LBrace | TokenType::Colon) => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
+                            Some(TokenType::LBrace | TokenType::Colon)
+                                => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
                             Some(TokenType::Keyword(Keyword::Extern)) => {
                                 self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
                                 (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, true)
@@ -280,7 +284,10 @@ impl<'a> Parser<'a> {
                         }
                         self.toks.step_expect(TokenType::RBrace)?;
                         log!("Successfully constructed {}", name);
-                        Parsed::Item(Item::Definition(name.to_owned(), Definition::Struct(StructDefinition { members })))
+                        Parsed::Item(Item::Definition(
+                            name.to_owned(),
+                            Definition::Struct(StructDefinition { members })
+                        ))
                     },
                     Ok(TokenType::Colon) => {
                         let ty = self.parse_type()?;
@@ -298,16 +305,28 @@ impl<'a> Parser<'a> {
                     }
                     Ok(TokenType::Dot) => {
                         let mut l_value = LValue::Variable(ident_start, name.to_owned());
-                        loop {
+                        let res =  loop {
                             let member = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
                             l_value = LValue::Member(Box::new(l_value), member);
-                            match_or_unexpected!{self.toks.step()?,
-                                TokenType::Dot => {},
-                                TokenType::Assign => break
+                            match self.toks.step() {
+                                Ok(tok) if tok.ty == TokenType::Dot => {}
+                                Ok(tok) if tok.ty == TokenType::Assign => break Ok(()),
+                                Err(err) => break Err(err),
+                                Ok(other) => break Err(CompileError {
+                                    err: Error::UnexpectedToken,
+                                    span: Span::new(other.start, other.end, self.toks.module) 
+                                })
                             }
+                        };
+                        if let Err(err) = res {
+                            Parsed::Error(err)
+                        } else {
+                            match self.parse_expression(var_index) {
+                                Ok(val) => Parsed::Item(Item::Block(BlockItem::Assign(l_value, val))),
+                                Err(err) => Parsed::Error(err)
+                            }
+                            
                         }
-                        let val = self.parse_expression(var_index)?;
-                        Parsed::Item(Item::Block(BlockItem::Assign(l_value, val)))
                     }
                     Ok(TokenType::Assign) => {
                         let val = self.parse_expression(var_index)?;
@@ -329,7 +348,7 @@ impl<'a> Parser<'a> {
                 Err(err) => {
                     match block_item {
                         Parsed::Item(_) => unreachable!(),
-                        Parsed::Error(err) => Err(err),
+                        Parsed::Error(parse_err) => { dbg!((err, parse_err)); Err(parse_err) },
                         Parsed::None => Err(err),
                     }
                 }
@@ -356,6 +375,7 @@ impl<'a> Parser<'a> {
             let ty = self.parse_type()?;
             params.push((name, ty, start, self.toks.previous().unwrap().end));
             match_or_unexpected!(self.toks.step()?,
+                self.toks.module,
                 TokenType::RParen => break,
                 TokenType::Comma => ()
             );
@@ -371,6 +391,7 @@ impl<'a> Parser<'a> {
     fn parse_factor(&mut self, var_index: &mut u32) -> Result<Expression, CompileError> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
+            self.toks.module,
             TokenType::Operator(Operator::Sub) => {
                 Expression::Negate(Box::new(self.parse_factor(var_index)?))
             },
@@ -400,6 +421,9 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let inner = self.parse_factor(var_index)?;
                 Expression::Cast(p, Box::new(inner))
+            },
+            TokenType::Keyword(Keyword::Root) => {
+                Expression::Root
             }
         );
         loop {
@@ -412,6 +436,7 @@ impl<'a> Parser<'a> {
                         loop {
                             args.push(self.parse_expression(var_index)?);
                             match_or_unexpected!(self.toks.step()?,
+                                self.toks.module,
                                 TokenType::Comma => (),
                                 TokenType::RParen => break
                             )
@@ -459,7 +484,8 @@ impl<'a> Parser<'a> {
             if tok.ty == TokenType::Keyword(Keyword::Else) {
                 let tok = self.toks.step_assert(TokenType::Keyword(Keyword::Else));
                 let else_pos = tok.end;
-                let next = self.toks.peek().ok_or(Error::UnexpectedEndOfFile.at(else_pos, else_pos))?;
+                let next = self.toks.peek()
+                    .ok_or(Error::UnexpectedEndOfFile.at(else_pos, else_pos, self.toks.module))?;
                 
                 match next.ty {
                     TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block(var_index)?)),
@@ -474,6 +500,7 @@ impl<'a> Parser<'a> {
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {
         let type_tok = self.toks.step()?;
         Ok(match_or_unexpected!(type_tok,
+            self.toks.module,
             TokenType::Ident => {
                 UnresolvedType::Unresolved(type_tok.get_val(self.src).to_owned())
             },

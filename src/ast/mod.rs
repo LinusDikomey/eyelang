@@ -1,12 +1,82 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, ops::{Index, IndexMut}, path::{PathBuf, Path}};
 use crate::{lexer::tokens::{FloatLiteral, IntLiteral, Operator}, types::Primitive};
 use self::repr::{Representer, Repr};
 
 pub mod repr;
 
+pub struct Modules {
+    modules: Vec<Module>,
+    sources: Vec<(String, PathBuf)>
+}
+impl Modules {
+    pub fn new() -> Self {
+        Self { modules: Vec::new(), sources: Vec::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.modules.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.modules.len()
+    }
+
+    pub fn first(&self) -> Option<&Module> {
+        self.modules.first()
+    }
+
+    pub fn add(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
+        let id = ModuleId(self.modules.len() as u32);
+        self.modules.push(module);
+        self.sources.push((src, path));
+        id
+    }
+
+    pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
+        self.modules[id.0 as usize] = module;
+        self.sources[id.0 as usize] = (src, path);
+    }
+    
+    pub fn src(&self, id: ModuleId) -> (&str, &Path) {
+        let t = &self.sources[id.0 as usize];
+        (&t.0, &t.1)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (ModuleId, &Module)> {
+        self.modules.iter()
+            .enumerate()
+            .map(|(i, m)| (ModuleId(i as u32), m))
+    }
+}
+impl Index<ModuleId> for Modules {
+    type Output = Module;
+
+    fn index(&self, index: ModuleId) -> &Self::Output {
+        &self.modules[index.0 as usize]
+    }
+}
+impl IndexMut<ModuleId> for Modules {
+    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
+        &mut self.modules[index.0 as usize]
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleId(u32);
+impl ModuleId {
+    pub const MISSING: Self = Self(u32::MAX);
+    pub const ROOT: Self = Self(0);
+    pub fn idx(self) -> usize { self.0 as usize }
+}
+
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub definitions: HashMap<String, Definition>
+    pub definitions: HashMap<String, Definition>,
+}
+impl Module {
+    pub fn empty() -> Self {
+    Self { definitions: HashMap::new() }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +89,7 @@ pub enum Item {
 pub enum Definition {
     Function(Function),
     Struct(StructDefinition),
+    Module(ModuleId)
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +149,8 @@ pub enum Expression {
     Negate(Box<Expression>),
     BinOp(Operator, Box<(Expression, Expression)>),
     MemberAccess(Box<Expression>, String),
-    Cast(Primitive, Box<Expression>)
+    Cast(Primitive, Box<Expression>),
+    Root
 }
 
 #[derive(Debug, Clone)]

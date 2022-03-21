@@ -108,7 +108,8 @@ pub enum Keyword {
     If,
     Else,
     While,
-    Extern
+    Extern,
+    Root
 }
 
 impl Keyword {
@@ -142,6 +143,7 @@ impl Keyword {
             "while" => Keyword::While,
 
             "extern" => Keyword::Extern,
+            "root" => Keyword::Root,
             _ => return None
         })
     }

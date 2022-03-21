@@ -1,4 +1,4 @@
-use crate::error::*;
+use crate::{error::*, ast::ModuleId};
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -34,7 +34,7 @@ impl TypeTable {
         *ty = match ty.merge(info) {
             Ok(ty) => ty,
             Err(err) => {
-                errors.emit(err, 0, 0);
+                errors.emit(err, 0, 0, ModuleId::MISSING);
                 TypeInfo::Invalid
             }
         };
@@ -51,7 +51,7 @@ impl TypeTable {
         *a_ty = match a_ty.merge(prev_b_ty) {
             Ok(ty) => ty,
             Err(err) => {
-                errors.emit(err, 0, 0);
+                errors.emit(err, 0, 0, ModuleId::MISSING);
                 TypeInfo::Invalid
             }
         }

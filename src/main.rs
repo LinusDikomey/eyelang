@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_else, box_patterns, variant_count)]
+#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists)]
 #![warn(unused_qualifications)]
 
 mod ast;
@@ -6,9 +6,10 @@ mod error;
 mod lexer;
 mod parser;
 mod types;
-mod interpreter;
+// mod interpreter;
 mod ir;
 mod link;
+mod compile;
 
 #[cfg(feature = "llvm-backend")]
 mod llvm_codegen;
@@ -16,7 +17,7 @@ mod llvm_codegen;
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
-use crate::{parser::Parser, interpreter::Scope, error::{Errors, Error}, ast::repr::Repr};
+use crate::error::Errors;
 use std::{path::Path, sync::atomic::AtomicBool, process::Command};
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -41,8 +42,8 @@ enum Cmd {
     Build,
     /// Compile and run using LLVMs JIT compiler. Might produce different results.
     Jit,
-    /// Interpret using a basic AST walk interpreter. This is just for testing and many programs will work differently.
-    Interpret,
+    // Interpret using a basic AST walk interpreter. This is just for testing and many programs will work differently.
+    // Interpret,
 }
 
 #[derive(clap::Parser)]
@@ -56,7 +57,7 @@ pub struct Args {
     #[clap(short, long)]
     reconstruct_src: bool,
     
-    /// Enable debug logginf
+    /// Enable debug logging
     #[clap(short, long)]
     log: bool,
 
@@ -80,120 +81,55 @@ impl Default for Args {
 fn main() {
     let args = Args::parse();
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
-    run_file(&mut (std::io::stdin().lock(), std::io::stdout()), &args);
+    run_file(&args);
 }
 
-fn run_file<R: std::io::BufRead, W: std::io::Write>(io: &mut (R, W), args: &Args) {
+fn run_file(args: &Args) {
     use colored::*;
     let path = Path::new(&args.file);
-    let src = std::fs::read_to_string(path)
-        .expect(&format!("Could not open source file: {}", args.file));
+    //let src = std::fs::read_to_string(path)
+    //    .expect(&format!("Could not open source file: {}", args.file));
 
     println!("{} {} ...", "Compiling".green(), args.file.underline().bright_blue());
     
     let no_extension = path.with_extension("");
-    let file = no_extension.file_name()
+    let name = no_extension.file_name()
         .expect("Failed to retrieve filename for input file")
         .to_str()
         .expect("Invalid filename");
 
-    match run(io, &src, args, file) {
+    match run(path, args, name) {
         Ok(()) => {}
-        Err(errors) => {
+        Err((modules, errors)) => {
             println!("{} {} {}",
                 "Finished with".red(),
                 errors.error_count().to_string().underline().bright_red(),
                 "errors".red()
             );
-            errors.print(&src, file);
+            errors.print(&modules);
         }
     }
 }
 
-fn run<'a, R: std::io::BufRead, W: std::io::Write>(
-    io: &mut (R, W),
-    src: &str,
+fn run(
+    path: &Path,
     args: &Args,
     output_name: &str
-) -> Result<(), Errors> {
-    let mut errors = Errors::new();
-    let Some(tokens) = lexer::parse(&src, &mut errors)
-        else { return Err(errors) };
-    
-        let count = errors.error_count();
-        println!("... Lexing finished with {} error{}",
-            if count > 0 {
-                count.to_string().red()
-            } else {
-                count.to_string().green()
-            },
-            if count == 1 { "" } else { "s" }
-        );
-
-    let mut parser = Parser::new(tokens, &src);
-    let mut module = match parser.parse() {
-        Ok(module) => module,
-        Err(err) => {
-            errors.emit(err.err, err.start, err.end);
-            return Err(errors);
-        }
-    };
-
-    let count = errors.error_count();
-    println!("... Parsing finished with {} error{}",
-        if count > 0 {
-            count.to_string().red()
-        } else {
-            count.to_string().green()
-        },
-        if count == 1 { "" } else { "s" }
-    );
-
-    log!("Module: {:#?}", module);
-    
-
-    if args.reconstruct_src {
-        println!("\nAST code reconstruction:\n");
-        let mut ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
-        module.repr(&mut ast_repr_ctx);
-        println!("\n---------- End of AST reconstruction ----------\n\n");
+) -> Result<(), (ast::Modules, Errors)> {
+    let (modules, _main, mut errors) = compile::path(path);
+    if errors.has_errors() {
+        return Err((modules, errors));
     }
-    
-    // Intrinsics are inserted into the module so the resolver can find them.
-    // This is a workarround until imports are present and these functions
-    // are no longer magic implemented in the interpreter
-    ast::insert_intrinsics(&mut module);
+    let ir = ir::reduce(&modules, &mut errors);
 
-    let ir = ir::reduce(&module, &mut errors);
-    log!("... reduced! IR: \n----------\n{}", ir);
+    log!("\n\n{ir}\n");
+
 
     if errors.has_errors() {
-        return Err(errors);
+        return Err((modules, errors));
     }
 
-    let main = if let Some((ty, id)) = ir.symbols.get("main") {
-        if *ty != ir::SymbolType::Func {
-            errors.emit(Error::FunctionExpected, 0, 0);
-            return Err(errors)
-        }
-        &ir.funcs[id.idx()]
-    } else {
-        errors.emit(Error::MissingMain, 0, 0);
-        return Err(errors);
-    };
-    
     match args.cmd {
-        Cmd::Interpret => {
-            let val = interpreter::eval_function(
-                io,
-                &mut Scope::from_module(&ir),
-                main,
-                &[]
-            );
-
-            let t = val.get_type().unwrap_or(ir::TypeRef::Primitive(types::Primitive::Unit));
-            println!("{}{} of type {}", "\nSuccessfully ran and returned: ".green(), val.adapt_fmt(&ir), t);
-        }
         #[cfg(feature = "llvm-backend")]
         Cmd::Run | Cmd::Build | Cmd::Jit => unsafe {
             let context = llvm::core::LLVMContextCreate();
@@ -234,6 +170,7 @@ fn run<'a, R: std::io::BufRead, W: std::io::Write>(
     Ok(())
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,3 +216,4 @@ Bye";
         assert_eq!(b"Input number: 124".as_slice(), output.as_slice());
     }
 }
+*/

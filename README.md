@@ -5,8 +5,11 @@ Also contains a basic tree-walk interpreter that is being used for running progr
 # Next steps
 - [x] Correct typechecker
 - [x] IR reducer
-- [ ] LLVM backend
+- [x] LLVM backend
+- [ ] Pointers
+- [ ] Arrays
 
 # current tasks
-- implement ir for struct initialization
-- llvm backend
+- Definitions inside functions
+- Flow analysis (return, assignment, etc.)
+- Error position info during/after ir generation

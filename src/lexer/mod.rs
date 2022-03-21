@@ -1,12 +1,12 @@
 pub mod tokens;
 
 use tokens::Token;
-use crate::error::{Errors, Error};
+use crate::{error::{Errors, Error}, ast::ModuleId};
 use self::tokens::{Keyword, Operator, TokenType};
 
-pub fn parse(src: &str, errors: &mut Errors) -> Option<Vec<Token>> {
+pub fn parse(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
     if src.len() > u32::MAX as usize {
-        errors.emit(Error::FileSizeExceeeded, 0, 0);
+        errors.emit(Error::FileSizeExceeeded, 0, 0, module);
         return None;
     }
 
@@ -15,7 +15,8 @@ pub fn parse(src: &str, errors: &mut Errors) -> Option<Vec<Token>> {
         src,
         chars,
         index: 0,
-        tokens: Vec::new()
+        tokens: Vec::new(),
+        module
     }.parse(errors))
 }
 
@@ -23,7 +24,8 @@ struct Lexer<'a> {
     src: &'a str,
     chars: Vec<(u32, char)>,
     index: usize,
-    tokens: Vec<Token>
+    tokens: Vec<Token>,
+    module: ModuleId
 }
 
 impl<'a> Lexer<'a> {
@@ -53,12 +55,13 @@ impl<'a> Lexer<'a> {
         let mut start;
 
         let mut invalid_chars = None;
-        fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors) {
+        fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors, module: ModuleId) {
             if let Some((start, end)) = *invalid {
                 errors.emit(
                     Error::UnexpectedCharacters,
                     start,
-                    end
+                    end,
+                    module
                 );
             }
             *invalid = None;
@@ -71,7 +74,7 @@ impl<'a> Lexer<'a> {
             }
             break match self.current() {
                 '#' => {
-                    emit_invalid(&mut invalid_chars, errors);
+                    emit_invalid(&mut invalid_chars, errors, self.module);
                     if let Some('-') = self.peek() {
                         self.step();
                         self.parse_multiline_comment(errors);
@@ -154,7 +157,8 @@ impl<'a> Lexer<'a> {
                                 errors.emit(
                                     Error::MultipleDotsInFloatLiteral,
                                     self.pos(),
-                                    self.pos()
+                                    self.pos(),
+                                    self.module
                                 );
                             }
                             is_float = true;
@@ -194,7 +198,8 @@ impl<'a> Lexer<'a> {
                                 errors.emit(
                                     Error::UnexpectedEndOfFile,
                                     start,
-                                    self.pos()-1
+                                    self.pos()-1,
+                                    self.module
                                 );
                                 break;
                             }
@@ -230,7 +235,7 @@ impl<'a> Lexer<'a> {
                 }
             };
         };
-        emit_invalid(&mut invalid_chars, errors);
+        emit_invalid(&mut invalid_chars, errors, self.module);
         let end = self.pos();
         self.step();
         Some(Token::new(ty, start, end))
@@ -254,7 +259,8 @@ impl<'a> Lexer<'a> {
                     errors.emit(
                         Error::UnexpectedEndOfFile,
                         start,
-                        self.pos()-1
+                        self.pos()-1,
+                        self.module
                     );
                     break;
                 }
@@ -298,5 +304,20 @@ impl<'a> Lexer<'a> {
 
     fn unstep(&mut self) {
         self.index -= 1;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+    pub module: ModuleId
+}
+impl Span {
+    pub fn new(start: u32, end: u32, module: ModuleId) -> Self {
+        Self { start, end, module }
+    }
+    pub fn todo() -> Self {
+        Self { start: 0, end: 0, module: ModuleId::MISSING }
     }
 }
