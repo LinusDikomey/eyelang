@@ -35,6 +35,7 @@ impl<'a> ReprPrinter<'a> {
         Self { indent, count: 0 }
     }
 }
+
 impl Representer for ReprPrinter<'_> {
     fn child(&self) -> Self {
         Self {
@@ -83,7 +84,7 @@ impl Definition {
 impl Function {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         c.write_add(name);
-        if self.params.len() > 0 {
+        if !self.params.is_empty() {
             c.write_add("(");
             for (i, (name, param, _, _)) in self.params.iter().enumerate() {
                 c.write_add(name.as_str());
@@ -189,7 +190,7 @@ impl<C: Representer> Repr<C> for Expression {
             Self::FloatLiteral(lit) => c.write_add(format!("{lit}")),
             Self::StringLiteral(s) => {
                 c.write_add("\"");
-                c.write_add(s.as_str().replace("\n", "\\n"));
+                c.write_add(s.as_str().replace('\n', "\\n"));
                 c.write_add("\"");
             }
             Self::BoolLiteral(b) => c.write_add(if *b { "true" } else { "false" }),
@@ -262,11 +263,34 @@ impl<C: Representer> Repr<C> for LValue {
     }
 }
 
+impl<R: Representer> Repr<R> for IdentPath {
+    fn repr(&self, c: &R) {
+        let (has_root, iter, last) = self.segments();
+        if has_root {
+            c.write_add("root");
+        }
+        let mut has_segments = false;
+        for (i, name) in iter.enumerate() {
+            has_segments = true;
+            if i != 0 || has_root {
+                c.write_add(".");
+            }
+            c.write_add(name.as_str());
+        }
+        if let Some(last) = last {
+            if has_root || has_segments {
+                c.write_add(".");
+            }
+            c.write_add(last.as_str());
+        }
+    }
+}
+
 impl<R: Representer> Repr<R> for UnresolvedType {
     fn repr(&self, c: &R) {
         match self {
             Self::Primitive(p) => p.repr(c),
-            Self::Unresolved(name) => c.write_add(name.as_str())
+            Self::Unresolved(path) => path.repr(c)
         }
     }
 }

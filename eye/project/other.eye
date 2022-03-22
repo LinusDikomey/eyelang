@@ -4,7 +4,4 @@ add(x i32, y i32) -> i32 {
     ret x + y
 }
 
-printf(s string) -> i32 {
-    root.printf("Evil printf\n")
-    ret 3
-}
+squareMag(p root.Point) -> i32: p.x * p.x + p.y * p.y

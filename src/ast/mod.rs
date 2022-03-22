@@ -13,16 +13,8 @@ impl Modules {
         Self { modules: Vec::new(), sources: Vec::new() }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.modules.is_empty()
-    }
-
     pub fn len(&self) -> usize {
         self.modules.len()
-    }
-
-    pub fn first(&self) -> Option<&Module> {
-        self.modules.first()
     }
 
     pub fn add(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
@@ -171,7 +163,7 @@ impl LValue {
         loop {
             match current {
                 Self::Variable(start, _) => return *start,
-                Self::Member(left, _) => current = &left
+                Self::Member(left, _) => current = left
             };
         }
     }
@@ -187,20 +179,84 @@ impl LValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub enum IdentPath {
+    Root,
+    Single(String),
+    Path { starts_with_root: bool, segments: Vec<String> }
+}
+
+impl IdentPath {
+    pub fn push(&mut self, segment: String) {
+        match self {
+            Self::Root => *self = Self::Path { starts_with_root: true, segments: vec![segment] },
+            Self::Single(first) => *self = Self::Path { 
+                starts_with_root: false,
+                segments: vec![std::mem::replace(first, String::new()), segment]
+            },
+            Self::Path { segments, .. } => segments.push(segment)
+        }
+    }
+
+    /*pub fn starts_with_root(&self) -> bool {
+        match self {
+            Self::Root | Self::Path { starts_with_root: true, .. }=> true,
+            _ => false
+        }
+    }*/
+
+    /// Returns: (root, segments_without_last, last_segment)
+    pub fn segments<'a>(&'a self) -> (bool, std::slice::Iter<'a, String>, Option<&'a String>) {
+        match self {
+            Self::Root => (true, (&[]).iter(), None),
+            Self::Single(s) => (false, (&[]).iter(), Some(s)),
+            Self::Path { starts_with_root, segments } => (
+                *starts_with_root,
+                if segments.is_empty() { &[] } else { &segments[..segments.len() - 1] }.iter(),
+                segments.last()
+            )
+        }
+    }
+}
+impl fmt::Display for IdentPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Root => write!(f, "root"),
+            Self::Single(s) => write!(f, "{s}"),
+            Self::Path { starts_with_root, segments } => {
+                if *starts_with_root {
+                    write!(f, "root")?;
+                    if !segments.is_empty() {
+                        write!(f, ".")?;
+                    }
+                }
+                for (i, segment) in segments.iter().enumerate() {
+                    if i != 0 { write!(f, ".")?; }
+                    write!(f, "{segment}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum UnresolvedType {
     Primitive(Primitive),
-    Unresolved(String)
+    Unresolved(IdentPath)
 }
 impl fmt::Display for UnresolvedType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UnresolvedType::Primitive(p) => p.fmt(f),
-            UnresolvedType::Unresolved(name) => write!(f, "{name}")
+            UnresolvedType::Unresolved(path) => {
+                write!(f, "{path}")
+            }
         }
     }
 }
 
+/*
 pub fn insert_intrinsics(module: &mut Module) {
     module.definitions.insert("print".to_owned(), Definition::Function(Function {
         body: Some(BlockOrExpr::Block(Block { items: Vec::new(), defs: HashMap::new() })),
@@ -224,3 +280,4 @@ pub fn insert_intrinsics(module: &mut Module) {
         return_type: (UnresolvedType::Primitive(Primitive::I32), 0, 0)
     }));
 }
+*/

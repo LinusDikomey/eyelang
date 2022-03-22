@@ -26,7 +26,7 @@ impl Errors {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.errors.len() > 0
+        !self.errors.is_empty()
     }
 
     pub fn error_count(&self) -> usize {
@@ -154,6 +154,7 @@ pub enum Error {
     UnknownType,
     UnknownFunction,
     UnknownVariable,
+    UnknownModule,
     MissingMain,
     UnexpectedType,
     IntLiteralOutOfRange,
@@ -166,6 +167,7 @@ pub enum Error {
     InvalidTopLevelBlockItem,
     UnknownEscapeCode,
     TypeExpected,
+    ModuleExpected,
     FunctionOrTypeExpected,
     IntExpected,
     FloatExpected,

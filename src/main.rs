@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists)]
+#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists, array_windows)]
 #![warn(unused_qualifications)]
 
 mod ast;
@@ -19,6 +19,8 @@ extern crate llvm_sys as llvm;
 
 use crate::error::Errors;
 use std::{path::Path, sync::atomic::AtomicBool, process::Command};
+use clap::StructOpt;
+use colored::Colorize;
 
 static LOG: AtomicBool = AtomicBool::new(false);
 
@@ -30,9 +32,7 @@ macro_rules! log {
         if $crate::LOG.load(std::sync::atomic::Ordering::Relaxed) { println!($s, $($arg),*) }
     }
 }
-use clap::StructOpt;
-use colored::Colorize;
-use log;
+pub(crate) use log;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
 enum Cmd {
@@ -116,7 +116,7 @@ fn run(
     args: &Args,
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
-    let (modules, _main, mut errors) = compile::path(path);
+    let (modules, _main, mut errors) = compile::path(path, args);
     if errors.has_errors() {
         return Err((modules, errors));
     }
@@ -154,7 +154,7 @@ fn run(
 
                 link::link(&obj_file, &exe_file, args);
                 if args.cmd == Cmd::Run {
-                    println!("{}", format!("Running {}...\n", &args.file).green());
+                    println!("{}", format!("Running {}...", &args.file).green());
 
                     Command::new(exe_file)
                         .spawn()

@@ -60,7 +60,34 @@ pub fn add_struct(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap
 fn resolve(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap<String, Symbol>], module: ModuleId, unresolved: &UnresolvedType, errors: &mut Errors) -> TypeRef {
     match unresolved {
         crate::ast::UnresolvedType::Primitive(p) => TypeRef::Primitive(*p),
-        crate::ast::UnresolvedType::Unresolved(name) => ty(ctx, modules, symbols, module, name, errors),
+        crate::ast::UnresolvedType::Unresolved(path) => {
+            let (root, segments, last) = path.segments();
+            let Some(last) = last else {
+                errors.emit(Error::TypeExpected, 0, 0, module);
+                return TypeRef::Invalid;
+            };
+            let mut module = if root { ModuleId::ROOT } else { module };
+            // handle all but the last path segments to go to the correct module
+            let mut update = |name| {
+                if let Some(def) = modules[module].definitions.get(name) {
+                    match def {
+                        ast::Definition::Module(new_module) => module = *new_module,
+                        _ => {
+                            errors.emit(Error::ModuleExpected, 0, 0, module);
+                            return Some(TypeRef::Invalid);
+                        }
+                    }
+                } else {
+                    errors.emit(Error::UnknownIdent, 0, 0, module);
+                    return Some(TypeRef::Invalid);
+                }
+                None
+            };
+            for name in segments {
+                if let Some(err) = update(name) { return err };
+            }
+            ty(ctx, modules, symbols, module, last, errors)
+        }
     }
 }
 
@@ -70,14 +97,12 @@ fn ty(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap<String, Sym
             Symbol::Type(ty) => return TypeRef::Resolved(*ty),
             _ => {}
         }
-    } else {
-        if let Some(def) = modules[module].definitions.get(name) {
-            match def {
-                crate::ast::Definition::Struct(struct_) => {
-                    return TypeRef::Resolved(add_struct(ctx, modules, symbols, struct_, module, name, errors));
-                }
-                _ => {}
+    } else if let Some(def) = modules[module].definitions.get(name) {
+        match def {
+            crate::ast::Definition::Struct(struct_) => {
+                return TypeRef::Resolved(add_struct(ctx, modules, symbols, struct_, module, name, errors));
             }
+            _ => {}
         }
     }
     errors.emit(Error::TypeExpected, 0, 0, module);

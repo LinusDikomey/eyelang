@@ -27,13 +27,11 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
         let mut cmd = Command::new("eval");
         cmd.arg(link.replace("[OBJ]", obj).replace("[OUT]", out));
         cmd
-    } else {
-        if let Some(cmd) = link_cmd(obj, out) {
+    } else if let Some(cmd) = link_cmd(obj, out) {
             cmd
-        } else {
-            eprintln!("No link command known for this os. You can manually link the object file created: {obj}");
-            return false;
-        }
+    } else {
+        eprintln!("No link command known for this os. You can manually link the object file created: {obj}");
+        return false;
     };
 
     let proc = cmd.spawn().expect("Failed to spawn linker process");

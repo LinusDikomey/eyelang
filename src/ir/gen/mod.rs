@@ -408,12 +408,43 @@ impl<'s> Scope<'s> {
     fn resolve_type(&mut self, unresolved: &ast::UnresolvedType) -> Result<TypeRef, Error> {
         match unresolved {
             ast::UnresolvedType::Primitive(p) => Ok(TypeRef::Primitive(*p)),
-            ast::UnresolvedType::Unresolved(name) => {
-                let resolved = self.info.resolve_local(name)?;
-                if let Resolved::Type(ty) = resolved {
-                    Ok(TypeRef::Resolved(ty))
+            ast::UnresolvedType::Unresolved(path) => {
+                let (root, iter, last) = path.segments();
+                // no last segment means it must point to the root module
+                let Some(last) = last else { return Err(Error::TypeExpected) };
+                enum ModuleOrLocal {
+                    Module(ModuleId),
+                    Local
+                }
+                
+                let mut current_module = if root {
+                    ModuleOrLocal::Module(ModuleId::ROOT)
                 } else {
-                    Err(Error::TypeExpected)
+                    ModuleOrLocal::Local
+                };
+
+                for name in iter {
+                    let look_from = match current_module {
+                        ModuleOrLocal::Module(m) => m,
+                        ModuleOrLocal::Local => self.module
+                    };
+                    match self.globals[look_from.idx()].get(name) {
+                        Some(Symbol::Module(m)) => current_module = ModuleOrLocal::Module(*m),
+                        Some(_) => panic!("1"),//return Err(Error::ModuleExpected),
+                        None => return Err(Error::UnknownModule)
+                    }
+                }
+                match current_module {
+                    ModuleOrLocal::Module(m) => match self.globals[m.idx()]
+                        .get(last.as_str())
+                        .ok_or(Error::UnknownIdent)? {
+                            Symbol::Type(ty) => Ok(TypeRef::Resolved(*ty)),
+                            _ => Err(Error::TypeExpected)
+                        },
+                    ModuleOrLocal::Local => match self.info.resolve_local(last.as_str())? {
+                        Resolved::Type(ty) => Ok(TypeRef::Resolved(ty)),
+                        _ => Err(Error::TypeExpected)
+                    }
                 }
             }
         }

@@ -499,18 +499,26 @@ impl<'a> Parser<'a> {
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {
         let type_tok = self.toks.step()?;
-        Ok(match_or_unexpected!(type_tok,
+        let parse_segments = |toks: &mut Tokens, mut path: IdentPath| -> EyeResult<UnresolvedType> {
+            while toks.step_if(TokenType::Dot).is_some() {
+                path.push(toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned());
+            }
+            Ok(UnresolvedType::Unresolved(path))
+        };
+        match_or_unexpected!(type_tok,
             self.toks.module,
+            TokenType::Keyword(Keyword::Root) => parse_segments(&mut self.toks, IdentPath::Root),
             TokenType::Ident => {
-                UnresolvedType::Unresolved(type_tok.get_val(self.src).to_owned())
+                let val = type_tok.get_val(self.src).to_owned();
+                parse_segments(&mut self.toks, IdentPath::Single(val))
             },
             TokenType::Keyword(Keyword::Primitive(primitive)) => {
-                UnresolvedType::Primitive(primitive)
+                Ok(UnresolvedType::Primitive(primitive))
             },
             TokenType::LParen => {
                 self.toks.step_expect(TokenType::RParen)?;
-                UnresolvedType::Primitive(Primitive::Unit)
+                Ok(UnresolvedType::Primitive(Primitive::Unit))
             }
-        ))
+        )
     }
 }

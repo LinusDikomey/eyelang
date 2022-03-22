@@ -11,3 +11,4 @@ llvm-backend = ["llvm-sys"]
 colored = "2.0.0"
 clap = { version = "3.1.6", features = ["derive"] }
 llvm-sys = { version = "130.0.3", optional = true }
+arrayvec = "0.7.2"

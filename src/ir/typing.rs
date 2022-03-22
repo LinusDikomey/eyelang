@@ -109,8 +109,6 @@ pub enum TypeInfo {
     Unknown,
     Int,
     Float,
-    Func(SymbolKey),
-    Type(SymbolKey),
     Primitive(Primitive),
     Resolved(SymbolKey),
     Invalid,
@@ -139,7 +137,7 @@ impl TypeInfo {
                     _ => Err(Error::FloatExpected)
                 }
             }
-            TypeInfo::Primitive(_) | TypeInfo::Resolved(_) | TypeInfo::Func(_) | TypeInfo::Type(_) => {
+            TypeInfo::Primitive(_) | TypeInfo::Resolved(_) => {
                 (other == *self)
                     .then(|| *self)
                     .ok_or(Error::MismatchedType)
@@ -159,7 +157,7 @@ impl TypeInfo {
 
     fn finalize(self) -> Type {
         match self {
-            Self::Unknown | Self::Invalid | Self::Func(_) | Self::Type(_) => Type::Prim(Primitive::Unit),
+            Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
             Self::Int => Type::Prim(Primitive::I32),
             Self::Float => Type::Prim(Primitive::F32),
             Self::Primitive(p) => Type::Prim(p),
