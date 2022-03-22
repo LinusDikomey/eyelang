@@ -38,6 +38,8 @@ pub enum TokenType {
     LBracket,
     RBracket,
 
+    Bang,
+
     Operator(Operator),
     Assign,
     Declare,
@@ -155,21 +157,24 @@ pub enum Operator {
     Sub,
     Mul,
     Div,
+    Mod,
 
-    Equals,     // ==
+    Equals,
+    NotEquals,
+
     LT,
     GT,
     LE,
-    GE
+    GE,
 }
 impl Operator {
     pub fn precedence(&self) -> u8 {
         use Operator::*;
         match self {
-            Equals => 20,
+            Equals | NotEquals => 20,
             LT | LE | GT | GE => 30,
             Add | Sub => 50,
-            Mul | Div => 60,
+            Mul | Div | Mod => 60,
         }
     }
 }

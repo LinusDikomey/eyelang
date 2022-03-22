@@ -276,13 +276,16 @@ pub enum Tag {
     String,
     Call,
     Neg,
+    Not,
 
     Add,
     Sub,
     Mul,
     Div,
+    Mod,
 
     Eq,
+    Ne,
     LT,
     GT,
     LE,
@@ -310,9 +313,9 @@ impl Tag {
             Tag::Store => BinOp,
             Tag::String => String,
             Tag::Call => Call,
-            Tag::Neg => UnOp,
-            Tag::Add | Tag::Sub | Tag::Mul | Tag::Div
-            | Tag::Eq | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,
+            Tag::Neg | Tag::Not => UnOp,
+            Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
+            | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,
             Tag::Member => Member,
             Tag::Cast => Cast,
             Tag::Goto => Block,

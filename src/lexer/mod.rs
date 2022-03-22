@@ -138,6 +138,7 @@ impl<'a> Lexer<'a> {
                 },
                 '*' => TokenType::Operator(Operator::Mul),
                 '/' => TokenType::Operator(Operator::Div),
+                '%' => TokenType::Operator(Operator::Mod),
                 
                 '<' => TokenType::Operator(match self.peek() {
                     Some('=') => { self.step(); Operator::LE },
@@ -148,6 +149,13 @@ impl<'a> Lexer<'a> {
                     _ => Operator::GT
                 }),
                 
+                '!' => {
+                    match self.peek() {
+                        Some('=') => { self.step(); TokenType::Operator(Operator::NotEquals) }
+                        _ => TokenType::Bang
+                    }
+                }
+
                 '0'..='9' => { // int/float literal
                     let mut is_float = false;
                     while match self.peek() {

@@ -392,9 +392,9 @@ impl<'a> Parser<'a> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Operator(Operator::Sub) => {
-                Expression::Negate(Box::new(self.parse_factor(var_index)?))
-            },
+            TokenType::Operator(Operator::Sub) => Expression::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
+            TokenType::Bang => Expression::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
+
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
                     Expression::Unit

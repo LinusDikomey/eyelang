@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, BlockItem, Expression, LValue, ModuleId},
+    ast::{self, BlockItem, Expression, LValue, ModuleId, UnOp},
     error::{Error, Errors},
     lexer::tokens::Operator,
     types::Primitive,
@@ -912,35 +912,43 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expression::Negate(val) => {
-                let inner = self.reduce_expr_val(errors, ir, val, expected, ret);
-                let is_ok = match ir.types.get_type(expected) {
-                    TypeInfo::Float | TypeInfo::Int | TypeInfo::Unknown => Ok(()),
-                    TypeInfo::Primitive(p) => {
-                        if let Some(int) = p.as_int() {
-                            if !int.is_signed() {
-                                Err(Error::CantNegateType)
-                            } else {
-                                Ok(())
-                            }
-                        } else if let Some(_) = p.as_float() {
-                            Ok(())
-                        } else {
-                            Err(Error::CantNegateType)
-                        }
-                    }
-                    _ => Err(Error::CantNegateType),
+            ast::Expression::UnOp(un_op, val) => {
+                let (expected, tag) = match un_op {
+                    UnOp::Neg => (expected, Tag::Neg),
+                    UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
                 };
-                if let Err(err) = is_ok {
+                let inner = self.reduce_expr_val(errors, ir, val, expected, ret);
+                let res = match un_op {
+                    UnOp::Neg => match ir.types.get_type(expected) {
+                        TypeInfo::Float | TypeInfo::Int | TypeInfo::Unknown => Ok(()),
+                        TypeInfo::Primitive(p) => {
+                            if let Some(int) = p.as_int() {
+                                if !int.is_signed() {
+                                    Err(Error::CantNegateType)
+                                } else {
+                                    Ok(())
+                                }
+                            } else if let Some(_) = p.as_float() {
+                                Ok(())
+                            } else {
+                                Err(Error::CantNegateType)
+                            }
+                        }
+                        _ => Err(Error::CantNegateType),
+                    }
+                    UnOp::Not => Ok(()) // type was already constrained to be a boolean
+                };
+                if let Err(err) = res {
                     errors.emit(err, 0, 0, self.module);
                 }
-                ir.add(Data { un_op: inner }, Tag::Neg, expected)
+                ir.add(Data { un_op: inner }, tag, expected)
             }
             ast::Expression::BinOp(op, sides) => {
                 let (l, r) = &**sides;
                 let is_logical = matches!(
                     op,
-                    Operator::Equals | Operator::LT | Operator::GT | Operator::LE | Operator::GE
+                    Operator::Equals |Operator::NotEquals 
+                    | Operator::LT | Operator::GT | Operator::LE | Operator::GE
                 );
 
                 // binary operations always require the same type on both sides right now
@@ -956,8 +964,11 @@ impl<'s> Scope<'s> {
                     Operator::Sub => Tag::Sub,
                     Operator::Mul => Tag::Mul,
                     Operator::Div => Tag::Div,
+                    Operator::Mod => Tag::Mod,
 
                     Operator::Equals => Tag::Eq,
+                    Operator::NotEquals => Tag::Ne,
+
                     Operator::LT => Tag::LT,
                     Operator::GT => Tag::GT,
                     Operator::LE => Tag::LE,

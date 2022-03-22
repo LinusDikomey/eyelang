@@ -20,8 +20,9 @@ pub trait Representer {
     fn begin_line(&self);
     fn write_start<B: Borrow<str>>(&self, s: B);
     fn write_add<B: Borrow<str>>(&self, s: B);
+    fn char(&self, c: char);
     fn space(&self) {
-        self.write_add(" ");
+        self.char(' ');
     }
     fn writeln<B: Borrow<str>>(&self, s: B);
 }
@@ -54,6 +55,9 @@ impl Representer for ReprPrinter<'_> {
 
     fn write_add<B: Borrow<str>>(&self, s: B) {
         print!("{}", s.borrow())
+    }
+    fn char(&self, c: char) {
+        print!("{c}")
     }
 
     fn writeln<B: Borrow<str>>(&self, s: B) {
@@ -221,8 +225,11 @@ impl<C: Representer> Repr<C> for Expression {
                 }
                 c.write_add(")");
             }
-            Self::Negate(expr) => {
-                c.write_add("-");
+            Self::UnOp(un_op, expr) => {
+                c.char(match un_op {
+                    UnOp::Neg => '-',
+                    UnOp::Not => '!',
+                });
                 expr.repr(c);
             }
             Self::BinOp(op, exprs) => {
@@ -343,11 +350,15 @@ impl<C: Representer> Repr<C> for FloatType {
 impl<C: Representer> Repr<C> for Operator {
     fn repr(&self, c: &C) {
         c.write_add(match self {
-            Operator::Equals => "==",
             Operator::Add => "+",
             Operator::Sub => "-",
             Operator::Mul => "*",
             Operator::Div => "/",
+            Operator::Mod => "%",
+
+            Operator::Equals => "==",
+            Operator::NotEquals => "!=",
+            
             Operator::LT => "<",
             Operator::GT => ">",
             Operator::LE => "<=",

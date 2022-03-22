@@ -138,11 +138,17 @@ pub enum Expression {
     Variable(String),
     If(Box<If>),
     FunctionCall(Box<Expression>, Vec<Expression>),
-    Negate(Box<Expression>),
+    UnOp(UnOp, Box<Expression>),
     BinOp(Operator, Box<(Expression, Expression)>),
     MemberAccess(Box<Expression>, String),
     Cast(Primitive, Box<Expression>),
     Root
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum UnOp {
+    Neg,
+    Not
 }
 
 #[derive(Debug, Clone)]

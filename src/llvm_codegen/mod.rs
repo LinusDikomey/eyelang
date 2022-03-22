@@ -245,54 +245,51 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
                     LLVMBuildNeg(builder, r, NONE)
                 }
             }
-            ir::Tag::Add => {
+            ir::Tag::Not => {
+                let r = get_ref(&instructions, data.un_op);
+                LLVMBuildNot(builder, r, NONE)
+            }
+            ir::Tag::Add | ir::Tag::Sub | ir::Tag::Mul | ir::Tag::Div | ir::Tag::Mod => {
                 let l = get_ref(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                if float_or_int(*ty).float() {
-                    LLVMBuildFAdd(builder, l, r, NONE)
-                } else {
-                    LLVMBuildAdd(builder, l, r, NONE)
-                }
+                match tag {
+                    ir::Tag::Add => if float_or_int(*ty).float() {
+                        LLVMBuildFAdd(builder, l, r, NONE)
+                    } else {
+                        LLVMBuildAdd(builder, l, r, NONE)
+                    }
+                    ir::Tag::Sub => if float_or_int(*ty).float() {
+                        LLVMBuildFSub(builder, l, r, NONE)
+                    } else {
+                        LLVMBuildSub(builder, l, r, NONE)
+                    }
+                    ir::Tag::Mul => if float_or_int(*ty).float() {
+                        LLVMBuildFMul(builder, l, r, NONE)
+                    } else {
+                        LLVMBuildMul(builder, l, r, NONE)
+                    }
+                    ir::Tag::Div => match float_or_int(*ty) {
+                        Numeric::Float(_) => LLVMBuildFDiv(builder, l, r, NONE),
+                        Numeric::Int(false, _) => LLVMBuildUDiv(builder, l, r, NONE),
+                        Numeric::Int(true, _) => LLVMBuildSDiv(builder, l, r, NONE),
+                    }
+                    ir::Tag::Mod => match float_or_int(*ty) {
+                        Numeric::Float(_) => LLVMBuildFRem(builder, l, r, NONE),
+                        Numeric::Int(false, _) => LLVMBuildURem(builder, l, r, NONE),
+                        Numeric::Int(true, _) => LLVMBuildSRem(builder, l, r, NONE),
+                    }
+                    _ => unreachable!()
+                }       
             }
-            ir::Tag::Sub => {
-                let l = get_ref(&instructions, data.bin_op.0);
-                let r = get_ref(&instructions, data.bin_op.1);
-                
-                if float_or_int(*ty).float() {
-                    LLVMBuildFSub(builder, l, r, NONE)
-                } else {
-                    LLVMBuildSub(builder, l, r, NONE)
-                }
-            }
-            ir::Tag::Mul => {
-                let l = get_ref(&instructions, data.bin_op.0);
-                let r = get_ref(&instructions, data.bin_op.1);
-
-                if float_or_int(*ty).float() {
-                    LLVMBuildFMul(builder, l, r, NONE)
-                } else {
-                    LLVMBuildMul(builder, l, r, NONE)
-                }
-            }
-            ir::Tag::Div => {
-                let l = get_ref(&instructions, data.bin_op.0);
-                let r = get_ref(&instructions, data.bin_op.1);
-                
-                match float_or_int(*ty) {
-                    Numeric::Float(_) => LLVMBuildFDiv(builder, l, r, NONE),
-                    Numeric::Int(false, _) => LLVMBuildUDiv(builder, l, r, NONE),
-                    Numeric::Int(true, _) => LLVMBuildSDiv(builder, l, r, NONE),
-                }
-            }
-            ir::Tag::Eq => {
+            ir::Tag::Eq | ir::Tag::Ne => {
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
                 if Type::Prim(Primitive::Bool) == ty || info_to_num(ty).int() {
-                    LLVMBuildICmp(builder, LLVMIntEQ, l, r, NONE)
+                    LLVMBuildICmp(builder, if *tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
-                    LLVMBuildFCmp(builder, LLVMRealUEQ, l, r, NONE)
+                    LLVMBuildFCmp(builder, if *tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
                 }
             }
             // TODO: operator short circuiting
