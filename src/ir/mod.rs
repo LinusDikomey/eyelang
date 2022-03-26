@@ -284,6 +284,9 @@ pub enum Tag {
     Div,
     Mod,
 
+    Or,
+    And,
+
     Eq,
     Ne,
     LT,
@@ -315,6 +318,7 @@ impl Tag {
             Tag::Call => Call,
             Tag::Neg | Tag::Not => UnOp,
             Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
+            | Tag::Or | Tag::And    
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,
             Tag::Member => Member,
             Tag::Cast => Cast,

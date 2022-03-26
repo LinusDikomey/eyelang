@@ -30,7 +30,7 @@ impl Drop for Module {
     }
 }
 
-pub mod backend;
+pub mod output;
 
 const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
@@ -249,7 +249,7 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
                 let r = get_ref(&instructions, data.un_op);
                 LLVMBuildNot(builder, r, NONE)
             }
-            ir::Tag::Add | ir::Tag::Sub | ir::Tag::Mul | ir::Tag::Div | ir::Tag::Mod => {
+            ir::Tag::Add | ir::Tag::Sub | ir::Tag::Mul | ir::Tag::Div | ir::Tag::Mod | ir::Tag::Or | ir::Tag::And => {
                 let l = get_ref(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
@@ -279,6 +279,8 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
                         Numeric::Int(false, _) => LLVMBuildURem(builder, l, r, NONE),
                         Numeric::Int(true, _) => LLVMBuildSRem(builder, l, r, NONE),
                     }
+                    ir::Tag::Or => LLVMBuildOr(builder, l, r, NONE),
+                    ir::Tag::And => LLVMBuildAnd(builder, l, r, NONE),
                     _ => unreachable!()
                 }       
             }

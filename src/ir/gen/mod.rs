@@ -1,7 +1,7 @@
 use crate::{
-    ast::{self, BlockItem, Expression, LValue, ModuleId, UnOp},
+    ast::{self, BlockItem, Expression, ModuleId, UnOp},
     error::{Error, Errors},
-    lexer::tokens::Operator,
+    lexer::tokens::{Operator, AssignType},
     types::Primitive,
 };
 use std::{borrow::Cow, collections::HashMap, ptr::NonNull};
@@ -35,7 +35,7 @@ pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
                         FunctionOrHeader::Header(header) => header.clone(),
                     };
                     let ir = def.body.as_ref().map(|body| {
-                        let mut builder = IrBuilder::new();
+                        let mut builder = IrBuilder::new(id);
                         let mut scope: Scope<'_> = scope.child();
                         for (i, (name, ty)) in header.params.iter().enumerate() {
                             let ty = builder.types.add((*ty).into());
@@ -94,6 +94,7 @@ pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
 }
 
 struct IrBuilder {
+    module: ModuleId,
     ir: Vec<Instruction>,
     current_block: u32,
     next_block: u32,
@@ -101,12 +102,13 @@ struct IrBuilder {
     extra_data: Vec<u8>,
 }
 impl IrBuilder {
-    pub fn new() -> Self {
+    pub fn new(module: ModuleId) -> Self {
         Self {
+            module,
             ir: vec![Instruction {
                 data: Data { int32: 0 },
                 tag: Tag::BlockBegin,
-                span: Span::new(0, 0, ModuleId::MISSING),
+                span: Span::new(0, 0, module),
                 ty: TypeTableIndex::NONE,
             }],
             current_block: 0,
@@ -122,7 +124,7 @@ impl IrBuilder {
             data,
             tag,
             ty,
-            span: Span::todo(),
+            span: Span::todo(self.module),
         });
         Ref::index(idx)
     }
@@ -132,7 +134,7 @@ impl IrBuilder {
             data,
             tag,
             ty: TypeTableIndex::NONE,
-            span: Span::todo(),
+            span: Span::todo(self.module),
         })
     }
 
@@ -166,7 +168,7 @@ impl IrBuilder {
             data: Data { int32: idx.0 },
             tag: Tag::BlockBegin,
             ty: TypeTableIndex::NONE,
-            span: Span::todo(),
+            span: Span::todo(self.module),
         });
     }
 
@@ -174,6 +176,10 @@ impl IrBuilder {
         let block = self.create_block();
         self.begin_block(block);
         block
+    }
+
+    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
+        self.types.specify(idx, info, errors, self.module)
     }
 }
 
@@ -217,9 +223,7 @@ impl<'a> ScopeInfo<'a> {
             self.parent()
                 .map(|parent| parent.resolve_local(name))
                 .transpose()?
-                .ok_or_else(|| {
-                    Error::UnknownIdent
-                })
+                .ok_or_else(|| Error::UnknownIdent)
         }
     }
 }
@@ -459,7 +463,7 @@ impl<'s> Scope<'s> {
         var
     }
 
-    fn assign(
+    /*fn assign(
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
@@ -560,6 +564,7 @@ impl<'s> Scope<'s> {
             }
         }
     }
+*/
 
     // returns (ref, is_block)
     fn reduce_block_or_expr(
@@ -625,11 +630,6 @@ impl<'s> Scope<'s> {
                     self.reduce_expr_store_into_var(errors, ir, val, var, ty, ret);
                 }
             }
-            BlockItem::Assign(var, val) => {
-                self.assign(errors, ir, var, val, ret)
-                    .map_err(|err| errors.emit(err, var.start(), var.start(), self.module))
-                    .ok();
-            }
             BlockItem::Expression(expr) => {
                 let expr_ty = ir.types.add(TypeInfo::Unknown);
                 self.reduce_expr(errors, ir, expr, expr_ty, ret);
@@ -684,6 +684,27 @@ impl<'s> Scope<'s> {
         ir.add(Data { bin_op: (var, val) }, Tag::Store, expected);
     }
 
+    fn reduce_lval_expr(
+        &mut self,
+        errors: &mut Errors,
+        ir: &mut IrBuilder,
+        expr: &Expression,
+        expected: TypeTableIndex,
+        ret: TypeTableIndex
+    ) -> Ref {
+        match self.reduce_expr_any(
+            errors, ir, expr, expected, ret,
+            |ir| ir.add(Data { ty: expected }, Tag::Decl, expected)
+        ) {
+            ExprResult::VarRef(var) => var,
+            ExprResult::Val(_) | ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
+                errors.emit(Error::CantAssignTo, 0, 0, self.module);
+                Ref::UNDEF
+            }
+            ExprResult::Stored(_) => unreachable!(),
+        }
+    }
+
     fn reduce_expr_any(
         &mut self,
         errors: &mut Errors,
@@ -696,8 +717,7 @@ impl<'s> Scope<'s> {
         let r = match expr {
             ast::Expression::Return(ret_val) => {
                 let r = self.reduce_expr_val(errors, ir, ret_val, ret, ret);
-                ir.types
-                    .specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
                 ir.add_untyped(Data { un_op: r }, Tag::Ret);
                 Ref::val(RefVal::Undef)
             }
@@ -705,7 +725,7 @@ impl<'s> Scope<'s> {
                 let int_ty = lit
                     .ty
                     .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
-                ir.types.specify(expected, int_ty, errors);
+                ir.specify(expected, int_ty, errors);
                 if lit.val <= std::u64::MAX as u128 {
                     ir.add(
                         Data {
@@ -723,31 +743,28 @@ impl<'s> Scope<'s> {
                 let float_ty = lit.ty.map_or(TypeInfo::Float, |float_ty| {
                     TypeInfo::Primitive(float_ty.into())
                 });
-                ir.types.specify(expected, float_ty, errors);
+                ir.specify(expected, float_ty, errors);
                 ir.add(Data { float: lit.val }, Tag::Float, expected)
             }
             ast::Expression::StringLiteral(string) => {
-                ir.types
-                    .specify(expected, TypeInfo::Primitive(Primitive::String), errors);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::String), errors);
                 let extra_len = ir._extra_len(string.as_bytes());
                 // add zero byte
                 ir.extra_data(&[b'\0']);
                 ir.add(Data { extra_len }, Tag::String, expected)
             }
             ast::Expression::BoolLiteral(b) => {
-                ir.types
-                    .specify(expected, TypeInfo::Primitive(Primitive::Bool), errors);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors);
                 Ref::val(if *b { RefVal::True } else { RefVal::False })
             }
             ast::Expression::Unit => {
-                ir.types
-                    .specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                 Ref::val(RefVal::Unit)
             }
             ast::Expression::Variable(name) => match self.resolve(&mut ir.types, name) {
                 Ok(resolved) => match resolved {
                     Resolved::Var(ty, var) => {
-                        ir.types.merge(ty, expected, errors);
+                        ir.types.merge(ty, expected, errors, self.module);
                         return ExprResult::VarRef(var);
                     }
                     Resolved::Func(f) => return ExprResult::Func(f),
@@ -756,7 +773,7 @@ impl<'s> Scope<'s> {
                 },
                 Err(err) => {
                     errors.emit(err, 0, 0, self.module);
-                    ir.types.specify(expected, TypeInfo::Invalid, errors);
+                    ir.specify(expected, TypeInfo::Invalid, errors);
                     Ref::val(RefVal::Undef)
                 }
             },
@@ -809,8 +826,7 @@ impl<'s> Scope<'s> {
                         expected,
                     )
                 } else {
-                    ir.types
-                        .specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                     let then_ty = ir.types.add(TypeInfo::Unknown);
                     self.reduce_block_or_expr(errors, ir, then, then_ty, ret);
                     ir.add_untyped(
@@ -830,8 +846,7 @@ impl<'s> Scope<'s> {
                 match self.reduce_expr(errors, ir, func_expr, func_ty, ret) {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
-                        ir.types
-                            .specify(expected, header.return_type.into(), errors);
+                        ir.specify(expected, header.return_type.into(), errors);
                         let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
                         } else {
@@ -871,7 +886,7 @@ impl<'s> Scope<'s> {
                     }
                     ExprResult::Type(ty) => {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
-                        ir.types.specify(expected, TypeInfo::Resolved(ty), errors);
+                        ir.specify(expected, TypeInfo::Resolved(ty), errors);
 
                         if args.len() != struct_.members.len() {
                             errors.emit(Error::InvalidArgCount, 0, 0, self.module);
@@ -907,7 +922,7 @@ impl<'s> Scope<'s> {
                         if ir.types.get_type(func_ty) != TypeInfo::Invalid {
                             errors.emit(Error::FunctionOrTypeExpected, 0, 0, self.module);
                         }
-                        ir.types.specify(expected, TypeInfo::Invalid, errors);
+                        ir.specify(expected, TypeInfo::Invalid, errors);
                         Ref::val(RefVal::Undef)
                     }
                 }
@@ -945,36 +960,70 @@ impl<'s> Scope<'s> {
             }
             ast::Expression::BinOp(op, sides) => {
                 let (l, r) = &**sides;
-                let is_logical = matches!(
-                    op,
-                    Operator::Equals |Operator::NotEquals 
-                    | Operator::LT | Operator::GT | Operator::LE | Operator::GE
-                );
+                if let Operator::Assignment(assignment) = op {
+                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                    let var_ty = ir.types.add_unknown();
+                    let lval = self.reduce_lval_expr(errors, ir, l, var_ty, ret);
+                    let r = self.reduce_expr_val(errors, ir, r, var_ty, ret);
 
-                // binary operations always require the same type on both sides right now
-                let inner_ty = if is_logical {
-                    ir.types.add(TypeInfo::Unknown)
+                    let val = if *assignment == AssignType::Assign {
+                        r
+                    } else {
+                        let left_val = ir.add(Data { un_op: lval }, Tag::Load, var_ty);
+                        let tag = match assignment {
+                            AssignType::Assign => unreachable!(),
+                            AssignType::AddAssign => Tag::Add,
+                            AssignType::SubAssign => Tag::Sub,
+                            AssignType::MulAssign => Tag::Mul,
+                            AssignType::DivAssign => Tag::Div,
+                            AssignType::ModAssign => Tag::Mod,
+                        };
+                        ir.add(Data { bin_op: (left_val, r) }, tag, var_ty)
+                    };
+                    ir.add(Data { bin_op: (lval, val) }, Tag::Store, var_ty)
                 } else {
-                    expected
-                };
-                let l = self.reduce_expr_val(errors, ir, l, inner_ty, ret);
-                let r = self.reduce_expr_val(errors, ir, r, inner_ty, ret);
-                let tag = match op {
-                    Operator::Add => Tag::Add,
-                    Operator::Sub => Tag::Sub,
-                    Operator::Mul => Tag::Mul,
-                    Operator::Div => Tag::Div,
-                    Operator::Mod => Tag::Mod,
+                    let is_boolean = matches!(
+                        op,
+                        Operator::Or | Operator::And
+                    );
+                    let is_logical = matches!(
+                        op,
+                        Operator::Equals |Operator::NotEquals 
+                        | Operator::LT | Operator::GT | Operator::LE | Operator::GE
+                    );
+    
+                    // binary operations always require the same type on both sides right now
+                    let inner_ty = if is_boolean {
+                        ir.types.add(TypeInfo::Primitive(Primitive::Bool))
+                    } else if is_logical {
+                        ir.types.add(TypeInfo::Unknown)
+                    } else {
+                        expected
+                    };
+                    let l = self.reduce_expr_val(errors, ir, l, inner_ty, ret);
+                    let r = self.reduce_expr_val(errors, ir, r, inner_ty, ret);
+                    let tag = match op {
+                        Operator::Add => Tag::Add,
+                        Operator::Sub => Tag::Sub,
+                        Operator::Mul => Tag::Mul,
+                        Operator::Div => Tag::Div,
+                        Operator::Mod => Tag::Mod,
 
-                    Operator::Equals => Tag::Eq,
-                    Operator::NotEquals => Tag::Ne,
+                        Operator::Or => Tag::Or,
+                        Operator::And => Tag::And,
+    
+                        Operator::Equals => Tag::Eq,
+                        Operator::NotEquals => Tag::Ne,
+    
+                        Operator::LT => Tag::LT,
+                        Operator::GT => Tag::GT,
+                        Operator::LE => Tag::LE,
+                        Operator::GE => Tag::GE,
 
-                    Operator::LT => Tag::LT,
-                    Operator::GT => Tag::GT,
-                    Operator::LE => Tag::LE,
-                    Operator::GE => Tag::GE,
-                };
-                ir.add(Data { bin_op: (l, r) }, tag, expected)
+                        Operator::Assignment(_) => unreachable!()
+                    };
+                    ir.add(Data { bin_op: (l, r) }, tag, expected)
+                }
             }
             ast::Expression::MemberAccess(left, member) => {
                 let left_ty = ir.types.add(TypeInfo::Unknown);
@@ -1024,7 +1073,7 @@ impl<'s> Scope<'s> {
                                 (TypeInfo::Invalid, 0)
                             }
                         };
-                        ir.types.specify(expected, ty, errors);
+                        ir.specify(expected, ty, errors);
                         let member = ir.add(
                             Data {
                                 member: (var, idx as u32),
@@ -1054,8 +1103,7 @@ impl<'s> Scope<'s> {
                 }
             }
             ast::Expression::Cast(target, val) => {
-                ir.types
-                    .specify(expected, TypeInfo::Primitive(*target), errors);
+                ir.specify(expected, TypeInfo::Primitive(*target), errors);
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
                 let val = self.reduce_expr_val(errors, ir, val, inner_ty, ret);
                 //TODO: check table for available casts

@@ -27,20 +27,24 @@ impl TypeTable {
         table_idx
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
+    pub fn add_unknown(&mut self) -> TypeTableIndex {
+        self.add(TypeInfo::Unknown)
+    }
+
+    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, module: ModuleId) {
         let idx = idx.idx();
         let type_idx = self.indices[idx];
         let ty = &mut self.types[type_idx.get()];
         *ty = match ty.merge(info) {
             Ok(ty) => ty,
             Err(err) => {
-                errors.emit(err, 0, 0, ModuleId::MISSING);
+                errors.emit(err, 0, 0, module);
                 TypeInfo::Invalid
             }
         };
     }
 
-    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors) {
+    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId) {
         let a_idx = self.indices[a.idx()];
         let b_idx = &mut self.indices[b.idx()];
         let prev_b_ty = self.types[b_idx.get()];
@@ -51,7 +55,7 @@ impl TypeTable {
         *a_ty = match a_ty.merge(prev_b_ty) {
             Ok(ty) => ty,
             Err(err) => {
-                errors.emit(err, 0, 0, ModuleId::MISSING);
+                errors.emit(err, 0, 0, module);
                 TypeInfo::Invalid
             }
         }

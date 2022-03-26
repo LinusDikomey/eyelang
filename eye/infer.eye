@@ -1,3 +1,8 @@
+# print and parse are no longer intrinsics so these are added to make the program work
+print(s string, ...) -> {}
+parse(s string) -> i32: 0
+read(msg string) -> string: ""
+
 main -> i8 {
     s := "Hello World"
     x := 3

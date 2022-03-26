@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use crate::types::*;
+use crate::{types::*, lexer::tokens::AssignType};
 
 use super::*;
 
@@ -167,12 +167,6 @@ impl<C: Representer> Repr<C> for BlockItem {
                     expr.repr(c);
                 }
             }
-            Self::Assign(l_val, expr) => {
-                c.begin_line();
-                l_val.repr(c);
-                c.write_add(" = ");
-                expr.repr(c);
-            }
             Self::Expression(expr) => {
                 c.begin_line();
                 expr.repr(c);
@@ -253,19 +247,6 @@ impl<C: Representer> Repr<C> for Expression {
                 expr.repr(c);
             },
             Self::Root => c.write_add("root")
-        }
-    }
-}
-
-impl<C: Representer> Repr<C> for LValue {
-    fn repr(&self, c: &C) {
-        match self {
-            Self::Variable(_, var) => c.write_add(var.as_str()),
-            Self::Member(l_val, member) => {
-                l_val.repr(c);
-                c.write_add(".");
-                c.write_add(member.as_str());
-            }
         }
     }
 }
@@ -356,13 +337,31 @@ impl<C: Representer> Repr<C> for Operator {
             Operator::Div => "/",
             Operator::Mod => "%",
 
+            Operator::Assignment(assignment) => return assignment.repr(c),
+            
             Operator::Equals => "==",
             Operator::NotEquals => "!=",
             
+            Operator::Or => "or",
+            Operator::And => "and",
+
             Operator::LT => "<",
             Operator::GT => ">",
             Operator::LE => "<=",
             Operator::GE => ">=",
+        })
+    }
+}
+
+impl<C: Representer> Repr<C> for AssignType {
+    fn repr(&self, c: &C) {
+        c.write_add(match self {
+            AssignType::Assign => "=",
+            AssignType::AddAssign => "+=",
+            AssignType::SubAssign => "-=",
+            AssignType::MulAssign => "*=",
+            AssignType::DivAssign => "/=",
+            AssignType::ModAssign => "%=",
         })
     }
 }

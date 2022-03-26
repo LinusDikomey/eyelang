@@ -208,9 +208,9 @@ impl<'a> Parser<'a> {
             }
             TokenType::Ident => {
                 let ident = self.toks.step_assert(TokenType::Ident);
-                let ident_start = ident.start;
                 let name = ident.get_val(self.src);
                 match self.toks.step().map(|t| t.ty) {
+                    // Function definition with parameters
                     Ok(TokenType::LParen) => match self.parse_params() {
                         Ok((params, varargs)) => {
                             match self.toks.step().map(|t| t.ty) {
@@ -245,7 +245,8 @@ impl<'a> Parser<'a> {
                             }
                         }
                         Err(err) => Parsed::Error(err)
-                    },
+                    }
+                    // Function definition
                     Ok(TokenType::Arrow) => {
                         let ret_type_start = self.toks.current().unwrap().start;
                         let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
@@ -268,7 +269,8 @@ impl<'a> Parser<'a> {
                         Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
                             params: Vec::new(), varargs: false, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
                         })))
-                    },
+                    }
+                    // Struct definition
                     Ok(TokenType::DoubleColon) => {
                         self.toks.step_expect(TokenType::LBrace)?;
                         let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
@@ -288,49 +290,23 @@ impl<'a> Parser<'a> {
                             name.to_owned(),
                             Definition::Struct(StructDefinition { members })
                         ))
-                    },
+                    }
+                    // Variable declaration with explicit type
                     Ok(TokenType::Colon) => {
                         let ty = self.parse_type()?;
-                        let val = self.toks.step_if(TokenType::Assign).is_some()
+                        let val = self.toks.step_if(TokenType::Equals)
+                            .is_some()
                             .then(|| self.parse_expression(var_index)).transpose()?;
                         let index = *var_index;
                         *var_index += 1;
                         Parsed::Item(Item::Block(BlockItem::Declare(name.to_owned(), index, Some(ty), val)))
-                    },
+                    }
+                    // Variable declaration with inferred type
                     Ok(TokenType::Declare) => {
                         let val = self.parse_expression(var_index)?;
                         let index = *var_index;
                         *var_index += 1;
                         Parsed::Item(Item::Block(BlockItem::Declare(name.to_owned(), index, None, Some(val))))
-                    }
-                    Ok(TokenType::Dot) => {
-                        let mut l_value = LValue::Variable(ident_start, name.to_owned());
-                        let res =  loop {
-                            let member = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
-                            l_value = LValue::Member(Box::new(l_value), member);
-                            match self.toks.step() {
-                                Ok(tok) if tok.ty == TokenType::Dot => {}
-                                Ok(tok) if tok.ty == TokenType::Assign => break Ok(()),
-                                Err(err) => break Err(err),
-                                Ok(other) => break Err(CompileError {
-                                    err: Error::UnexpectedToken,
-                                    span: Span::new(other.start, other.end, self.toks.module) 
-                                })
-                            }
-                        };
-                        if let Err(err) = res {
-                            Parsed::Error(err)
-                        } else {
-                            match self.parse_expression(var_index) {
-                                Ok(val) => Parsed::Item(Item::Block(BlockItem::Assign(l_value, val))),
-                                Err(err) => Parsed::Error(err)
-                            }
-                            
-                        }
-                    }
-                    Ok(TokenType::Assign) => {
-                        let val = self.parse_expression(var_index)?;
-                        Parsed::Item(Item::Block(BlockItem::Assign(LValue::Variable(ident_start, name.to_owned()), val)))
                     }
                     _ => Parsed::None
                 }
@@ -392,7 +368,7 @@ impl<'a> Parser<'a> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Operator(Operator::Sub) => Expression::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
+            TokenType::Minus => Expression::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
             TokenType::Bang => Expression::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
 
             TokenType::LParen => {
@@ -456,7 +432,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expression) -> EyeResult<Expression> {
-        while let Some(TokenType::Operator(op)) = self.toks.peek().map(|t| t.ty) {
+        while let Some(op) = self.toks.peek().map(|t| Option::<Operator>::from(t.ty)).flatten() {
             self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
             if op_prec < expr_prec { break; }
@@ -464,12 +440,11 @@ impl<'a> Parser<'a> {
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
-            match self.toks.peek().map(|t| t.ty) {
-                Some(TokenType::Operator(next_op)) => if op_prec < next_op.precedence() {
+            if let Some(next_op) = self.toks.peek().map(|t| Option::<Operator>::from(t.ty)).flatten() {
+                if op_prec < next_op.precedence() {
                     rhs = self.parse_bin_op_rhs(var_index, op.precedence() + 1, rhs)?;
-                },
-                _ => ()
-            };
+                }
+            }
             lhs = Expression::BinOp(op, Box::new((lhs, rhs)));
         }
         Ok(lhs)

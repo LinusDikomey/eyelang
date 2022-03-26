@@ -136,7 +136,7 @@ fn run(
             let llvm_module = llvm_codegen::module(context, &ir);
             if args.cmd == Cmd::Jit {
                 println!("{}", "JIT running...\n".green());
-                let ret_val = llvm_codegen::backend::run_jit(llvm_module);
+                let ret_val = llvm_codegen::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
                 println!("\nResult of main function: {ret_val}");
@@ -149,7 +149,7 @@ fn run(
                 }
                 let obj_file = format!("eyebuild/{output_name}.o");
                 let exe_file = format!("./eyebuild/{output_name}");
-                llvm_codegen::backend::emit_bitcode(None, llvm_module, &obj_file);
+                llvm_codegen::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
                 link::link(&obj_file, &exe_file, args);

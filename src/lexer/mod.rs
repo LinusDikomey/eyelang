@@ -2,7 +2,7 @@ pub mod tokens;
 
 use tokens::Token;
 use crate::{error::{Errors, Error}, ast::ModuleId};
-use self::tokens::{Keyword, Operator, TokenType};
+use self::tokens::{Keyword, TokenType};
 
 pub fn parse(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
     if src.len() > u32::MAX as usize {
@@ -127,31 +127,46 @@ impl<'a> Lexer<'a> {
 
                 '=' => {
                     match self.peek() {
-                        Some('=') => { self.step(); TokenType::Operator(Operator::Equals) }
-                        _ => TokenType::Assign
+                        Some('=') => { self.step(); TokenType::DoubleEquals }
+                        _ => TokenType::Equals
                     }
                 },
-                '+' => TokenType::Operator(Operator::Add),
+                '+' => if self.step_if('=') {
+                    TokenType::PlusEquals
+                } else {
+                    TokenType::Plus
+                }
                 '-' => match self.peek() {
                     Some('>') => { self.step(); TokenType::Arrow }
-                    _ => TokenType::Operator(Operator::Sub),
-                },
-                '*' => TokenType::Operator(Operator::Mul),
-                '/' => TokenType::Operator(Operator::Div),
-                '%' => TokenType::Operator(Operator::Mod),
-                
-                '<' => TokenType::Operator(match self.peek() {
-                    Some('=') => { self.step(); Operator::LE },
-                    _ => Operator::LT
-                }),
-                '>' => TokenType::Operator(match self.peek() {
-                    Some('=') => { self.step(); Operator::GE },
-                    _ => Operator::GT
-                }),
-                
+                    Some('=') => { self.step(); TokenType::MinusEquals }
+                    _ => TokenType::Minus,
+                }
+                '*' => if self.step_if('=') {
+                    TokenType::StarEquals
+                } else {
+                    TokenType::Star
+                }
+                '/' => if self.step_if('=') {
+                    TokenType::SlashEquals
+                } else {
+                    TokenType::Slash
+                }
+                '%' => if self.step_if('=') {
+                    TokenType::PercentEquals
+                } else {
+                    TokenType::Percent
+                }
+                '<' => match self.peek() {
+                    Some('=') => { self.step(); TokenType::LessEquals },
+                    _ => TokenType::LessThan
+                }
+                '>' => match self.peek() {
+                    Some('=') => { self.step(); TokenType::GreaterEquals },
+                    _ => TokenType::GreaterThan
+                }
                 '!' => {
                     match self.peek() {
-                        Some('=') => { self.step(); TokenType::Operator(Operator::NotEquals) }
+                        Some('=') => { self.step(); TokenType::BangEquals }
                         _ => TokenType::Bang
                     }
                 }
@@ -306,6 +321,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn step_if(&mut self, c: char) -> bool {
+        if self.peek() == Some(c) {
+            self.step().unwrap();
+            true
+        } else {
+            false
+        }
+    }
+
     fn peek(&self) -> Option<char> {
         (self.index + 1 < self.chars.len()).then(|| self.chars[self.index + 1].1)
     }
@@ -325,7 +349,7 @@ impl Span {
     pub fn new(start: u32, end: u32, module: ModuleId) -> Self {
         Self { start, end, module }
     }
-    pub fn todo() -> Self {
-        Self { start: 0, end: 0, module: ModuleId::MISSING }
+    pub fn todo(module: ModuleId) -> Self {
+        Self { start: 0, end: 0, module }
     }
 }

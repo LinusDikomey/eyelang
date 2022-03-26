@@ -5,6 +5,8 @@ assert(b bool) ->: if !b: printf("An assertion failed!\n")
 main -> {
     bools()
     arithmetic()
+    comparisons()
+    assign()
 }
 
 bools -> {
@@ -18,6 +20,16 @@ bools -> {
     assert(false != true)
     
     assert(!false == true)
+
+    assert((true or true) == true)
+    assert((true or false) == true)
+    assert((false or true) == true)
+    assert((false or false) == false)
+
+    assert((true and true) == true)
+    assert((true and false) == false)
+    assert((false and true) == false)
+    assert((false and false) == false)
 }
 
 arithmetic -> {
@@ -45,4 +57,26 @@ comparisons -> {
     assert(4 <= 4)
     assert(-5 >= -5)
     assert(3 > 2)
+}
+
+Point :: { x i32, y i32 }
+
+assign -> {
+    x := 3
+    x += 1
+    assert(x == 4)
+    x -= 1
+    assert(x == 3)
+    x *= 4
+    assert(x == 12)
+    x /= 3
+    assert(x == 4)
+    x %= 3
+    assert(x == 1)
+
+    p := Point(1, 13)
+    p.x += 3
+    assert(p.x == 4)
+    p.y %= 5
+    assert(p.y == 3)
 }

@@ -1,3 +1,8 @@
+printf(fmt string, ...) -> i32 extern
+# print and parse are no longer intrinsics so these are added to make the program work
+print(s string, ...) -> {}
+parse(s string) -> i32: 0
+
 sayHello(newline bool) ->: print("Hello", if newline: "\n" else "")
 bye -> { print("Bye") }
 
@@ -37,21 +42,21 @@ main -> {
     print("Half your number is: ", string(y), "\n")
     print("Some calculations:\n")
     # test()("Calling return value from test()\n")
+
+    printVec3(addVec3(Vec3(1., 2., 3.), Vec3(4., 7., 9.)))
+
     bye()
 }
-
-# can't write func type as return type right now so this doesn't work
-#-
-test -> func {
-    print("Printing from test()\n")
-    ret print
-}
--#
 
 Vec3 :: {
     x f32,
     y f32,
     z f32
+}
+
+addVec3(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+printVec3(v Vec3) -> {
+    printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
 }
 
 Transform :: {

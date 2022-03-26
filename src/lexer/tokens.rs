@@ -40,8 +40,27 @@ pub enum TokenType {
 
     Bang,
 
-    Operator(Operator),
-    Assign,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    
+    Equals,
+    DoubleEquals,
+    BangEquals,
+
+    PlusEquals,
+    MinusEquals,
+    StarEquals,
+    SlashEquals,
+    PercentEquals,
+
+    LessThan,
+    GreaterThan,
+    LessEquals,
+    GreaterEquals,
+
     Declare,
 
     Arrow,
@@ -106,12 +125,14 @@ pub enum Keyword {
     Ret,
     True,
     False,
+    And,
+    Or,
     Struct,
     If,
     Else,
     While,
     Extern,
-    Root
+    Root,
 }
 
 impl Keyword {
@@ -139,6 +160,8 @@ impl Keyword {
             "ret" => Keyword::Ret,
             "true" => Keyword::True,
             "false" => Keyword::False,
+            "and" => Keyword::And,
+            "or" => Keyword::Or,
             "struct" => Keyword::Struct,
             "if" => Keyword::If,
             "else" => Keyword::Else,
@@ -151,14 +174,19 @@ impl Keyword {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operator {
     Add,
     Sub,
     Mul,
     Div,
     Mod,
+    
+    Assignment(AssignType),
 
+    Or,
+    And,
+    
     Equals,
     NotEquals,
 
@@ -167,14 +195,59 @@ pub enum Operator {
     LE,
     GE,
 }
+impl From<TokenType> for Option<Operator> {
+    fn from(tok: TokenType) -> Self {
+        use Operator::*;
+        Some(match tok {
+            TokenType::Plus => Add,
+            TokenType::Minus => Sub,
+            TokenType::Star => Mul,
+            TokenType::Slash => Div,
+            TokenType::Percent => Mod,
+
+            TokenType::Equals => Assignment(AssignType::Assign),
+            TokenType::PlusEquals => Assignment(AssignType::AddAssign),
+            TokenType::MinusEquals => Assignment(AssignType::SubAssign),
+            TokenType::StarEquals => Assignment(AssignType::MulAssign),
+            TokenType::SlashEquals => Assignment(AssignType::DivAssign),
+            TokenType::PercentEquals => Assignment(AssignType::ModAssign),
+            
+            TokenType::Keyword(Keyword::Or) => Or,
+            TokenType::Keyword(Keyword::And) => And,
+
+            TokenType::DoubleEquals => Equals,
+            TokenType::BangEquals => NotEquals,
+
+            TokenType::LessThan => LT,
+            TokenType::GreaterThan => GT,
+            TokenType::LessEquals => LE,
+            TokenType::GreaterEquals => GE,
+
+            _ => return None
+        })
+    }
+}
 impl Operator {
     pub fn precedence(&self) -> u8 {
         use Operator::*;
         match self {
-            Equals | NotEquals => 20,
-            LT | LE | GT | GE => 30,
-            Add | Sub => 50,
-            Mul | Div | Mod => 60,
+            Assignment(_) => 10,
+            Or => 20,
+            And => 30,
+            Equals | NotEquals => 40,
+            LT | LE | GT | GE => 50,
+            Add | Sub => 60,
+            Mul | Div | Mod => 70,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignType {
+    Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
+    ModAssign
 }

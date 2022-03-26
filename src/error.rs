@@ -179,7 +179,8 @@ pub enum Error {
     CantNegateType,
     NonexistantMember,
     TypeMustBeKnownHere,
-    MissingMainFile
+    MissingMainFile,
+    CantAssignTo
 }
 impl Error {
     pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {

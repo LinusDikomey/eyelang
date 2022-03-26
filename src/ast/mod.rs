@@ -56,7 +56,6 @@ impl IndexMut<ModuleId> for Modules {
 #[derive(Clone, Copy, Debug)]
 pub struct ModuleId(u32);
 impl ModuleId {
-    pub const MISSING: Self = Self(u32::MAX);
     pub const ROOT: Self = Self(0);
     pub fn idx(self) -> usize { self.0 as usize }
 }
@@ -123,7 +122,6 @@ pub struct Block {
 pub enum BlockItem {
     Block(Block),
     Declare(String, u32, Option<UnresolvedType>, Option<Expression>),
-    Assign(LValue, Expression),
     Expression(Expression),
 }
 
@@ -158,6 +156,7 @@ pub struct If {
     pub else_: Option<BlockOrExpr>
 }
 
+/*
 #[derive(Debug, Clone)]
 pub enum LValue {
     Variable(u32, String),
@@ -184,6 +183,7 @@ impl LValue {
         }
     }
 }
+*/
 
 #[derive(Debug, Clone)]
 pub enum IdentPath {
