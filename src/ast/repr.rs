@@ -208,6 +208,16 @@ impl<C: Representer> Repr<C> for Expression {
                     else_block.repr(c);
                 }
             }
+            Self::While(box While { cond, body }) => {
+                c.write_add("while ");
+                cond.repr(c);
+                if let BlockOrExpr::Block(_) = body {
+                    c.space();
+                } else {
+                    c.write_add(": ");
+                }
+                body.repr(c);
+            }
             Self::FunctionCall(func, args) => {
                 func.repr(c);
                 c.write_add("(");

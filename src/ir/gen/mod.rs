@@ -798,12 +798,7 @@ impl<'s> Scope<'s> {
                 let val = if let Some(else_) = else_ {
                     let after_block = ir.create_block();
                     let (then_val, _) = self.reduce_block_or_expr(errors, ir, then, expected, ret);
-                    ir.add_untyped(
-                        Data {
-                            int32: after_block.0,
-                        },
-                        Tag::Goto,
-                    );
+                    ir.add_untyped(Data { int32: after_block.0, }, Tag::Goto);
                     ir.begin_block(other_block);
                     let (else_val, _) = self.reduce_block_or_expr(errors, ir, else_, expected, ret);
                     ir.add_untyped(
@@ -840,6 +835,31 @@ impl<'s> Scope<'s> {
                     Ref::val(RefVal::Unit)
                 };
                 val
+            }
+            ast::Expression::While(while_) => {
+                let ast::While { cond, body } = &**while_;
+
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+
+                let cond_block = ir.create_block();
+                let body_block = ir.create_block();
+                let after_block = ir.create_block();
+
+                ir.add_untyped(Data { int32: cond_block.0 }, Tag::Goto);
+                ir.begin_block(cond_block);
+                
+                let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+                let cond = self.reduce_expr_val(errors, ir, cond, b, ret);
+
+                let branch_extra = ir.extra_data(&body_block.0.to_le_bytes());
+                ir.extra_data(&after_block.0.to_le_bytes());
+                ir.add_untyped(Data { branch: (cond, branch_extra) }, Tag::Branch);
+                ir.begin_block(body_block);
+                let body_ty = ir.types.add(TypeInfo::Unknown);
+                self.reduce_block_or_expr(errors, ir, body, body_ty, ret);
+                ir.add_untyped(Data { int32: cond_block.0 }, Tag::Goto);
+                ir.begin_block(after_block);
+                Ref::val(RefVal::Unit)
             }
             ast::Expression::FunctionCall(func_expr, args) => {
                 let func_ty = ir.types.add(TypeInfo::Unknown);

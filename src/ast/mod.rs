@@ -135,6 +135,7 @@ pub enum Expression {
     Unit,
     Variable(String),
     If(Box<If>),
+    While(Box<While>),
     FunctionCall(Box<Expression>, Vec<Expression>),
     UnOp(UnOp, Box<Expression>),
     BinOp(Operator, Box<(Expression, Expression)>),
@@ -154,6 +155,12 @@ pub struct If {
     pub cond: Expression,
     pub then: BlockOrExpr,
     pub else_: Option<BlockOrExpr>
+}
+
+#[derive(Debug, Clone)]
+pub struct While {
+    pub cond: Expression,
+    pub body: BlockOrExpr
 }
 
 /*

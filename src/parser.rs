@@ -394,6 +394,7 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::False) => Expression::BoolLiteral(false),
             TokenType::Ident                   => Expression::Variable(first.get_val(self.src).to_owned()),
             TokenType::Keyword(Keyword::If) => Expression::If(Box::new(self.parse_if_from_cond(var_index)?)),
+            TokenType::Keyword(Keyword::While) => Expression::While(Box::new(self.parse_while_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let inner = self.parse_factor(var_index)?;
                 Expression::Cast(p, Box::new(inner))
@@ -470,6 +471,13 @@ impl<'a> Parser<'a> {
         } else { None };
 
         Ok(If { cond, then, else_ })
+    }
+
+    /// Starts after the while keyword has already been parsed
+    fn parse_while_from_cond(&mut self, var_index: &mut u32) -> EyeResult<While> {
+        let cond = self.parse_expression(var_index)?;
+        let body = self.parse_block_or_expr(var_index)?;
+        Ok(While { cond, body })
     }
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {

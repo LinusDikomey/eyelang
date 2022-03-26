@@ -44,8 +44,15 @@ main -> {
     # test()("Calling return value from test()\n")
 
     printVec3(addVec3(Vec3(1., 2., 3.), Vec3(4., 7., 9.)))
-
+    
+    i := 5
+    while i < 10: i = incAndPrint(i)
     bye()
+}
+
+incAndPrint(i i32) -> i32 {
+    printf("I is %d\n", i)
+    ret i + 1
 }
 
 Vec3 :: {
