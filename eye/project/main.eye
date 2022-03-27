@@ -8,5 +8,5 @@ main -> {
     printf("Hello World: %d\n", other.add(p.x, 2))
     printf("Square Magnitude of Point: %d\n", other.squareMag(p))
     
-    # other.printf("Test")
+    folder.file.function()
 }

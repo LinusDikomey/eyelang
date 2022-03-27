@@ -6,7 +6,6 @@ mod error;
 mod lexer;
 mod parser;
 mod types;
-// mod interpreter;
 mod ir;
 mod link;
 mod compile;
@@ -42,8 +41,6 @@ enum Cmd {
     Build,
     /// Compile and run using LLVMs JIT compiler. Might produce different results.
     Jit,
-    // Interpret using a basic AST walk interpreter. This is just for testing and many programs will work differently.
-    // Interpret,
 }
 
 #[derive(clap::Parser)]
@@ -51,7 +48,6 @@ enum Cmd {
 pub struct Args {
     #[clap(arg_enum)]
     cmd: Cmd,
-    //#[clap(short, long, default_value_t = "eye/test.eye")]
     file: String,
     /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
     #[clap(short, long)]

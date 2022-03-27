@@ -11,6 +11,7 @@ pub enum Primitive {
     Never
 }
 impl Primitive {
+    /*
     pub fn _size(&self) -> u32 {
         use Primitive::*;
         match self {
@@ -24,7 +25,7 @@ impl Primitive {
             Unit | Never => 0,           
         }
     }
-
+    */
     pub fn as_int(&self) -> Option<IntType> {
         use Primitive::*;
         Some(match self {

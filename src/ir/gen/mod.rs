@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, BlockItem, Expression, ModuleId, UnOp},
+    ast::{self, BlockItem, Expr, ModuleId, UnOp},
     error::{Error, Errors},
     lexer::tokens::{Operator, AssignType},
     types::Primitive,
@@ -70,7 +70,6 @@ pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
                     scope.ctx.funcs[func.idx()] = FunctionOrHeader::Func(Function {
                         name: name.clone(),
                         header,
-                        ast: def.clone(),
                         ir,
                     });
                 }
@@ -463,109 +462,6 @@ impl<'s> Scope<'s> {
         var
     }
 
-    /*fn assign(
-        &mut self,
-        errors: &mut Errors,
-        ir: &mut IrBuilder,
-        l_val: &LValue,
-        assign_val: &Expression,
-        ret: TypeTableIndex,
-    ) -> Result<(), Error> {
-        let mut current = NonNull::from(&mut self.info);
-
-        loop {
-            let mut idents = l_val.idents().into_iter();
-            if let Some(symbol) = unsafe { current.as_mut() }
-                .symbols
-                .to_mut()
-                .get_mut(idents.next().unwrap())
-            {
-                match symbol {
-                    Symbol::Func(_) | Symbol::Type(_) | Symbol::Module(_) => {
-                        return Err(Error::ExpectedVarFoundDefinition)
-                    }
-                    Symbol::Var { ty, var } => {
-                        let mut current_var = *var;
-                        let expected = match l_val {
-                            LValue::Variable(_, _) => *ty,
-                            LValue::Member(_, _) => {
-                                let mut current_ty = ir.types.get_type(*ty);
-                                for ident in idents {
-                                    (current_ty, current_var) = match current_ty {
-                                        TypeInfo::Resolved(key) => {
-                                            let TypeDef::Struct(struct_) =
-                                                &mut self.ctx.types[key.idx()];
-                                            if let Some((i, (_, member_ty))) = struct_
-                                                .members
-                                                .iter()
-                                                .enumerate()
-                                                .find(|(_, (name, _))| name == ident)
-                                            {
-                                                let member_ty = (*member_ty).into();
-                                                let member_ty_entry = ir.types.add(member_ty);
-                                                let member = ir.add(
-                                                    Data {
-                                                        member: (current_var, i as u32),
-                                                    },
-                                                    Tag::Member,
-                                                    member_ty_entry,
-                                                );
-                                                (member_ty, member)
-                                            } else {
-                                                errors.emit(
-                                                    Error::NonexistantMember,
-                                                    0,
-                                                    0,
-                                                    self.module,
-                                                );
-                                                (TypeInfo::Invalid, Ref::val(RefVal::Undef))
-                                            }
-                                        }
-                                        TypeInfo::Invalid => break,
-                                        TypeInfo::Unknown => {
-                                            errors.emit(
-                                                Error::TypeMustBeKnownHere,
-                                                0,
-                                                0,
-                                                self.module,
-                                            );
-                                            (TypeInfo::Invalid, Ref::val(RefVal::Undef))
-                                        }
-                                        _ => {
-                                            errors.emit(
-                                                Error::NonexistantMember,
-                                                0,
-                                                0,
-                                                self.module,
-                                            );
-                                            (TypeInfo::Invalid, Ref::val(RefVal::Undef))
-                                        }
-                                    }
-                                }
-                                ir.types.add(current_ty)
-                            }
-                        };
-                        let expr_val = self.reduce_expr_val(errors, ir, assign_val, expected, ret);
-                        ir.add_untyped(
-                            Data {
-                                bin_op: (current_var, expr_val),
-                            },
-                            Tag::Store,
-                        );
-                        return Ok(());
-                    }
-                }
-            } else {
-                if let Some(new) = unsafe { current.as_mut() }.parent() {
-                    current = NonNull::from(new);
-                } else {
-                    return Err(Error::UnknownVariable);
-                }
-            }
-        }
-    }
-*/
-
     // returns (ref, is_block)
     fn reduce_block_or_expr(
         &mut self,
@@ -630,7 +526,7 @@ impl<'s> Scope<'s> {
                     self.reduce_expr_store_into_var(errors, ir, val, var, ty, ret);
                 }
             }
-            BlockItem::Expression(expr) => {
+            BlockItem::Expr(expr) => {
                 let expr_ty = ir.types.add(TypeInfo::Unknown);
                 self.reduce_expr(errors, ir, expr, expr_ty, ret);
             }
@@ -641,7 +537,7 @@ impl<'s> Scope<'s> {
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
-        expr: &Expression,
+        expr: &Expr,
         expected: TypeTableIndex,
         ret: TypeTableIndex,
     ) -> Ref {
@@ -653,7 +549,7 @@ impl<'s> Scope<'s> {
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
-        expr: &Expression,
+        expr: &Expr,
         expected: TypeTableIndex,
         ret: TypeTableIndex,
     ) -> ExprResult {
@@ -667,7 +563,7 @@ impl<'s> Scope<'s> {
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
-        expr: &Expression,
+        expr: &Expr,
         var: Ref,
         expected: TypeTableIndex,
         ret: TypeTableIndex,
@@ -688,7 +584,7 @@ impl<'s> Scope<'s> {
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
-        expr: &Expression,
+        expr: &Expr,
         expected: TypeTableIndex,
         ret: TypeTableIndex
     ) -> Ref {
@@ -709,19 +605,19 @@ impl<'s> Scope<'s> {
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
-        expr: &Expression,
+        expr: &Expr,
         expected: TypeTableIndex,
         ret: TypeTableIndex,
         get_var: impl Fn(&mut IrBuilder) -> Ref,
     ) -> ExprResult {
         let r = match expr {
-            ast::Expression::Return(ret_val) => {
+            ast::Expr::Return(ret_val) => {
                 let r = self.reduce_expr_val(errors, ir, ret_val, ret, ret);
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
                 ir.add_untyped(Data { un_op: r }, Tag::Ret);
                 Ref::val(RefVal::Undef)
             }
-            ast::Expression::IntLiteral(lit) => {
+            ast::Expr::IntLiteral(lit) => {
                 let int_ty = lit
                     .ty
                     .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
@@ -739,29 +635,29 @@ impl<'s> Scope<'s> {
                     ir.add(Data { extra }, Tag::LargeInt, expected)
                 }
             }
-            ast::Expression::FloatLiteral(lit) => {
+            ast::Expr::FloatLiteral(lit) => {
                 let float_ty = lit.ty.map_or(TypeInfo::Float, |float_ty| {
                     TypeInfo::Primitive(float_ty.into())
                 });
                 ir.specify(expected, float_ty, errors);
                 ir.add(Data { float: lit.val }, Tag::Float, expected)
             }
-            ast::Expression::StringLiteral(string) => {
+            ast::Expr::StringLiteral(string) => {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::String), errors);
                 let extra_len = ir._extra_len(string.as_bytes());
                 // add zero byte
                 ir.extra_data(&[b'\0']);
                 ir.add(Data { extra_len }, Tag::String, expected)
             }
-            ast::Expression::BoolLiteral(b) => {
+            ast::Expr::BoolLiteral(b) => {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors);
                 Ref::val(if *b { RefVal::True } else { RefVal::False })
             }
-            ast::Expression::Unit => {
+            ast::Expr::Unit => {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                 Ref::val(RefVal::Unit)
             }
-            ast::Expression::Variable(name) => match self.resolve(&mut ir.types, name) {
+            ast::Expr::Variable(name) => match self.resolve(&mut ir.types, name) {
                 Ok(resolved) => match resolved {
                     Resolved::Var(ty, var) => {
                         ir.types.merge(ty, expected, errors, self.module);
@@ -777,7 +673,7 @@ impl<'s> Scope<'s> {
                     Ref::val(RefVal::Undef)
                 }
             },
-            ast::Expression::If(if_) => {
+            ast::Expr::If(if_) => {
                 let ast::If { cond, then, else_ } = &**if_;
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
                 let cond = self.reduce_expr_val(errors, ir, cond, b, ret);
@@ -836,7 +732,7 @@ impl<'s> Scope<'s> {
                 };
                 val
             }
-            ast::Expression::While(while_) => {
+            ast::Expr::While(while_) => {
                 let ast::While { cond, body } = &**while_;
 
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
@@ -861,7 +757,7 @@ impl<'s> Scope<'s> {
                 ir.begin_block(after_block);
                 Ref::val(RefVal::Unit)
             }
-            ast::Expression::FunctionCall(func_expr, args) => {
+            ast::Expr::FunctionCall(func_expr, args) => {
                 let func_ty = ir.types.add(TypeInfo::Unknown);
                 match self.reduce_expr(errors, ir, func_expr, func_ty, ret) {
                     ExprResult::Func(key) => {
@@ -947,7 +843,7 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expression::UnOp(un_op, val) => {
+            ast::Expr::UnOp(un_op, val) => {
                 let (expected, tag) = match un_op {
                     UnOp::Neg => (expected, Tag::Neg),
                     UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
@@ -978,7 +874,7 @@ impl<'s> Scope<'s> {
                 }
                 ir.add(Data { un_op: inner }, tag, expected)
             }
-            ast::Expression::BinOp(op, sides) => {
+            ast::Expr::BinOp(op, sides) => {
                 let (l, r) = &**sides;
                 if let Operator::Assignment(assignment) = op {
                     ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
@@ -1045,7 +941,7 @@ impl<'s> Scope<'s> {
                     ir.add(Data { bin_op: (l, r) }, tag, expected)
                 }
             }
-            ast::Expression::MemberAccess(left, member) => {
+            ast::Expr::MemberAccess(left, member) => {
                 let left_ty = ir.types.add(TypeInfo::Unknown);
                 enum MemberAccessType {
                     Var(Ref),
@@ -1122,7 +1018,7 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expression::Cast(target, val) => {
+            ast::Expr::Cast(target, val) => {
                 ir.specify(expected, TypeInfo::Primitive(*target), errors);
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
                 let val = self.reduce_expr_val(errors, ir, val, inner_ty, ret);
@@ -1135,7 +1031,7 @@ impl<'s> Scope<'s> {
                     expected,
                 )
             }
-            ast::Expression::Root => {
+            ast::Expr::Root => {
                 return ExprResult::Module(ModuleId::ROOT)
             }
         };

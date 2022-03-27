@@ -21,7 +21,6 @@ impl SymbolKey {
 pub struct Function {
     pub name: String,
     pub header: FunctionHeader,
-    pub ast: crate::ast::Function, // temporary solution?
     pub ir: Option<FunctionIr>
 }
 
@@ -58,7 +57,6 @@ impl fmt::Display for Function {
                     DataVariant::Int => write!(f, "{}", inst.data.int)?,
                     DataVariant::Int32 => write!(f, "{}", inst.data.int32)?,
                     DataVariant::Block => write!(f, "{}", format!("b{}", inst.data.int32).bright_blue())?,
-                    //DataVariant::Extra(len) => write!(f, "{:?}", &self.extra[inst.data.extra as usize .. len as usize])?,
                     DataVariant::LargeInt => {
                         let bytes = &ir.extra[
                             inst.data.extra as usize
@@ -182,11 +180,6 @@ pub struct Struct {
     pub members: Vec<(String, TypeRef)>,
     pub name: String
 }
-impl Struct {
-    pub fn _size(&self, module: &Module) -> u32 {
-        self.members.iter().map(|(_, m)| m._size(module)).sum()
-    }
-}
 impl fmt::Display for Struct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (name, member) in &self.members {
@@ -202,19 +195,6 @@ pub enum TypeRef {
     Primitive(Primitive),
     Resolved(SymbolKey),
     Invalid,
-}
-impl TypeRef {
-    pub fn _size(&self, module: &Module) -> u32 {
-        match self {
-            TypeRef::Primitive(p) => p._size(),
-            TypeRef::Resolved(key) => {
-                match &module.types[key.idx()] {
-                    TypeDef::Struct(s) => s._size(module)
-                }
-            }
-            TypeRef::Invalid => 0
-        }
-    }
 }
 impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

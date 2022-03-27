@@ -167,7 +167,7 @@ impl<C: Representer> Repr<C> for BlockItem {
                     expr.repr(c);
                 }
             }
-            Self::Expression(expr) => {
+            Self::Expr(expr) => {
                 c.begin_line();
                 expr.repr(c);
             }
@@ -176,7 +176,7 @@ impl<C: Representer> Repr<C> for BlockItem {
     }
 }
 
-impl<C: Representer> Repr<C> for Expression {
+impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
         match self {
             Self::Return(val) => {

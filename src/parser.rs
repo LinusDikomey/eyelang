@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
             TokenType::LBrace => self.parse_block(var_index).map(BlockOrExpr::Block),
             TokenType::Colon => {
                 self.toks.step_expect(TokenType::Colon)?;
-                let expr = self.parse_expression(var_index)?;
+                let expr = self.parse_expr(var_index)?;
                 Ok(BlockOrExpr::Expr(expr))
             }
         )
@@ -202,8 +202,8 @@ impl<'a> Parser<'a> {
             TokenType::LBrace => Parsed::Item(Item::Block(BlockItem::Block(self.parse_block(var_index)?))),
             TokenType::Keyword(Keyword::If) => {
                 self.toks.step_assert(TokenType::Keyword(Keyword::If));
-                Parsed::Item(Item::Block(BlockItem::Expression(
-                    Expression::If(Box::new(self.parse_if_from_cond(var_index)?))
+                Parsed::Item(Item::Block(BlockItem::Expr(
+                    Expr::If(Box::new(self.parse_if_from_cond(var_index)?))
                 )))
             }
             TokenType::Ident => {
@@ -296,14 +296,14 @@ impl<'a> Parser<'a> {
                         let ty = self.parse_type()?;
                         let val = self.toks.step_if(TokenType::Equals)
                             .is_some()
-                            .then(|| self.parse_expression(var_index)).transpose()?;
+                            .then(|| self.parse_expr(var_index)).transpose()?;
                         let index = *var_index;
                         *var_index += 1;
                         Parsed::Item(Item::Block(BlockItem::Declare(name.to_owned(), index, Some(ty), val)))
                     }
                     // Variable declaration with inferred type
                     Ok(TokenType::Declare) => {
-                        let val = self.parse_expression(var_index)?;
+                        let val = self.parse_expr(var_index)?;
                         let index = *var_index;
                         *var_index += 1;
                         Parsed::Item(Item::Block(BlockItem::Declare(name.to_owned(), index, None, Some(val))))
@@ -317,9 +317,9 @@ impl<'a> Parser<'a> {
             Ok(item)
         } else {
             self.toks.set_position(pre_item_pos);
-            match self.parse_expression(var_index) {
+            match self.parse_expr(var_index) {
                 Ok(expr) => {
-                    Ok(Item::Block(BlockItem::Expression(expr)))
+                    Ok(Item::Block(BlockItem::Expr(expr)))
                 }
                 Err(err) => {
                     match block_item {
@@ -359,48 +359,48 @@ impl<'a> Parser<'a> {
         Ok((params, vararg))
     }
 
-    fn parse_expression(&mut self, var_index: &mut u32) -> EyeResult<Expression> {
+    fn parse_expr(&mut self, var_index: &mut u32) -> EyeResult<Expr> {
         let lhs = self.parse_factor(var_index)?;
         self.parse_bin_op_rhs(var_index, 0, lhs)
     }
 
-    fn parse_factor(&mut self, var_index: &mut u32) -> Result<Expression, CompileError> {
+    fn parse_factor(&mut self, var_index: &mut u32) -> Result<Expr, CompileError> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Minus => Expression::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
-            TokenType::Bang => Expression::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
+            TokenType::Minus => Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
+            TokenType::Bang => Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
 
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
-                    Expression::Unit
+                    Expr::Unit
                 } else {
-                    let factor = self.parse_expression(var_index)?;
+                    let factor = self.parse_expr(var_index)?;
                     self.toks.step_expect(TokenType::RParen)?;
                     factor
                 }
             },
-            TokenType::Keyword(Keyword::Ret) => Expression::Return(Box::new(self.parse_expression(var_index)?)),
-            TokenType::IntLiteral              => Expression::IntLiteral(IntLiteral::from_tok(first, self.src)),
-            TokenType::FloatLiteral            => Expression::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
-            TokenType::StringLiteral           => Expression::StringLiteral(
+            TokenType::Keyword(Keyword::Ret) => Expr::Return(Box::new(self.parse_expr(var_index)?)),
+            TokenType::IntLiteral              => Expr::IntLiteral(IntLiteral::from_tok(first, self.src)),
+            TokenType::FloatLiteral            => Expr::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
+            TokenType::StringLiteral           => Expr::StringLiteral(
                 self.src[first.start as usize + 1 ..= first.end as usize - 1]
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
                     .replace("\\r", "\r")
                     .replace("\\\"", "\r")
             ),
-            TokenType::Keyword(Keyword::True)  => Expression::BoolLiteral(true),
-            TokenType::Keyword(Keyword::False) => Expression::BoolLiteral(false),
-            TokenType::Ident                   => Expression::Variable(first.get_val(self.src).to_owned()),
-            TokenType::Keyword(Keyword::If) => Expression::If(Box::new(self.parse_if_from_cond(var_index)?)),
-            TokenType::Keyword(Keyword::While) => Expression::While(Box::new(self.parse_while_from_cond(var_index)?)),
+            TokenType::Keyword(Keyword::True)  => Expr::BoolLiteral(true),
+            TokenType::Keyword(Keyword::False) => Expr::BoolLiteral(false),
+            TokenType::Ident                   => Expr::Variable(first.get_val(self.src).to_owned()),
+            TokenType::Keyword(Keyword::If) => Expr::If(Box::new(self.parse_if_from_cond(var_index)?)),
+            TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let inner = self.parse_factor(var_index)?;
-                Expression::Cast(p, Box::new(inner))
+                Expr::Cast(p, Box::new(inner))
             },
             TokenType::Keyword(Keyword::Root) => {
-                Expression::Root
+                Expr::Root
             }
         );
         loop {
@@ -411,7 +411,7 @@ impl<'a> Parser<'a> {
                     let mut args = Vec::new();
                     if self.toks.step_if(TokenType::RParen).is_none() {
                         loop {
-                            args.push(self.parse_expression(var_index)?);
+                            args.push(self.parse_expr(var_index)?);
                             match_or_unexpected!(self.toks.step()?,
                                 self.toks.module,
                                 TokenType::Comma => (),
@@ -419,12 +419,12 @@ impl<'a> Parser<'a> {
                             )
                         }
                     }
-                    expr = Expression::FunctionCall(Box::new(expr), args);
+                    expr = Expr::FunctionCall(Box::new(expr), args);
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
                     let field = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
-                    expr = Expression::MemberAccess(Box::new(expr), field);
+                    expr = Expr::MemberAccess(Box::new(expr), field);
                 }
                 _ => break
             }
@@ -432,7 +432,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expression) -> EyeResult<Expression> {
+    fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expr) -> EyeResult<Expr> {
         while let Some(op) = self.toks.peek().map(|t| Option::<Operator>::from(t.ty)).flatten() {
             self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
@@ -446,14 +446,14 @@ impl<'a> Parser<'a> {
                     rhs = self.parse_bin_op_rhs(var_index, op.precedence() + 1, rhs)?;
                 }
             }
-            lhs = Expression::BinOp(op, Box::new((lhs, rhs)));
+            lhs = Expr::BinOp(op, Box::new((lhs, rhs)));
         }
         Ok(lhs)
     }
 
     /// Starts after the if keyword has already been parsed
     fn parse_if_from_cond(&mut self, var_index: &mut u32) -> EyeResult<If> {
-        let cond = self.parse_expression(var_index)?;
+        let cond = self.parse_expr(var_index)?;
         let then = self.parse_block_or_expr(var_index)?;
         
         let else_ = if let Some(tok) = self.toks.peek() {
@@ -465,7 +465,7 @@ impl<'a> Parser<'a> {
                 
                 match next.ty {
                     TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block(var_index)?)),
-                    _ => Some(BlockOrExpr::Expr(self.parse_expression(var_index)?))
+                    _ => Some(BlockOrExpr::Expr(self.parse_expr(var_index)?))
                 }
             } else { None }
         } else { None };
@@ -475,7 +475,7 @@ impl<'a> Parser<'a> {
 
     /// Starts after the while keyword has already been parsed
     fn parse_while_from_cond(&mut self, var_index: &mut u32) -> EyeResult<While> {
-        let cond = self.parse_expression(var_index)?;
+        let cond = self.parse_expr(var_index)?;
         let body = self.parse_block_or_expr(var_index)?;
         Ok(While { cond, body })
     }

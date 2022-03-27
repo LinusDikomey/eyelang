@@ -101,7 +101,7 @@ pub struct Function {
 #[derive(Debug, Clone)]
 pub enum BlockOrExpr {
     Block(Block),
-    Expr(Expression)
+    Expr(Expr)
 }
 impl<C: Representer> Repr<C> for BlockOrExpr {
     fn repr(&self, c: &C) {
@@ -121,13 +121,13 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum BlockItem {
     Block(Block),
-    Declare(String, u32, Option<UnresolvedType>, Option<Expression>),
-    Expression(Expression),
+    Declare(String, u32, Option<UnresolvedType>, Option<Expr>),
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]
-pub enum Expression {
-    Return(Box<Expression>),
+pub enum Expr {
+    Return(Box<Expr>),
     IntLiteral(IntLiteral),
     FloatLiteral(FloatLiteral),
     StringLiteral(String),
@@ -136,11 +136,11 @@ pub enum Expression {
     Variable(String),
     If(Box<If>),
     While(Box<While>),
-    FunctionCall(Box<Expression>, Vec<Expression>),
-    UnOp(UnOp, Box<Expression>),
-    BinOp(Operator, Box<(Expression, Expression)>),
-    MemberAccess(Box<Expression>, String),
-    Cast(Primitive, Box<Expression>),
+    FunctionCall(Box<Expr>, Vec<Expr>),
+    UnOp(UnOp, Box<Expr>),
+    BinOp(Operator, Box<(Expr, Expr)>),
+    MemberAccess(Box<Expr>, String),
+    Cast(Primitive, Box<Expr>),
     Root
 }
 
@@ -152,14 +152,14 @@ pub enum UnOp {
 
 #[derive(Debug, Clone)]
 pub struct If {
-    pub cond: Expression,
+    pub cond: Expr,
     pub then: BlockOrExpr,
     pub else_: Option<BlockOrExpr>
 }
 
 #[derive(Debug, Clone)]
 pub struct While {
-    pub cond: Expression,
+    pub cond: Expr,
     pub body: BlockOrExpr
 }
 
@@ -268,29 +268,3 @@ impl fmt::Display for UnresolvedType {
         }
     }
 }
-
-/*
-pub fn insert_intrinsics(module: &mut Module) {
-    module.definitions.insert("print".to_owned(), Definition::Function(Function {
-        body: Some(BlockOrExpr::Block(Block { items: Vec::new(), defs: HashMap::new() })),
-        params: Vec::new(),
-        varargs: true, //Some(("args".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)),
-        var_count: 0,
-        return_type: (UnresolvedType::Primitive(Primitive::Unit), 0, 0)
-    }));
-    module.definitions.insert("read".to_owned(), Definition::Function(Function {
-        body: Some(BlockOrExpr::Expr(Expression::StringLiteral(String::new()))),
-        params: vec![("s".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        varargs: false,
-        var_count: 0,
-        return_type: (UnresolvedType::Primitive(Primitive::String), 0, 0)
-    }));
-    module.definitions.insert("parse".to_owned(), Definition::Function(Function {
-        body: Some(BlockOrExpr::Expr(Expression::IntLiteral(IntLiteral { val: 0, ty: Some(crate::types::IntType::I32) } ))),
-        params: vec![("s".to_owned(), UnresolvedType::Primitive(Primitive::String), 0, 0)],
-        varargs: false,
-        var_count: 0,
-        return_type: (UnresolvedType::Primitive(Primitive::I32), 0, 0)
-    }));
-}
-*/
