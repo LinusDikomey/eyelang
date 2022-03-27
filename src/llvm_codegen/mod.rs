@@ -57,11 +57,10 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     }
 }
 
-unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &ir::TypeRef) -> LLVMTypeRef {
+unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
     match ty {
-        ir::TypeRef::Primitive(p) => llvm_primitive_ty(ctx, *p),
-        ir::TypeRef::Resolved(id) => types[id.idx()],
-        ir::TypeRef::Invalid => panic!("Invalid types shouldn't reach the codegen stage"),
+        Type::Prim(p) => llvm_primitive_ty(ctx, *p),
+        Type::Id(id) => types[id.idx()],
     }
 }
 
@@ -74,14 +73,14 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
 
     let types = module.types.iter()
         .map(|ty| {
-            let ir::TypeDef::Struct(struct_) = ty;
+            let ir::FinalTypeDef::Struct(struct_) = ty;
             let name = ffi::CString::new(struct_.name.as_bytes()).unwrap();
             LLVMStructCreateNamed(ctx, name.as_ptr())
         })
         .collect::<Vec<_>>();
 
     for (ty, struct_ty) in module.types.iter().zip(&types) {
-        let ir::TypeDef::Struct(struct_) = ty;
+        let ir::FinalTypeDef::Struct(struct_) = ty;
         let mut members = struct_.members.iter().map(|(_name, ty)| llvm_ty(ctx, &types, ty)).collect::<Vec<_>>();
         LLVMStructSetBody(*struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
     }
@@ -90,8 +89,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
 
     let funcs = module.funcs.iter()
         .map(|func| {
-            let ret = llvm_ty(ctx, &types, &func.header().return_type);
-            let mut params = func.header().params.iter().map(|(_name, ty)| llvm_ty(ctx, &types, ty)).collect::<Vec<_>>();
+            let ret = llvm_ty(ctx, &types, &func.return_type);
+            let mut params = func.params.iter().map(|(_name, ty)| llvm_ty(ctx, &types, ty)).collect::<Vec<_>>();
 
             /*let (mut params, vararg): (Vec<_>, _) = if let Some((_, vararg)) = &func.header.vararg {
                 let vararg_ty = llvm_ty(ctx, &types, vararg);
@@ -100,8 +99,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
                 (params.collect(), FALSE)
             };*/
 
-            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, if func.header.varargs {TRUE} else {FALSE});
-            let name = ffi::CString::new(func.header().name.as_bytes()).unwrap();
+            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, if func.varargs {TRUE} else {FALSE});
+            let name = ffi::CString::new(func.name.as_bytes()).unwrap();
             LLVMAddFunction(llvm_module, name.as_ptr(), func_ty)
         })
         .collect::<Vec<_>>();
@@ -112,7 +111,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
     for (i, func) in funcs.iter().enumerate() {
         let ir_func = &module.funcs[i];
         if let Some(ir) = &ir_func.ir {
-            build_func(ir_func.header(), ir, ctx, builder, *func, &types, &funcs)
+            build_func(ir_func, ir, ctx, builder, *func, &types, &funcs)
         }
     }
 
@@ -131,10 +130,10 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
 }
 
 
-unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LLVMContextRef, builder: LLVMBuilderRef, llvm_func: LLVMValueRef, types: &[LLVMTypeRef], funcs: &[LLVMValueRef]) {
-    crate::log!("-------------------- Building LLVM IR for func {}", header.name);
+unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMContextRef, builder: LLVMBuilderRef, llvm_func: LLVMValueRef, types: &[LLVMTypeRef], funcs: &[LLVMValueRef]) {
+    crate::log!("-------------------- Building LLVM IR for func {}", func.name);
     let zero_i32 = LLVMConstInt(LLVMInt32TypeInContext(ctx), 0, FALSE);
-    let blocks = (0..func.block_count).map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) ).collect::<Vec<_>>();
+    let blocks = (0..ir.block_count).map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) ).collect::<Vec<_>>();
 
     let mut instructions = Vec::new();
 
@@ -152,18 +151,14 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             let i = r.into_ref().unwrap() as usize;
             let r = instructions[i];
             debug_assert!(!r.is_null());
-            (r, func.types.get(func.inst[i].ty))
+            (r, ir.types.get(ir.inst[i].ty))
         }
     };
     let get_ref = |instructions: &[LLVMValueRef], r: ir::Ref| get_ref_and_type(instructions, r).0;
 
     let table_ty = |ty: ir::TypeTableIndex| {
-        let info = func.types.get(ty);
-        let type_ref = match info {
-            ir::Type::Prim(p) => ir::TypeRef::Primitive(p),
-            ir::Type::Id(id) => ir::TypeRef::Resolved(id),
-        };
-        llvm_ty(ctx, types, &type_ref)
+        let info = ir.types.get(ty);
+        llvm_ty(ctx, types, &info)
     };
     #[derive(Clone, Copy, Debug)]
     enum Numeric { Float(u32), Int(bool, u32) }
@@ -186,9 +181,9 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             t => panic!("Invalid type for int/float operation: {t}")
         }
     };
-    let float_or_int = |ty: ir::TypeTableIndex| info_to_num(func.types.get(ty));
+    let float_or_int = |ty: ir::TypeTableIndex| info_to_num(ir.types.get(ty));
 
-    for (i, inst) in func.inst.iter().enumerate() {
+    for (i, inst) in ir.inst.iter().enumerate() {
         let ir::Instruction { tag, data, span: _, ty } = inst;
         crate::log!("Generating {tag:?}");
         let val: LLVMValueRef = match tag {
@@ -205,7 +200,7 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
                 }
             }
             ir::Tag::Param => {
-                let param_var = LLVMBuildAlloca(builder, llvm_ty(ctx, types, &header.params[data.int32 as usize].1), NONE);
+                let param_var = LLVMBuildAlloca(builder, llvm_ty(ctx, types, &func.params[data.int32 as usize].1), NONE);
                 let val = LLVMGetParam(llvm_func, data.int32);
                 LLVMBuildStore(builder, val, param_var);
                 param_var
@@ -213,7 +208,7 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             ir::Tag::Int => LLVMConstInt(table_ty(*ty), data.int, FALSE),
             ir::Tag::LargeInt => {
                 let mut bytes = [0; 16];
-                bytes.copy_from_slice(&func.extra[data.extra as usize .. data.extra as usize + 16]);
+                bytes.copy_from_slice(&ir.extra[data.extra as usize .. data.extra as usize + 16]);
                 let num = u128::from_le_bytes(bytes);
                 let words = [(num >> 64) as u64, (num as u64)];
                 LLVMConstIntOfArbitraryPrecision(table_ty(*ty), 2, words.as_ptr())
@@ -222,17 +217,17 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty), NONE),
             ir::Tag::Load => LLVMBuildLoad(builder, get_ref(&instructions, data.un_op), NONE),
             ir::Tag::Store => LLVMBuildStore(builder, get_ref(&instructions, data.bin_op.1), get_ref(&instructions, data.bin_op.0)),
-            ir::Tag::String => LLVMBuildGlobalStringPtr(builder, func.extra.as_ptr().add(data.extra_len.0 as usize) as _, NONE),
+            ir::Tag::String => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize) as _, NONE),
             ir::Tag::Call => {
                 let begin = data.extra_len.0 as usize;
                 let mut func_id = [0; 8];
-                func_id.copy_from_slice(&func.extra[begin..begin+8]);
+                func_id.copy_from_slice(&ir.extra[begin..begin+8]);
                 let func_id = u64::from_le_bytes(func_id);
                 let llvm_func = funcs[func_id as usize];
 
                 let mut r_bytes = [0; 4];
                 let mut args = (0..data.extra_len.1 as usize).map(|i| {
-                    r_bytes.copy_from_slice(&func.extra[begin + 8 + 4*i..begin + 8 + 4*(i+1)]);
+                    r_bytes.copy_from_slice(&ir.extra[begin + 8 + 4*i..begin + 8 + 4*(i+1)]);
                     get_ref(&instructions, ir::Ref::from_bytes(r_bytes))
                 }).collect::<Vec<_>>();
                 LLVMBuildCall(builder, llvm_func, args.as_mut_ptr(), args.len() as u32, NONE)
@@ -378,23 +373,23 @@ unsafe fn build_func(header: &ir::FunctionHeader, func: &ir::FunctionIr, ctx: LL
             ir::Tag::Branch => {
                 let mut bytes = [0; 4];
                 let begin = data.branch.1 as usize;
-                bytes.copy_from_slice(&func.extra[begin .. begin+4]);
+                bytes.copy_from_slice(&ir.extra[begin .. begin+4]);
                 let then = u32::from_le_bytes(bytes);
-                bytes.copy_from_slice(&func.extra[begin+4 .. begin+8]);
+                bytes.copy_from_slice(&ir.extra[begin+4 .. begin+8]);
                 let else_ = u32::from_le_bytes(bytes);
 
                 LLVMBuildCondBr(builder, get_ref(&instructions, data.branch.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
-                if func.types.get(*ty) != Type::Prim(Primitive::Unit) {
+                if ir.types.get(*ty) != Type::Prim(Primitive::Unit) {
                     let phi = LLVMBuildPhi(builder, table_ty(*ty), NONE);
                     let begin = data.extra_len.0 as usize;
                     for i in 0..data.extra_len.1 {
                         let c = begin + i as usize * 8;
                         let mut b = [0; 4];
-                        b.copy_from_slice(&func.extra[c..c+4]);
+                        b.copy_from_slice(&ir.extra[c..c+4]);
                         let block = u32::from_le_bytes(b);
-                        b.copy_from_slice(&func.extra[c+4..c+8]);
+                        b.copy_from_slice(&ir.extra[c+4..c+8]);
                         let r = ir::Ref::from_bytes(b);
                         let mut block = blocks[block as usize];
                         LLVMAddIncoming(phi, &mut get_ref(&instructions, r), &mut block, 1)

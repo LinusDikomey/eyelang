@@ -81,7 +81,7 @@ impl FinalTypeTable {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Type {
     Prim(Primitive),
     Id(SymbolKey)
@@ -94,6 +94,7 @@ impl fmt::Display for Type {
         }
     }
 }
+
 
 #[derive(Clone, Copy, Debug)]
 struct TypeIdx(u32);

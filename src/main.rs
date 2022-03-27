@@ -112,18 +112,14 @@ fn run(
     args: &Args,
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
-    let (modules, _main, mut errors) = compile::path(path, args);
-    if errors.has_errors() {
-        return Err((modules, errors));
-    }
-    let ir = ir::reduce(&modules, &mut errors);
+    let (modules, _main, errors) = compile::path(path, args);
+    //if errors.has_errors() { return Err((modules, errors)); }
+    let ir = match ir::reduce(&modules, errors) {
+        Ok(ir) => ir,
+        Err(err) => return Err((modules, err))
+    };
 
     log!("\n\n{ir}\n");
-
-
-    if errors.has_errors() {
-        return Err((modules, errors));
-    }
 
     match args.cmd {
         #[cfg(feature = "llvm-backend")]

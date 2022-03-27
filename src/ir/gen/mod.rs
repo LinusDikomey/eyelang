@@ -11,12 +11,12 @@ use super::{typing::*, *};
 mod scope;
 mod types;
 
-pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
+pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Errors> {
     let mut ctx = TypingCtx {
         funcs: Vec::new(),
         types: Vec::new(),
     };
-    let globals = types::gen_globals(modules, &mut ctx, errors);
+    let globals = types::gen_globals(modules, &mut ctx, &mut errors);
 
     for (id, ast) in modules.iter() {
         let mut scope = Scope::new(&mut ctx, &globals[id.idx()], &globals, id);
@@ -48,7 +48,7 @@ pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
                         }
                         let expected = builder.types.add(header.return_type.into());
                         let (val, block) = scope.reduce_block_or_expr(
-                            errors,
+                            &mut errors,
                             &mut builder,
                             body,
                             expected,
@@ -77,19 +77,22 @@ pub fn reduce(modules: &ast::Modules, errors: &mut Errors) -> Module {
             }
         }
     }
+    if errors.has_errors() {
+        return Err(errors);
+    }
     let funcs = ctx
         .funcs
         .into_iter()
         .map(|func| match func {
             FunctionOrHeader::Header(_) => panic!("Function was generated"),
-            FunctionOrHeader::Func(func) => func,
+            FunctionOrHeader::Func(func) => func.finalize(),
         })
         .collect();
-    Module {
+    Ok(Module {
         name: "MainModule".to_owned(),
         funcs,
-        types: ctx.types,
-    }
+        types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
+    })
 }
 
 struct IrBuilder {

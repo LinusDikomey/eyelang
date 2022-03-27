@@ -1,5 +1,6 @@
 main ->: print("Hello")
 
+# invalid integer types
 InvalidTypes :: {
     valid u32,
     invalid u33,

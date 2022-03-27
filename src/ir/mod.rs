@@ -23,20 +23,30 @@ pub struct Function {
     pub header: FunctionHeader,
     pub ir: Option<FunctionIr>
 }
-
 impl Function {
     pub fn header(&self) -> &FunctionHeader { &self.header }
+    pub fn finalize(self) -> FinalFunction {
+        FinalFunction {
+            name: self.name,
+            params: self.header.params.into_iter()
+                .map(|(name, ty)| (name, ty.finalize()))
+                .collect(),
+                varargs: self.header.varargs,
+                return_type: self.header.return_type.finalize(),
+                ir: self.ir
+            }
+    }
 }
-impl fmt::Display for Function {
+impl fmt::Display for FinalFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(")?;
-        for (i, (name, param)) in self.header.params.iter().enumerate() {
+        for (i, (name, param)) in self.params.iter().enumerate() {
             if i != 0 {
                 write!(f, ", ")?;
             }
             write!(f, "{name} {param}")?;
         }
-        writeln!(f, ") -> {}", self.header.return_type)?;
+        writeln!(f, ") -> {}", self.return_type)?;
 
         let write_ref = |f: &mut fmt::Formatter, r: Ref| {
             if let Some(val) = r.into_val() {
@@ -148,6 +158,14 @@ impl fmt::Display for Function {
     }
 }
 
+pub struct FinalFunction {
+    pub name: String,
+    pub params: Vec<(String, Type)>,
+    pub varargs: bool,
+    pub return_type: Type,
+    pub ir: Option<FunctionIr>
+}
+
 pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
@@ -168,11 +186,29 @@ pub struct FunctionHeader {
 pub enum TypeDef {
     Struct(Struct)
 }
+impl TypeDef {
+    pub fn finalize(self) -> FinalTypeDef {
+        match self {
+            Self::Struct(struct_) => {
+                FinalTypeDef::Struct(FinalStruct {
+                    members: struct_.members.into_iter()
+                        .map(|(name, member)| (name, member.finalize()))
+                        .collect(),
+                    name: struct_.name
+                })
+            }
+        }
+    }
+}
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let TypeDef::Struct(struct_) = self;
         write!(f, "{struct_}")
     }
+}
+
+pub enum FinalTypeDef {
+    Struct(FinalStruct)
 }
 
 #[derive(Debug, Clone)]
@@ -189,12 +225,36 @@ impl fmt::Display for Struct {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FinalStruct {
+    pub members: Vec<(String, Type)>,
+    pub name: String
+}
+impl fmt::Display for FinalStruct {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (name, member) in &self.members {
+            writeln!(f, "  {name} {member}")?;
+        }
+        Ok(())
+    }
+}
+
 //TODO: fit type ref into u64 by offsetting symbol key references by the amount of primitives
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeRef {
     Primitive(Primitive),
     Resolved(SymbolKey),
     Invalid,
+}
+impl TypeRef {
+    pub fn finalize(self) -> Type {
+        match self {
+            Self::Primitive(p) => Type::Prim(p),
+            Self::Resolved(id) => Type::Id(id),
+            Self::Invalid =>
+                panic!("Tried to finalize invalid type. Finalization shouldn't happen with errors present"),
+        }
+    }
 }
 impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -208,12 +268,12 @@ impl fmt::Display for TypeRef {
 
 pub struct Module {
     pub name: String,
-    pub funcs: Vec<Function>,
-    pub types: Vec<TypeDef>,
+    pub funcs: Vec<FinalFunction>,
+    pub types: Vec<FinalTypeDef>,
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for TypeDef::Struct(struct_) in &self.types {
+        for FinalTypeDef::Struct(struct_) in &self.types {
             let name = &struct_.name;
             writeln!(f, "{begin} {name}\n{}{end} {name}\n",
                 struct_,
