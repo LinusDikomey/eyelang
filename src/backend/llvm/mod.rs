@@ -184,7 +184,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
     let float_or_int = |ty: ir::TypeTableIndex| info_to_num(ir.types.get(ty));
 
     for (i, inst) in ir.inst.iter().enumerate() {
-        let ir::Instruction { tag, data, span: _, ty } = inst;
+        let ir::Instruction { tag, data, span: _, ty, used: _} = inst;
         crate::log!("Generating {tag:?}");
         let val: LLVMValueRef = match tag {
             ir::Tag::BlockBegin => {

@@ -81,21 +81,6 @@ impl FinalTypeTable {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Type {
-    Prim(Primitive),
-    Id(SymbolKey)
-}
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Prim(p) => write!(f, "{p}"),
-            Self::Id(id) => write!(f, "{{t{}}}", id.idx()),
-        }
-    }
-}
-
-
 #[derive(Clone, Copy, Debug)]
 struct TypeIdx(u32);
 impl TypeIdx {    

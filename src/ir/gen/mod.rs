@@ -6,10 +6,13 @@ use crate::{
 };
 use std::{borrow::Cow, collections::HashMap, ptr::NonNull};
 
+use self::builder::IrBuilder;
+
 use super::{typing::*, *};
 
 mod scope;
 mod types;
+mod builder;
 
 pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Errors> {
     let mut ctx = TypingCtx {
@@ -57,14 +60,9 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
                         if block == false
                             || header.return_type == TypeRef::Primitive(Primitive::Unit)
                         {
-                            builder.add(Data { un_op: val }, Tag::Ret, TypeTableIndex::NONE);
+                            builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
                         }
-                        FunctionIr {
-                            inst: builder.ir,
-                            extra: builder.extra_data,
-                            types: builder.types.finalize(),
-                            block_count: builder.next_block,
-                        }
+                        builder.finish()
                     });
 
                     scope.ctx.funcs[func.idx()] = FunctionOrHeader::Func(Function {
@@ -93,104 +91,6 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
         funcs,
         types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
     })
-}
-
-struct IrBuilder {
-    module: ModuleId,
-    ir: Vec<Instruction>,
-    current_block: u32,
-    next_block: u32,
-    types: TypeTable,
-    extra_data: Vec<u8>,
-}
-impl IrBuilder {
-    pub fn new(module: ModuleId) -> Self {
-        Self {
-            module,
-            ir: vec![Instruction {
-                data: Data { int32: 0 },
-                tag: Tag::BlockBegin,
-                span: Span::new(0, 0, module),
-                ty: TypeTableIndex::NONE,
-            }],
-            current_block: 0,
-            next_block: 1,
-            types: TypeTable::new(),
-            extra_data: Vec::new(),
-        }
-    }
-
-    pub fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
-        let idx = self.ir.len() as u32;
-        self.ir.push(Instruction {
-            data,
-            tag,
-            ty,
-            span: Span::todo(self.module),
-        });
-        Ref::index(idx)
-    }
-
-    pub fn add_untyped(&mut self, data: Data, tag: Tag) {
-        self.ir.push(Instruction {
-            data,
-            tag,
-            ty: TypeTableIndex::NONE,
-            span: Span::todo(self.module),
-        })
-    }
-
-    pub fn extra_data<'a>(&mut self, bytes: &[u8]) -> u32 {
-        let idx = self.extra_data.len() as u32;
-        self.extra_data.extend(bytes);
-        idx
-    }
-
-    pub fn _extra_len(&mut self, bytes: &[u8]) -> (u32, u32) {
-        (self.extra_data(bytes), bytes.len() as u32)
-    }
-
-    pub fn create_block(&mut self) -> BlockIndex {
-        let idx = BlockIndex(self.next_block);
-        self.next_block += 1;
-        idx
-    }
-
-    pub fn begin_block(&mut self, idx: BlockIndex) {
-        debug_assert!(
-            matches!(
-                self.ir[self.ir.len() - 1].tag,
-                Tag::Branch | Tag::Goto | Tag::Ret
-            ),
-            "Can't begin next block without exiting previous one (Branch/Goto/Ret)"
-        );
-
-        self.current_block = idx.0;
-        self.ir.push(Instruction {
-            data: Data { int32: idx.0 },
-            tag: Tag::BlockBegin,
-            ty: TypeTableIndex::NONE,
-            span: Span::todo(self.module),
-        });
-    }
-
-    pub fn _create_and_begin_block(&mut self) -> BlockIndex {
-        let block = self.create_block();
-        self.begin_block(block);
-        block
-    }
-
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
-        self.types.specify(idx, info, errors, self.module)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct BlockIndex(u32);
-impl BlockIndex {
-    fn bytes(&self) -> [u8; 4] {
-        self.0.to_le_bytes()
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -580,7 +480,7 @@ impl<'s> Scope<'s> {
                 Ref::UNDEF
             }
         };
-        ir.add(Data { bin_op: (var, val) }, Tag::Store, expected);
+        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
     }
 
     fn reduce_lval_expr(
@@ -617,7 +517,7 @@ impl<'s> Scope<'s> {
             ast::Expr::Return(ret_val) => {
                 let r = self.reduce_expr_val(errors, ir, ret_val, ret, ret);
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
-                ir.add_untyped(Data { un_op: r }, Tag::Ret);
+                ir.add_untyped(Tag::Ret, Data { un_op: r });
                 Ref::val(RefVal::Undef)
             }
             ast::Expr::IntLiteral(lit) => {
@@ -686,26 +586,16 @@ impl<'s> Scope<'s> {
                 let branch_extra = ir.extra_data(&then_block.0.to_le_bytes());
                 ir.extra_data(&other_block.0.to_le_bytes());
 
-                ir.add_untyped(
-                    Data {
-                        branch: (cond, branch_extra),
-                    },
-                    Tag::Branch,
-                );
+                ir.add_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
                 ir.begin_block(then_block);
 
                 let val = if let Some(else_) = else_ {
                     let after_block = ir.create_block();
                     let (then_val, _) = self.reduce_block_or_expr(errors, ir, then, expected, ret);
-                    ir.add_untyped(Data { int32: after_block.0, }, Tag::Goto);
+                    ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(other_block);
                     let (else_val, _) = self.reduce_block_or_expr(errors, ir, else_, expected, ret);
-                    ir.add_untyped(
-                        Data {
-                            int32: after_block.0,
-                        },
-                        Tag::Goto,
-                    );
+                    ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(after_block);
 
                     let extra = ir.extra_data(&then_block.bytes());
@@ -723,12 +613,7 @@ impl<'s> Scope<'s> {
                     ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                     let then_ty = ir.types.add(TypeInfo::Unknown);
                     self.reduce_block_or_expr(errors, ir, then, then_ty, ret);
-                    ir.add_untyped(
-                        Data {
-                            int32: other_block.0,
-                        },
-                        Tag::Goto,
-                    );
+                    ir.add_untyped(Tag::Goto, Data { int32: other_block.0 });
                     ir.begin_block(other_block);
 
                     Ref::val(RefVal::Unit)
@@ -744,7 +629,7 @@ impl<'s> Scope<'s> {
                 let body_block = ir.create_block();
                 let after_block = ir.create_block();
 
-                ir.add_untyped(Data { int32: cond_block.0 }, Tag::Goto);
+                ir.add_untyped(Tag::Goto, Data { int32: cond_block.0 });
                 ir.begin_block(cond_block);
                 
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
@@ -752,11 +637,11 @@ impl<'s> Scope<'s> {
 
                 let branch_extra = ir.extra_data(&body_block.0.to_le_bytes());
                 ir.extra_data(&after_block.0.to_le_bytes());
-                ir.add_untyped(Data { branch: (cond, branch_extra) }, Tag::Branch);
+                ir.add_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
                 ir.begin_block(body_block);
                 let body_ty = ir.types.add(TypeInfo::Unknown);
                 self.reduce_block_or_expr(errors, ir, body, body_ty, ret);
-                ir.add_untyped(Data { int32: cond_block.0 }, Tag::Goto);
+                ir.add_untyped(Tag::Goto, Data { int32: cond_block.0 });
                 ir.begin_block(after_block);
                 Ref::val(RefVal::Unit)
             }
@@ -827,12 +712,7 @@ impl<'s> Scope<'s> {
                                     Tag::Member,
                                     member_ty,
                                 );
-                                ir.add_untyped(
-                                    Data {
-                                        bin_op: (member, member_val),
-                                    },
-                                    Tag::Store,
-                                );
+                                ir.add_untyped(Tag::Store, Data { bin_op: (member, member_val) });
                             }
                             return ExprResult::Stored(var);
                         }
@@ -899,7 +779,8 @@ impl<'s> Scope<'s> {
                         };
                         ir.add(Data { bin_op: (left_val, r) }, tag, var_ty)
                     };
-                    ir.add(Data { bin_op: (lval, val) }, Tag::Store, var_ty)
+                    ir.add_untyped(Tag::Store, Data { bin_op: (lval, val) });
+                    Ref::UNDEF
                 } else {
                     let is_boolean = matches!(
                         op,
@@ -955,7 +836,7 @@ impl<'s> Scope<'s> {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                     ExprResult::Val(val) => {
                         let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
-                        ir.add(Data { bin_op: (var, val) }, Tag::Store, expected);
+                        ir.add_unused(Tag::Store, Data { bin_op: (var, val) }, expected);
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Func(_) | ExprResult::Type(_) => {

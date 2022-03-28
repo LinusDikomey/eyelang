@@ -1,14 +1,26 @@
 use std::fmt;
 use colored::Colorize;
 use crate::{types::Primitive, lexer::Span};
-
+use typing::FinalTypeTable;
 
 mod gen;
 mod typing;
 
 pub use gen::reduce;
-pub use typing::Type;
-use typing::FinalTypeTable;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Type {
+    Prim(Primitive),
+    Id(SymbolKey)
+}
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Prim(p) => write!(f, "{p}"),
+            Self::Id(id) => write!(f, "{{t{}}}", id.idx()),
+        }
+    }
+}
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
@@ -298,7 +310,8 @@ pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
     pub ty: TypeTableIndex,
-    pub span: Span
+    pub span: Span,
+    pub used: bool
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -366,6 +379,10 @@ impl Tag {
             Tag::Branch => Branch,
             Tag::Phi => ExtraBranchRefs
         }
+    }
+
+    pub fn is_untyped(&self) -> bool {
+        matches!(*self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
     }
 }
 
@@ -447,11 +464,26 @@ pub union Data {
     pub member: (Ref, u32),
     pub cast: (Ref, Primitive),
     pub branch: (Ref, u32),
-    pub none: ()
+    pub none: (),
+    pub block: BlockIndex
 }
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", unsafe { self.int })
+    }
+}
+
+
+#[derive(Clone, Copy)]
+pub struct BlockIndex(u32);
+impl BlockIndex {
+    pub fn bytes(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+}
+impl fmt::Display for BlockIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "b{}", self.0)
     }
 }
 

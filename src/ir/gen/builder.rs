@@ -1,7 +1,4 @@
-use std::fmt;
-
-use crate::{ast::ModuleId, ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr}, lexer::Span, error::Errors};
-
+use crate::{ast::ModuleId, ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex}, lexer::Span, error::Errors};
 
 pub struct IrBuilder {
     module: ModuleId,
@@ -29,12 +26,9 @@ impl IrBuilder {
         }
     }
 
-    #[must_use]
+    #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     pub fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
-        #[cfg(debug_assertions)]
-        {
-            assert!(!tag.is_untyped(), "IR Tag {tag:?} doesn't need a type");
-        }
+        debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
         let idx = self.ir.len() as u32;
         self.ir.push(Instruction {
             data,
@@ -46,27 +40,8 @@ impl IrBuilder {
         Ref::index(idx)
     }
 
-    pub fn add_unused(&mut self, data: Data, tag: Tag, ty: Option<TypeTableIndex>) {
-        #[cfg(debug_assertions)]
-        {
-            assert_eq!(ty.is_none(), tag.is_untyped());
-        }
-        self.ir.push(Instruction {
-            data,
-            tag,
-            ty: ty.unwrap_or(TypeTableIndex::NONE),
-            span: Span::todo(self.module),
-            used: false
-        });
-    }
-
-
-
-    pub fn add_untyped(&mut self, data: Data, tag: Tag) {
-        #[cfg(debug_assertions)]
-        {
-            assert!(tag.is_untyped(), "IR Tag {tag:?} needs a type");
-        }
+    pub fn add_untyped(&mut self, tag: Tag, data: Data) {
+        debug_assert!(tag.is_untyped(), "The IR instruction {tag:?} needs a type");
         self.ir.push(Instruction {
             data,
             tag,
@@ -74,6 +49,28 @@ impl IrBuilder {
             span: Span::todo(self.module),
             used: false
         })
+    }
+
+    pub fn add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
+        debug_assert!(!tag.is_untyped(), "The unused IR instruction {tag:?} doesn't need a type");
+        self.ir.push(Instruction {
+            data,
+            tag,
+            ty: ty,
+            span: Span::todo(self.module),
+            used: false
+        });
+    }
+
+    pub fn add_unused_untyped(&mut self, tag: Tag, data: Data) {
+        debug_assert!(tag.is_untyped(), "The unused IR instruction {tag:?} needs a type");
+        self.ir.push(Instruction {
+            data,
+            tag,
+            ty: TypeTableIndex::NONE,
+            span: Span::todo(self.module),
+            used: false
+        });
     }
 
     pub fn extra_data<'a>(&mut self, bytes: &[u8]) -> u32 {
@@ -128,19 +125,5 @@ impl IrBuilder {
 
     pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
         self.types.specify(idx, info, errors, self.module)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct BlockIndex(u32);
-impl BlockIndex {
-    pub fn bytes(&self) -> [u8; 4] {
-        self.0.to_le_bytes()
-    }
-    pub fn idx(self) -> usize { self.0 as usize }
-}
-impl fmt::Display for BlockIndex {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "b{}", self.0)
     }
 }

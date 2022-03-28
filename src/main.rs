@@ -7,17 +7,16 @@ mod lexer;
 mod parser;
 mod types;
 mod ir;
+#[cfg(feature = "llvm-backend")]
 mod link;
 mod compile;
-
-#[cfg(feature = "llvm-backend")]
-mod llvm_codegen;
+mod backend;
 
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
 use crate::error::Errors;
-use std::{path::Path, sync::atomic::AtomicBool, process::Command};
+use std::{path::Path, sync::atomic::AtomicBool};
 use clap::StructOpt;
 use colored::Colorize;
 
@@ -35,12 +34,20 @@ pub(crate) use log;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
 enum Cmd {
+    /// Check a file or project for errors and warnings. 
+    Check,
     /// Build an executable and run it immediately.
+    #[cfg(feature = "llvm-backend")]
     Run,
     /// Build an executable.
+    #[cfg(feature = "llvm-backend")]
     Build,
     /// Compile and run using LLVMs JIT compiler. Might produce different results.
+    #[cfg(feature = "llvm-backend")]
     Jit,
+    /// Run with a self-implemented x86 backend. Will emit completely unoptimized code.
+    /// This backend is primarily used for fast compilations.
+    X86Run,
 }
 
 #[derive(clap::Parser)]
@@ -61,17 +68,6 @@ pub struct Args {
     /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
     #[clap(long)]
     link_cmd: Option<String>,
-}
-impl Default for Args {
-    fn default() -> Self {
-        Self {
-            cmd: Cmd::Run,
-            file: "eye/test.eye".to_owned(),
-            reconstruct_src: false,
-            log: false,
-            link_cmd: None,
-        }
-    }
 }
 
 fn main() {
@@ -122,13 +118,17 @@ fn run(
     log!("\n\n{ir}\n");
 
     match args.cmd {
+        Cmd::Check => {
+            let _ = output_name;
+            println!("{}", "Check successful ✅".green());
+        }
         #[cfg(feature = "llvm-backend")]
         Cmd::Run | Cmd::Build | Cmd::Jit => unsafe {
             let context = llvm::core::LLVMContextCreate();
-            let llvm_module = llvm_codegen::module(context, &ir);
+            let llvm_module = backend::llvm::module(context, &ir);
             if args.cmd == Cmd::Jit {
                 println!("{}", "JIT running...\n".green());
-                let ret_val = llvm_codegen::output::run_jit(llvm_module);
+                let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
                 println!("\nResult of main function: {ret_val}");
@@ -141,14 +141,14 @@ fn run(
                 }
                 let obj_file = format!("eyebuild/{output_name}.o");
                 let exe_file = format!("./eyebuild/{output_name}");
-                llvm_codegen::output::emit_bitcode(None, llvm_module, &obj_file);
+                backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
                 link::link(&obj_file, &exe_file, args);
                 if args.cmd == Cmd::Run {
                     println!("{}", format!("Running {}...", &args.file).green());
 
-                    Command::new(exe_file)
+                    std::process::Command::new(exe_file)
                         .spawn()
                         .expect("Failed to run")
                         .wait()
@@ -158,6 +158,12 @@ fn run(
                 }
             }
         }
+        Cmd::X86Run => {
+            let asm_file = std::fs::File::create(format!("./eyebuild/{output_name}.asm"))
+                .expect("Failed to create assembly file");
+            unsafe { backend::x86::emit(&ir, asm_file) };
+        }
+        
     }
     Ok(())
 }
