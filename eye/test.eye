@@ -47,12 +47,24 @@ main -> {
     
     i := 5
     while i < 10: i = incAndPrint(i)
-    bye()
-}
+    incAndPrint(i i32) -> i32 {
+        printf("I is %d\n", i)
+        ret i + 1
+    }
 
-incAndPrint(i i32) -> i32 {
-    printf("I is %d\n", i)
-    ret i + 1
+    {
+        obj := PhysicsObject(Vec3(1, 2, 3), Vec3(4, 5, 6))
+        printf("Physics Object: %d\n", obj.pos.y + obj.rot.z)
+        PhysicsObject :: {
+            pos Vec3,
+            rot Vec3
+        }
+        Vec3 :: { x i32, y i32, z i32 }
+    }
+    # Here Vec3 means Vec3 from the global scope again
+    v := Vec3(1., 2.5, 3.141)
+    printVec3(v)
+    bye()
 }
 
 Vec3 :: {

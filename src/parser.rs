@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
                 Err(err) => {
                     match block_item {
                         Parsed::Item(_) => unreachable!(),
-                        Parsed::Error(parse_err) => { dbg!((err, parse_err)); Err(parse_err) },
+                        Parsed::Error(parse_err) => { Err(parse_err) },
                         Parsed::None => Err(err),
                     }
                 }

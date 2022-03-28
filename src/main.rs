@@ -1,4 +1,4 @@
-#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists, array_windows)]
+#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists, array_windows, bool_to_option)]
 #![warn(unused_qualifications)]
 
 mod ast;

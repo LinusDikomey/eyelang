@@ -10,6 +10,5 @@ Also contains a basic tree-walk interpreter that is being used for running progr
 - [ ] Arrays
 
 # current tasks
-- Definitions inside functions
 - Flow analysis (return, assignment, etc.)
 - Error position info during/after ir generation

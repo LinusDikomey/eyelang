@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use crate::{ast::{Modules, ModuleId, StructDefinition, self, UnresolvedType}, error::{Errors, Error}};
-
-use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeader};
+use crate::{
+    ast::{Modules, ModuleId, StructDefinition, self, UnresolvedType},
+    error::{Errors, Error},
+    ir::gen::FunctionOrHeader
+};
+use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeader, Scope};
 
 pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) -> Vec<HashMap<String, Symbol>> {
     let mut symbols = (0..modules.len()).map(|_| HashMap::new()).collect::<Vec<_>>();
@@ -10,13 +13,143 @@ pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) 
     for (module_id, module) in modules.iter() {
         for (name, def) in &module.definitions {
             match def {
-                ast::Definition::Function(func) => { add_func(ctx, modules, &mut symbols, func, module_id, name, errors); }
-                ast::Definition::Struct(struct_) => { add_struct(ctx, modules, &mut symbols, struct_, module_id, name, errors); }
+                ast::Definition::Function(func) => {
+                    add_func(ctx, modules, &mut symbols, func, module_id, name, errors);
+                }
+                ast::Definition::Struct(struct_) => {
+                    add_struct(ctx, modules, &mut symbols, struct_, module_id, name, errors);
+                }
                 ast::Definition::Module(module) => {
                     symbols[module_id.idx()].insert(name.clone(), Symbol::Module(*module));
                 }
             }
         }
+    }
+
+    symbols
+}
+
+pub fn gen_locals(
+    scope: &mut Scope,
+    defs: &HashMap<String, ast::Definition>,
+    errors: &mut Errors
+) -> HashMap<String, Symbol> {
+    fn ty(
+        ty: &UnresolvedType,
+        symbols: &mut HashMap<String, Symbol>,
+        defs: &HashMap<String,
+        ast::Definition>,
+        scope: &mut Scope,
+        errors: &mut Errors
+    ) -> TypeRef {
+        match ty {
+            UnresolvedType::Primitive(p) => TypeRef::Primitive(*p),
+            UnresolvedType::Unresolved(path) => {
+                let (root, segments, last) = path.segments();
+                let Some(last) = last else {
+                    errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                    return TypeRef::Invalid
+                };
+                let mut current_module = root.then_some(ModuleId::ROOT);
+
+                for segment in segments {
+                    if let Some(module) = current_module {
+                        match scope.globals[module.idx()].get(segment) {
+                            Some(Symbol::Module(id)) => current_module = Some(*id),
+                            Some(_) => {
+                                errors.emit(Error::ModuleExpected, 0, 0, scope.module);
+                                return TypeRef::Invalid
+                            }
+                            None => {
+                                errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                                return TypeRef::Invalid
+                            }
+                        }
+
+                    }
+                }
+
+                let mut symbol_to_ty = |symbol: &Symbol| {
+                    match symbol {
+                        Symbol::Type(key) => TypeRef::Resolved(*key),
+                        _ => {
+                            errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                            TypeRef::Invalid
+                        }
+                    }
+                };
+                if let Some(module) = current_module {
+                    let Some(symbol) = scope.globals[module.idx()].get(last) else {
+                        errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                        return TypeRef::Invalid;
+                    };
+                    symbol_to_ty(symbol)
+
+                } else {
+                    if let Some(symbol) = symbols.get(last) {
+                        symbol_to_ty(symbol)
+                    } else if let Some(def) = defs.get(last) {
+                        if let ast::Definition::Struct(struct_) = def {
+                            gen_struct(last, struct_, symbols, defs, scope, errors)
+                        } else {
+                            errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                            TypeRef::Invalid
+                        }
+                    } else {
+                        errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                        TypeRef::Invalid
+                    }
+                }
+            }
+        }
+    }
+
+    fn gen_struct(
+        name: &String,
+        struct_: &StructDefinition,
+        symbols: &mut HashMap<String, Symbol>,
+        defs: &HashMap<String, ast::Definition>,
+        scope: &mut Scope,
+        errors: &mut Errors
+    ) -> TypeRef {
+        let members = struct_.members.iter()
+            .map(|(name, unresolved, _, _)| {
+                (name.clone(), ty(unresolved, symbols, defs, scope, errors))
+            })
+            .collect();
+
+        let idx = scope.ctx.add_type(TypeDef::Struct(super::Struct { name: name.clone(), members }));
+        symbols.insert(name.clone(), Symbol::Type(idx));
+        TypeRef::Resolved(idx)
+    }
+
+    let mut symbols = HashMap::with_capacity(defs.len());
+
+    for (name, def) in defs {
+        if symbols.contains_key(name) { continue }
+
+        match def {
+            ast::Definition::Function(func) => {
+                let params = func.params.iter()
+                    .map(|(name, unresolved, _, _)| {
+                        (name.clone(), ty(unresolved, &mut symbols, defs, scope, errors))
+                    })
+                    .collect();
+                let return_type = ty(&func.return_type.0, &mut symbols, defs, scope, errors);
+                symbols.insert(name.clone(), Symbol::Func(scope.ctx.add_func(FunctionOrHeader::Header(FunctionHeader {
+                    name: name.clone(),
+                    params,
+                    varargs: func.varargs,
+                    return_type,
+                }))));
+            }
+            ast::Definition::Struct(struct_) => {
+                gen_struct(name, struct_, &mut symbols, defs, scope, errors);
+            }
+            ast::Definition::Module(id) => {
+                symbols.insert(name.clone(), Symbol::Module(*id));
+            }
+        };
     }
 
     symbols

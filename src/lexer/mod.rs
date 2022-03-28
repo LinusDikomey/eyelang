@@ -56,7 +56,7 @@ impl<'a> Lexer<'a> {
 
         let mut invalid_chars = None;
         fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors, module: ModuleId) {
-            if let Some((start, end)) = *invalid {
+            if let Some((start, end)) = invalid.take() {
                 errors.emit(
                     Error::UnexpectedCharacters,
                     start,
@@ -64,12 +64,12 @@ impl<'a> Lexer<'a> {
                     module
                 );
             }
-            *invalid = None;
         }
 
         let ty = loop {
             start = self.pos();
             if self.is_at_end() {
+                emit_invalid(&mut invalid_chars, errors, self.module);
                 return None;
             }
             break match self.current() {
@@ -94,7 +94,6 @@ impl<'a> Lexer<'a> {
                     self.skip_junk();
                     continue;
                 }
-                //';' => TokenType::Semicolon,
                 ':' => {
                     match self.peek() {
                         Some(':') => { self.step(); TokenType::DoubleColon },

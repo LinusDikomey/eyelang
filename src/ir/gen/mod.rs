@@ -24,56 +24,9 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
     for (id, ast) in modules.iter() {
         let mut scope = Scope::new(&mut ctx, &globals[id.idx()], &globals, id);
 
-        for (name, def) in &ast.definitions {
-            let module_globals = &globals[id.idx()];
-            match def {
-                ast::Definition::Function(def) => {
-                    let Symbol::Func(func) = module_globals.get(name)
-                        .expect("Missing function after global definition phase")
-                        else { panic!("Function expected") };
-                    let header = match &scope.ctx.funcs[func.idx()] {
-                        FunctionOrHeader::Func(_) => {
-                            unreachable!("Function shouldn't already be defined here")
-                        }
-                        FunctionOrHeader::Header(header) => header.clone(),
-                    };
-                    let ir = def.body.as_ref().map(|body| {
-                        let mut builder = IrBuilder::new(id);
-                        let mut scope: Scope<'_> = scope.child();
-                        for (i, (name, ty)) in header.params.iter().enumerate() {
-                            let ty = builder.types.add((*ty).into());
-                            let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
-                            scope
-                                .info
-                                .symbols
-                                .to_mut()
-                                .insert(name.clone(), Symbol::Var { ty, var: param });
-                        }
-                        let expected = builder.types.add(header.return_type.into());
-                        let (val, block) = scope.reduce_block_or_expr(
-                            &mut errors,
-                            &mut builder,
-                            body,
-                            expected,
-                            expected,
-                        );
-                        if block == false
-                            || header.return_type == TypeRef::Primitive(Primitive::Unit)
-                        {
-                            builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
-                        }
-                        builder.finish()
-                    });
-
-                    scope.ctx.funcs[func.idx()] = FunctionOrHeader::Func(Function {
-                        name: name.clone(),
-                        header,
-                        ir,
-                    });
-                }
-                _ => {}
-            }
-        }
+        gen_func_bodies(&mut scope, &ast.definitions, &mut errors,
+            |scope, name| scope.globals[scope.module.idx()].get(name)
+        );
     }
     if errors.has_errors() {
         return Err(errors);
@@ -93,7 +46,62 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
     })
 }
 
-#[derive(Clone, Copy)]
+fn gen_func_bodies(
+    scope: &mut Scope,
+    defs: &HashMap<String, ast::Definition>,
+    errors: &mut Errors,
+    get_func: impl for<'a> Fn(&'a mut Scope, &str) -> Option<&'a Symbol>,
+) {
+    for (name, def) in defs {
+        let ast::Definition::Function(def) = def else { continue };
+        let Symbol::Func(func) = get_func(scope, name)
+            .expect("Missing function after definition phase")
+            else { panic!("Function expected") };
+        
+        let func_idx = func.idx();
+        let header = match &scope.ctx.funcs[func_idx] {
+            FunctionOrHeader::Func(_) => {
+                unreachable!("Function shouldn't already be defined here")
+            }
+            FunctionOrHeader::Header(header) => header.clone(),
+        };
+        let ir = def.body.as_ref().map(|body| {
+            let mut builder = IrBuilder::new(scope.module);
+            let mut scope: Scope<'_> = scope.child(HashMap::with_capacity(header.params.len()));
+            for (i, (name, ty)) in header.params.iter().enumerate() {
+                let ty = builder.types.add((*ty).into());
+                let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
+                scope
+                    .info
+                    .symbols
+                    .to_mut()
+                    .insert(name.clone(), Symbol::Var { ty, var: param });
+            }
+            let expected = builder.types.add(header.return_type.into());
+            let (val, block) = scope.reduce_block_or_expr(
+                errors,
+                &mut builder,
+                body,
+                expected,
+                expected,
+            );
+            if block == false
+                || header.return_type == TypeRef::Primitive(Primitive::Unit)
+            {
+                builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
+            }
+            builder.finish()
+        });
+
+        scope.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
+            name: name.clone(),
+            header,
+            ir,
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
@@ -271,7 +279,7 @@ impl ExprResult {
         }
     }
 }
-struct Scope<'s> {
+pub struct Scope<'s> {
     ctx: &'s mut TypingCtx,
     globals: &'s [HashMap<String, Symbol>],
     module: ModuleId,
@@ -295,14 +303,14 @@ impl<'s> Scope<'s> {
             },
         }
     }
-    pub fn child<'c>(&'c mut self) -> Scope<'c> {
+    pub fn child<'c>(&'c mut self, symbols: HashMap<String, Symbol>) -> Scope<'c> {
         Scope {
             ctx: &mut *self.ctx,
             globals: self.globals,
             module: self.module,
             info: ScopeInfo {
                 parent: Some(NonNull::from(&mut self.info)),
-                symbols: Cow::Owned(HashMap::new()),
+                symbols: Cow::Owned(symbols),
             },
         }
     }
@@ -393,10 +401,15 @@ impl<'s> Scope<'s> {
         _expected: TypeTableIndex,
         ret: TypeTableIndex,
     ) {
-        let mut scope = self.child(); //TODO: local definitions: &block.defs
-                                      //ir.types.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+        let locals = types::gen_locals(self, &block.defs,  errors);
+        let mut block_scope = self.child(locals);
+        gen_func_bodies(&mut block_scope, &block.defs, errors,
+            |scope, name| scope.info.symbols.get(name)
+        );
+        
+        //ir.types.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
         for item in &block.items {
-            scope.reduce_stmt(errors, ir, item, ret);
+            block_scope.reduce_stmt(errors, ir, item, ret);
         }
     }
 
