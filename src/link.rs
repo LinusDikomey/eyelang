@@ -49,6 +49,7 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
         Os::Windows => "link.exe",
     });
     cmd.arg(obj);
+    cmd.arg("help.o");
     let args: &[&str] = match os {
         Os::Linux => &["-lc"],
         Os::Windows => todo!(),

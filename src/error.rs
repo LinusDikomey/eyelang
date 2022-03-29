@@ -180,7 +180,10 @@ pub enum Error {
     NonexistantMember,
     TypeMustBeKnownHere,
     MissingMainFile,
-    CantAssignTo
+    CantAssignTo,
+    TooLargePointer,
+    CantTakeRef,
+    CantDeref
 }
 impl Error {
     pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {

@@ -1,7 +1,7 @@
 use std::path::Path;
 use crate::{log, ast::{self, Modules, ModuleId, Module, repr::Repr}, error::{Error, Errors}, lexer, parser::Parser, Args};
 
-pub fn path(path: &Path, args: &Args) -> (Modules, ModuleId, Errors) {
+pub fn path(path: &Path, args: &Args, std: Option<&Path>) -> (Modules, ModuleId, Errors) {
     let mut errors = Errors::new();
     let mut modules = Modules::new();
 
@@ -10,6 +10,13 @@ pub fn path(path: &Path, args: &Args) -> (Modules, ModuleId, Errors) {
     } else {
         file(path, &mut modules, &mut errors, args)
     };
+    if let Some(std) = std {
+        let std_mod = tree(std, &mut modules, &mut errors, TreeType::Main, args);
+        modules[main].definitions.insert(
+            "std".to_owned(),
+            ast::Definition::Module(std_mod)    
+        );
+    }
     (modules, main, errors)
 }
 
@@ -27,7 +34,13 @@ impl TreeType {
     }
 }
 
-fn tree(path: &Path, modules: &mut Modules, errors: &mut Errors, t: TreeType, args: &Args) -> ModuleId {
+fn tree(
+    path: &Path,
+    modules: &mut Modules,
+    errors: &mut Errors,
+    t: TreeType,
+    args: &Args
+) -> ModuleId {
     let base_file = path.join(t.file());
     let base_exists = std::fs::try_exists(&base_file)
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));

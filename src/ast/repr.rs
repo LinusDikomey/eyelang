@@ -233,6 +233,8 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char(match un_op {
                     UnOp::Neg => '-',
                     UnOp::Not => '!',
+                    UnOp::Ref => '&',
+                    UnOp::Deref => '~',
                 });
                 expr.repr(c);
             }
@@ -288,7 +290,11 @@ impl<R: Representer> Repr<R> for UnresolvedType {
     fn repr(&self, c: &R) {
         match self {
             Self::Primitive(p) => p.repr(c),
-            Self::Unresolved(path) => path.repr(c)
+            Self::Unresolved(path) => path.repr(c),
+            Self::Pointer(inner) => {
+                c.char('*');
+                inner.repr(c);
+            }
         }
     }
 }

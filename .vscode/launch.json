@@ -21,7 +21,7 @@
             },
             "args": [
                 "run",
-                "eye/test.eye"
+                "eye/pointers.eye"
             ],
             "cwd": "${workspaceFolder}"
         },

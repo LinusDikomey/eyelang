@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, analysis::LLVMVerifyModule, LLVMModule};
-use crate::{ir::{self, Type}, types::Primitive};
+use crate::{ir::{self, Type, BaseType}, types::Primitive};
 use std::{ffi, ptr, ops::{Deref, DerefMut}};
 
 pub struct Module(LLVMModuleRef);
@@ -58,9 +58,21 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
 }
 
 unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
+    let base_ty = |base| {
+        match base {
+            BaseType::Prim(p) => llvm_primitive_ty(ctx, p),
+            BaseType::Id(id) => types[id.idx()],
+        }
+    };
     match ty {
-        Type::Prim(p) => llvm_primitive_ty(ctx, *p),
-        Type::Id(id) => types[id.idx()],
+        Type::Base(base) => base_ty(*base),
+        Type::Pointer { count, inner } => {
+            let mut base = base_ty(*inner);
+            for _ in 0..count.get() {
+                base = LLVMPointerType(base, 0);
+            }
+            base
+        }
     }
 }
 
@@ -142,9 +154,12 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
             match val {
                 ir::RefVal::True | ir::RefVal::False => (
                     LLVMConstInt(LLVMInt1TypeInContext(ctx), if val == ir::RefVal::True { 1 } else { 0 }, FALSE),
-                    Type::Prim(Primitive::Bool)
+                    Type::Base(BaseType::Prim(Primitive::Bool))
                 ),
-                ir::RefVal::Unit => (LLVMGetUndef(LLVMVoidTypeInContext(ctx)), Type::Prim(Primitive::Unit)),
+                ir::RefVal::Unit => (
+                    LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
+                    Type::Base(BaseType::Prim(Primitive::Unit))
+                ),
                 ir::RefVal::Undef => panic!(),
             }
         } else {
@@ -177,7 +192,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
     }
     let info_to_num = |info: Type| {
         match info {
-            ir::Type::Prim(p) => prim_to_num(p),
+            ir::Type::Base(BaseType::Prim(p)) => prim_to_num(p),
             t => panic!("Invalid type for int/float operation: {t}")
         }
     };
@@ -193,7 +208,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
             }
             ir::Tag::Ret => {
                 let (r, ty) = get_ref_and_type(&instructions, data.un_op);
-                if let Type::Prim(Primitive::Unit) = ty {
+                if let Type::Base(BaseType::Prim(Primitive::Unit)) = ty {
                     LLVMBuildRetVoid(builder)
                 } else {
                     LLVMBuildRet(builder, r)
@@ -283,7 +298,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                if Type::Prim(Primitive::Bool) == ty || info_to_num(ty).int() {
+                if Type::Base(BaseType::Prim(Primitive::Bool)) == ty || info_to_num(ty).int() {
                     LLVMBuildICmp(builder, if *tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
                     LLVMBuildFCmp(builder, if *tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
@@ -381,7 +396,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 LLVMBuildCondBr(builder, get_ref(&instructions, data.branch.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
-                if ir.types.get(*ty) != Type::Prim(Primitive::Unit) {
+                if ir.types.get(*ty) != Type::Base(BaseType::Prim(Primitive::Unit)) {
                     let phi = LLVMBuildPhi(builder, table_ty(*ty), NONE);
                     let begin = data.extra_len.0 as usize;
                     for i in 0..data.extra_len.1 {

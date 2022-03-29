@@ -46,6 +46,9 @@ pub enum TokenType {
     Slash,
     Percent,
     
+    Ampersand,
+    SnackWave,
+
     Equals,
     DoubleEquals,
     BangEquals,

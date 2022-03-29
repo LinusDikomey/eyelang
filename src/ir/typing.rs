@@ -18,6 +18,10 @@ impl TypeTable {
         let type_idx = self.indices[idx.idx()];
         self.types[type_idx.get()]
     }
+    
+    pub fn update_type(&mut self, idx: TypeTableIndex, info: TypeInfo) {
+        self.types[self.indices[idx.idx()].get()] = info;
+    }
 
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
         let type_idx = TypeIdx::new(self.types.len());
@@ -31,28 +35,23 @@ impl TypeTable {
         self.add(TypeInfo::Unknown)
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, module: ModuleId) {
-        let idx = idx.idx();
-        let type_idx = self.indices[idx];
-        let ty = &mut self.types[type_idx.get()];
-        *ty = match ty.merge(info) {
-            Ok(ty) => ty,
-            Err(err) => {
-                errors.emit(err, 0, 0, module);
-                TypeInfo::Invalid
-            }
-        };
+    pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, module: ModuleId) {
+        let ty = merge_twosided(self.get_type(idx), other, self).unwrap_or_else(|err| {
+            errors.emit(err, 0, 0, module);
+            TypeInfo::Invalid
+        });
+        self.update_type(idx, ty);
     }
 
     pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId) {
         let a_idx = self.indices[a.idx()];
+        let a_ty = self.types[a_idx.get()];
         let b_idx = &mut self.indices[b.idx()];
         let prev_b_ty = self.types[b_idx.get()];
         *b_idx = a_idx; // make b point to a's type
 
-        let a_ty = &mut self.types[a_idx.get()];
         // merge b's previous type into a
-        *a_ty = match a_ty.merge(prev_b_ty) {
+        self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self) {
             Ok(ty) => ty,
             Err(err) => {
                 errors.emit(err, 0, 0, module);
@@ -63,7 +62,7 @@ impl TypeTable {
 
     pub fn finalize(self) -> FinalTypeTable {
         let types = self.indices.iter()
-            .map(|&i| self.types[i.0 as usize].finalize())
+            .map(|&i| self.types[i.0 as usize].finalize(&self))
             .collect();
         FinalTypeTable { types }
     }
@@ -94,73 +93,83 @@ impl TypeIdx {
 
 
 /// A type that may not be (completely) known yet. 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum TypeInfo {
     Unknown,
     Int,
     Float,
     Primitive(Primitive),
     Resolved(SymbolKey),
+    Pointer(TypeTableIndex),
     Invalid,
 }
 impl TypeInfo {
-    fn merge(&self, other: TypeInfo) -> Result<Self, Error> {
-        self.merge_is_other(other, false)
-    }
-
-    fn merge_is_other(&self, other: TypeInfo, is_other: bool) -> Result<Self, Error> {
-        let res = match self {
-            Self::Unknown => Ok(other),
-            Self::Int => {
-                match other {
-                    Self::Int => Ok(other),
-                    Self::Primitive(p) if p.as_int().is_some() => Ok(other),
-                    Self::Unknown => Ok(Self::Int),
-                    _ => Err(Error::IntExpected)
-                }
-            }
-            Self::Float => {
-                match other {
-                    Self::Float => Ok(other),
-                    Self::Primitive(p) if p.as_float().is_some() => Ok(other),
-                    Self::Unknown => Ok(Self::Float),
-                    _ => Err(Error::FloatExpected)
-                }
-            }
-            TypeInfo::Primitive(_) | TypeInfo::Resolved(_) => {
-                (other == *self)
-                    .then(|| *self)
-                    .ok_or(Error::MismatchedType)
-            }
-            TypeInfo::Invalid => Ok(*self), // invalid type 'spreading'
-        };
-        match res {
-            Ok(t) => Ok(t),
-            Err(err) => if is_other {
-                crate::log!("Merge failed {self:?} {other:?}");
-                Err(err)
-            } else {
-                other.merge_is_other(*self, true)
-            }
-        }
-    }
-
-    fn finalize(self) -> Type {
+    fn finalize(self, types: &TypeTable) -> Type {
         match self {
-            Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
-            Self::Int => Type::Prim(Primitive::I32),
-            Self::Float => Type::Prim(Primitive::F32),
-            Self::Primitive(p) => Type::Prim(p),
-            Self::Resolved(id) => Type::Id(id),
+            Self::Unknown | Self::Invalid => Type::Base(BaseType::Prim(Primitive::Unit)),
+            Self::Int => Type::Base(BaseType::Prim(Primitive::I32)),
+            Self::Float => Type::Base(BaseType::Prim(Primitive::F32)),
+            Self::Primitive(p) => Type::Base(BaseType::Prim(p)),
+            Self::Resolved(id) => Type::Base(BaseType::Id(id)),
+            Self::Pointer(inner) => {
+                let inner = types.get_type(inner).finalize(types);
+                inner.pointer_to().expect("A pointer was too large. TODO: handle this properly")
+            }
         }
     }
 }
-impl From<TypeRef> for TypeInfo {
-    fn from(ty: TypeRef) -> Self {
-        match ty {
-            TypeRef::Primitive(p) => Self::Primitive(p),
-            TypeRef::Resolved(r) => Self::Resolved(r),
-            TypeRef::Invalid => Self::Invalid,
+
+fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Result<TypeInfo, Error> {
+    match merge_onesided(ty, other, types) {
+        Ok(t) => Ok(t),
+        Err(_) => merge_onesided(other, ty, types)
+    }
+}
+
+/// merge the types and return the merged type
+fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Result<TypeInfo, Error> {
+    use TypeInfo::*;
+    match ty {
+        Unknown => Ok(other),
+        Int => {
+            match other {
+                Int => Ok(other),
+                Primitive(p) if p.as_int().is_some() => Ok(other),
+                Unknown => Ok(Int),
+                _ => Err(Error::IntExpected)
+            }
         }
+        Float => {
+            match other {
+                Float => Ok(other),
+                Primitive(p) if p.as_float().is_some() => Ok(other),
+                Unknown => Ok(Float),
+                _ => Err(Error::FloatExpected)
+            }
+        }
+        Primitive(prim) => {
+            if let Primitive(other) = other {
+                prim == other
+            } else { false }
+                .then(|| ty)
+                .ok_or(Error::MismatchedType)
+        } | Resolved(id) => {
+            if let Resolved(other) = other {
+                id == other
+            } else { false }
+                .then(|| ty)
+                .ok_or(Error::MismatchedType)
+        }
+        Pointer(inner) => {
+            match other {
+                Pointer(other_inner) => {
+                    let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+                    //TODO: if the type hasn't changed, no new type has to be added
+                    Ok(Pointer(types.add(new_inner)))
+                }
+                _ => Err(Error::MismatchedType)
+            }
+        }
+        Invalid => Ok(Invalid), // invalid type 'spreading'
     }
 }

@@ -370,7 +370,8 @@ impl<'a> Parser<'a> {
             self.toks.module,
             TokenType::Minus => Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
             TokenType::Bang => Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
-
+            TokenType::Ampersand => Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index)?)),
+            TokenType::SnackWave => Expr::UnOp(UnOp::Deref, Box::new(self.parse_factor(var_index)?)),
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
                     Expr::Unit
@@ -388,6 +389,7 @@ impl<'a> Parser<'a> {
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
                     .replace("\\r", "\r")
+                    .replace("\\0", "\0")
                     .replace("\\\"", "\r")
             ),
             TokenType::Keyword(Keyword::True)  => Expr::BoolLiteral(true),
@@ -501,6 +503,9 @@ impl<'a> Parser<'a> {
             TokenType::LParen => {
                 self.toks.step_expect(TokenType::RParen)?;
                 Ok(UnresolvedType::Primitive(Primitive::Unit))
+            },
+            TokenType::Star => {
+                Ok(UnresolvedType::Pointer(Box::new(self.parse_type()?)))
             }
         )
     }

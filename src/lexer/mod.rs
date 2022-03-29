@@ -155,6 +155,8 @@ impl<'a> Lexer<'a> {
                 } else {
                     TokenType::Percent
                 }
+                '&' => TokenType::Ampersand,
+                '~' => TokenType::SnackWave,
                 '<' => match self.peek() {
                     Some('=') => { self.step(); TokenType::LessEquals },
                     _ => TokenType::LessThan
@@ -264,7 +266,7 @@ impl<'a> Lexer<'a> {
     }
     
     fn parse_multiline_comment(&mut self, errors: &mut Errors) -> usize {
-        let start = self.pos() - 2;
+        let start = self.pos() - 1;
         let mut newlines = 0;
         loop {
             match self.step() {

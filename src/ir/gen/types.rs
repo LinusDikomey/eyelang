@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, num::NonZeroU8};
 
 use crate::{
     ast::{Modules, ModuleId, StructDefinition, self, UnresolvedType},
     error::{Errors, Error},
-    ir::gen::FunctionOrHeader
+    ir::{gen::FunctionOrHeader, BaseType}
 };
 use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeader, Scope};
 
@@ -35,15 +35,14 @@ pub fn gen_locals(
     errors: &mut Errors
 ) -> HashMap<String, Symbol> {
     fn ty(
-        ty: &UnresolvedType,
+        unresolved: &UnresolvedType,
         symbols: &mut HashMap<String, Symbol>,
-        defs: &HashMap<String,
-        ast::Definition>,
+        defs: &HashMap<String, ast::Definition>,
         scope: &mut Scope,
         errors: &mut Errors
     ) -> TypeRef {
-        match ty {
-            UnresolvedType::Primitive(p) => TypeRef::Primitive(*p),
+        match unresolved {
+            UnresolvedType::Primitive(p) => TypeRef::Base(BaseType::Prim(*p)),
             UnresolvedType::Unresolved(path) => {
                 let (root, segments, last) = path.segments();
                 let Some(last) = last else {
@@ -71,7 +70,7 @@ pub fn gen_locals(
 
                 let mut symbol_to_ty = |symbol: &Symbol| {
                     match symbol {
-                        Symbol::Type(key) => TypeRef::Resolved(*key),
+                        Symbol::Type(key) => TypeRef::Base(BaseType::Id(*key)),
                         _ => {
                             errors.emit(Error::TypeExpected, 0, 0, scope.module);
                             TypeRef::Invalid
@@ -101,6 +100,9 @@ pub fn gen_locals(
                     }
                 }
             }
+            UnresolvedType::Pointer(inner) => {
+                ty(inner, symbols, defs, scope, errors)
+            }
         }
     }
 
@@ -120,7 +122,7 @@ pub fn gen_locals(
 
         let idx = scope.ctx.add_type(TypeDef::Struct(super::Struct { name: name.clone(), members }));
         symbols.insert(name.clone(), Symbol::Type(idx));
-        TypeRef::Resolved(idx)
+        TypeRef::Base(BaseType::Id(idx))
     }
 
     let mut symbols = HashMap::with_capacity(defs.len());
@@ -190,9 +192,16 @@ pub fn add_struct(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap
     key
 }
 
-fn resolve(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap<String, Symbol>], module: ModuleId, unresolved: &UnresolvedType, errors: &mut Errors) -> TypeRef {
+fn resolve(
+    ctx: &mut TypingCtx,
+    modules: &Modules,
+    symbols: &mut [HashMap<String, Symbol>],
+    module: ModuleId,
+    unresolved: &UnresolvedType,
+    errors: &mut Errors
+) -> TypeRef {
     match unresolved {
-        crate::ast::UnresolvedType::Primitive(p) => TypeRef::Primitive(*p),
+        crate::ast::UnresolvedType::Primitive(p) => TypeRef::Base(BaseType::Prim(*p)),
         crate::ast::UnresolvedType::Unresolved(path) => {
             let (root, segments, last) = path.segments();
             let Some(last) = last else {
@@ -221,19 +230,39 @@ fn resolve(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap<String
             }
             ty(ctx, modules, symbols, module, last, errors)
         }
+        UnresolvedType::Pointer(inner) => {
+            match resolve(ctx, modules, symbols, module, inner, errors) {
+                TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
+                TypeRef::Pointer { count, inner } => { 
+                    if count.get() == u8::MAX {
+                        errors.emit(Error::TooLargePointer, 0, 0, module);
+                    }
+                    TypeRef::Pointer { count: count.saturating_add(1), inner }
+                }
+                TypeRef::Invalid => TypeRef::Invalid,
+            }
+        }
+        
     }
 }
 
-fn ty(ctx: &mut TypingCtx, modules: &Modules, symbols: &mut [HashMap<String, Symbol>], module: ModuleId, name: &str, errors: &mut Errors) -> TypeRef {
+fn ty(
+    ctx: &mut TypingCtx,
+    modules: &Modules,
+    symbols: &mut [HashMap<String, Symbol>],
+    module: ModuleId,
+    name: &str,
+    errors: &mut Errors
+) -> TypeRef {
     if let Some(symbol) = symbols[module.idx()].get(name) {
         match symbol {
-            Symbol::Type(ty) => return TypeRef::Resolved(*ty),
+            Symbol::Type(ty) => return TypeRef::Base(BaseType::Id(*ty)),
             _ => {}
         }
     } else if let Some(def) = modules[module].definitions.get(name) {
         match def {
             crate::ast::Definition::Struct(struct_) => {
-                return TypeRef::Resolved(add_struct(ctx, modules, symbols, struct_, module, name, errors));
+                return TypeRef::Base(BaseType::Id(add_struct(ctx, modules, symbols, struct_, module, name, errors)));
             }
             _ => {}
         }

@@ -69,7 +69,8 @@ fn gen_func_bodies(
             let mut builder = IrBuilder::new(scope.module);
             let mut scope: Scope<'_> = scope.child(HashMap::with_capacity(header.params.len()));
             for (i, (name, ty)) in header.params.iter().enumerate() {
-                let ty = builder.types.add((*ty).into());
+                let info = ty.into_info(&mut builder.types);
+                let ty = builder.types.add(info);
                 let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
                 scope
                     .info
@@ -77,7 +78,8 @@ fn gen_func_bodies(
                     .to_mut()
                     .insert(name.clone(), Symbol::Var { ty, var: param });
             }
-            let expected = builder.types.add(header.return_type.into());
+            let return_type = header.return_type.into_info(&mut builder.types);
+            let expected = builder.types.add(return_type);
             let (val, block) = scope.reduce_block_or_expr(
                 errors,
                 &mut builder,
@@ -86,7 +88,7 @@ fn gen_func_bodies(
                 expected,
             );
             if block == false
-                || header.return_type == TypeRef::Primitive(Primitive::Unit)
+                || header.return_type == TypeRef::Base(BaseType::Prim(Primitive::Unit))
             {
                 builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
             }
@@ -321,7 +323,7 @@ impl<'s> Scope<'s> {
 
     fn resolve_type(&mut self, unresolved: &ast::UnresolvedType) -> Result<TypeRef, Error> {
         match unresolved {
-            ast::UnresolvedType::Primitive(p) => Ok(TypeRef::Primitive(*p)),
+            ast::UnresolvedType::Primitive(p) => Ok(TypeRef::Base(BaseType::Prim(*p))),
             ast::UnresolvedType::Unresolved(path) => {
                 let (root, iter, last) = path.segments();
                 // no last segment means it must point to the root module
@@ -352,14 +354,26 @@ impl<'s> Scope<'s> {
                     ModuleOrLocal::Module(m) => match self.globals[m.idx()]
                         .get(last.as_str())
                         .ok_or(Error::UnknownIdent)? {
-                            Symbol::Type(ty) => Ok(TypeRef::Resolved(*ty)),
+                            Symbol::Type(ty) => Ok(TypeRef::Base(BaseType::Id(*ty))),
                             _ => Err(Error::TypeExpected)
                         },
                     ModuleOrLocal::Local => match self.info.resolve_local(last.as_str())? {
-                        Resolved::Type(ty) => Ok(TypeRef::Resolved(ty)),
+                        Resolved::Type(ty) => Ok(TypeRef::Base(BaseType::Id(ty))),
                         _ => Err(Error::TypeExpected)
                     }
                 }
+            }
+            ast::UnresolvedType::Pointer(inner) => {
+                Ok(match self.resolve_type(inner)? {
+                    TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
+                    TypeRef::Pointer { count, inner } => {
+                        if count.get() == 255 {
+                            return Err(Error::TooLargePointer)
+                        }
+                        TypeRef::Pointer { count: count.saturating_add(1), inner }
+                    }
+                    TypeRef::Invalid => TypeRef::Invalid,
+                })
             }
         }
     }
@@ -433,7 +447,7 @@ impl<'s> Scope<'s> {
                         return;
                     }
                 }
-                .map_or(TypeInfo::Unknown, Into::into);
+                .map_or(TypeInfo::Unknown, |ty| ty.into_info(&mut ir.types));
                 let ty = ir.types.add(ty);
 
                 let var = self.declare_var(ir, name.clone(), ty);
@@ -663,7 +677,8 @@ impl<'s> Scope<'s> {
                 match self.reduce_expr(errors, ir, func_expr, func_ty, ret) {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
-                        ir.specify(expected, header.return_type.into(), errors);
+                        let info = header.return_type.into_info(&mut ir.types);
+                        ir.specify(expected, info, errors);
                         let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
                         } else {
@@ -685,9 +700,10 @@ impl<'s> Scope<'s> {
                             let mut bytes = Vec::with_capacity(8 + 4 * args.len());
                             bytes.extend(&key.bytes());
                             for (arg, ty) in args.iter().zip(params) {
+                                let info = ty.map(|ty| ty.into_info(&mut ir.types)).unwrap_or(TypeInfo::Unknown);
                                 let ty = ir
                                     .types
-                                    .add(ty.map(|ty| ty.into()).unwrap_or(TypeInfo::Unknown));
+                                    .add(info);
                                 let expr = self.reduce_expr_val(errors, ir, arg, ty, ret);
                                 bytes.extend(&expr.to_bytes());
                             }
@@ -711,7 +727,7 @@ impl<'s> Scope<'s> {
                         } else {
                             let var = get_var(ir);
                             let member_types: Vec<TypeInfo> =
-                                struct_.members.iter().map(|(_, ty)| (*ty).into()).collect();
+                                struct_.members.iter().map(|(_, ty)| ty.into_info(&mut ir.types)).collect();
                             for (i, (member_val, member_ty)) in
                                 args.iter().zip(member_types).enumerate()
                             {
@@ -731,7 +747,7 @@ impl<'s> Scope<'s> {
                         }
                     }
                     _ => {
-                        if ir.types.get_type(func_ty) != TypeInfo::Invalid {
+                        if matches!(ir.types.get_type(func_ty), TypeInfo::Invalid) {
                             errors.emit(Error::FunctionOrTypeExpected, 0, 0, self.module);
                         }
                         ir.specify(expected, TypeInfo::Invalid, errors);
@@ -743,6 +759,27 @@ impl<'s> Scope<'s> {
                 let (expected, tag) = match un_op {
                     UnOp::Neg => (expected, Tag::Neg),
                     UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
+                    UnOp::Ref => {
+                        let unknown_ty = ir.types.add(TypeInfo::Unknown);
+                        let ptr_ty = TypeInfo::Pointer(unknown_ty);
+                        ir.types.specify(expected, ptr_ty, errors, self.module);
+                        let inner_expected = match ir.types.get_type(expected) {
+                            TypeInfo::Pointer(inner) => inner,
+                            _ => ir.types.add(TypeInfo::Invalid)
+                        };
+                        return ExprResult::Val(match self.reduce_expr(errors, ir, val, inner_expected, ret) {
+                            ExprResult::VarRef(r) => r,
+                            _ => {
+                                errors.emit(Error::CantTakeRef, 0, 0, self.module);
+                                Ref::UNDEF
+                            }
+                        })
+                    }
+                    UnOp::Deref => {
+                        let expected = ir.types.add(TypeInfo::Pointer(expected));
+                        let pointer_val = self.reduce_expr_val(errors, ir, val, expected, ret);
+                        return ExprResult::VarRef(pointer_val); // just use the pointer value as variable
+                    }
                 };
                 let inner = self.reduce_expr_val(errors, ir, val, expected, ret);
                 let res = match un_op {
@@ -763,7 +800,8 @@ impl<'s> Scope<'s> {
                         }
                         _ => Err(Error::CantNegateType),
                     }
-                    UnOp::Not => Ok(()) // type was already constrained to be a boolean
+                    UnOp::Not => Ok(()), // type was already constrained before
+                    UnOp::Ref | UnOp::Deref => unreachable!(),
                 };
                 if let Err(err) = res {
                     errors.emit(err, 0, 0, self.module);
@@ -870,7 +908,7 @@ impl<'s> Scope<'s> {
                                     .enumerate()
                                     .find(|(_, (name, _))| name == member)
                                 {
-                                    ((*ty).into(), i)
+                                    (ty.into_info(&mut ir.types), i)
                                 } else {
                                     errors.emit(Error::NonexistantMember, 0, 0, self.module);
                                     (TypeInfo::Invalid, 0)

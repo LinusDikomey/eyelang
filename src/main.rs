@@ -1,4 +1,13 @@
-#![feature(iter_intersperse, let_else, box_patterns, variant_count, path_try_exists, array_windows, bool_to_option)]
+#![feature(
+    iter_intersperse,
+    let_else,
+    box_patterns,
+    variant_count,
+    path_try_exists,
+    array_windows,
+    bool_to_option,
+    nonzero_ops
+)]
 #![warn(unused_qualifications)]
 
 mod ast;
@@ -68,6 +77,10 @@ pub struct Args {
     /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
     #[clap(long)]
     link_cmd: Option<String>,
+
+    /// Disables the standard library
+    #[clap(short, long)]
+    nostd: bool
 }
 
 fn main() {
@@ -108,7 +121,7 @@ fn run(
     args: &Args,
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
-    let (modules, _main, errors) = compile::path(path, args);
+    let (modules, _main, errors) = compile::path(path, args, (!args.nostd).then(|| Path::new("std")));
     //if errors.has_errors() { return Err((modules, errors)); }
     let ir = match ir::reduce(&modules, errors) {
         Ok(ir) => ir,

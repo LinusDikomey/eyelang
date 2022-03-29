@@ -1,6 +1,6 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU8};
 use colored::Colorize;
-use crate::{types::Primitive, lexer::Span};
+use crate::{types::Primitive, lexer::Span, error::Error};
 use typing::FinalTypeTable;
 
 mod gen;
@@ -8,16 +8,48 @@ mod typing;
 
 pub use gen::reduce;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Type {
+use self::typing::{TypeInfo, TypeTable};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BaseType {
     Prim(Primitive),
     Id(SymbolKey)
+}
+impl fmt::Display for BaseType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BaseType::Prim(p) => write!(f, "{p}"),
+            BaseType::Id(id) => write!(f, "{{t{}}}", id.idx()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Type {
+    Base(BaseType),
+    Pointer {
+        count: NonZeroU8,
+        inner: BaseType
+    }
+}
+impl Type {
+    pub fn pointer_to(self) -> Result<Self, Error> {
+        Ok(match self {
+            Self::Base(inner) => Self::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
+            Self::Pointer { count, inner } => {
+                if count.get() == u8::MAX {
+                    return Err(Error::TooLargePointer);
+                }
+                Self::Pointer { count: unsafe { count.unchecked_add(1) }, inner }
+            }
+        })
+    }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Prim(p) => write!(f, "{p}"),
-            Self::Id(id) => write!(f, "{{t{}}}", id.idx()),
+            Self::Base(base) => write!(f, "{base}"),
+            Self::Pointer { count, inner } => write!(f, "{}{inner}", "*".repeat(count.get() as usize))
         }
     }
 }
@@ -254,16 +286,39 @@ impl fmt::Display for FinalStruct {
 //TODO: fit type ref into u64 by offsetting symbol key references by the amount of primitives
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeRef {
-    Primitive(Primitive),
-    Resolved(SymbolKey),
+    Base(BaseType),
+    Pointer {
+        count: NonZeroU8,
+        inner: BaseType
+    },
     Invalid,
 }
 impl TypeRef {
+    pub fn into_info(self, types: &mut TypeTable) -> TypeInfo {
+        let base_from = |base| {
+            match base {
+                BaseType::Prim(p) => TypeInfo::Primitive(p),
+                BaseType::Id(id) => TypeInfo::Resolved(id),
+            }
+        };
+        match self {
+            TypeRef::Base(base) => base_from(base),
+            TypeRef::Pointer { count, inner } => {
+                let mut current = base_from(inner);
+                for _ in 0..count.get() {
+                    current = TypeInfo::Pointer(types.add(current))
+                }
+                current
+            }
+            TypeRef::Invalid => TypeInfo::Invalid,
+        }
+    }
+    
     pub fn finalize(self) -> Type {
         match self {
-            Self::Primitive(p) => Type::Prim(p),
-            Self::Resolved(id) => Type::Id(id),
-            Self::Invalid =>
+            Self::Base(base) => Type::Base(base),
+            Self::Pointer { count, inner } => Type::Pointer { count, inner },
+            Self::Invalid => 
                 panic!("Tried to finalize invalid type. Finalization shouldn't happen with errors present"),
         }
     }
@@ -271,8 +326,8 @@ impl TypeRef {
 impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeRef::Primitive(prim) => write!(f, "{}", prim),
-            TypeRef::Resolved(key) => write!(f, "{}", key.idx()),
+            TypeRef::Base(base) => write!(f, "{base}"),
+            TypeRef::Pointer { count, inner } => write!(f, "{}{inner}", "*".repeat(count.get() as usize)),
             TypeRef::Invalid => write!(f, "Invalid")
         }
     }

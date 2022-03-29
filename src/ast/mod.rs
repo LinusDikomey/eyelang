@@ -147,7 +147,9 @@ pub enum Expr {
 #[derive(Debug, Clone, Copy)]
 pub enum UnOp {
     Neg,
-    Not
+    Not,
+    Ref,
+    Deref,
 }
 
 #[derive(Debug, Clone)]
@@ -256,15 +258,15 @@ impl fmt::Display for IdentPath {
 #[derive(Debug, Clone)]
 pub enum UnresolvedType {
     Primitive(Primitive),
-    Unresolved(IdentPath)
+    Unresolved(IdentPath),
+    Pointer(Box<UnresolvedType>)
 }
 impl fmt::Display for UnresolvedType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UnresolvedType::Primitive(p) => p.fmt(f),
-            UnresolvedType::Unresolved(path) => {
-                write!(f, "{path}")
-            }
+            UnresolvedType::Unresolved(path) => write!(f, "{path}"),
+            UnresolvedType::Pointer(inner) => write!(f, "*{inner}")
         }
     }
 }
