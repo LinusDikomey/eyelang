@@ -111,7 +111,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
                 (params.collect(), FALSE)
             };*/
 
-            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, if func.varargs {TRUE} else {FALSE});
+            let varargs = if func.varargs {TRUE} else {FALSE};
+            let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
             let name = ffi::CString::new(func.name.as_bytes()).unwrap();
             LLVMAddFunction(llvm_module, name.as_ptr(), func_ty)
         })
@@ -134,7 +135,11 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
         
     }
     #[cfg(debug_assertions)]
-    LLVMVerifyModule(llvm_module, llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction, std::ptr::null_mut());
+    LLVMVerifyModule(
+        llvm_module,
+        llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction,
+        std::ptr::null_mut()
+    );
 
     // done building
     LLVMDisposeBuilder(builder);

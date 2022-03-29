@@ -1,4 +1,9 @@
-use crate::{ast::ModuleId, ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex}, lexer::Span, error::Errors};
+use crate::{
+    ast::ModuleId,
+    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
+    lexer::Span,
+    error::Errors
+};
 
 pub struct IrBuilder {
     module: ModuleId,

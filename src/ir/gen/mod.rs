@@ -10,7 +10,6 @@ use self::builder::IrBuilder;
 
 use super::{typing::*, *};
 
-mod scope;
 mod types;
 mod builder;
 
@@ -175,78 +174,6 @@ enum Resolved {
     Type(SymbolKey),
     Module(ModuleId),
 }
-
-/*
-fn define_type(
-    info: &mut ScopeInfo,
-    ctx: &mut TypingCtx,
-    types: Option<&mut TypeTable>,
-    name: &str,
-    def: &StructDefinition,
-    module: ModuleId,
-    errors: &mut Errors
-) -> SymbolKey {
-    let members = def.members.iter().map(|(name, ty, start, end)| {
-        let resolved = if let Some(types) = types {
-            resolve_type(info, ctx, types, ty, errors)
-        } else {
-            resolve_type_noinfer(info, ctx, ty, errors)
-        };
-        (
-            name.clone(),
-            match resolved {
-                Ok(ty) => ty,
-                Err(err) => {
-                    errors.emit(err, *start, *end, module);
-                    TypeRef::Invalid
-                }
-            }
-        )
-    }).collect();
-    let key = SymbolKey::new(ctx.types.len() as u64);
-    ctx.types.push(TypeDef::Struct(Struct { members, name: name.to_owned() }));
-    debug_assert!(previous.is_none(), "Duplicate type definition inserted");
-    let previous = info.symbols.insert(name.to_owned(), Symbol::Type(key));
-    key
-}
-*/
-
-/*fn define_func_header<'a>(
-    info: &mut ScopeInfo,
-    ctx: &mut TypingCtx,
-    name: String,
-    func: &ast::Function,
-    errors: &mut Errors
-) -> FunctionHeader {
-    let params = func
-        .params
-        .iter()
-        .map(|(name, arg, start, end)| {
-            let t = match resolve_type_noinfer(info, ctx, arg, errors) {
-                Ok(t) => t,
-                Err(err) => {
-                    errors.emit(err, *start, *end, info.module);
-                    TypeRef::Invalid
-                }
-            };
-            (name.clone(), t)
-        })
-        .collect();
-    /*let vararg = func.vararg.as_ref().map(|(name, ty, start, end)| {
-        Ok((
-            name.clone(),
-            resolve_type_noinfer(info, ctx, ty, errors)
-                .map_err(|err| CompileError { err, start: *start, end: *end })?
-        ))
-    }).transpose();
-    let vararg = errors.emit_unwrap(vararg, None);
-    */
-
-    let return_type = resolve_type_noinfer(info, ctx, &func.return_type.0, errors)
-        .map_err(|err| CompileError { err, span: Span::new(func.return_type.1, func.return_type.2, info.module) });
-    let return_type = errors.emit_unwrap(return_type, TypeRef::Invalid);
-    FunctionHeader { params, return_type, varargs: func.varargs, name }
-}*/
 
 enum ExprResult {
     VarRef(Ref),

@@ -202,21 +202,6 @@ impl<'a> Lexer<'a> {
                 '"' => { // string literal
                     while self.peek() != Some('"') {
                         match self.step() {
-                            /*Some('\\') => {
-                                val.push(match self.step() {
-                                    Some('n') => '\n',
-                                    Some('t') => '\t',
-                                    Some('"') => '"',
-                                    Some(_) => return Err(EyeError::CompileError(
-                                        CompileError::UnknownEscapeCode,
-                                        self.pos(),
-                                        self.pos()
-                                    )),
-                                    None => return Err(EyeError::CompileError(
-                                        CompileError::UnexpectedEndOfFile, self.pos(), self.pos())
-                                    )
-                                });
-                            }*/
                             Some(_) => {}
                             None => {
                                 errors.emit(

@@ -1,10 +1,8 @@
 #![feature(
-    iter_intersperse,
     let_else,
     box_patterns,
     variant_count,
     path_try_exists,
-    array_windows,
     bool_to_option,
     nonzero_ops
 )]
@@ -79,8 +77,13 @@ pub struct Args {
     link_cmd: Option<String>,
 
     /// Disables the standard library
-    #[clap(short, long)]
-    nostd: bool
+    #[clap(long)]
+    nostd: bool,
+
+    /// Don't link the object file into an executable after compiling
+    #[clap(long)]
+    nolink: bool,
+
 }
 
 fn main() {
@@ -92,9 +95,6 @@ fn main() {
 fn run_file(args: &Args) {
     use colored::*;
     let path = Path::new(&args.file);
-    //let src = std::fs::read_to_string(path)
-    //    .expect(&format!("Could not open source file: {}", args.file));
-
     println!("{} {} ...", "Compiling".green(), args.file.underline().bright_blue());
     
     let no_extension = path.with_extension("");
@@ -122,7 +122,6 @@ fn run(
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
     let (modules, _main, errors) = compile::path(path, args, (!args.nostd).then(|| Path::new("std")));
-    //if errors.has_errors() { return Err((modules, errors)); }
     let ir = match ir::reduce(&modules, errors) {
         Ok(ir) => ir,
         Err(err) => return Err((modules, err))
@@ -157,13 +156,17 @@ fn run(
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
+                if args.nolink {
+                    println!("{}", "Skipping link step because --nolink was specified".yellow());
+                    return Ok(());
+                }
                 link::link(&obj_file, &exe_file, args);
                 if args.cmd == Cmd::Run {
                     println!("{}", format!("Running {}...", &args.file).green());
 
                     std::process::Command::new(exe_file)
                         .spawn()
-                        .expect("Failed to run")
+                        .expect("Failed to run link command")
                         .wait()
                         .expect("Running process failed");
                 } else {
@@ -180,51 +183,3 @@ fn run(
     }
     Ok(())
 }
-
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_eye_files() {
-        const EXPECTED: &'static str = 
-"4
-Vec before assignment: 1 2.5 3
-Vec after assignment: 1 3.1 3
-x: 1
-Hello, John Doe
-You entered: 123456789
-Your number is 5 or larger
-Half your number is: 61728394
-Some calculations:
-Bye";
-        let mut output = Vec::new();
-        run_file(&mut(std::io::Cursor::new(Vec::<u8>::new()), std::io::Cursor::new(&mut output)), &Args {
-            cmd: Cmd::Interpret,
-            file: "eye/test.eye".to_owned(),
-            reconstruct_src: true,
-            link_cmd: None,
-            log: false
-        });
-        let string = String::from_utf8(output).unwrap();
-        println!("{string}");
-        assert_eq!(string, EXPECTED);
-
-        let input = b"123\n";
-        let mut output = Vec::new();
-        run(
-            &mut(std::io::Cursor::new(input), &mut output),
-            "main ->: print(string(parse(read(\"Input number: \"))+i32(1)))",
-            &Args {
-                cmd: Cmd::Interpret,
-                file: "eye/test.eye".to_owned(),
-                ..Default::default()
-            },
-            "test"
-        ).unwrap();
-        println!("{:?}", String::from_utf8(output.clone()));
-        assert_eq!(b"Input number: 124".as_slice(), output.as_slice());
-    }
-}
-*/

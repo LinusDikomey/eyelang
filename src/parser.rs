@@ -69,13 +69,14 @@ impl Tokens {
         tok
     }
 
-    pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Result<&Token, CompileError> {
+    pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T)
+    -> Result<&Token, CompileError> {
         let expected = expected.into().0;
         let module = self.module;
         let tok = self.step()?;
         if expected.iter().find(|expected_tok| **expected_tok == tok.ty).is_none() {
             return Err(CompileError {
-                err: Error::UnexpectedToken, //(tok.ty, expected.into_iter().map(|tok| format!("{tok:?}")).collect()),
+                err: Error::UnexpectedToken,
                 span: Span::new(tok.start, tok.end, module)
             });
         }
@@ -145,7 +146,11 @@ impl<'a> Parser<'a> {
                     span: Span::new(start, self.toks.current().unwrap().end, self.toks.module)
                 }),
                 Item::Definition(name, def) => if let Some(_existing) = definitions.insert(name, def) {
-                    return Err(Error::DuplicateDefinition.at(start, self.toks.current().unwrap().end, self.toks.module));
+                    return Err(Error::DuplicateDefinition.at(
+                        start,
+                        self.toks.current().unwrap().end,
+                        self.toks.module
+                    ));
                 }
             }
         }
@@ -267,7 +272,11 @@ impl<'a> Parser<'a> {
                             self.parse_block_or_expr(&mut var_count)
                         }).transpose()?;
                         Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                            params: Vec::new(), varargs: false, body, return_type: (return_type, ret_type_start, ret_type_end), var_count
+                            params: Vec::new(),
+                            varargs: false,
+                            body,
+                            return_type: (return_type, ret_type_start, ret_type_end),
+                            var_count
                         })))
                     }
                     // Struct definition
@@ -382,19 +391,19 @@ impl<'a> Parser<'a> {
                 }
             },
             TokenType::Keyword(Keyword::Ret) => Expr::Return(Box::new(self.parse_expr(var_index)?)),
-            TokenType::IntLiteral              => Expr::IntLiteral(IntLiteral::from_tok(first, self.src)),
-            TokenType::FloatLiteral            => Expr::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
-            TokenType::StringLiteral           => Expr::StringLiteral(
+            TokenType::IntLiteral => Expr::IntLiteral(IntLiteral::from_tok(first, self.src)),
+            TokenType::FloatLiteral => Expr::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
+            TokenType::StringLiteral => Expr::StringLiteral(
                 self.src[first.start as usize + 1 ..= first.end as usize - 1]
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
                     .replace("\\r", "\r")
                     .replace("\\0", "\0")
-                    .replace("\\\"", "\r")
+                    .replace("\\\"", "\"")
             ),
-            TokenType::Keyword(Keyword::True)  => Expr::BoolLiteral(true),
+            TokenType::Keyword(Keyword::True) => Expr::BoolLiteral(true),
             TokenType::Keyword(Keyword::False) => Expr::BoolLiteral(false),
-            TokenType::Ident                   => Expr::Variable(first.get_val(self.src).to_owned()),
+            TokenType::Ident => Expr::Variable(first.get_val(self.src).to_owned()),
             TokenType::Keyword(Keyword::If) => Expr::If(Box::new(self.parse_if_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {

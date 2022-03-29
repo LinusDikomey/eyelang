@@ -1,5 +1,12 @@
 use std::path::Path;
-use crate::{log, ast::{self, Modules, ModuleId, Module, repr::Repr}, error::{Error, Errors}, lexer, parser::Parser, Args};
+use crate::{
+    log,
+    ast::{self, Modules, ModuleId, Module, repr::Repr},
+    error::{Error, Errors},
+    lexer,
+    parser::Parser,
+    Args
+};
 
 pub fn path(path: &Path, args: &Args, std: Option<&Path>) -> (Modules, ModuleId, Errors) {
     let mut errors = Errors::new();

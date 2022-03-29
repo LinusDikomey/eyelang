@@ -40,7 +40,13 @@ pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &s
     let file_type = target_machine::LLVMCodeGenFileType::LLVMObjectFile;
     // takes ownership of the module
     let out_cstr = CString::new(out).expect("Invalid object file name");
-    let err = target_machine::LLVMTargetMachineEmitToFile(machine, module.into_inner(), out_cstr.as_ptr() as _, file_type, &mut error);
+    let err = target_machine::LLVMTargetMachineEmitToFile(
+        machine,
+        module.into_inner(),
+        out_cstr.as_ptr() as _,
+        file_type,
+        &mut error
+    );
     if err == TRUE {
         panic!("Failed to emit object file: {:?}", CStr::from_ptr(error));
     }
