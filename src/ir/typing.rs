@@ -165,7 +165,9 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                 Pointer(other_inner) => {
                     let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
                     //TODO: if the type hasn't changed, no new type has to be added
-                    Ok(Pointer(types.add(new_inner)))
+                    types.update_type(inner, new_inner);
+                    types.update_type(other_inner, new_inner);
+                    Ok(Pointer(inner))
                 }
                 _ => Err(Error::MismatchedType)
             }

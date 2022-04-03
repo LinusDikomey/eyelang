@@ -1,6 +1,5 @@
 
-printf(fmt string, ...) -> i32 extern
-assert(b bool) ->: if !b: printf("An assertion failed!\n")
+assert(b bool) ->: if !b: std.c.printf("An assertion failed!\n")
 
 main -> {
     bools()

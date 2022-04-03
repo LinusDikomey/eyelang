@@ -1,4 +1,3 @@
-printf(fmt string, ...) -> i32 extern
 # print and parse are no longer intrinsics so these are added to make the program work
 print(s string, ...) -> {}
 parse(s string) -> i32: 0
@@ -48,13 +47,13 @@ main -> {
     i := 5
     while i < 10: i = incAndPrint(i)
     incAndPrint(i i32) -> i32 {
-        printf("I is %d\n", i)
+        std.c.printf("I is %d\n", i)
         ret i + 1
     }
 
     {
         obj := PhysicsObject(Vec3(1, 2, 3), Vec3(4, 5, 6))
-        printf("Physics Object: %d\n", obj.pos.y + obj.rot.z)
+        std.c.printf("Physics Object: %d\n", obj.pos.y + obj.rot.z)
         PhysicsObject :: {
             pos Vec3,
             rot Vec3
@@ -75,7 +74,7 @@ Vec3 :: {
 
 addVec3(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 printVec3(v Vec3) -> {
-    printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
+    std.c.printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
 }
 
 Transform :: {

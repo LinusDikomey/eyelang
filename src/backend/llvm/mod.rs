@@ -1,6 +1,6 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, analysis::LLVMVerifyModule, LLVMModule};
 use crate::{ir::{self, Type, BaseType}, types::Primitive};
-use std::{ffi, ptr, ops::{Deref, DerefMut}};
+use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write};
 
 pub struct Module(LLVMModuleRef);
 impl Module {
@@ -204,8 +204,11 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
     let float_or_int = |ty: ir::TypeTableIndex| info_to_num(ir.types.get(ty));
 
     for (i, inst) in ir.inst.iter().enumerate() {
+        if crate::LOG.load(Ordering::Relaxed) {
+            print!("Generating %{i} = {} ->", inst.display(&ir.extra, &ir.types));
+            std::io::stdout().flush().unwrap();
+        }
         let ir::Instruction { tag, data, span: _, ty, used: _} = inst;
-        crate::log!("Generating {tag:?}");
         let val: LLVMValueRef = match tag {
             ir::Tag::BlockBegin => {
                 LLVMPositionBuilderAtEnd(builder, blocks[data.int32 as usize]);
@@ -422,9 +425,9 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
         };
         if !val.is_null() {
             let cstr = val_str(val);
-            crate::log!("{i}: {inst:?} -> {cstr:?}");
+            crate::log!("{cstr:?}");
         } else {
-            crate::log!("{i}: {inst:?} -> null");
+            crate::log!("null");
         }
 
         instructions.push(val);

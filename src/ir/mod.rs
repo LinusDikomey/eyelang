@@ -1,5 +1,5 @@
 use std::{fmt, num::NonZeroU8};
-use colored::Colorize;
+use colored::{Colorize, ColoredString};
 use crate::{types::Primitive, lexer::Span, error::Error};
 use typing::FinalTypeTable;
 
@@ -92,105 +92,16 @@ impl fmt::Display for FinalFunction {
         }
         writeln!(f, ") -> {}", self.return_type)?;
 
-        let write_ref = |f: &mut fmt::Formatter, r: Ref| {
-            if let Some(val) = r.into_val() {
-                write!(f, "{}", format!("{val}").yellow())
-            } else {
-                write!(f, "{}", format!("%{}", r.into_ref().unwrap()).cyan())
-            }
-        };
-
         if let Some(ir) = &self.ir {
             for (i, inst) in ir.inst.iter().enumerate() {
                 if inst.tag == Tag::BlockBegin {
                     writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
                     continue;
                 }
-                write!(f, "    {:>4} = {} ", format!("%{i}").cyan(), format!("{:?}", inst.tag).green())?;
-                unsafe { match inst.tag.union_val() {
-                    DataVariant::Int => write!(f, "{}", inst.data.int)?,
-                    DataVariant::Int32 => write!(f, "{}", inst.data.int32)?,
-                    DataVariant::Block => write!(f, "{}", format!("b{}", inst.data.int32).bright_blue())?,
-                    DataVariant::LargeInt => {
-                        let bytes = &ir.extra[
-                            inst.data.extra as usize
-                            .. (inst.data.extra + 16) as usize
-                        ];
-                        let mut bytes_arr = [0; 16];
-                        bytes_arr.copy_from_slice(bytes);
-                        write!(f, "{:?}", u128::from_le_bytes(bytes_arr))?;
-                    }
-                    DataVariant::String => {
-                        let bytes = &ir.extra[
-                            inst.data.extra_len.0 as usize
-                            .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
-                        ];
-                        write!(f, "{:?}", bytes)?;
-                    }
-                    DataVariant::Call => {
-                        let start = inst.data.extra_len.0 as usize;
-                        let mut bytes = [0; 8];
-                        bytes.copy_from_slice(&ir.extra[start..start+8]);
-                        let func = SymbolKey(u64::from_le_bytes(bytes));
-                        let refs = (0..inst.data.extra_len.1).map(|i| {
-                            let mut ref_bytes = [0; 4];
-                            let begin = 8 + start + (4 * i) as usize;
-                            ref_bytes.copy_from_slice(&ir.extra[begin..begin+4]);
-                            Ref::from_bytes(ref_bytes)
-                        });
-                        write!(f, "f{}(", func.0)?;
-                        for (i, r) in refs.enumerate() {
-                            if i != 0 {
-                                write!(f, ", ")?;
-                            }
-                            write_ref(f, r)?;
-                        }
-                        write!(f, ")")?;
-                    }
-                    DataVariant::ExtraBranchRefs => {
-                        for i in 0..inst.data.extra_len.1 {
-                            if i != 0 {
-                                write!(f, ", ")?;
-                            }
-                            let mut current_bytes = [0; 4];
-                            let begin = (inst.data.extra_len.0 + i * 8) as usize;
-                            current_bytes.copy_from_slice(&ir.extra[begin..begin + 4]);
-                            let block = u32::from_le_bytes(current_bytes);
-                            current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
-                            current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
-                            let r = Ref::from_bytes(current_bytes);
-                            write!(f, "[{} ", format!("b{block}").bright_blue())?;
-                            write_ref(f, r)?;
-                            write!(f, "]")?;
-                        }
-                    }
-                    DataVariant::Float => write!(f, "{}", inst.data.float)?,
-                    DataVariant::UnOp => write_ref(f, inst.data.un_op)?,
-                    DataVariant::BinOp => {
-                        write_ref(f, inst.data.bin_op.0)?;
-                        write!(f, ", ")?;
-                        write_ref(f, inst.data.bin_op.1)?;
-                    }
-                    DataVariant::Type => write!(f, "{}", ir.types.get(inst.data.ty))?,
-                    DataVariant::Member => {
-                        write_ref(f, inst.data.member.0)?;
-                        write!(f, ", [member {}]", inst.data.member.1)?;
-                    }
-                    DataVariant::Cast => {
-                        write_ref(f, inst.data.cast.0)?;
-                        write!(f, " as {}", inst.data.cast.1)?;
-                    }
-                    DataVariant::Branch => {
-                        write_ref(f, inst.data.branch.0)?;
-                        let i = inst.data.branch.1 as usize;
-                        let mut bytes = [0; 4];
-                        bytes.copy_from_slice(&ir.extra[i..i+4]);
-                        let a = u32::from_le_bytes(bytes);
-                        bytes.copy_from_slice(&ir.extra[i+4..i+8]);
-                        let b = u32::from_le_bytes(bytes);
-                        write!(f, " b{a} or b{b}")?;
-                    }
-                }}
+                write!(f, "    {:>4} = {}", 
+                    format!("%{i}").cyan(),
+                    inst.display(&ir.extra, &ir.types)
+                )?;
                 if inst.ty.is_present() {
                     writeln!(f, " :: {}", format!("{}", ir.types.get(inst.ty)).magenta())?;
                 } else {
@@ -349,7 +260,7 @@ impl fmt::Display for Module {
             )?
         }
         for func in &self.funcs {
-            let name = func.name.yellow();
+            let name = func.name.red();
             writeln!(f, "{begin} {name}{}{end} {name}\n",
                 func,
                 begin = "begin func".blue(),
@@ -367,6 +278,108 @@ pub struct Instruction {
     pub ty: TypeTableIndex,
     pub span: Span,
     pub used: bool
+}
+impl Instruction {
+    pub fn display(&self, extra: &[u8], types: &FinalTypeTable) -> String {
+        format!("{} {}", self.tag, self.display_data(extra, types))
+    }
+
+    fn display_data(&self, extra: &[u8], types: &FinalTypeTable) -> ColoredString {
+        let write_ref = |r: Ref| {
+            if let Some(val) = r.into_val() {
+                format!("{val}").yellow()
+            } else {
+                format!("%{}", r.into_ref().unwrap()).cyan()
+            }
+        };
+        unsafe { match self.tag.union_data_type() {
+            DataVariant::Int => self.data.int.to_string().yellow(),
+            DataVariant::Int32 => self.data.int32.to_string().yellow(),
+            DataVariant::Block => format!("b{}", self.data.int32).bright_blue(),
+            DataVariant::LargeInt => {
+                let bytes = &extra[
+                    self.data.extra as usize
+                    .. (self.data.extra + 16) as usize
+                ];
+                let mut bytes_arr = [0; 16];
+                bytes_arr.copy_from_slice(bytes);
+                u128::from_le_bytes(bytes_arr).to_string().yellow()
+            }
+            DataVariant::String => {
+                let bytes = &extra[
+                    self.data.extra_len.0 as usize
+                    .. (self.data.extra_len.0 + self.data.extra_len.1) as usize
+                ];
+                format!("{bytes:?}").yellow()
+            }
+            DataVariant::Call => {
+                let start = self.data.extra_len.0 as usize;
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&extra[start..start+8]);
+                let func = SymbolKey(u64::from_le_bytes(bytes));
+                let refs = (0..self.data.extra_len.1).map(|i| {
+                    let mut ref_bytes = [0; 4];
+                    let begin = 8 + start + (4 * i) as usize;
+                    ref_bytes.copy_from_slice(&extra[begin..begin+4]);
+                    Ref::from_bytes(ref_bytes)
+                });
+                let mut s = format!("{}{}(", "f".red(), func.0.to_string().red());
+                for (i, r) in refs.enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&write_ref(r).to_string());
+                }
+                s.push(')');
+                s.normal()
+            }
+            DataVariant::ExtraBranchRefs => {
+                let mut s = String::new();
+                for i in 0..self.data.extra_len.1 {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    let mut current_bytes = [0; 4];
+                    let begin = (self.data.extra_len.0 + i * 8) as usize;
+                    current_bytes.copy_from_slice(&extra[begin..begin + 4]);
+                    let block = u32::from_le_bytes(current_bytes);
+                    current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
+                    current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
+                    let r = Ref::from_bytes(current_bytes);
+                    s.push('[');
+                    s.push_str(&format!("b{block}").bright_blue().to_string());
+                    s.push_str(&write_ref(r).to_string());
+                    s.push(']');
+                }
+                s.normal()
+            }
+            DataVariant::Float => self.data.float.to_string().yellow(),
+            DataVariant::UnOp => write_ref(self.data.un_op),
+            DataVariant::BinOp => {
+                format!("{}, {}", write_ref(self.data.bin_op.0), write_ref(self.data.bin_op.1)).normal()
+            }
+            DataVariant::Type => types.get(self.data.ty).to_string().purple(),
+            DataVariant::Member => {
+                format!("{}, [member {}]", write_ref(self.data.member.0), self.data.member.1).normal()
+            }
+            DataVariant::Cast => {
+                format!("{} as {}", write_ref(self.data.cast.0), self.data.cast.1).normal()
+            }
+            DataVariant::Branch => {
+                let i = self.data.branch.1 as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&extra[i..i+4]);
+                let a = u32::from_le_bytes(bytes);
+                bytes.copy_from_slice(&extra[i+4..i+8]);
+                let b = u32::from_le_bytes(bytes);
+                format!("{} b{a} or b{b}",
+                    write_ref(self.data.branch.0),
+                    a = a.to_string().bright_blue(),
+                    b = b.to_string().bright_blue()
+                ).normal()
+            }
+        }}
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,7 +423,7 @@ pub enum Tag {
     Phi
 }
 impl Tag {
-    fn union_val(&self) -> DataVariant {
+    fn union_data_type(&self) -> DataVariant {
         use DataVariant::*;
         match self {
             Tag::BlockBegin => Int32,
@@ -438,6 +451,11 @@ impl Tag {
 
     pub fn is_untyped(&self) -> bool {
         matches!(*self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
+    }
+}
+impl fmt::Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", format!("{self:?}").bright_blue())
     }
 }
 

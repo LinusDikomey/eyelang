@@ -1,4 +1,6 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
+use colored::Colorize;
+
 use crate::Args;
 
 #[allow(unused)]
@@ -33,11 +35,13 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
         return false;
     };
 
+    cmd.stderr(Stdio::piped());
+
     let proc = cmd.spawn().expect("Failed to spawn linker process");
     let output = proc.wait_with_output().expect("Linker process is invalid");
     if !output.status.success() {
-        let out = String::from_utf8_lossy(&output.stdout);
-        eprintln!("Linking failed:\n{out}");
+        let out = String::from_utf8_lossy(&output.stderr);
+        eprintln!("{}:\n{out}", "Linking command failed with output".red());
         false
     } else { true }
 }
@@ -49,18 +53,27 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
         Os::Windows => "link.exe",
     });
     cmd.arg(obj);
-    cmd.arg("help.o");
-    let args: &[&str] = match os {
-        Os::Linux => &["-lc"],
-        Os::Windows => todo!(),
-        Os::Osx => &[
-            "-L/usr/local/lib",
-            "-lSystem",
-            "-syslibroot",
-            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
-        ]
+    cmd.arg("eyebuild/help.o");
+    match os {
+        Os::Linux => cmd.arg("-lc"),
+        Os::Windows => todo!("Can't link automatically with windows yet. \
+            You will have to link the object file in the eyebuild directory manually"),
+        Os::Osx => {
+            let sdk_path_output = Command::new("xcrun")
+                .args(["-sdk", "macosx", "--show-sdk-path"])
+                .output()
+                .expect("Failed to run command to find sdk path");
+            let sdk_path = String::from_utf8(sdk_path_output.stdout)
+                .expect("SDK path contains invalid characters. Can't link against system library");
+
+            cmd.args([
+                "-L/usr/local/lib",
+                "-lSystem",
+                "-syslibroot",
+            ]);
+            cmd.arg(sdk_path.trim())
+        }
     };
-    cmd.args(args);
     cmd.args(["-o", out]);
     Some(cmd)
 }

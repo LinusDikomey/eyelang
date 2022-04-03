@@ -11,3 +11,9 @@ Maybe T :: Just(t) | Nothing deriving Clone
 AStruct :: (
     x i32
 )
+
+SomeEnum :: {
+    Variant { x i32, y String }
+    OtherVariant
+    ThirdVariant
+}

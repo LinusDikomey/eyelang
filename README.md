@@ -1,14 +1,40 @@
 # eyelang
+
 A basic programming language. The compiler is written in rust using LLVM as its backend.
-Also contains a basic tree-walk interpreter that is being used for running programs right now until the LLVM backend is ready.
+A simple unoptimized x86 backend is also on it's way.
 
-# Next steps
-- [x] Correct typechecker
-- [x] IR reducer
-- [x] LLVM backend
-- [ ] Pointers
-- [ ] Arrays
+## examples
 
-# current tasks
-- Flow analysis (return, assignment, etc.)
-- Error position info during/after ir generation
+```
+main -> {
+    std.println("Hello World")
+    x := 3
+    y := 2 * x + 3
+    y += 1
+    std.c.printf("X is %d and y is %d\n", x, y)
+}
+```
+
+### Functions and pointers
+```
+add_pointer_values(x *i32, y *i32) -> i32: ~x + ~y
+
+main -> {
+    x := 5
+    y := 7
+    std.c.printf("Result: %d\n", add_pointer_values(&x, &y))
+}
+```
+
+## Philosophy
+- Runtime Speed: The language should make it possible to write code about as fast as C.
+- Short syntax: Shorter code is more fun to write and easier to read.
+- Type inference: Having to write less types makes the code shorter and refactoring easier.
+- Compilation speed: Compilation speed over a few seconds makes debugging painfully slow.
+- Simplicity: Syntax features are nice but too many of them make the language too complicated.
+
+## Next steps
+- [x] Pointers
+- [ ] Pointer operations
+- [ ] Flow analysis (return, assignment, etc.)
+- [ ] Error position info during/after ir generation

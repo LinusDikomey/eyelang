@@ -58,7 +58,7 @@ enum Cmd {
 }
 
 #[derive(clap::Parser)]
-#[clap(version, about, long_about = None)]
+#[clap(version, about, long_about = "Eye is a simple, compiled, performant programming language")]
 pub struct Args {
     #[clap(arg_enum)]
     cmd: Cmd,
@@ -127,6 +127,16 @@ fn run(
         Err(err) => return Err((modules, err))
     };
 
+    // temporary: compile help.c for some helper methods implemented in c
+    let res = std::process::Command::new("clang")
+        .args(["-c", "help.c", "-o", "eyebuild/help.o"])
+        .status()
+        .expect("Failed to run command to compile help.c");
+    if !res.success() {
+        eprintln!("The help.c compilation command failed. \
+            The help.o object file is assumed to be found in the eyebuild directory now.");
+    }
+
     log!("\n\n{ir}\n");
 
     match args.cmd {
@@ -160,7 +170,10 @@ fn run(
                     println!("{}", "Skipping link step because --nolink was specified".yellow());
                     return Ok(());
                 }
-                link::link(&obj_file, &exe_file, args);
+                if !link::link(&obj_file, &exe_file, args) {
+                    eprintln!("{}", "Aborting because linking failed".red());
+                    return Ok(());
+                }
                 if args.cmd == Cmd::Run {
                     println!("{}", format!("Running {}...", &args.file).green());
 
@@ -179,7 +192,6 @@ fn run(
                 .expect("Failed to create assembly file");
             unsafe { backend::x86::emit(&ir, asm_file) };
         }
-        
     }
     Ok(())
 }

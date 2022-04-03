@@ -14,10 +14,10 @@ main -> {
     std.c.printf("y is: %d, x is %d, ~y is: %d\n", y, x, ~y)
 }
 
-add_to(i *i32, amount i32) -> {
+add_to(i *i64, amount i64) -> {
     ~i += amount
 }
 
-double_ptr_add(i **i32, amount i32) -> {
+double_ptr_add(i **i64, amount i64) -> {
     ~~i += amount
 }
