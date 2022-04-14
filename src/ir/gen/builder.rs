@@ -56,7 +56,7 @@ impl IrBuilder {
         })
     }
 
-    pub fn add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
+    pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
         debug_assert!(!tag.is_untyped(), "The unused IR instruction {tag:?} doesn't need a type");
         self.ir.push(Instruction {
             data,

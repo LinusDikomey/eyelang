@@ -38,9 +38,19 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
             FunctionOrHeader::Func(func) => func.finalize(),
         })
         .collect();
+
+    let main = match globals[ModuleId::ROOT.idx()].get("main") {
+        Some(Symbol::Func(func)) => *func,
+        _ => {
+            errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
+            return Err(errors)
+        }
+    };
+
     Ok(Module {
         name: "MainModule".to_owned(),
         funcs,
+        main,
         types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
     })
 }
@@ -814,7 +824,7 @@ impl<'s> Scope<'s> {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                     ExprResult::Val(val) => {
                         let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
-                        ir.add_unused(Tag::Store, Data { bin_op: (var, val) }, expected);
+                        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Func(_) | ExprResult::Type(_) => {

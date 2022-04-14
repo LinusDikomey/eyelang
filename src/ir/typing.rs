@@ -1,6 +1,15 @@
 use crate::{error::*, ast::ModuleId};
 use super::*;
 
+/// Type inference debugging
+fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
+    #[cfg(feature = "debug_types")]
+    println!("[TypeInfer] {msg}: {d:?}");
+    #[cfg(not(feature = "debug_types"))]
+    { _ = msg; }
+    d
+}
+
 #[derive(Clone, Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfo>,
@@ -8,6 +17,7 @@ pub struct TypeTable {
 }
 impl TypeTable {
     pub fn new() -> Self {
+        ty_dbg("Creating type table", ());
         Self {
             types: Vec::new(),
             indices: Vec::new()
@@ -23,11 +33,17 @@ impl TypeTable {
         self.types[self.indices[idx.idx()].get()] = info;
     }
 
+    // Points a to the index that b is pointing to
+    fn point_to(&mut self, a: TypeTableIndex, b: TypeTableIndex) {
+        self.indices[a.idx()] = self.indices[b.idx()];
+    }
+
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
         let type_idx = TypeIdx::new(self.types.len());
         self.types.push(info);
         let table_idx = TypeTableIndex::new(self.indices.len() as u32);
         self.indices.push(type_idx);
+        ty_dbg("Adding", &(info, type_idx));
         table_idx
     }
 
@@ -36,7 +52,9 @@ impl TypeTable {
     }
 
     pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, module: ModuleId) {
-        let ty = merge_twosided(self.get_type(idx), other, self).unwrap_or_else(|err| {
+        let prev = self.get_type(idx);
+        ty_dbg("Specifying", (prev, idx, other));
+        let ty = merge_twosided(prev, other, self).unwrap_or_else(|err| {
             errors.emit(err, 0, 0, module);
             TypeInfo::Invalid
         });
@@ -48,7 +66,9 @@ impl TypeTable {
         let a_ty = self.types[a_idx.get()];
         let b_idx = &mut self.indices[b.idx()];
         let prev_b_ty = self.types[b_idx.get()];
+        ty_dbg("Merging", (a_ty, prev_b_ty, a_idx, *b_idx));
         *b_idx = a_idx; // make b point to a's type
+
 
         // merge b's previous type into a
         self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self) {
@@ -166,7 +186,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                     let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
                     //TODO: if the type hasn't changed, no new type has to be added
                     types.update_type(inner, new_inner);
-                    types.update_type(other_inner, new_inner);
+                    types.point_to(other_inner, inner);
                     Ok(Pointer(inner))
                 }
                 _ => Err(Error::MismatchedType)

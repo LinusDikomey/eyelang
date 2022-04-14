@@ -121,7 +121,7 @@ pub unsafe fn emit(module: &ir::Module, file: File) {
 
 unsafe fn gen_func(index: u32, func: &ir::FinalFunction, w: &mut AsmWriter) {
     if let Some(ir) = &func.ir {
-        w.begin_func(if func.name == "main" { "_start" } else { &func.name });
+        w.begin_func(&func.name);
         w.inst(push(rbp));
 
         let mut r = Vec::with_capacity(ir.inst.len());

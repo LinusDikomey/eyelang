@@ -248,6 +248,7 @@ pub struct Module {
     pub name: String,
     pub funcs: Vec<FinalFunction>,
     pub types: Vec<FinalTypeDef>,
+    pub main: SymbolKey
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

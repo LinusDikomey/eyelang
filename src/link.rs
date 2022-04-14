@@ -1,5 +1,4 @@
-use std::process::{Command, Stdio};
-use colored::Colorize;
+use std::process::Command;
 
 use crate::Args;
 
@@ -29,21 +28,19 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
         cmd.arg(link.replace("[OBJ]", obj).replace("[OUT]", out));
         cmd
     } else if let Some(cmd) = link_cmd(obj, out) {
-            cmd
+        cmd
     } else {
-        eprintln!("No link command known for this os. You can manually link the object file created: {obj}");
+        eprintln!("No link command known for this OS. You can manually link the object file created: {obj}");
         return false;
     };
 
-    cmd.stderr(Stdio::piped());
-
     let proc = cmd.spawn().expect("Failed to spawn linker process");
     let output = proc.wait_with_output().expect("Linker process is invalid");
-    if !output.status.success() {
-        let out = String::from_utf8_lossy(&output.stderr);
-        eprintln!("{}:\n{out}", "Linking command failed with output".red());
-        false
-    } else { true }
+    let ok = output.status.success();
+    if !ok {
+        eprintln!("{}", "Linking command failed!");
+    }
+    ok
 }
 
 fn link_cmd(obj: &str, out: &str) -> Option<Command> {
@@ -55,7 +52,14 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
     cmd.arg(obj);
     cmd.arg("eyebuild/help.o");
     match os {
-        Os::Linux => cmd.arg("-lc"),
+        Os::Linux => {
+            cmd.args([
+                "-dynamic-linker",
+                "/lib64/ld-linux-x86-64.so.2",
+                "-lc",
+                "help/linux/entry.o",
+            ]);
+        }
         Os::Windows => todo!("Can't link automatically with windows yet. \
             You will have to link the object file in the eyebuild directory manually"),
         Os::Osx => {
@@ -71,7 +75,7 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
                 "-lSystem",
                 "-syslibroot",
             ]);
-            cmd.arg(sdk_path.trim())
+            cmd.arg(sdk_path.trim());
         }
     };
     cmd.args(["-o", out]);

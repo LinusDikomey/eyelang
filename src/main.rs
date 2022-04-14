@@ -83,7 +83,6 @@ pub struct Args {
     /// Don't link the object file into an executable after compiling
     #[clap(long)]
     nolink: bool,
-
 }
 
 fn main() {
@@ -127,16 +126,6 @@ fn run(
         Err(err) => return Err((modules, err))
     };
 
-    // temporary: compile help.c for some helper methods implemented in c
-    let res = std::process::Command::new("clang")
-        .args(["-c", "help.c", "-o", "eyebuild/help.o"])
-        .status()
-        .expect("Failed to run command to compile help.c");
-    if !res.success() {
-        eprintln!("The help.c compilation command failed. \
-            The help.o object file is assumed to be found in the eyebuild directory now.");
-    }
-
     log!("\n\n{ir}\n");
 
     match args.cmd {
@@ -153,7 +142,7 @@ fn run(
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
-                println!("\nResult of main function: {ret_val}");
+                println!("\nResult of JIT execution: {ret_val}");
             } else {
                 match std::fs::create_dir("eyebuild") {
                     Ok(()) => {}
@@ -161,8 +150,17 @@ fn run(
                         panic!("Failed to create build directory: {err}")
                     }
                 }
+                // temporary: compile help.c for some helper methods implemented in c
+                let res = std::process::Command::new("clang")
+                    .args(["-c", "help/help.c", "-o", "eyebuild/help.o"])
+                    .status()
+                    .expect("Failed to run command to compile help.c");
+                if !res.success() {
+                    eprintln!("The help.c compilation command failed. \
+                        The help.o object file is assumed to be found in the eyebuild directory now.");
+                }
                 let obj_file = format!("eyebuild/{output_name}.o");
-                let exe_file = format!("./eyebuild/{output_name}");
+                let exe_file = format!("eyebuild/{output_name}");
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
@@ -179,7 +177,7 @@ fn run(
 
                     std::process::Command::new(exe_file)
                         .spawn()
-                        .expect("Failed to run link command")
+                        .expect("Failed to run the executable command")
                         .wait()
                         .expect("Running process failed");
                 } else {

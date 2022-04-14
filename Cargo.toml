@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = ["llvm-backend"]
 llvm-backend = ["llvm-sys"]
+debug_types = []
 
 [dependencies]
 colored = "2.0.0"
