@@ -255,7 +255,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                 Tag::Add => {
                     let left = get_ref(data.bin_op.0, &r).ensure_rax(w);
                     w.inst(push(left));
-                    let mut right = dbg!(get_ref(data.bin_op.1, &r));
+                    let mut right = get_ref(data.bin_op.1, &r);
                     if right == rax {
                         // move into rdx because rax will be occupied by the left side
                         w.inst(mov(rdx, right));

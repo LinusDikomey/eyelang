@@ -117,7 +117,7 @@ pub enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
     Module(ModuleId),
-    Var { ty: TypeTableIndex, var: Ref },
+    Var { ty: TypeTableIndex, var: Ref }
 }
 
 struct ScopeInfo<'a> {

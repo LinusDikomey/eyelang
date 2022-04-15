@@ -137,6 +137,7 @@ impl<'a> Parser<'a> {
 
     fn parse_module(&mut self) -> Result<Module, CompileError> {
         let mut definitions = HashMap::new();
+        let mut uses = Vec::new();
         
         while self.toks.index < self.toks.len {
             let start = self.toks.current().unwrap().start;
@@ -154,7 +155,9 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Ok(Module { definitions })
+        definitions.shrink_to_fit();
+        uses.shrink_to_fit();
+        Ok(Module { definitions, uses })
     }
 
     fn parse_block_or_expr(&mut self, var_index: &mut u32) -> EyeResult<BlockOrExpr> {
@@ -178,6 +181,7 @@ impl<'a> Parser<'a> {
     fn parse_block(&mut self, var_index: &mut u32) -> EyeResult<Block> {
         self.toks.step_expect(TokenType::LBrace)?;
         let mut defs = HashMap::new();
+        let mut uses = Vec::new();
         let mut items = Vec::new();
 
         while self.toks.current()?.ty != TokenType::RBrace {
@@ -191,7 +195,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.toks.step_expect(TokenType::RBrace)?;
-        Ok( Block { items, defs })
+        items.shrink_to_fit();
+        defs.shrink_to_fit();
+        uses.shrink_to_fit();
+        Ok( Block { items, defs, uses })
     }
 
     fn parse_item(&mut self, var_index: &mut u32) -> Result<Item, CompileError> {
@@ -203,7 +210,21 @@ impl<'a> Parser<'a> {
             None
         }
 
-        let block_item = match self.toks.current()?.ty {
+        let item = match self.toks.current()?.ty {
+            TokenType::Keyword(Keyword::Use) => {
+                self.toks.step_assert(TokenType::Keyword(Keyword::Use));
+                let use_tok = self.toks.current().unwrap();
+                let use_start = use_tok.start;
+                let use_end = use_tok.end;
+                
+                let path = self.parse_path()?;
+                let last = path.segments().2
+                    .ok_or(CompileError {
+                        err: Error::CantUseRootPath,
+                        span: Span::new(use_start, use_end, self.toks.module)
+                    })?;
+                Parsed::Item(Item::Definition(last.clone(), Definition::Use(path)))
+            }
             TokenType::LBrace => Parsed::Item(Item::Block(BlockItem::Block(self.parse_block(var_index)?))),
             TokenType::Keyword(Keyword::If) => {
                 self.toks.step_assert(TokenType::Keyword(Keyword::If));
@@ -322,7 +343,7 @@ impl<'a> Parser<'a> {
             },
             _ => Parsed::None
         };
-        if let Parsed::Item(item) = block_item {
+        if let Parsed::Item(item) = item {
             Ok(item)
         } else {
             self.toks.set_position(pre_item_pos);
@@ -331,7 +352,7 @@ impl<'a> Parser<'a> {
                     Ok(Item::Block(BlockItem::Expr(expr)))
                 }
                 Err(err) => {
-                    match block_item {
+                    match item {
                         Parsed::Item(_) => unreachable!(),
                         Parsed::Error(parse_err) => { Err(parse_err) },
                         Parsed::None => Err(err),
@@ -490,21 +511,34 @@ impl<'a> Parser<'a> {
         let body = self.parse_block_or_expr(var_index)?;
         Ok(While { cond, body })
     }
+    
+    fn parse_path(&mut self) -> EyeResult<IdentPath> {
+        let first = self.toks.step_expect([TokenType::Keyword(Keyword::Root), TokenType::Ident])?;
+        let path_start = match first.ty {
+            TokenType::Keyword(Keyword::Root) => IdentPath::Root,
+            TokenType::Ident => IdentPath::Single(first.get_val(self.src).to_owned()),
+            _ => unreachable!()
+        };
+        self.parse_rest_of_path(path_start)
+    }
+
+    fn parse_rest_of_path(&mut self, mut path: IdentPath) -> EyeResult<IdentPath> {
+        while self.toks.step_if(TokenType::Dot).is_some() {
+            path.push(self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned());
+        }
+        Ok(path)
+    }
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {
         let type_tok = self.toks.step()?;
-        let parse_segments = |toks: &mut Tokens, mut path: IdentPath| -> EyeResult<UnresolvedType> {
-            while toks.step_if(TokenType::Dot).is_some() {
-                path.push(toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned());
-            }
-            Ok(UnresolvedType::Unresolved(path))
-        };
         match_or_unexpected!(type_tok,
             self.toks.module,
-            TokenType::Keyword(Keyword::Root) => parse_segments(&mut self.toks, IdentPath::Root),
+            TokenType::Keyword(Keyword::Root) => Ok(UnresolvedType::Unresolved(
+                self.parse_rest_of_path(IdentPath::Root)?
+            )),
             TokenType::Ident => {
                 let val = type_tok.get_val(self.src).to_owned();
-                parse_segments(&mut self.toks, IdentPath::Single(val))
+                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(IdentPath::Single(val))?))
             },
             TokenType::Keyword(Keyword::Primitive(primitive)) => {
                 Ok(UnresolvedType::Primitive(primitive))

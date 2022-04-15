@@ -17,12 +17,14 @@ main -> {
 
 ### Functions and pointers
 ```
+use std.c.printf
+
 add_pointer_values(x *i32, y *i32) -> i32: ~x + ~y
 
 main -> {
     x := 5
     y := 7
-    std.c.printf("Result: %d\n", add_pointer_values(&x, &y))
+    printf("Result: %d\n", add_pointer_values(&x, &y))
 }
 ```
 
@@ -32,9 +34,3 @@ main -> {
 - Type inference: Having to write less types makes the code shorter and refactoring easier.
 - Compilation speed: Compilation speed over a few seconds makes debugging painfully slow.
 - Simplicity: Syntax features are nice but too many of them make the language too complicated.
-
-## Next steps
-- [x] Pointers
-- [ ] Pointer operations
-- [ ] Flow analysis (return, assignment, etc.)
-- [ ] Error position info during/after ir generation

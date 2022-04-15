@@ -63,10 +63,11 @@ impl ModuleId {
 #[derive(Debug, Clone)]
 pub struct Module {
     pub definitions: HashMap<String, Definition>,
+    pub uses: Vec<IdentPath>
 }
 impl Module {
     pub fn empty() -> Self {
-    Self { definitions: HashMap::new() }
+        Self { definitions: HashMap::new(), uses: Vec::new() }
     }
 }
 
@@ -80,7 +81,8 @@ pub enum Item {
 pub enum Definition {
     Function(Function),
     Struct(StructDefinition),
-    Module(ModuleId)
+    Module(ModuleId),
+    Use(IdentPath)
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +117,8 @@ impl<C: Representer> Repr<C> for BlockOrExpr {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub items: Vec<BlockItem>,
-    pub defs: HashMap<String, Definition>
+    pub defs: HashMap<String, Definition>,
+    pub uses: Vec<IdentPath>
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +224,7 @@ impl IdentPath {
     }*/
 
     /// Returns: (root, segments_without_last, last_segment)
+    /// last_segment will only be None if the path is a single root item
     pub fn segments<'a>(&'a self) -> (bool, std::slice::Iter<'a, String>, Option<&'a String>) {
         match self {
             Self::Root => (true, (&[]).iter(), None),

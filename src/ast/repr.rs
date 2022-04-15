@@ -81,6 +81,10 @@ impl Definition {
             Self::Function(func) => func.repr(c, name),
             Self::Struct(struc) => struc.repr(c, name),
             Self::Module(_) => {}
+            Self::Use(path) => {
+                c.write_add("use ");
+                path.repr(c)
+            }
         }
     }
 }

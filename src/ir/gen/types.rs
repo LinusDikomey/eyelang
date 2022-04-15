@@ -12,21 +12,42 @@ pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) 
 
     for (module_id, module) in modules.iter() {
         for (name, def) in &module.definitions {
-            match def {
-                ast::Definition::Function(func) => {
-                    add_func(ctx, modules, &mut symbols, func, module_id, name, errors);
-                }
-                ast::Definition::Struct(struct_) => {
-                    add_struct(ctx, modules, &mut symbols, struct_, module_id, name, errors);
-                }
-                ast::Definition::Module(module) => {
-                    symbols[module_id.idx()].insert(name.clone(), Symbol::Module(*module));
-                }
-            }
+            add_global_def(def, ctx, &modules, &mut symbols, module_id, name, errors);
         }
     }
 
     symbols
+}
+
+fn add_global_def(
+    def: &ast::Definition,
+    ctx: &mut TypingCtx,
+    modules: &Modules,
+    symbols: &mut [HashMap<String, Symbol>],
+    module: ModuleId,
+    name: &str,
+    errors: &mut Errors,
+) -> Option<Symbol> {
+    Some(match def {
+        ast::Definition::Function(func) => {
+            Symbol::Func(add_func(ctx, modules, symbols, func, module, name, errors))
+        }
+        ast::Definition::Struct(struct_) => {
+            Symbol::Type(add_struct(ctx, modules, symbols, struct_, module, name, errors))
+        }
+        ast::Definition::Module(inner_module) => {
+            symbols[module.idx()].insert(name.to_owned(), Symbol::Module(*inner_module));
+            Symbol::Module(*inner_module)
+        }
+        ast::Definition::Use(path) => {
+            if let Some(symbol) = resolve_global_path(ctx, modules, symbols, path, module, errors) {
+                symbols[module.idx()].insert(name.to_owned(), symbol);
+                symbol
+            } else {
+                return None;
+            }
+        }
+    })
 }
 
 pub fn gen_locals(
@@ -34,6 +55,7 @@ pub fn gen_locals(
     defs: &HashMap<String, ast::Definition>,
     errors: &mut Errors
 ) -> HashMap<String, Symbol> {
+    //TODO: split off path resolving into it's own function for use statements
     fn ty(
         unresolved: &UnresolvedType,
         symbols: &mut HashMap<String, Symbol>,
@@ -151,6 +173,7 @@ pub fn gen_locals(
             ast::Definition::Module(id) => {
                 symbols.insert(name.clone(), Symbol::Module(*id));
             }
+            ast::Definition::Use(_) => todo!("local use statements aren't supported right now")
         };
     }
 
@@ -166,9 +189,10 @@ pub fn add_func(
     name: &str,
     errors: &mut Errors
 ) -> SymbolKey {
-    // This should not happen because functions shouldn't cross-refererence.
-    // If they do in the future, do the same as add_struct does
-    debug_assert!(!symbols[module.idx()].contains_key(name));
+    if let Some(existing) = symbols[module.idx()].get(name) {
+        let Symbol::Func(key) = existing else { unreachable!() };
+        return *key;
+    }
 
     let params = func.params.iter()
         .map(|(name, param_ty, _start, _end)| 
@@ -210,6 +234,42 @@ pub fn add_struct(
     key
 }
 
+fn resolve_global_path(
+    ctx: &mut TypingCtx,
+    modules: &Modules,
+    symbols: &mut [HashMap<String, Symbol>],
+    path: &ast::IdentPath,
+    module: ModuleId,
+    errors: &mut Errors
+) -> Option<Symbol> {
+    let (root, segments, last) = path.segments();
+    let Some(last) = last else {
+        errors.emit(Error::CantUseRootPath, 0, 0, module);
+        return None;
+    };
+    let mut module = if root { ModuleId::ROOT } else { module };
+    // handle all but the last path segments to go to the correct module
+    let mut update = |name| {
+        if let Some(def) = modules[module].definitions.get(name) {
+            match def {
+                ast::Definition::Module(new_module) => module = *new_module,
+                _ => {
+                    errors.emit(Error::ModuleExpected, 0, 0, module);
+                    return false;
+                }
+            }
+        } else {
+            errors.emit(Error::UnknownIdent, 0, 0, module);
+            return false;
+        }
+        true
+    };
+    for name in segments {
+        if !update(name) { return None };
+    }
+    resolve_in_module(ctx, modules, symbols, module, last, errors)
+}
+
 fn resolve(
     ctx: &mut TypingCtx,
     modules: &Modules,
@@ -246,7 +306,14 @@ fn resolve(
             for name in segments {
                 if let Some(err) = update(name) { return err };
             }
-            ty(ctx, modules, symbols, module, last, errors)
+            match resolve_in_module(ctx, modules, symbols, module, last, errors) {
+                Some(Symbol::Type(ty)) => TypeRef::Base(BaseType::Id(ty)),
+                Some(_) => {
+                    errors.emit(Error::TypeExpected, 0, 0, module);
+                    TypeRef::Invalid
+                }
+                None => TypeRef::Invalid // an error was already emitted in this case
+            }
         }
         UnresolvedType::Pointer(inner) => {
             match resolve(ctx, modules, symbols, module, inner, errors) {
@@ -264,27 +331,24 @@ fn resolve(
     }
 }
 
-fn ty(
+fn resolve_in_module(
     ctx: &mut TypingCtx,
     modules: &Modules,
     symbols: &mut [HashMap<String, Symbol>],
     module: ModuleId,
     name: &str,
     errors: &mut Errors
-) -> TypeRef {
+) -> Option<Symbol> {
     if let Some(symbol) = symbols[module.idx()].get(name) {
-        match symbol {
+        /*match symbol {
             Symbol::Type(ty) => return TypeRef::Base(BaseType::Id(*ty)),
             _ => {}
-        }
+        }*/
+        Some(*symbol)
     } else if let Some(def) = modules[module].definitions.get(name) {
-        match def {
-            crate::ast::Definition::Struct(struct_) => {
-                return TypeRef::Base(BaseType::Id(add_struct(ctx, modules, symbols, struct_, module, name, errors)));
-            }
-            _ => {}
-        }
+        add_global_def(def, ctx, modules, symbols, module, name, errors)
+    } else {
+        errors.emit(Error::UnknownIdent, 0, 0, module);
+        None
     }
-    errors.emit(Error::TypeExpected, 0, 0, module);
-    TypeRef::Invalid
 }

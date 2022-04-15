@@ -130,41 +130,46 @@ pub enum Keyword {
     False,
     And,
     Or,
+    As,
     Struct,
     If,
     Else,
     While,
     Extern,
     Root,
+    Use,
 }
 
 impl Keyword {
 
     pub fn from_str(s: &str) -> Option<Keyword> {
+        use Keyword::Primitive as P;
+        use Primitive::*;
         Some(match s {
-            "i8"   => Keyword::Primitive(Primitive::I8),
-            "i16"  => Keyword::Primitive(Primitive::I16),
-            "i32"  => Keyword::Primitive(Primitive::I32),
-            "i64"  => Keyword::Primitive(Primitive::I64),
-            "i128" => Keyword::Primitive(Primitive::I128),
+            "i8"   => P(I8),
+            "i16"  => P(I16),
+            "i32"  => P(I32),
+            "i64"  => P(I64),
+            "i128" => P(I128),
             
-            "u8"   => Keyword::Primitive(Primitive::U8),
-            "u16"  => Keyword::Primitive(Primitive::U16),
-            "u32"  => Keyword::Primitive(Primitive::U32),
-            "u64"  => Keyword::Primitive(Primitive::U64),
-            "u128" => Keyword::Primitive(Primitive::U128),
+            "u8"   => P(U8),
+            "u16"  => P(U16),
+            "u32"  => P(U32),
+            "u64"  => P(U64),
+            "u128" => P(U128),
             
-            "f32" => Keyword::Primitive(Primitive::F32),
-            "f64" => Keyword::Primitive(Primitive::F64),
+            "f32" => P(F32),
+            "f64" => P(F64),
             
-            "bool" => Keyword::Primitive(Primitive::Bool),
-            "string" => Keyword::Primitive(Primitive::String),
+            "bool" => P(Bool),
+            "string" => P(String),
 
             "ret" => Keyword::Ret,
             "true" => Keyword::True,
             "false" => Keyword::False,
             "and" => Keyword::And,
             "or" => Keyword::Or,
+            "as" => Keyword::As,
             "struct" => Keyword::Struct,
             "if" => Keyword::If,
             "else" => Keyword::Else,
@@ -172,6 +177,7 @@ impl Keyword {
 
             "extern" => Keyword::Extern,
             "root" => Keyword::Root,
+            "use" => Keyword::Use,
             _ => return None
         })
     }
