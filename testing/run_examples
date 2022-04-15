@@ -1,0 +1,11 @@
+#!/bin/bash
+cargo build
+./target/debug/eyelang run eye/project --nostd
+./target/debug/eyelang run eye/basic.eye
+printf "+\n3\n4" | ./target/debug/eyelang run eye/calculator.eye
+./target/debug/eyelang run eye/fib.eye
+./target/debug/eyelang run eye/infer.eye
+./target/debug/eyelang run eye/operators.eye
+# ./target/debug/eyelang run eye/pointers.eye # not testing this because pointer addresses will be different each run
+./target/debug/eyelang run eye/return_3.eye
+./target/debug/eyelang run eye/test.eye

@@ -3,7 +3,7 @@
 A basic programming language. The compiler is written in rust using LLVM as its backend.
 A simple unoptimized x86 backend is also on it's way.
 
-## examples
+## Examples
 
 ```
 main -> {

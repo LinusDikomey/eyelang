@@ -60,6 +60,7 @@ impl SymbolKey {
     #[inline(always)]
     pub fn idx(&self) -> usize { self.0 as usize }
     pub fn bytes(&self) -> [u8; 8] { self.0.to_le_bytes() }
+    pub fn from_bytes(bytes: [u8; 8]) -> Self { Self(u64::from_le_bytes(bytes)) }
 }
 
 pub struct Function {
@@ -348,7 +349,7 @@ impl Instruction {
                     current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
                     let r = Ref::from_bytes(current_bytes);
                     s.push('[');
-                    s.push_str(&format!("b{block}").bright_blue().to_string());
+                    s.push_str(&format!("b{block}: ").bright_blue().to_string());
                     s.push_str(&write_ref(r).to_string());
                     s.push(']');
                 }
@@ -373,10 +374,10 @@ impl Instruction {
                 let a = u32::from_le_bytes(bytes);
                 bytes.copy_from_slice(&extra[i+4..i+8]);
                 let b = u32::from_le_bytes(bytes);
-                format!("{} b{a} or b{b}",
+                format!("{} {a} or {b}",
                     write_ref(self.data.branch.0),
-                    a = a.to_string().bright_blue(),
-                    b = b.to_string().bright_blue()
+                    a = format!("b{a}").bright_blue(),
+                    b = format!("b{b}").bright_blue()
                 ).normal()
             }
         }}

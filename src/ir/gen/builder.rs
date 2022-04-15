@@ -113,6 +113,10 @@ impl IrBuilder {
         });
     }
 
+    pub fn current_block(&self) -> BlockIndex {
+        BlockIndex(self.current_block)
+    }
+
     pub fn finish(self) -> FunctionIr {
         FunctionIr {
             inst: self.ir,

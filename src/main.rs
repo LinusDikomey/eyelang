@@ -23,7 +23,7 @@ mod backend;
 extern crate llvm_sys as llvm;
 
 use crate::error::Errors;
-use std::{path::Path, sync::atomic::AtomicBool};
+use std::{path::{Path, PathBuf}, sync::atomic::AtomicBool};
 use clap::StructOpt;
 use colored::Colorize;
 
@@ -127,6 +127,16 @@ fn run(
     };
 
     log!("\n\n{ir}\n");
+    let obj_file = format!("eyebuild/{output_name}.o");
+    let exe_file = format!("eyebuild/{output_name}");
+    let exec = || {
+        println!("{}", format!("Running {}...", &args.file).green());
+        std::process::Command::new(&exe_file)
+            .spawn()
+            .expect("Failed to run the executable command")
+            .wait()
+            .expect("Running process failed");
+    };
 
     match args.cmd {
         Cmd::Check => {
@@ -159,8 +169,6 @@ fn run(
                     eprintln!("The help.c compilation command failed. \
                         The help.o object file is assumed to be found in the eyebuild directory now.");
                 }
-                let obj_file = format!("eyebuild/{output_name}.o");
-                let exe_file = format!("eyebuild/{output_name}");
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
@@ -173,22 +181,26 @@ fn run(
                     return Ok(());
                 }
                 if args.cmd == Cmd::Run {
-                    println!("{}", format!("Running {}...", &args.file).green());
-
-                    std::process::Command::new(exe_file)
-                        .spawn()
-                        .expect("Failed to run the executable command")
-                        .wait()
-                        .expect("Running process failed");
+                    exec();
                 } else {
                     println!("{}", format!("Built {}", &args.file).green());
                 }
             }
         }
         Cmd::X86Run => {
-            let asm_file = std::fs::File::create(format!("./eyebuild/{output_name}.asm"))
+            let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
+            let asm_file = std::fs::File::create(&asm_path)
                 .expect("Failed to create assembly file");
             unsafe { backend::x86::emit(&ir, asm_file) };
+            if !backend::x86::assemble(&asm_path, Path::new(&obj_file)) {
+                eprintln!("Assembler failed! Exiting");
+                return Ok(());
+            }
+            if !link::link(&obj_file, &exe_file, args) {
+                eprintln!("{}", "Aborting because linking failed".red());
+                return Ok(());
+            }
+            exec();
         }
     }
     Ok(())

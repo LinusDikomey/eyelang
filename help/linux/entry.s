@@ -1,18 +1,19 @@
-extern main
+extern main ; from the eyelang module
+extern exit ; from libc
+
 global _start
 
 section .text
 
 _start:
-  mov rax, 1        ; write(
-  mov rdi, 1        ;   STDOUT_FILENO,
-  mov rsi, msg      ;   message
-  mov rdx, msglen   ;   sizeof message
-  syscall           ; );
   call main
-  mov rax, 60       ; exit(
-  mov rdi, 0        ;   EXIT_SUCCESS
-  syscall           ; );
+  
+  ; mov rdi, rax ; mov result of main into the exit result
+  ; mov rax, 60       ; exit(
+  ; syscall           ; );
+
+  mov rdi, 0 ; set exit code to 0
+  call exit ; better than a raw syscall because it flushes io buffers
 
 section .rodata
   msg: db "Eyelang entry point", 10

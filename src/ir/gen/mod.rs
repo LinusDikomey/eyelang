@@ -556,23 +556,19 @@ impl<'s> Scope<'s> {
                 let val = if let Some(else_) = else_ {
                     let after_block = ir.create_block();
                     let (then_val, _) = self.reduce_block_or_expr(errors, ir, then, expected, ret);
+                    let then_exit = ir.current_block();
                     ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(other_block);
                     let (else_val, _) = self.reduce_block_or_expr(errors, ir, else_, expected, ret);
+                    let else_exit = ir.current_block();
                     ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(after_block);
 
-                    let extra = ir.extra_data(&then_block.bytes());
+                    let extra = ir.extra_data(&then_exit.bytes());
                     ir.extra_data(&then_val.to_bytes());
-                    ir.extra_data(&other_block.bytes());
+                    ir.extra_data(&else_exit.bytes());
                     ir.extra_data(&else_val.to_bytes());
-                    ir.add(
-                        Data {
-                            extra_len: (extra, 2),
-                        },
-                        Tag::Phi,
-                        expected,
-                    )
+                    ir.add(Data { extra_len: (extra, 2) }, Tag::Phi, expected)
                 } else {
                     ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                     let then_ty = ir.types.add(TypeInfo::Unknown);
@@ -895,13 +891,7 @@ impl<'s> Scope<'s> {
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
                 let val = self.reduce_expr_val(errors, ir, val, inner_ty, ret);
                 //TODO: check table for available casts
-                ir.add(
-                    Data {
-                        cast: (val, *target),
-                    },
-                    Tag::Cast,
-                    expected,
-                )
+                ir.add(Data { cast: (val, *target), }, Tag::Cast, expected)
             }
             ast::Expr::Root => {
                 return ExprResult::Module(ModuleId::ROOT)

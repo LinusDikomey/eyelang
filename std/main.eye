@@ -30,7 +30,7 @@ int_to_string(i i32) -> string {
     ret buffer
 }
 
-string_to_int(s string) -> i32 {
+parse_int(s string) -> i32 {
     ret c.atoi(s)
 }
 
