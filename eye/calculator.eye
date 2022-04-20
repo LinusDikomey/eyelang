@@ -8,7 +8,7 @@ main -> {
     std.c.printf("Result: %d\n", calc(mode, a, b))
 }
 
-calc(mode string, a i32, b i32) -> i32 {
+calc(mode *i8, a i32, b i32) -> i32 {
     ret if std.streq(mode, "+"): a + b
     else if std.streq(mode, "-"): a - b
     else if std.streq(mode, "*"): a * b

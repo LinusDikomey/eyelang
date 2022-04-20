@@ -1,6 +1,6 @@
 # print and parse are no longer intrinsics so these are added to make the program work
-print(s string, ...) -> {}
-parse(s string) -> i32: 0
+print(s *i8, ...) -> {}
+parse(s *i8) -> i32: 0
 
 sayHello(newline bool) ->: print("Hello", if newline: "\n" else "")
 bye -> { print("Bye") }
@@ -14,21 +14,21 @@ bla(x i32, y i32) -> {
 }
 
 main -> {
-    print(string(abs(-4)), "\n")
+    # print(string(abs(-4)), "\n")
     v := Vec3(1.0, 2.5, 3.0)
 
-    print("Vec before assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
+    # print("Vec before assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
 
     v.y = 3.1
-    print("Vec after assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
-    print("x: ", string(v.x), "\n")
+    # print("Vec after assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
+    # print("x: ", string(v.x), "\n")
 
     name := "John Doe"
     sayHello(false)
     print(", ")
     print(name, "\n")
     inp := parse("123456789")
-    print("You entered: ", string(inp), "\n")
+    # print("You entered: ", string(inp), "\n")
     
     x := 4
 
@@ -38,7 +38,7 @@ main -> {
         print("Your number is 5 or larger\n")
 
     y: i32 = inp / 2
-    print("Half your number is: ", string(y), "\n")
+    # print("Half your number is: ", string(y), "\n")
     print("Some calculations:\n")
     # test()("Calling return value from test()\n")
 

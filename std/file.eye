@@ -1,9 +1,8 @@
 
-read_to_string(path string) -> string {
+read_to_string(path *i8) -> *i8 {
     chunk_size := 64
-
     buf := root.std.buf(chunk_size)
-    str := root.std.c.malloc(chunk_size)
+    str := root.std.c.malloc(chunk_size+1) # reserve one byte for zero terminator
 
     handle := root.std.c.fopen(path, "r")
     if handle.ptr == 0 {

@@ -162,8 +162,7 @@ impl Keyword {
             "f64" => P(F64),
             
             "bool" => P(Bool),
-            "string" => P(String),
-
+            
             "ret" => Keyword::Ret,
             "true" => Keyword::True,
             "false" => Keyword::False,

@@ -313,7 +313,6 @@ impl<C: Representer> Repr<C> for Primitive {
             | Self::I128 | Self::U128
                 => self.as_int().unwrap().repr(c),
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
-            Self::String => c.write_add("string"),
             Self::Bool => c.write_add("bool"),
             Self::Unit => c.write_add("()"),
             Self::Never => c.write_add("!")

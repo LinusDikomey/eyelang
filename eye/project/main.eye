@@ -1,5 +1,5 @@
 
-printf(fmt string, ...) -> i32 extern
+printf(fmt *i8, ...) -> i32 extern
 
 Point :: { x i32, y i32 }
 

@@ -1,17 +1,17 @@
 # print and parse are no longer intrinsics so these are added to make the program work
-print(s string, ...) -> {}
-parse(s string) -> i32: 0
-read(msg string) -> string: ""
+print(s *i8, ...) -> {}
+parse(s *i8) -> i32: 0
+read(msg *i8) -> *i8: ""
 
 main -> i8 {
     s := "Hello World"
     x := 3
     x = 4
     y := x + 5 * 2
-    print(s, ", ", string(y), "\n")
+    # print(s, ", ", string(y), "\n")
 
     unknownInt := 4 # i32 should be chosen when no other information is known
-    print(string(unknownInt), "\n")
+    # print(string(unknownInt), "\n")
 
     x := if 1 < 2: 5 else x
 

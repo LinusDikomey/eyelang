@@ -365,7 +365,7 @@ impl Instruction {
                 format!("{}, [member {}]", write_ref(self.data.member.0), self.data.member.1).normal()
             }
             DataVariant::Cast => {
-                format!("{} as {}", write_ref(self.data.un_op), types.get(self.data.ty)).normal()
+                format!("{} as {}", write_ref(self.data.un_op), types.get(self.ty)).normal()
             }
             DataVariant::Branch => {
                 let i = self.data.branch.1 as usize;
@@ -419,6 +419,7 @@ pub enum Tag {
 
     Member,
     Cast,
+    AsPointer,
 
     Goto,
     Branch,
@@ -429,7 +430,7 @@ impl Tag {
         use DataVariant::*;
         match self {
             Tag::BlockBegin => Int32,
-            Tag::Ret => UnOp,
+            Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not => UnOp,
             Tag::Param => Int32,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
@@ -439,7 +440,6 @@ impl Tag {
             Tag::Store => BinOp,
             Tag::String => String,
             Tag::Call => Call,
-            Tag::Neg | Tag::Not => UnOp,
             Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,

@@ -2,7 +2,7 @@ use crate::{
     ast::ModuleId,
     ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
     lexer::Span,
-    error::Errors
+    error::Errors, types::Primitive
 };
 
 pub struct IrBuilder {
@@ -134,5 +134,22 @@ impl IrBuilder {
 
     pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
         self.types.specify(idx, info, errors, self.module)
+    }
+
+    pub fn ty(&self, r: Ref) -> TypeInfo {
+        if let Some(v) = r.into_val() {
+            match v {
+                crate::ir::RefVal::True | crate::ir::RefVal::False => TypeInfo::Primitive(Primitive::Bool),
+                crate::ir::RefVal::Unit => TypeInfo::Primitive(Primitive::Unit),
+                crate::ir::RefVal::Undef => TypeInfo::Invalid,
+            }
+        } else {
+            let idx = r.into_ref().unwrap();
+            self.types.get_type(self.ir[idx as usize].ty)
+        }
+    }
+
+    pub fn ir(&self) -> &[Instruction] {
+        &self.ir
     }
 }

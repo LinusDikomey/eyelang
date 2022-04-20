@@ -1,64 +1,66 @@
 
-print(s string) -> {
+print(s *i8) -> {
     c.printf("%s", s)
 }
-println(s string) -> {
+println(s *i8) -> {
     c.printf("%s\n", s)
 }
 
 skip_char -> {
-    c.scanf("%c", c.malloc(8))
+    tmp: u64 = 0
+    c.scanf("%c", (&tmp) as *i8)
 }
 
-readline -> string {
+readline -> *i8 {
     line := c.malloc(1024)
     c.scanf("%1023[^\n]", line)
     skip_char()
     ret line
 }
 
-input(msg string) -> string {
+input(msg *i8) -> *i8 {
     print(msg)
     line := readline()
     ret line
 }
 
-int_to_string(i i32) -> string {
+int_to_string(i i32) -> *i8 {
     max_len := 10
     buffer := c.malloc(max_len)
     c.snprintf(buffer, max_len, "%d", i)
     ret buffer
 }
 
-parse_int(s string) -> i32 {
+parse_int(s *i8) -> i32 {
     ret c.atoi(s)
 }
 
-streq(a string, b string) -> bool {
+streq(a *i8, b *i8) -> bool {
     ret c.strcmp(a, b) == 0
 }
 
 Buf :: {
-    ptr string,
+    ptr *i8,
     size u64,
     cap u64
 }
+
 buf(initial_cap u64) -> Buf: Buf(c.malloc(initial_cap), 0, initial_cap)
 
-buf_write(buf Buf, ptr string, len u64) -> Buf {
+buf_write(buf Buf, ptr *i8, len u64) -> Buf {
     if buf.cap - buf.size >= len {
         # enough capacity
-        c.memcpy(c.ptr_add(buf.ptr, buf.size), ptr, len)
+        c.memcpy(c.ptr_add(buf.ptr as *i8, buf.size), ptr as *i8, len)
         buf.size += len
     } else {
         # not enough capacity, reallocate
         new_size := buf.size + len
         new_cap := new_size
         new_ptr := c.malloc(new_size)
-        c.memcpy(new_ptr, buf.ptr, buf.size)
-        c.free(buf.ptr)
+        c.memcpy(new_ptr, buf.ptr as *i8, buf.size)
+        c.free(buf.ptr as *i8)
 
-        c.memcpy(c.ptr_add(new_ptr, buf.size), ptr, len)
+        c.memcpy(c.ptr_add(new_ptr, buf.size), ptr as *i8, len)
 
         buf = Buf(new_ptr, new_size, new_cap)
     }

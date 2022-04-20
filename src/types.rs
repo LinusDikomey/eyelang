@@ -5,7 +5,6 @@ pub enum Primitive {
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
     F32, F64,
-    String,
     Bool,
     Unit,
     Never
@@ -68,7 +67,6 @@ impl fmt::Display for Primitive {
             U128 => "u128",
             F32 => "f32",
             F64 => "f64",
-            String => "string",
             Bool => "bool",
             Unit => "()",
             Never => "!"

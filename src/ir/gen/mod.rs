@@ -517,7 +517,8 @@ impl<'s> Scope<'s> {
                 ir.add(Data { float: lit.val }, Tag::Float, expected)
             }
             ast::Expr::StringLiteral(string) => {
-                ir.specify(expected, TypeInfo::Primitive(Primitive::String), errors);
+                let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
+                ir.specify(expected, TypeInfo::Pointer(i8_ty), errors);
                 let extra_len = ir._extra_len(string.as_bytes());
                 // add zero byte
                 ir.extra_data(&[b'\0']);
@@ -708,7 +709,13 @@ impl<'s> Scope<'s> {
                             _ => ir.types.add(TypeInfo::Invalid)
                         };
                         return ExprResult::Val(match self.reduce_expr(errors, ir, val, inner_expected, ret) {
-                            ExprResult::VarRef(r) => r,
+                            ExprResult::VarRef(r) => {
+                                let idx = r.into_ref().expect("VarRef should never be constant");
+                                let inner_ty =ir.ir()[idx as usize].ty;
+
+                                let ty = ir.types.add(TypeInfo::Pointer(inner_ty));
+                                ir.add(Data { un_op: r }, Tag::AsPointer, ty)
+                            }
                             _ => {
                                 errors.emit(Error::CantTakeRef, 0, 0, self.module);
                                 Ref::UNDEF

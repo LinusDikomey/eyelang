@@ -279,6 +279,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                 Tag::GE => todo!(),
                 Tag::Member => todo!(),
                 Tag::Cast => todo!(),
+                Tag::AsPointer => todo!(),
                 Tag::Goto => todo!(),
                 Tag::Branch => todo!(),
                 Tag::Phi => todo!(),

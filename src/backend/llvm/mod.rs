@@ -50,7 +50,6 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
         I128 | U128 => LLVMInt128TypeInContext(ctx),
         F32 => LLVMFloatTypeInContext(ctx),
         F64 => LLVMDoubleTypeInContext(ctx),
-        String => LLVMPointerType(LLVMInt8TypeInContext(ctx), 0),
         Bool => LLVMInt1TypeInContext(ctx),
         Unit => LLVMVoidTypeInContext(ctx),
         Never => unreachable!(), // should the never type ever be represented in llvm?
@@ -362,8 +361,6 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 let (val, origin) = get_ref_and_type(&instructions, data.un_op);
                 let target = ir.types.get(*ty);
                 match target {
-                    // temporary fix for string casts: just always give an empty string
-                    Type::Base(BaseType::Prim(Primitive::String)) => LLVMBuildGlobalStringPtr(builder, NONE, NONE),
                     Type::Base(BaseType::Prim(target)) => {
                         match origin {
                             Type::Base(BaseType::Prim(origin)) => {
@@ -408,13 +405,14 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                     Type::Pointer { count: _, inner: _ } => {
                         let llvm_target = llvm_ty(ctx, types, &target);
                         match origin {
-                            Type::Pointer { count: _, inner: _ } | Type::Base(BaseType::Prim(Primitive::String))
+                            Type::Pointer { count: _, inner: _ }
                                 => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
                             t => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
                     }
                 }
             }
+            ir::Tag::AsPointer => get_ref(&instructions, data.un_op),
             ir::Tag::Goto => LLVMBuildBr(builder, blocks[data.int32 as usize]),
             ir::Tag::Branch => {
                 let mut bytes = [0; 4];
