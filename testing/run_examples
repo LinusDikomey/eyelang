@@ -9,3 +9,5 @@ printf "+\n3\n4" | ./target/debug/eyelang run eye/calculator.eye
 # ./target/debug/eyelang run eye/pointers.eye # not testing this because pointer addresses will be different each run
 ./target/debug/eyelang run eye/return_3.eye
 ./target/debug/eyelang run eye/test.eye
+./target/debug/eyelang run eye/casts.eye
+./target/debug/eyelang run eye/heap.eye
