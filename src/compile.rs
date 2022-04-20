@@ -8,23 +8,37 @@ use crate::{
     Args
 };
 
-pub fn path(path: &Path, args: &Args, std: Option<&Path>) -> (Modules, ModuleId, Errors) {
+pub struct Dependency<'a> {
+    name: String,
+    path: &'a Path
+}
+
+pub fn project(module_path: &Path, args: &Args, deps: &[Dependency]) -> Result<crate::ir::Module, (Modules, Errors)> {
     let mut errors = Errors::new();
     let mut modules = Modules::new();
 
-    let main = if path.is_dir() {
-        tree(path, &mut modules, &mut errors, TreeType::Main, args)
+    /*let deps = deps.into_iter()
+        .map(|dep| Ok::<_, (Modules, Errors)>((dep.name.clone(), crate::ir::Symbol::project(dep.path, args, &[])?)))
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    */
+
+    let main = if module_path.is_dir() {
+        tree(module_path, &mut modules, &mut errors, TreeType::Main, args)
     } else {
-        file(path, &mut modules, &mut errors, args)
+        file(module_path, &mut modules, &mut errors, args)
     };
-    if let Some(std) = std {
+    
+    if let Some(std) = (!args.nostd).then(|| Path::new("std")) {
         let std_mod = tree(std, &mut modules, &mut errors, TreeType::Main, args);
         modules[main].definitions.insert(
             "std".to_owned(),
             ast::Definition::Module(std_mod)    
         );
     }
-    (modules, main, errors)
+    match crate::ir::reduce(&modules, errors) {
+        Ok((ir, _globals)) => Ok(ir),
+        Err(err) => Err((modules, err))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,7 +60,7 @@ fn tree(
     modules: &mut Modules,
     errors: &mut Errors,
     t: TreeType,
-    args: &Args
+    args: &Args,
 ) -> ModuleId {
     let base_file = path.join(t.file());
     let base_exists = std::fs::try_exists(&base_file)
@@ -88,7 +102,12 @@ fn tree(
     base_module
 }
 
-fn file(path: &Path, modules: &mut Modules, errors: &mut Errors, args: &Args) -> ModuleId {
+fn file(
+    path: &Path,
+    modules: &mut Modules,
+    errors: &mut Errors,
+    args: &Args,
+) -> ModuleId {
     let src = match std::fs::read_to_string(path) {
         Ok(f) => f,
         Err(err) => panic!("Failed to read file {path:?}: {err}")
@@ -119,10 +138,6 @@ fn file(path: &Path, modules: &mut Modules, errors: &mut Errors, args: &Args) ->
         }
     };
     
-    // Intrinsics are inserted into the module so the resolver can find them.
-    // This is a workarround until imports are present and these functions
-    // are no longer magic implemented in the interpreter
-
     crate::log!("Parsed file {:?}", path);
 
     module_id

@@ -120,12 +120,8 @@ fn run(
     args: &Args,
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
-    let (modules, _main, errors) = compile::path(path, args, (!args.nostd).then(|| Path::new("std")));
-    let ir = match ir::reduce(&modules, errors) {
-        Ok(ir) => ir,
-        Err(err) => return Err((modules, err))
-    };
-
+    let ir = compile::project(path, args, &[])?;
+    
     log!("\n\n{ir}\n");
     let obj_file = format!("eyebuild/{output_name}.o");
     let exe_file = format!("eyebuild/{output_name}");

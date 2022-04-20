@@ -1,5 +1,4 @@
 use std::{collections::HashMap, num::NonZeroU8};
-
 use crate::{
     ast::{Modules, ModuleId, StructDefinition, self, UnresolvedType},
     error::{Errors, Error},
@@ -7,7 +6,32 @@ use crate::{
 };
 use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeader, Scope};
 
-pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) -> Vec<HashMap<String, Symbol>> {
+#[derive(Clone, Debug)]
+pub struct Globals(Vec<HashMap<String, Symbol>>);
+impl Globals {
+    pub fn get_ref<'a>(&'a self) -> GlobalsRef<'a> {
+        GlobalsRef(&self.0)
+    }
+}
+impl std::ops::Index<ModuleId> for Globals {
+    type Output = HashMap<String, Symbol>;
+
+    fn index(&self, index: ModuleId) -> &Self::Output {
+        &self.0[index.idx()]
+    }
+}
+
+/// For passing arround a reference to globals. More efficient than &Globals.
+#[derive(Clone, Copy)]
+pub struct GlobalsRef<'a>(&'a [HashMap<String, Symbol>]);
+impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
+    type Output = HashMap<String, Symbol>;
+    fn index(&self, index: ModuleId) -> &Self::Output {
+        &self.0[index.idx()]
+    }
+}
+
+pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) -> Globals {
     let mut symbols = (0..modules.len()).map(|_| HashMap::new()).collect::<Vec<_>>();
 
     for (module_id, module) in modules.iter() {
@@ -15,8 +39,7 @@ pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) 
             add_global_def(def, ctx, &modules, &mut symbols, module_id, name, errors);
         }
     }
-
-    symbols
+    Globals(symbols)
 }
 
 fn add_global_def(
@@ -75,7 +98,7 @@ pub fn gen_locals(
 
                 for segment in segments {
                     if let Some(module) = current_module {
-                        match scope.globals[module.idx()].get(segment) {
+                        match scope.globals[module].get(segment) {
                             Some(Symbol::Module(id)) => current_module = Some(*id),
                             Some(_) => {
                                 errors.emit(Error::ModuleExpected, 0, 0, scope.module);
@@ -100,7 +123,7 @@ pub fn gen_locals(
                     }
                 };
                 if let Some(module) = current_module {
-                    let Some(symbol) = scope.globals[module.idx()].get(last) else {
+                    let Some(symbol) = scope.globals[module].get(last) else {
                         errors.emit(Error::UnknownIdent, 0, 0, scope.module);
                         return TypeRef::Invalid;
                     };

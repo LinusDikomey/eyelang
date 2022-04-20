@@ -5,26 +5,30 @@ use crate::{
     types::Primitive,
 };
 use std::{borrow::Cow, collections::HashMap, ptr::NonNull};
-
-use self::builder::IrBuilder;
+use builder::IrBuilder;
+use self::types::{GlobalsRef, Globals};
 
 use super::{typing::*, *};
 
 mod types;
 mod builder;
 
-pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Errors> {
+pub fn reduce(modules: &ast::Modules, mut errors: Errors) 
+-> Result<(Module, Globals), Errors> {
     let mut ctx = TypingCtx {
         funcs: Vec::new(),
         types: Vec::new(),
     };
     let globals = types::gen_globals(modules, &mut ctx, &mut errors);
 
+    // scope accessible from all modules containing dependencies etc.
+    // let global_scope = Scope::new(&mut ctx, deps, &glo, module);
+
     for (id, ast) in modules.iter() {
-        let mut scope = Scope::new(&mut ctx, &globals[id.idx()], &globals, id);
+        let mut scope = Scope::new(&mut ctx, &globals[id], globals.get_ref(), id);
 
         gen_func_bodies(&mut scope, &ast.definitions, &mut errors,
-            |scope, name| scope.globals[scope.module.idx()].get(name)
+            |scope, name| scope.globals[scope.module].get(name)
         );
     }
     if errors.has_errors() {
@@ -39,7 +43,7 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
         })
         .collect();
 
-    let main = match globals[ModuleId::ROOT.idx()].get("main") {
+    let main = match globals[ModuleId::ROOT].get("main") {
         Some(Symbol::Func(func)) => *func,
         _ => {
             errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
@@ -47,12 +51,15 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors) -> Result<Module, Erro
         }
     };
 
-    Ok(Module {
-        name: "MainModule".to_owned(),
-        funcs,
-        main,
-        types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
-    })
+    Ok((
+        Module {
+            name: "MainModule".to_owned(),
+            funcs,
+            main,
+            types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
+        },
+        globals
+    ))
 }
 
 fn gen_func_bodies(
@@ -220,7 +227,7 @@ impl ExprResult {
 }
 pub struct Scope<'s> {
     ctx: &'s mut TypingCtx,
-    globals: &'s [HashMap<String, Symbol>],
+    globals: GlobalsRef<'s>,
     module: ModuleId,
     info: ScopeInfo<'s>,
 }
@@ -229,7 +236,7 @@ impl<'s> Scope<'s> {
     pub fn new(
         ctx: &'s mut TypingCtx,
         symbols: &'s HashMap<String, Symbol>,
-        globals: &'s [HashMap<String, Symbol>],
+        globals: GlobalsRef<'s>,
         module: ModuleId,
     ) -> Self {
         Self {
@@ -281,14 +288,14 @@ impl<'s> Scope<'s> {
                         ModuleOrLocal::Module(m) => m,
                         ModuleOrLocal::Local => self.module
                     };
-                    match self.globals[look_from.idx()].get(name) {
+                    match self.globals[look_from].get(name) {
                         Some(Symbol::Module(m)) => current_module = ModuleOrLocal::Module(*m),
                         Some(_) => panic!("1"),//return Err(Error::ModuleExpected),
                         None => return Err(Error::UnknownModule)
                     }
                 }
                 match current_module {
-                    ModuleOrLocal::Module(m) => match self.globals[m.idx()]
+                    ModuleOrLocal::Module(m) => match self.globals[m]
                         .get(last.as_str())
                         .ok_or(Error::UnknownIdent)? {
                             Symbol::Type(ty) => Ok(TypeRef::Base(BaseType::Id(*ty))),
@@ -868,7 +875,7 @@ impl<'s> Scope<'s> {
                         return ExprResult::VarRef(member);
                     }
                     MemberAccessType::Module(id) => {
-                        let module = &self.globals[id.idx()];
+                        let module = &self.globals[id];
                         if let Some(symbol) = module.get(member) {
                             return match *symbol {
                                 Symbol::Func(f) => ExprResult::Func(f),
@@ -887,11 +894,19 @@ impl<'s> Scope<'s> {
                 }
             }
             ast::Expr::Cast(target, val) => {
-                ir.specify(expected, TypeInfo::Primitive(*target), errors);
+                let target = match self.resolve_type(target) {
+                    Ok(target) => target.into_info(&mut ir.types),
+                    Err(err) => {
+                        errors.emit(err, 0, 0, self.module);
+                        TypeInfo::Invalid
+                    }
+                };
+
+                ir.specify(expected, target, errors);
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
                 let val = self.reduce_expr_val(errors, ir, val, inner_ty, ret);
                 //TODO: check table for available casts
-                ir.add(Data { cast: (val, *target), }, Tag::Cast, expected)
+                ir.add(Data { un_op: val, }, Tag::Cast, expected)
             }
             ast::Expr::Root => {
                 return ExprResult::Module(ModuleId::ROOT)

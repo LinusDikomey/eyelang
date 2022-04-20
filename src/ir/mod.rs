@@ -5,7 +5,7 @@ use typing::FinalTypeTable;
 
 mod gen;
 mod typing;
-
+pub use gen::Symbol;
 pub use gen::reduce;
 
 use self::typing::{TypeInfo, TypeTable};
@@ -365,7 +365,7 @@ impl Instruction {
                 format!("{}, [member {}]", write_ref(self.data.member.0), self.data.member.1).normal()
             }
             DataVariant::Cast => {
-                format!("{} as {}", write_ref(self.data.cast.0), self.data.cast.1).normal()
+                format!("{} as {}", write_ref(self.data.un_op), types.get(self.data.ty)).normal()
             }
             DataVariant::Branch => {
                 let i = self.data.branch.1 as usize;
@@ -537,7 +537,6 @@ pub union Data {
     pub bin_op: (Ref, Ref),
     pub ty: TypeTableIndex,
     pub member: (Ref, u32),
-    pub cast: (Ref, Primitive),
     pub branch: (Ref, u32),
     pub none: (),
     pub block: BlockIndex

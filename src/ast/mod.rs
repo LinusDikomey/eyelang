@@ -143,7 +143,7 @@ pub enum Expr {
     UnOp(UnOp, Box<Expr>),
     BinOp(Operator, Box<(Expr, Expr)>),
     MemberAccess(Box<Expr>, String),
-    Cast(Primitive, Box<Expr>),
+    Cast(UnresolvedType, Box<Expr>),
     Root
 }
 

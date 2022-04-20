@@ -429,7 +429,7 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let inner = self.parse_factor(var_index)?;
-                Expr::Cast(p, Box::new(inner))
+                Expr::Cast(UnresolvedType::Primitive(p), Box::new(inner))
             },
             TokenType::Keyword(Keyword::Root) => {
                 Expr::Root
@@ -457,6 +457,11 @@ impl<'a> Parser<'a> {
                     self.toks.step().unwrap();
                     let field = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
                     expr = Expr::MemberAccess(Box::new(expr), field);
+                }
+                Some(TokenType::Keyword(Keyword::As)) => {
+                    self.toks.step_assert(TokenType::Keyword(Keyword::As));
+                    let target_ty = self.parse_type()?;
+                    expr = Expr::Cast(target_ty, Box::new(expr));
                 }
                 _ => break
             }

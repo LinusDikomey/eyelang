@@ -355,39 +355,62 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 LLVMBuildInBoundsGEP(builder, r, elems.as_mut_ptr(), 2, NONE)
             }
             ir::Tag::Cast => {
-                let (val, ty) = get_ref_and_type(&instructions, data.cast.0);
-                if data.cast.1 == Primitive::String {
-                    LLVMBuildGlobalStringPtr(builder, NONE, NONE)
-                } else {
-                    let origin = info_to_num(ty);
-                    let target = prim_to_num(data.cast.1);
-                    let llvm_target = llvm_primitive_ty(ctx, data.cast.1);
-                    match (origin, target) {
-                        (Numeric::Float(a), Numeric::Float(b)) => match a.cmp(&b) {
-                            std::cmp::Ordering::Less => LLVMBuildFPExt(builder, val, llvm_target, NONE),
-                            std::cmp::Ordering::Equal => val,
-                            std::cmp::Ordering::Greater => LLVMBuildFPTrunc(builder, val, llvm_target, NONE),
-                        },
-                        (Numeric::Float(_a), Numeric::Int(s, _b)) => if s {
-                            LLVMBuildFPToSI(builder, val, llvm_target, NONE)
-                        } else {
-                            LLVMBuildFPToUI(builder, val, llvm_target, NONE)
-                        }
-                        (Numeric::Int(s, _a), Numeric::Float(_b)) => if s {
-                            LLVMBuildSIToFP(builder, val, llvm_target, NONE)
-                        } else {
-                            LLVMBuildUIToFP(builder, val, llvm_target, NONE)
-                        }
-                        (Numeric::Int(s1, a), Numeric::Int(s2, b)) => match a.cmp(&b) {
-                            std::cmp::Ordering::Less => if s2 {
-                                LLVMBuildSExt(builder, val, llvm_target, NONE)
-                            } else {
-                                LLVMBuildZExt(builder, val, llvm_target, NONE)
+                // cast just panics here right now when the cast is invalid because cast checks aren't implemented
+                // anywhere before.
+                // IR should probably just have different types of casts like in LLVM. 
+                // (reinterpret, trunc, extend, float to int, int to float, etc.)
+                let (val, origin) = get_ref_and_type(&instructions, data.un_op);
+                let target = ir.types.get(*ty);
+                match target {
+                    // temporary fix for string casts: just always give an empty string
+                    Type::Base(BaseType::Prim(Primitive::String)) => LLVMBuildGlobalStringPtr(builder, NONE, NONE),
+                    Type::Base(BaseType::Prim(target)) => {
+                        match origin {
+                            Type::Base(BaseType::Prim(origin)) => {
+                                let origin = prim_to_num(origin);
+                                let target_num = prim_to_num(target);
+                                let llvm_target = llvm_primitive_ty(ctx, target);
+                                match (origin, target_num) {
+                                    (Numeric::Float(a), Numeric::Float(b)) => match a.cmp(&b) {
+                                        std::cmp::Ordering::Less 
+                                            => LLVMBuildFPExt(builder, val, llvm_target, NONE),
+                                        std::cmp::Ordering::Equal => val,
+                                        std::cmp::Ordering::Greater 
+                                            => LLVMBuildFPTrunc(builder, val, llvm_target, NONE),
+                                    },
+                                    (Numeric::Float(_a), Numeric::Int(s, _b)) => if s {
+                                        LLVMBuildFPToSI(builder, val, llvm_target, NONE)
+                                    } else {
+                                        LLVMBuildFPToUI(builder, val, llvm_target, NONE)
+                                    }
+                                    (Numeric::Int(s, _a), Numeric::Float(_b)) => if s {
+                                        LLVMBuildSIToFP(builder, val, llvm_target, NONE)
+                                    } else {
+                                        LLVMBuildUIToFP(builder, val, llvm_target, NONE)
+                                    }
+                                    (Numeric::Int(s1, a), Numeric::Int(s2, b)) => match a.cmp(&b) {
+                                        std::cmp::Ordering::Less => if s2 {
+                                            LLVMBuildSExt(builder, val, llvm_target, NONE)
+                                        } else {
+                                            LLVMBuildZExt(builder, val, llvm_target, NONE)
+                                        }
+                                        std::cmp::Ordering::Equal => if s1 == s2 { val } else {
+                                            LLVMBuildBitCast(builder, val, llvm_target, NONE)
+                                        },
+                                        std::cmp::Ordering::Greater => LLVMBuildTrunc(builder, val, llvm_target, NONE)
+                                    }
+                                }
                             }
-                            std::cmp::Ordering::Equal => if s1 == s2 { val } else {
-                                LLVMBuildBitCast(builder, val, llvm_target, NONE)
-                            },
-                            std::cmp::Ordering::Greater => LLVMBuildTrunc(builder, val, llvm_target, NONE)
+                            _ => panic!("Invalid cast to primitive")
+                        }
+                    }
+                    Type::Base(BaseType::Id(_)) => panic!("Invalid cast"),
+                    Type::Pointer { count: _, inner: _ } => {
+                        let llvm_target = llvm_ty(ctx, types, &target);
+                        match origin {
+                            Type::Pointer { count: _, inner: _ } | Type::Base(BaseType::Prim(Primitive::String))
+                                => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
+                            t => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
                     }
                 }
