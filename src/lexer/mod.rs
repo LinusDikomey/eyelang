@@ -157,6 +157,7 @@ impl<'a> Lexer<'a> {
                 }
                 '&' => TokenType::Ampersand,
                 '~' => TokenType::SnackWave,
+                '^' => TokenType::Caret,
                 '<' => match self.peek() {
                     Some('=') => { self.step(); TokenType::LessEquals },
                     _ => TokenType::LessThan

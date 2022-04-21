@@ -28,7 +28,7 @@ main -> {
 ```
 use std.c.printf
 
-add_pointer_values(x *i32, y *i32) -> i32: ~x + ~y
+add_pointer_values(x *i32, y *i32) -> i32: x^ + y^
 
 main -> {
     x := 5
@@ -44,7 +44,7 @@ add(x i64, y i64) -> i32: x + y
 main -> {
     x := 3 # x is inferred to have type i64
     pointer := &x
-    std.c.printf("Result: %d\n", if 1 < 2: add(~pointer, 4) else -1)
+    std.c.printf("Result: %d\n", if 1 < 2: add(pointer^, 4) else -1)
 }
 ```
 
@@ -55,12 +55,12 @@ use std.c
 Vec3 :: { x f64, y f64, z f64 }
 
 print_vec3(v *Vec3) -> {
-    c.printf("Vec3: [%.1f, %.1f, %.1f]\n", (~v).x, (~v).y, (~v).z)
+    c.printf("Vec3: [%.1f, %.1f, %.1f]\n", v^.x, v^.y, v^.z)
 }
 
 main -> {
     v := c.malloc(12) as *Vec3
-    ~v = Vec3(1.0, 2.0, 3.0)
+    v^ = Vec3(1.0, 2.0, 3.0)
     print_vec3(v)
 }
 ```

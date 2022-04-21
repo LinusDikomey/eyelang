@@ -48,6 +48,7 @@ pub enum TokenType {
     
     Ampersand,
     SnackWave,
+    Caret,
 
     Equals,
     DoubleEquals,

@@ -398,17 +398,16 @@ impl<'a> Parser<'a> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Minus => Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?)),
-            TokenType::Bang => Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?)),
-            TokenType::Ampersand => Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index)?)),
-            TokenType::SnackWave => Expr::UnOp(UnOp::Deref, Box::new(self.parse_factor(var_index)?)),
+            TokenType::Minus => return Ok(Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?))),
+            TokenType::Bang => return Ok(Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?))),
+            TokenType::Ampersand => return Ok(Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index)?))),
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
                     Expr::Unit
                 } else {
-                    let factor = self.parse_expr(var_index)?;
+                    let inner = self.parse_expr(var_index)?;
                     self.toks.step_expect(TokenType::RParen)?;
-                    factor
+                    inner
                 }
             },
             TokenType::Keyword(Keyword::Ret) => Expr::Return(Box::new(self.parse_expr(var_index)?)),
@@ -462,6 +461,10 @@ impl<'a> Parser<'a> {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
                     let target_ty = self.parse_type()?;
                     expr = Expr::Cast(target_ty, Box::new(expr));
+                }
+                Some(TokenType::Caret) => {
+                    self.toks.step_assert(TokenType::Caret);
+                    expr = Expr::UnOp(UnOp::Deref, Box::new(expr))
                 }
                 _ => break
             }
