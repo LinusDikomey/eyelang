@@ -310,7 +310,6 @@ fn resolve(
                 return TypeRef::Invalid;
             };
             let mut module = if root { ModuleId::ROOT } else { module };
-            // handle all but the last path segments to go to the correct module
             let mut update = |name| {
                 if let Some(def) = modules[module].definitions.get(name) {
                     match def {

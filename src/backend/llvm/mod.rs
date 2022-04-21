@@ -238,8 +238,13 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
             ir::Tag::Float => LLVMConstReal(table_ty(*ty), data.float),
             ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty), NONE),
             ir::Tag::Load => LLVMBuildLoad(builder, get_ref(&instructions, data.un_op), NONE),
-            ir::Tag::Store => LLVMBuildStore(builder, get_ref(&instructions, data.bin_op.1), get_ref(&instructions, data.bin_op.0)),
-            ir::Tag::String => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize) as _, NONE),
+            ir::Tag::Store => LLVMBuildStore(
+                builder,
+                get_ref(&instructions, data.bin_op.1),
+                get_ref(&instructions, data.bin_op.0)
+            ),
+            ir::Tag::String 
+                => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize) as _, NONE),
             ir::Tag::Call => {
                 let begin = data.extra_len.0 as usize;
                 let mut func_id = [0; 8];

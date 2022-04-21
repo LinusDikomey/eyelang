@@ -192,6 +192,7 @@ enum Resolved {
     Module(ModuleId),
 }
 
+#[derive(Debug)]
 enum ExprResult {
     VarRef(Ref),
     Val(Ref),
@@ -709,12 +710,21 @@ impl<'s> Scope<'s> {
                             _ => ir.types.add(TypeInfo::Invalid)
                         };
                         return ExprResult::Val(match self.reduce_expr(errors, ir, val, inner_expected, ret) {
-                            ExprResult::VarRef(r) => {
+                            ExprResult::VarRef(r) | ExprResult::Stored(r) => {
                                 let idx = r.into_ref().expect("VarRef should never be constant");
                                 let inner_ty =ir.ir()[idx as usize].ty;
 
-                                let ty = ir.types.add(TypeInfo::Pointer(inner_ty));
-                                ir.add(Data { un_op: r }, Tag::AsPointer, ty)
+                                ir.types.specify(expected, TypeInfo::Pointer(inner_ty), errors, self.module);
+                                ir.add(Data { un_op: r }, Tag::AsPointer, expected)
+                            }
+                            ExprResult::Val(val) => {
+                                let val_expected = match ir.types.get_type(expected) {
+                                    TypeInfo::Pointer(inner) => inner,
+                                    _ => ir.types.add(TypeInfo::Invalid)
+                                };
+                                let var = ir.add(Data { ty: val_expected }, Tag::Decl, val_expected);
+                                ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                                ir.add(Data { un_op: var }, Tag::AsPointer, expected)
                             }
                             _ => {
                                 errors.emit(Error::CantTakeRef, 0, 0, self.module);

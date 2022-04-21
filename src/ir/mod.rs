@@ -436,7 +436,6 @@ impl Tag {
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
             Tag::Decl => Type,
-            Tag::Load => UnOp,
             Tag::Store => BinOp,
             Tag::String => String,
             Tag::Call => Call,

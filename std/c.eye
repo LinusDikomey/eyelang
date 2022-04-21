@@ -23,5 +23,11 @@ fread(ptr *i8, size u64, count u64, stream FileHandle ) -> u64 extern
 
 sleep(seconds u32) -> extern
 
+
+# from help.c
+
 ptr_add(ptr *i8, offset u64) -> *i8 extern
 ptr_sub(ptr *i8, offset u64) -> *i8 extern
+
+ptr_to_int(ptr *()) -> u64 extern
+int_to_ptr(i u64) -> *() extern

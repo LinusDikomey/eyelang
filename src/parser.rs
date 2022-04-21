@@ -390,17 +390,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self, var_index: &mut u32) -> EyeResult<Expr> {
-        let lhs = self.parse_factor(var_index)?;
+        let lhs = self.parse_factor(var_index, true)?;
         self.parse_bin_op_rhs(var_index, 0, lhs)
     }
 
-    fn parse_factor(&mut self, var_index: &mut u32) -> Result<Expr, CompileError> {
+    fn parse_factor(&mut self, var_index: &mut u32, include_as: bool) -> Result<Expr, CompileError> {
         let first = self.toks.step()?;
         let mut expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Minus => return Ok(Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index)?))),
-            TokenType::Bang => return Ok(Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index)?))),
-            TokenType::Ampersand => return Ok(Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index)?))),
+            TokenType::Minus => Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index, false)?)),
+            TokenType::Bang => Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index, false)?)),
+            TokenType::Ampersand => Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index, false)?)),
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
                     Expr::Unit
@@ -427,7 +427,7 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::If) => Expr::If(Box::new(self.parse_if_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(var_index)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
-                let inner = self.parse_factor(var_index)?;
+                let inner = self.parse_factor(var_index, false)?;
                 Expr::Cast(UnresolvedType::Primitive(p), Box::new(inner))
             },
             TokenType::Keyword(Keyword::Root) => {
@@ -435,7 +435,7 @@ impl<'a> Parser<'a> {
             }
         );
         loop {
-            match self.toks.peek().map(|t| t.ty) {
+            expr = match self.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
                     // function call
                     self.toks.step_expect(TokenType::LParen)?;
@@ -450,26 +450,25 @@ impl<'a> Parser<'a> {
                             )
                         }
                     }
-                    expr = Expr::FunctionCall(Box::new(expr), args);
+                    Expr::FunctionCall(Box::new(expr), args)
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
                     let field = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
-                    expr = Expr::MemberAccess(Box::new(expr), field);
-                }
-                Some(TokenType::Keyword(Keyword::As)) => {
-                    self.toks.step_assert(TokenType::Keyword(Keyword::As));
-                    let target_ty = self.parse_type()?;
-                    expr = Expr::Cast(target_ty, Box::new(expr));
+                    Expr::MemberAccess(Box::new(expr), field)
                 }
                 Some(TokenType::Caret) => {
                     self.toks.step_assert(TokenType::Caret);
-                    expr = Expr::UnOp(UnOp::Deref, Box::new(expr))
+                    Expr::UnOp(UnOp::Deref, Box::new(expr))
                 }
-                _ => break
+                Some(TokenType::Keyword(Keyword::As)) if include_as => {
+                    self.toks.step_assert(TokenType::Keyword(Keyword::As));
+                    let target_ty = self.parse_type()?;
+                    Expr::Cast(target_ty, Box::new(expr))
+                }
+                _ => break Ok(expr)
             }
         }
-        Ok(expr)
     }
 
     fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expr) -> EyeResult<Expr> {
@@ -477,7 +476,7 @@ impl<'a> Parser<'a> {
             self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
             if op_prec < expr_prec { break; }
-            let mut rhs = self.parse_factor(var_index)?;
+            let mut rhs = self.parse_factor(var_index, true)?;
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
