@@ -13,7 +13,7 @@ use super::{typing::*, *};
 mod types;
 mod builder;
 
-pub fn reduce(modules: &ast::Modules, mut errors: Errors) 
+pub fn reduce(modules: &ast::Modules, mut errors: Errors, require_main_func: bool) 
 -> Result<(Module, Globals), Errors> {
     let mut ctx = TypingCtx {
         funcs: Vec::new(),
@@ -43,13 +43,17 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors)
         })
         .collect();
 
-    let main = match globals[ModuleId::ROOT].get("main") {
-        Some(Symbol::Func(func)) => *func,
-        _ => {
-            errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
-            return Err(errors)
-        }
-    };
+    let mut main = None;
+    if require_main_func {
+        main = Some(match globals[ModuleId::ROOT].get("main") {
+            Some(Symbol::Func(func)) => *func,
+            _ => {
+                errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
+                return Err(errors)
+            }
+        });
+    }
+    
 
     Ok((
         Module {
@@ -266,9 +270,9 @@ impl<'s> Scope<'s> {
         self.info.resolve_local(name)
     }
 
-    fn resolve_type(&mut self, unresolved: &ast::UnresolvedType) -> Result<TypeRef, Error> {
+    fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, types: &mut TypeTable) -> Result<TypeInfo, Error> {
         match unresolved {
-            ast::UnresolvedType::Primitive(p) => Ok(TypeRef::Base(BaseType::Prim(*p))),
+            ast::UnresolvedType::Primitive(p) => Ok(TypeInfo::Primitive(*p)),
             ast::UnresolvedType::Unresolved(path) => {
                 let (root, iter, last) = path.segments();
                 // no last segment means it must point to the root module
@@ -299,27 +303,20 @@ impl<'s> Scope<'s> {
                     ModuleOrLocal::Module(m) => match self.globals[m]
                         .get(last.as_str())
                         .ok_or(Error::UnknownIdent)? {
-                            Symbol::Type(ty) => Ok(TypeRef::Base(BaseType::Id(*ty))),
+                            Symbol::Type(ty) => Ok(TypeInfo::Resolved(*ty)),
                             _ => Err(Error::TypeExpected)
                         },
                     ModuleOrLocal::Local => match self.info.resolve_local(last.as_str())? {
-                        Resolved::Type(ty) => Ok(TypeRef::Base(BaseType::Id(ty))),
+                        Resolved::Type(ty) => Ok(TypeInfo::Resolved(ty)),
                         _ => Err(Error::TypeExpected)
                     }
                 }
             }
             ast::UnresolvedType::Pointer(inner) => {
-                Ok(match self.resolve_type(inner)? {
-                    TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
-                    TypeRef::Pointer { count, inner } => {
-                        if count.get() == 255 {
-                            return Err(Error::TooLargePointer)
-                        }
-                        TypeRef::Pointer { count: count.saturating_add(1), inner }
-                    }
-                    TypeRef::Invalid => TypeRef::Invalid,
-                })
+                let inner = self.resolve_type(inner, types)?;
+                Ok(TypeInfo::Pointer(types.add(inner)))
             }
+            ast::UnresolvedType::Infer => Ok(TypeInfo::Unknown)
         }
     }
 
@@ -385,14 +382,14 @@ impl<'s> Scope<'s> {
                 self.reduce_block(errors, ir, block, block_ty, ret);
             }
             BlockItem::Declare(name, _index, ty, val) => {
-                let ty = match ty.as_ref().map(|ty| self.resolve_type(&ty)).transpose() {
+                let ty = match ty.as_ref().map(|ty| self.resolve_type(&ty, &mut ir.types)).transpose() {
                     Ok(t) => t,
                     Err(err) => {
                         errors.emit(err, 0, 0, self.module);
                         return;
                     }
                 }
-                .map_or(TypeInfo::Unknown, |ty| ty.into_info(&mut ir.types));
+                .unwrap_or(TypeInfo::Unknown);
                 let ty = ir.types.add(ty);
 
                 let var = self.declare_var(ir, name.clone(), ty);
@@ -911,8 +908,8 @@ impl<'s> Scope<'s> {
                 }
             }
             ast::Expr::Cast(target, val) => {
-                let target = match self.resolve_type(target) {
-                    Ok(target) => target.into_info(&mut ir.types),
+                let target = match self.resolve_type(target, &mut ir.types) {
+                    Ok(target) => target,
                     Err(err) => {
                         errors.emit(err, 0, 0, self.module);
                         TypeInfo::Invalid

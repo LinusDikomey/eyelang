@@ -39,7 +39,7 @@ pub enum TokenType {
     RBracket,
 
     Bang,
-
+    
     Plus,
     Minus,
     Star,
@@ -49,7 +49,9 @@ pub enum TokenType {
     Ampersand,
     SnackWave,
     Caret,
-
+    
+    Underscore,
+    
     Equals,
     DoubleEquals,
     BangEquals,
@@ -126,6 +128,7 @@ impl fmt::Display for FloatLiteral {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Keyword {
     Primitive(Primitive),
+    Fn,
     Ret,
     True,
     False,
@@ -164,6 +167,7 @@ impl Keyword {
             
             "bool" => P(Bool),
             
+            "fn" => Keyword::Fn,
             "ret" => Keyword::Ret,
             "true" => Keyword::True,
             "false" => Keyword::False,
@@ -180,6 +184,11 @@ impl Keyword {
             "use" => Keyword::Use,
             _ => return None
         })
+    }
+}
+impl Into<TokenType> for Keyword {
+    fn into(self) -> TokenType {
+        TokenType::Keyword(self)
     }
 }
 

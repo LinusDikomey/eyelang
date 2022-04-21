@@ -1,9 +1,9 @@
 # print and parse are no longer intrinsics so these are added to make the program work
-print(s *i8, ...) -> {}
-parse(s *i8) -> i32: 0
-read(msg *i8) -> *i8: ""
+fn print(s *i8, ...) {}
+fn parse(s *i8) i32: 0
+fn read(msg *i8) *i8: ""
 
-main -> i8 {
+fn main i8 {
     s := "Hello World"
     x := 3
     x = 4
@@ -29,8 +29,17 @@ main -> i8 {
         print("Your number is at least 5")
     }
 
+    {
+        s := "Hello"
+        x: i32 = 12
+        s = &x as *_
+
+        x: _ = 3
+        y: _ = 4
+        test(x, y)
+    }
 
     ret test(y, 3)
 }
 
-test(i i64, b i32) -> i8: i8(i)
+fn test(i i64, b i32) i8: i8(i)

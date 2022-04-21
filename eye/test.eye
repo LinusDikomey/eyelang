@@ -1,19 +1,19 @@
 # print and parse are no longer intrinsics so these are added to make the program work
-print(s *i8, ...) -> {}
-parse(s *i8) -> i32: 0
+fn print(s *i8, ...) {}
+fn parse(s *i8) i32: 0
 
-sayHello(newline bool) ->: print("Hello", if newline: "\n" else "")
-bye -> { print("Bye") }
+fn sayHello(newline bool): print("Hello", if newline: "\n" else "")
+fn bye { print("Bye") }
 
-add(x i32, y i32) -> i32: x + y
+fn add(x i32, y i32) i32: x + y
 
-abs(x i32) -> i32: if x < 0: -x else x
-bla(x i32, y i32) -> {
+fn abs(x i32) i32: if x < 0: -x else x
+fn bla(x i32, y i32) {
     z := 3
     w := 5
 }
 
-main -> {
+fn main {
     # print(string(abs(-4)), "\n")
     v := Vec3(1.0, 2.5, 3.0)
 
@@ -46,7 +46,7 @@ main -> {
     
     i := 5
     while i < 10: i = incAndPrint(i)
-    incAndPrint(i i32) -> i32 {
+    fn incAndPrint(i i32) i32 {
         std.c.printf("I is %d\n", i)
         ret i + 1
     }
@@ -72,8 +72,8 @@ Vec3 :: {
     z f32
 }
 
-addVec3(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
-printVec3(v Vec3) -> {
+fn addVec3(a Vec3, b Vec3) Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+fn printVec3(v Vec3) {
     std.c.printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
 }
 
@@ -83,7 +83,7 @@ Transform :: {
     scale Vec3
 }
 
-commentTest -> {
+fn commentTest {
     # this is a comment
     #-
     This is a

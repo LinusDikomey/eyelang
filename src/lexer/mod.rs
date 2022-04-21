@@ -158,6 +158,8 @@ impl<'a> Lexer<'a> {
                 '&' => TokenType::Ampersand,
                 '~' => TokenType::SnackWave,
                 '^' => TokenType::Caret,
+                '_' => TokenType::Underscore,
+
                 '<' => match self.peek() {
                     Some('=') => { self.step(); TokenType::LessEquals },
                     _ => TokenType::LessThan
@@ -230,7 +232,7 @@ impl<'a> Lexer<'a> {
                     } else {
                         TokenType::Ident
                     }
-                },
+                }
                 _ => {
                     let start = self.pos();
                     self.step();

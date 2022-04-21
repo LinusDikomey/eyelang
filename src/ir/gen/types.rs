@@ -148,6 +148,10 @@ pub fn gen_locals(
             UnresolvedType::Pointer(inner) => {
                 ty(inner, symbols, defs, scope, errors)
             }
+            UnresolvedType::Infer => {
+                errors.emit(Error::InferredTypeNotAllowedHere, 0, 0, scope.module);
+                TypeRef::Invalid
+            }
         }
     }
 
@@ -348,6 +352,10 @@ fn resolve(
                 }
                 TypeRef::Invalid => TypeRef::Invalid,
             }
+        }
+        UnresolvedType::Infer => {
+            errors.emit(Error::InferredTypeNotAllowedHere, 0, 0, module);
+            TypeRef::Invalid
         }
         
     }

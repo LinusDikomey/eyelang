@@ -1,14 +1,14 @@
 
-assert(b bool) ->: if !b: std.c.printf("An assertion failed!\n")
+fn assert(b bool): if !b: std.c.printf("An assertion failed!\n")
 
-main -> {
+fn main {
     bools()
     arithmetic()
     comparisons()
     assign()
 }
 
-bools -> {
+fn bools {
     assert(true)
     assert(!false)
     assert(!!true)
@@ -31,7 +31,7 @@ bools -> {
     assert((false and false) == false)
 }
 
-arithmetic -> {
+fn arithmetic {
     assert(1+1 == 2)
     assert(5-3 == 2)
     assert(3*4 == 12)
@@ -48,7 +48,7 @@ arithmetic -> {
     assert(-11 % 10 == -1)
 }
 
-comparisons -> {
+fn comparisons {
     assert(1 < 2)
     assert(2 > 1)
     assert(1 <= 3)
@@ -60,7 +60,7 @@ comparisons -> {
 
 Point :: { x i32, y i32 }
 
-assign -> {
+fn assign {
     x := 3
     x += 1
     assert(x == 4)

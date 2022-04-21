@@ -80,9 +80,9 @@ pub struct Args {
     #[clap(long)]
     nostd: bool,
 
-    /// Don't link the object file into an executable after compiling
+    /// Just emit an object file. Doesn't require a main function
     #[clap(long)]
-    nolink: bool,
+    emit_obj: bool
 }
 
 fn main() {
@@ -120,7 +120,7 @@ fn run(
     args: &Args,
     output_name: &str
 ) -> Result<(), (ast::Modules, Errors)> {
-    let ir = compile::project(path, args, &[])?;
+    let ir = compile::project(path, args, &[], !args.emit_obj)?;
     
     log!("\n\n{ir}\n");
     let obj_file = format!("eyebuild/{output_name}.o");
@@ -168,8 +168,8 @@ fn run(
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);
 
-                if args.nolink {
-                    println!("{}", "Skipping link step because --nolink was specified".yellow());
+                if args.emit_obj {
+                    println!("{}", "Object successfully emitted!".green());
                     return Ok(());
                 }
                 if !link::link(&obj_file, &exe_file, args) {

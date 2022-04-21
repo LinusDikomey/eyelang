@@ -299,6 +299,7 @@ impl<R: Representer> Repr<R> for UnresolvedType {
                 c.char('*');
                 inner.repr(c);
             }
+            Self::Infer => c.char('_')
         }
     }
 }

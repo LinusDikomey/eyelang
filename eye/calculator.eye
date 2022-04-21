@@ -1,6 +1,6 @@
 # This doesn't work right now because string equality is not implemented
 
-main -> {
+fn main {
     x := 1
     mode := std.input("Enter operation: ")
     a := std.parse_int(std.input("First number: "))
@@ -8,7 +8,7 @@ main -> {
     std.c.printf("Result: %d\n", calc(mode, a, b))
 }
 
-calc(mode *i8, a i32, b i32) -> i32 {
+fn calc(mode *i8, a i32, b i32) i32 {
     ret if std.streq(mode, "+"): a + b
     else if std.streq(mode, "-"): a - b
     else if std.streq(mode, "*"): a * b
@@ -18,5 +18,5 @@ calc(mode *i8, a i32, b i32) -> i32 {
     else -1
 }
 
-shl(x i32, amount i32) -> i32: if amount <= 0: x else shl(x, amount - 1) * 2
-shr(x i32, amount i32) -> i32: if amount <= 0: x else shr(x, amount - 1) / 2
+fn shl(x i32, amount i32) i32: if amount <= 0: x else shl(x, amount - 1) * 2
+fn shr(x i32, amount i32) i32: if amount <= 0: x else shr(x, amount - 1) / 2

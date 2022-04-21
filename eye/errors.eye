@@ -1,4 +1,4 @@
-main ->: print("Hello")
+fn main: print("Hello")
 
 # invalid integer types
 InvalidTypes :: {
@@ -20,7 +20,7 @@ InvalidTypes :: {
    º∂∑∑€®
 ƒ~ª©ƒ∂∂€®øπå√∫
 
-test(x u32, y u33, z u34, valid InvalidTypes) -> {
+fn test(x u32, y u33, z u34, valid InvalidTypes) {
     print("Test Function"); # oh no, a semicolon
 }
 

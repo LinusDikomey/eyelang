@@ -8,12 +8,14 @@ use crate::{
     Args
 };
 
+//TODO: proper dependencies / project handling
 pub struct Dependency<'a> {
-    name: String,
-    path: &'a Path
+    _name: String,
+    _path: &'a Path
 }
 
-pub fn project(module_path: &Path, args: &Args, deps: &[Dependency]) -> Result<crate::ir::Module, (Modules, Errors)> {
+pub fn project(module_path: &Path, args: &Args, _deps: &[Dependency], require_main_func: bool)
+-> Result<crate::ir::Module, (Modules, Errors)> {
     let mut errors = Errors::new();
     let mut modules = Modules::new();
 
@@ -35,7 +37,7 @@ pub fn project(module_path: &Path, args: &Args, deps: &[Dependency]) -> Result<c
             ast::Definition::Module(std_mod)    
         );
     }
-    match crate::ir::reduce(&modules, errors) {
+    match crate::ir::reduce(&modules, errors, require_main_func) {
         Ok((ir, _globals)) => Ok(ir),
         Err(err) => Err((modules, err))
     }
@@ -49,7 +51,7 @@ enum TreeType {
 impl TreeType {
     fn file(&self) -> &'static str {
         match self {
-            Self::Main => "main.eye",
+            Self::Main { .. } => "main.eye",
             Self::Mod => "mod.eye"
         }
     }
@@ -67,7 +69,7 @@ fn tree(
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
     let base_module = if !base_exists {
         let main_mod = modules.add(Module::empty(), "".to_owned(), path.to_owned());
-        if t == TreeType::Main {
+        if let TreeType::Main = t {
             errors.emit(Error::MissingMainFile, 0, 0, main_mod);
         }
         main_mod

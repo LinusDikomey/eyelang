@@ -136,7 +136,7 @@ impl IrBuilder {
         self.types.specify(idx, info, errors, self.module)
     }
 
-    pub fn ty(&self, r: Ref) -> TypeInfo {
+    pub fn _ty(&self, r: Ref) -> TypeInfo {
         if let Some(v) = r.into_val() {
             match v {
                 crate::ir::RefVal::True | crate::ir::RefVal::False => TypeInfo::Primitive(Primitive::Bool),
