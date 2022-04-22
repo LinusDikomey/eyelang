@@ -57,9 +57,8 @@ impl fmt::Display for Type {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
 impl SymbolKey {
-    #[inline(always)]
-    pub fn idx(&self) -> usize { self.0 as usize }
-    pub fn bytes(&self) -> [u8; 8] { self.0.to_le_bytes() }
+    pub fn idx(self) -> usize { self.0 as usize }
+    pub fn bytes(self) -> [u8; 8] { self.0.to_le_bytes() }
     pub fn from_bytes(bytes: [u8; 8]) -> Self { Self(u64::from_le_bytes(bytes)) }
 }
 
@@ -218,7 +217,7 @@ impl TypeRef {
             TypeRef::Pointer { count, inner } => {
                 let mut current = base_from(inner);
                 for _ in 0..count.get() {
-                    current = TypeInfo::Pointer(types.add(current))
+                    current = TypeInfo::Pointer(types.add(current));
                 }
                 current
             }
@@ -259,7 +258,7 @@ impl fmt::Display for Module {
                 struct_,
                 begin = "begin type".blue(),
                 end  = "end type".blue()
-            )?
+            )?;
         }
         for func in &self.funcs {
             let name = func.name.red();
@@ -426,20 +425,18 @@ pub enum Tag {
     Phi
 }
 impl Tag {
-    fn union_data_type(&self) -> DataVariant {
+    fn union_data_type(self) -> DataVariant {
         use DataVariant::*;
         match self {
-            Tag::BlockBegin => Int32,
+            Tag::BlockBegin | Tag::Param => Int32,
             Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not => UnOp,
-            Tag::Param => Int32,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
             Tag::Decl => Type,
-            Tag::Store => BinOp,
             Tag::String => String,
             Tag::Call => Call,
-            Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
+            Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,
             Tag::Member => Member,
@@ -450,8 +447,8 @@ impl Tag {
         }
     }
 
-    pub fn is_untyped(&self) -> bool {
-        matches!(*self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
+    pub fn is_untyped(self) -> bool {
+        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
     }
 }
 impl fmt::Display for Tag {
@@ -473,16 +470,16 @@ impl Ref {
     pub fn index(idx: u32) -> Self {
         Self(INDEX_OFFSET + idx)
     }
-    pub fn is_val(&self) -> bool { self.0 < INDEX_OFFSET }
-    pub fn into_val(&self) -> Option<RefVal> {
+    pub fn is_val(self) -> bool { self.0 < INDEX_OFFSET }
+    pub fn into_val(self) -> Option<RefVal> {
         self.is_val().then(|| unsafe { std::mem::transmute(self.0 as u8) })
     }
-    pub fn is_ref(&self) -> bool { !self.is_val() }
-    pub fn into_ref(&self) -> Option<u32> {
+    pub fn is_ref(self) -> bool { !self.is_val() }
+    pub fn into_ref(self) -> Option<u32> {
         self.is_ref().then(|| self.0 - INDEX_OFFSET)
     }
 
-    pub fn to_bytes(&self) -> [u8; 4] {
+    pub fn to_bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
 
@@ -550,7 +547,7 @@ impl fmt::Debug for Data {
 #[derive(Clone, Copy)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
-    pub fn bytes(&self) -> [u8; 4] {
+    pub fn bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
 }

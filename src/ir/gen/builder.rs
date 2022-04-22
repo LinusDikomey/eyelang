@@ -2,7 +2,7 @@ use crate::{
     ast::ModuleId,
     ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
     lexer::Span,
-    error::Errors, types::Primitive
+    error::Errors
 };
 
 pub struct IrBuilder {
@@ -53,7 +53,7 @@ impl IrBuilder {
             ty: TypeTableIndex::NONE,
             span: Span::todo(self.module),
             used: false
-        })
+        });
     }
 
     pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
@@ -61,7 +61,7 @@ impl IrBuilder {
         self.ir.push(Instruction {
             data,
             tag,
-            ty: ty,
+            ty,
             span: Span::todo(self.module),
             used: false
         });
@@ -78,7 +78,7 @@ impl IrBuilder {
         });
     }
 
-    pub fn extra_data<'a>(&mut self, bytes: &[u8]) -> u32 {
+    pub fn extra_data(&mut self, bytes: &[u8]) -> u32 {
         let idx = self.extra_data.len() as u32;
         self.extra_data.extend(bytes);
         idx
@@ -133,20 +133,7 @@ impl IrBuilder {
     }
 
     pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
-        self.types.specify(idx, info, errors, self.module)
-    }
-
-    pub fn _ty(&self, r: Ref) -> TypeInfo {
-        if let Some(v) = r.into_val() {
-            match v {
-                crate::ir::RefVal::True | crate::ir::RefVal::False => TypeInfo::Primitive(Primitive::Bool),
-                crate::ir::RefVal::Unit => TypeInfo::Primitive(Primitive::Unit),
-                crate::ir::RefVal::Undef => TypeInfo::Invalid,
-            }
-        } else {
-            let idx = r.into_ref().unwrap();
-            self.types.get_type(self.ir[idx as usize].ty)
-        }
+        self.types.specify(idx, info, errors, self.module);
     }
 
     pub fn ir(&self) -> &[Instruction] {

@@ -18,11 +18,11 @@ impl Errors {
     }
 
     pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
-        self.errors.push(CompileError { err, span: Span { start, end, module } })
+        self.errors.push(CompileError { err, span: Span { start, end, module } });
     }
 
     pub fn emit_err(&mut self, err: CompileError) {
-        self.errors.push(err)
+        self.errors.push(err);
     }
 
     pub fn has_errors(&self) -> bool {
@@ -96,7 +96,7 @@ impl Errors {
                 if lines.peek().is_some() {
                     println!();
                 } else {
-                    println!("{post}")
+                    println!("{post}");
                 }
             };
 

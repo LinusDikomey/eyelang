@@ -38,7 +38,7 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
     let output = proc.wait_with_output().expect("Linker process is invalid");
     let ok = output.status.success();
     if !ok {
-        eprintln!("{}", "Linking command failed!");
+        eprintln!("Linking command failed!");
     }
     ok
 }

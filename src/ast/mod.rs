@@ -168,35 +168,6 @@ pub struct While {
     pub body: BlockOrExpr
 }
 
-/*
-#[derive(Debug, Clone)]
-pub enum LValue {
-    Variable(u32, String),
-    Member(Box<LValue>, String)
-}
-impl LValue {
-    pub fn start(&self) -> u32 {
-        let mut current = self;
-        loop {
-            match current {
-                Self::Variable(start, _) => return *start,
-                Self::Member(left, _) => current = left
-            };
-        }
-    }
-    pub fn idents(&self) -> Vec<&str> {
-        match self {
-            Self::Variable(_, ident) => vec![ident],
-            Self::Member(left, ident) => {
-                let mut v = left.idents();
-                v.push(ident);
-                v
-            }
-        }
-    }
-}
-*/
-
 #[derive(Debug, Clone)]
 pub enum IdentPath {
     Root,
@@ -210,22 +181,15 @@ impl IdentPath {
             Self::Root => *self = Self::Path { starts_with_root: true, segments: vec![segment] },
             Self::Single(first) => *self = Self::Path { 
                 starts_with_root: false,
-                segments: vec![std::mem::replace(first, String::new()), segment]
+                segments: vec![std::mem::take(first), segment]
             },
             Self::Path { segments, .. } => segments.push(segment)
         }
     }
-
-    /*pub fn starts_with_root(&self) -> bool {
-        match self {
-            Self::Root | Self::Path { starts_with_root: true, .. }=> true,
-            _ => false
-        }
-    }*/
-
-    /// Returns: (root, segments_without_last, last_segment)
-    /// last_segment will only be None if the path is a single root item
-    pub fn segments<'a>(&'a self) -> (bool, std::slice::Iter<'a, String>, Option<&'a String>) {
+    
+    /// Returns: (`root`, `segments_without_last`, `last_segment`)
+    /// `last_segment` will only be None if the path is a single root item
+    pub fn segments(&self) -> (bool, std::slice::Iter<String>, Option<&String>) {
         match self {
             Self::Root => (true, (&[]).iter(), None),
             Self::Single(s) => (false, (&[]).iter(), Some(s)),

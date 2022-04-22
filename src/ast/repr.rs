@@ -9,12 +9,6 @@ pub trait Repr<C: Representer> {
     fn repr(&self, c: &C);
 }
 
-/*enum ReprWriter<'a, W: std::fmt::Write> {
-    Writer(&'a mut W),
-    Parent(&'a mut ReprCtx<'a, W>)
-}*/
-
-
 pub trait Representer {
     fn child(&self) -> Self;
     fn begin_line(&self);
@@ -54,10 +48,10 @@ impl Representer for ReprPrinter<'_> {
     }
 
     fn write_add<B: Borrow<str>>(&self, s: B) {
-        print!("{}", s.borrow())
+        print!("{}", s.borrow());
     }
     fn char(&self, c: char) {
-        print!("{c}")
+        print!("{c}");
     }
 
     fn writeln<B: Borrow<str>>(&self, s: B) {
@@ -83,7 +77,7 @@ impl Definition {
             Self::Module(_) => {}
             Self::Use(path) => {
                 c.write_add("use ");
-                path.repr(c)
+                path.repr(c);
             }
         }
     }
@@ -369,7 +363,7 @@ impl<C: Representer> Repr<C> for Operator {
             Operator::GT => ">",
             Operator::LE => "<=",
             Operator::GE => ">=",
-        })
+        });
     }
 }
 
@@ -382,6 +376,6 @@ impl<C: Representer> Repr<C> for AssignType {
             AssignType::MulAssign => "*=",
             AssignType::DivAssign => "/=",
             AssignType::ModAssign => "%=",
-        })
+        });
     }
 }

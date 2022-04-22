@@ -59,6 +59,7 @@ enum Cmd {
 
 #[derive(clap::Parser)]
 #[clap(version, about, long_about = "Eye is a simple, compiled, performant programming language")]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Args {
     #[clap(arg_enum)]
     cmd: Cmd,
@@ -92,7 +93,6 @@ fn main() {
 }
 
 fn run_file(args: &Args) {
-    use colored::*;
     let path = Path::new(&args.file);
     println!("{} {} ...", "Compiling".green(), args.file.underline().bright_blue());
     

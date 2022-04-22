@@ -30,8 +30,8 @@ pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &s
 
     let machine = target_machine::LLVMCreateTargetMachine(
         target,
-        target_triple, cpu.as_ptr() as _,
-        features.as_ptr() as _,
+        target_triple, cpu.as_ptr().cast(),
+        features.as_ptr().cast(),
         opt_level,
         target_machine::LLVMRelocMode::LLVMRelocDefault,
         target_machine::LLVMCodeModel::LLVMCodeModelDefault
@@ -54,7 +54,7 @@ pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &s
 
 pub unsafe fn run_jit(module: super::Module) -> i64 {
     // build an execution engine
-    let mut ee = mem::MaybeUninit::uninit().assume_init();
+    let mut ee = mem::MaybeUninit::uninit();
     let mut out = ptr::null_mut();
 
     // robust code should check that these calls complete successfully
@@ -65,9 +65,10 @@ pub unsafe fn run_jit(module: super::Module) -> i64 {
     target::LLVM_InitializeNativeAsmPrinter();
 
     // takes ownership of the module
-    execution_engine::LLVMCreateExecutionEngineForModule(&mut ee, module.into_inner(), &mut out);
-
-    let addr = execution_engine::LLVMGetFunctionAddress(ee, "main\0".as_ptr() as _);
+    execution_engine::LLVMCreateExecutionEngineForModule(ee.as_mut_ptr(), module.into_inner(), &mut out);
+    let ee = ee.assume_init();
+    
+    let addr = execution_engine::LLVMGetFunctionAddress(ee, "main\0".as_ptr().cast());
     if addr == 0 {
         panic!("Main symbol not found");
     }

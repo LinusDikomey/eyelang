@@ -32,7 +32,7 @@ fn main i8 {
     {
         s := "Hello"
         x: i32 = 12
-        s = &x as *_
+        s = &x as _
 
         x: _ = 3
         y: _ = 4

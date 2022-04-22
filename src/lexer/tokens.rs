@@ -11,7 +11,7 @@ pub struct Token {
 
 impl Token {
     pub fn new(ty: TokenType, start: u32, end: u32) -> Self {
-        Self { ty, start, end }
+        Self { start, end, ty }
     }
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
@@ -91,10 +91,6 @@ impl IntLiteral {
 
         Self { val, ty: None }
     }
-
-    /*pub fn _fits_into_type(&self, ty: &IntType) -> bool {
-        self.unsigned_val <= if self.sign {ty.min_val()} else {ty.max_val()}
-    }*/
 }
 impl fmt::Display for IntLiteral {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -110,13 +106,6 @@ pub struct FloatLiteral {
 impl FloatLiteral {
     pub fn from_tok(token: &Token, src: &str) -> Self {
         Self { val: token.get_val(src).parse::<f64>().unwrap(), ty: None }
-    }
-
-    pub fn _fits_into_type(&self, ty: &FloatType) -> bool {
-        match ty {
-            FloatType::F32 => true, //TODO: boundary checks
-            FloatType::F64 => true,
-        }
     }
 }
 impl fmt::Display for FloatLiteral {
@@ -186,9 +175,9 @@ impl Keyword {
         })
     }
 }
-impl Into<TokenType> for Keyword {
-    fn into(self) -> TokenType {
-        TokenType::Keyword(self)
+impl From<Keyword> for TokenType {
+    fn from(k: Keyword) -> Self {
+        TokenType::Keyword(k)
     }
 }
 
@@ -246,7 +235,7 @@ impl From<TokenType> for Option<Operator> {
     }
 }
 impl Operator {
-    pub fn precedence(&self) -> u8 {
+    pub fn precedence(self) -> u8 {
         use Operator::*;
         match self {
             Assignment(_) => 10,

@@ -9,7 +9,7 @@ use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeade
 #[derive(Clone, Debug)]
 pub struct Globals(Vec<HashMap<String, Symbol>>);
 impl Globals {
-    pub fn get_ref<'a>(&'a self) -> GlobalsRef<'a> {
+    pub fn get_ref(&self) -> GlobalsRef {
         GlobalsRef(&self.0)
     }
 }
@@ -36,7 +36,7 @@ pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) 
 
     for (module_id, module) in modules.iter() {
         for (name, def) in &module.definitions {
-            add_global_def(def, ctx, &modules, &mut symbols, module_id, name, errors);
+            add_global_def(def, ctx, modules, &mut symbols, module_id, name, errors);
         }
     }
     Globals(symbols)
@@ -114,12 +114,11 @@ pub fn gen_locals(
                 }
 
                 let mut symbol_to_ty = |symbol: &Symbol| {
-                    match symbol {
-                        Symbol::Type(key) => TypeRef::Base(BaseType::Id(*key)),
-                        _ => {
-                            errors.emit(Error::TypeExpected, 0, 0, scope.module);
-                            TypeRef::Invalid
-                        }
+                    if let Symbol::Type(key) = symbol {
+                        TypeRef::Base(BaseType::Id(*key))
+                    } else {
+                        errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                        TypeRef::Invalid
                     }
                 };
                 if let Some(module) = current_module {
@@ -129,20 +128,18 @@ pub fn gen_locals(
                     };
                     symbol_to_ty(symbol)
 
-                } else {
-                    if let Some(symbol) = symbols.get(last) {
-                        symbol_to_ty(symbol)
-                    } else if let Some(def) = defs.get(last) {
-                        if let ast::Definition::Struct(struct_) = def {
-                            gen_struct(last, struct_, symbols, defs, scope, errors)
-                        } else {
-                            errors.emit(Error::TypeExpected, 0, 0, scope.module);
-                            TypeRef::Invalid
-                        }
+                } else if let Some(symbol) = symbols.get(last) {
+                    symbol_to_ty(symbol)
+                } else if let Some(def) = defs.get(last) {
+                    if let ast::Definition::Struct(struct_) = def {
+                        gen_struct(last, struct_, symbols, defs, scope, errors)
                     } else {
-                        errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                        errors.emit(Error::TypeExpected, 0, 0, scope.module);
                         TypeRef::Invalid
                     }
+                } else {
+                    errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                    TypeRef::Invalid
                 }
             }
             UnresolvedType::Pointer(inner) => {
@@ -156,7 +153,7 @@ pub fn gen_locals(
     }
 
     fn gen_struct(
-        name: &String,
+        name: &str,
         struct_: &StructDefinition,
         symbols: &mut HashMap<String, Symbol>,
         defs: &HashMap<String, ast::Definition>,
@@ -169,8 +166,8 @@ pub fn gen_locals(
             })
             .collect();
 
-        let idx = scope.ctx.add_type(TypeDef::Struct(super::Struct { name: name.clone(), members }));
-        symbols.insert(name.clone(), Symbol::Type(idx));
+        let idx = scope.ctx.add_type(TypeDef::Struct(super::Struct { name: name.to_owned(), members }));
+        symbols.insert(name.to_owned(), Symbol::Type(idx));
         TypeRef::Base(BaseType::Id(idx))
     }
 
@@ -250,12 +247,10 @@ pub fn add_struct(
         let Symbol::Type(key) = existing else { unreachable!() };
         return *key;
     }
-    let members = def.members.iter().map(|(name, unresolved, _start, _end)| {
-        (
-            name.to_owned(),
-            resolve(ctx, modules, symbols, module, unresolved, errors)
-        )
-    }).collect::<Vec<_>>();
+    let members = def.members.iter().map(|(name, unresolved, _start, _end)| {(
+        name.clone(),
+        resolve(ctx, modules, symbols, module, unresolved, errors)
+    )}).collect::<Vec<_>>();
     let key = ctx.add_type(TypeDef::Struct(crate::ir::Struct { members, name: name.to_owned() }));
     symbols[module.idx()].insert(name.to_owned(), Symbol::Type(key));
     key
@@ -278,12 +273,11 @@ fn resolve_global_path(
     // handle all but the last path segments to go to the correct module
     let mut update = |name| {
         if let Some(def) = modules[module].definitions.get(name) {
-            match def {
-                ast::Definition::Module(new_module) => module = *new_module,
-                _ => {
-                    errors.emit(Error::ModuleExpected, 0, 0, module);
-                    return false;
-                }
+            if let ast::Definition::Module(new_module) = def {
+                module = *new_module;
+            } else {
+                errors.emit(Error::ModuleExpected, 0, 0, module);
+                return false;
             }
         } else {
             errors.emit(Error::UnknownIdent, 0, 0, module);
@@ -316,12 +310,11 @@ fn resolve(
             let mut module = if root { ModuleId::ROOT } else { module };
             let mut update = |name| {
                 if let Some(def) = modules[module].definitions.get(name) {
-                    match def {
-                        ast::Definition::Module(new_module) => module = *new_module,
-                        _ => {
-                            errors.emit(Error::ModuleExpected, 0, 0, module);
-                            return Some(TypeRef::Invalid);
-                        }
+                    if let ast::Definition::Module(new_module) = def {
+                        module = *new_module;
+                    } else {
+                        errors.emit(Error::ModuleExpected, 0, 0, module);
+                        return Some(TypeRef::Invalid);
                     }
                 } else {
                     errors.emit(Error::UnknownIdent, 0, 0, module);
@@ -370,10 +363,6 @@ fn resolve_in_module(
     errors: &mut Errors
 ) -> Option<Symbol> {
     if let Some(symbol) = symbols[module.idx()].get(name) {
-        /*match symbol {
-            Symbol::Type(ty) => return TypeRef::Base(BaseType::Id(*ty)),
-            _ => {}
-        }*/
         Some(*symbol)
     } else if let Some(def) = modules[module].definitions.get(name) {
         add_global_def(def, ctx, modules, symbols, module, name, errors)

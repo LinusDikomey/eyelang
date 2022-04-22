@@ -106,7 +106,7 @@ impl TypeIdx {
     fn new(idx: usize) -> Self {
         Self(idx as u32)
     }
-    fn get(&self) -> usize {
+    fn get(self) -> usize {
         self.0 as usize
     }
 }

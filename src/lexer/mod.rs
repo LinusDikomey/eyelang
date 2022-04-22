@@ -43,18 +43,13 @@ impl<'a> Lexer<'a> {
 
     fn pos(&self) -> u32 {
         self.chars.get(self.index)
-            .map(|(x, _)| *x)
-            .unwrap_or_else(||
-                self.chars
-                    .last()
-                    .map(|(pos, c)| *pos + c.len_utf8() as u32)
-                    .unwrap_or(0)
+            .map_or_else(
+                || self.chars.last()
+                    .map_or(0, |(pos, c)| *pos + c.len_utf8() as u32),
+                |(x, _)| *x,
             )
     }
     fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
-        let mut start;
-
-        let mut invalid_chars = None;
         fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors, module: ModuleId) {
             if let Some((start, end)) = invalid.take() {
                 errors.emit(
@@ -65,6 +60,9 @@ impl<'a> Lexer<'a> {
                 );
             }
         }
+
+        let mut start;
+        let mut invalid_chars = None;
 
         let ty = loop {
             start = self.pos();
@@ -221,11 +219,8 @@ impl<'a> Lexer<'a> {
                     TokenType::StringLiteral
                 },
                 'A'..='Z' | 'a'..='z' => { // keyword/identifier
-                    loop {
-                        match self.peek() {
-                            Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') => { self.step().unwrap(); }
-                            _ => break
-                        }
+                    while let Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') = self.peek() {
+                        self.step().unwrap();
                     }
                     if let Some(keyword) = Keyword::from_str(&self.src[start as usize ..= self.pos() as usize]) {
                         TokenType::Keyword(keyword)

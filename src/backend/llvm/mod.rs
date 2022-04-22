@@ -34,7 +34,7 @@ pub mod output;
 
 const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
-const NONE: *const i8 = "\0".as_ptr() as _;
+const NONE: *const i8 = "\0".as_ptr().cast();
 
 fn val_str(val: LLVMValueRef) -> ffi::CString {
     unsafe { ffi::CString::from_raw(LLVMPrintValueToString(val)) }
@@ -123,7 +123,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
     for (i, func) in funcs.iter().enumerate() {
         let ir_func = &module.funcs[i];
         if let Some(ir) = &ir_func.ir {
-            build_func(ir_func, ir, ctx, builder, *func, &types, &funcs)
+            build_func(ir_func, ir, ctx, builder, *func, &types, &funcs);
         }
     }
 
@@ -182,8 +182,8 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
     #[derive(Clone, Copy, Debug)]
     enum Numeric { Float(u32), Int(bool, u32) }
     impl Numeric {
-        fn float(&self) -> bool { matches!(self, Numeric::Float(_)) }
-        fn int(&self) -> bool { matches!(self, Numeric::Int(_, _)) }
+        fn float(self) -> bool { matches!(self, Numeric::Float(_)) }
+        fn int(self) -> bool { matches!(self, Numeric::Int(_, _)) }
     }
     fn prim_to_num(p: Primitive) -> Numeric {
         if let Some(p) = p.as_int() {
@@ -244,7 +244,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 get_ref(&instructions, data.bin_op.0)
             ),
             ir::Tag::String 
-                => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize) as _, NONE),
+                => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize).cast(), NONE),
             ir::Tag::Call => {
                 let begin = data.extra_len.0 as usize;
                 let mut func_id = [0; 8];
@@ -412,7 +412,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                         match origin {
                             Type::Pointer { count: _, inner: _ }
                                 => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
-                            t => panic!("Can't cast from non-pointer type {t} to pointer")
+                            t @ Type::Base(_) => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
                     }
                 }
@@ -430,7 +430,9 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                 LLVMBuildCondBr(builder, get_ref(&instructions, data.branch.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
-                if ir.types.get(*ty) != Type::Base(BaseType::Prim(Primitive::Unit)) {
+                if ir.types.get(*ty) == Type::Base(BaseType::Prim(Primitive::Unit)) {
+                    LLVMGetUndef(LLVMVoidTypeInContext(ctx))
+                } else {
                     let phi = LLVMBuildPhi(builder, table_ty(*ty), NONE);
                     let begin = data.extra_len.0 as usize;
                     for i in 0..data.extra_len.1 {
@@ -441,19 +443,17 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                         b.copy_from_slice(&ir.extra[c+4..c+8]);
                         let r = ir::Ref::from_bytes(b);
                         let mut block = blocks[block as usize];
-                        LLVMAddIncoming(phi, &mut get_ref(&instructions, r), &mut block, 1)
+                        LLVMAddIncoming(phi, &mut get_ref(&instructions, r), &mut block, 1);
                     }
                     phi
-                } else {
-                    LLVMGetUndef(LLVMVoidTypeInContext(ctx))
                 }
             }
         };
-        if !val.is_null() {
+        if val.is_null() {
+            crate::log!("null");
+        } else {
             let cstr = val_str(val);
             crate::log!("{cstr:?}");
-        } else {
-            crate::log!("null");
         }
 
         instructions.push(val);

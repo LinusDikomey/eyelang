@@ -49,7 +49,7 @@ enum TreeType {
     Mod
 }
 impl TreeType {
-    fn file(&self) -> &'static str {
+    fn file(self) -> &'static str {
         match self {
             Self::Main { .. } => "main.eye",
             Self::Mod => "mod.eye"
@@ -67,14 +67,14 @@ fn tree(
     let base_file = path.join(t.file());
     let base_exists = std::fs::try_exists(&base_file)
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
-    let base_module = if !base_exists {
+    let base_module = if base_exists {
+        file(&base_file, modules, errors, args)
+    } else {
         let main_mod = modules.add(Module::empty(), "".to_owned(), path.to_owned());
         if let TreeType::Main = t {
             errors.emit(Error::MissingMainFile, 0, 0, main_mod);
         }
         main_mod
-    } else {
-        file(&base_file, modules, errors, args)
     };
 
     for entry in std::fs::read_dir(path).expect("Failed to read directory") {
@@ -85,10 +85,7 @@ fn tree(
         let child_module = if file_ty.is_dir() {
             tree(&path, modules, errors, TreeType::Mod, args)
         } else if file_ty.is_file() {
-            let is_eye = match path.extension() {
-                Some(extension) if extension == "eye" => true,
-                _ => false
-            };
+            let is_eye = matches!(path.extension(), Some(extension) if extension == "eye");
             if !is_eye { continue; }
             file(&path, modules, errors, args)
         } else {
@@ -128,8 +125,8 @@ fn file(
             if args.reconstruct_src {
                 log!("Module: {:#?}", module);
                 println!("\n---------- Start of AST code reconstruction for file {path:?} ----------\n");
-                let mut ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
-                module.repr(&mut ast_repr_ctx);
+                let ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
+                module.repr(&ast_repr_ctx);
                 println!("------------ End of AST code reconstruction for file {path:?} ----------");
             }
             modules.update(module_id, module, src, path.to_owned());

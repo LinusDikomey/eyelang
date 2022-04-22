@@ -10,22 +10,7 @@ pub enum Primitive {
     Never
 }
 impl Primitive {
-    /*
-    pub fn _size(&self) -> u32 {
-        use Primitive::*;
-        match self {
-            I8   | U8        => 1,
-            I16  | U16       => 2,
-            I32  | U32 | F32 => 4,
-            I64  | U64 | F64 => 8,
-            I128 | U128      => 16,
-            String => todo!(),
-            Bool => 1,
-            Unit | Never => 0,           
-        }
-    }
-    */
-    pub fn as_int(&self) -> Option<IntType> {
+    pub fn as_int(self) -> Option<IntType> {
         use Primitive::*;
         Some(match self {
             I8 => IntType::I8,
@@ -42,7 +27,7 @@ impl Primitive {
         })
     }
 
-    pub fn as_float(&self) -> Option<FloatType> {
+    pub fn as_float(self) -> Option<FloatType> {
         use Primitive::*;
         Some(match self {
             F32 => FloatType::F32,
@@ -80,25 +65,25 @@ pub enum IntType {
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
 }
-impl Into<Primitive> for IntType {
-    fn into(self) -> Primitive {
-        match self {
-            Self::I8 => Primitive::I8,
-            Self::I16 => Primitive::I16,
-            Self::I32 => Primitive::I32,
-            Self::I64 => Primitive::I64,
-            Self::I128 => Primitive::I128,
-            Self::U8 => Primitive::U8,
-            Self::U16 => Primitive::U16,
-            Self::U32 => Primitive::U32,
-            Self::U64 => Primitive::U64,
-            Self::U128 => Primitive::U128,
+impl From<IntType> for Primitive {
+    fn from(i: IntType) -> Self {
+        match i {
+            IntType::I8 => Self::I8,
+            IntType::I16 => Self::I16,
+            IntType::I32 => Self::I32,
+            IntType::I64 => Self::I64,
+            IntType::I128 => Self::I128,
+            IntType::U8 => Self::U8,
+            IntType::U16 => Self::U16,
+            IntType::U32 => Self::U32,
+            IntType::U64 => Self::U64,
+            IntType::U128 => Self::U128,
         }
     }
 }
 
 impl IntType {
-    pub fn size(&self) -> u32 {
+    pub fn size(self) -> u32 {
         use IntType::*;
         match self {
             I8 | U8 => 1,
@@ -109,33 +94,15 @@ impl IntType {
         }
     }
 
-    pub fn is_signed(&self) -> bool {
+    pub fn is_signed(self) -> bool {
         match self {
             IntType::I8 | IntType::I16 | IntType::I32 | IntType::I64 | IntType::I128 => true,
             IntType::U8 | IntType::U16 | IntType::U32 | IntType::U64 | IntType::U128 => false,
         }
     }
 
-    pub fn bit_count(&self) -> u32 {
+    pub fn bit_count(self) -> u32 {
         self.size() * 8
-    }
-
-    /// returns the smallest possible value
-    pub fn _min_val(&self) -> u128 {
-        if self.is_signed() {
-            2_u128.pow(self.bit_count() as u32 - 1)
-        } else {
-            0
-        }
-    }
-
-    /// returns the largest possible value
-    pub fn _max_val(&self) -> u128 {
-        if self.is_signed() {
-            2_u128.pow(self.bit_count() as u32 - 1) - 1
-        } else {
-            2_u128.pow(self.bit_count() as u32) - 1
-        }
     }
 }
 
@@ -143,16 +110,16 @@ impl IntType {
 pub enum FloatType {
     F32, F64,
 }
-impl Into<Primitive> for FloatType {
-    fn into(self) -> Primitive {
-        match self {
-            Self::F32 => Primitive::F32,
-            Self::F64 => Primitive::F64
+impl From<FloatType> for Primitive {
+    fn from(f: FloatType) -> Self {
+        match f {
+            FloatType::F32 => Self::F32,
+            FloatType::F64 => Self::F64
         }
     }
 }
 impl FloatType {
-    pub fn size(&self) -> u32 {
+    pub fn size(self) -> u32 {
         use FloatType::*;
         match self {
             F32 => 4,
@@ -160,7 +127,7 @@ impl FloatType {
         }
     }
 
-    pub fn bit_count(&self) -> u32 {
+    pub fn bit_count(self) -> u32 {
         self.size() * 8
     }
 }

@@ -3,6 +3,7 @@ use std::{fs::File, io::{BufWriter, Write}, fmt, process::Command, path::Path};
 use crate::ir::{self, Instruction, Tag, SymbolKey, Ref};
 
 #[allow(non_camel_case_types)]
+#[derive(Clone, Copy)]
 enum Inst<'a> {
     mov(Val, Val),
     push(Val),
@@ -16,7 +17,7 @@ enum Inst<'a> {
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Val {
-    NoVal,
+    None,
     Int(u64),
     Stack(u32),
     Data(u32),
@@ -29,18 +30,15 @@ use Inst::*;
 use Val::*;
 impl Val {
     fn is_reg(&self) -> bool {
-        match self {
-            NoVal | Int(_) | Stack(_) | Data(_) => false,
-            _ => true
-        }
+        !matches!(self, None | Int(_) | Stack(_) | Data(_))
     }
     /// moves this value into the specified register if it isn't already in any register
     #[must_use = "Returns the existing or new register"]
     fn ensure_reg(self, w: &mut AsmWriter, reg: Val) -> Self {
-        if !self.is_reg() {
+        if self.is_reg() { self } else {
             w.inst(mov(reg, self));
             reg
-        } else { self }
+        }
     }
     #[must_use = "Returns the existing register or rax"]
     fn ensure_rax(self, w: &mut AsmWriter) -> Self { self.ensure_reg(w, rax) }
@@ -48,7 +46,7 @@ impl Val {
 impl fmt::Display for Val {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            NoVal => panic!("Tried to write NoVal. Did the x86 backend try to use the result of a label/return?"),
+            None => panic!("Tried to write NoVal. Did the x86 backend try to use the result of a label/return?"),
             Int(i) => return write!(f, "{i}"),
             Stack(offset) => return write!(f, "dword ptr [rbp - {offset}]"),
             Data(index) => return write!(f, "data{index}"),
@@ -90,11 +88,11 @@ impl AsmWriter {
     }
 
     fn begin_func(&mut self, name: &str) {
-        write!(self.w, "{name}:\n").unwrap();
+        writeln!(self.w, "{name}:").unwrap();
     }
 
     fn label(&mut self, func: u32, block: u32) {
-        write!(self.w, "label{func}_{block}:\n").unwrap();
+        writeln!(self.w, "label{func}_{block}:").unwrap();
     }
 
     fn inst(&mut self, inst: Inst) {
@@ -102,8 +100,8 @@ impl AsmWriter {
         write!(self.w, "\t").unwrap();
         let mut w = |inst: &str, args: &[Val]| {
             write!(self.w, "{inst}").unwrap();
-            if args.len() > 0 { write!(self.w, " ").unwrap(); }
-            for (i, arg) in args.into_iter().enumerate() {
+            if !args.is_empty() { write!(self.w, " ").unwrap(); }
+            for (i, arg) in args.iter().enumerate() {
                 if i != 0 {
                     write!(self.w, ", ").unwrap();
                 }
@@ -119,7 +117,7 @@ impl AsmWriter {
             not(v) => w("NOT", &[v]),
             add(r, v) => w("add", &[r, v])
         }
-        write!(self.w, "\n").unwrap();
+        writeln!(self.w).unwrap();
     }
 
     fn data(&mut self, data: &[u8]) -> u32 {
@@ -188,7 +186,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
             let val = match *tag {
                 Tag::BlockBegin => {
                     w.label(index, data.int32);
-                    NoVal
+                    None
                 }
                 Tag::Ret => {
                     let val = get_ref(data.un_op, &r);
@@ -197,7 +195,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                     }
                     w.inst(pop(rbp));
                     w.inst(ret);
-                    NoVal
+                    None
                 }
                 Tag::Param => todo!(),
                 Tag::Int => Int(data.int),
@@ -214,7 +212,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                     let val = get_ref(data.bin_op.1, &r);
                     
                     w.inst(mov(into, val));
-                    NoVal
+                    None
                 }
                 Tag::String => {
                     let bytes = &ir.extra[

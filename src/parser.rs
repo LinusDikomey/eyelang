@@ -36,7 +36,7 @@ impl Tokens {
     }
 
     pub fn last_src_pos(&self) -> u32 {
-        self.tokens.last().map(|tok| tok.end).unwrap_or(0)
+        self.tokens.last().map_or(0, |tok| tok.end)
     }
 
     pub fn position(&self) -> usize {
@@ -57,7 +57,7 @@ impl Tokens {
         }
     }
 
-    /// stpes over the current token and returns it. Token type checks only happen in debug mode.
+    /// steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> &Token {
         let tok = self.step().expect("step_assert failed");
@@ -70,7 +70,7 @@ impl Tokens {
         let expected = expected.into().0;
         let module = self.module;
         let tok = self.step()?;
-        if expected.iter().find(|expected_tok| **expected_tok == tok.ty).is_none() {
+        if !expected.iter().any(|expected_tok| *expected_tok == tok.ty) {
             return Err(CompileError {
                 err: Error::UnexpectedToken,
                 span: Span::new(tok.start, tok.end, module)
@@ -159,7 +159,7 @@ impl<'a> Parser<'a> {
     fn parse_block_or_expr(&mut self, var_index: &mut u32) -> EyeResult<BlockOrExpr> {
         match_or_unexpected!(
             self.toks.peek()
-                .ok_or(Error::UnexpectedEndOfFile.at(
+                .ok_or_else(|| Error::UnexpectedEndOfFile.at(
                     self.toks.last_src_pos(),
                     self.toks.last_src_pos(),
                     self.toks.module
@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
                         let name = name_tok.get_val(self.src).to_owned();
                         let (s, e) = (name_tok.start, name_tok.end);
                         let ty = self.parse_type()?;
-                        params.push((name, ty, s, e))
+                        params.push((name, ty, s, e));
                     }
                 }
                 let mut var_count = 0;
@@ -296,83 +296,11 @@ impl<'a> Parser<'a> {
             }
             // block
             TokenType::LBrace => Item::Block(BlockItem::Block(self.parse_block(var_index)?)),
-            // if statement TODO: if expressions are probably enough
-            TokenType::Keyword(Keyword::If) => {
-                self.toks.step_assert(TokenType::Keyword(Keyword::If));
-                Item::Block(BlockItem::Expr(
-                    Expr::If(Box::new(self.parse_if_from_cond(var_index)?))
-                ))
-            }
             // either a struct or a variable
             TokenType::Ident => {
                 let ident = self.toks.step_expect(TokenType::Ident)?;
                 let name = ident.get_val(self.src);
                 match self.toks.peek().map(|t| t.ty) {
-                    /*
-                    // Function definition with parameters
-                    Ok(TokenType::LParen) => match self.parse_params() {
-                        Ok((params, varargs)) => {
-                            match self.toks.step().map(|t| t.ty) {
-                                Ok(TokenType::Arrow) => {
-                                    let ret_type_start = self.toks.current().unwrap().start;
-                                    let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
-                                        Some(TokenType::LBrace | TokenType::Colon) =>
-                                            (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
-                                        Some(TokenType::Keyword(Keyword::Extern)) => {
-                                            self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
-                                            (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, true)
-                                        }
-                                        _ => {
-                                            let ty = self.parse_type()?;
-                                            let end = self.toks.previous().unwrap().end;
-                                            (ty, end, self.toks.step_if(TokenType::Keyword(Keyword::Extern)).is_some())
-                                        }
-                                    };
-                                    let mut var_count = 1 + params.len() as u32;
-                                    let body = (!is_extern).then(|| {
-                                        self.parse_block_or_expr(&mut var_count)
-                                    }).transpose()?;
-                                    Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                                        params,
-                                        varargs,
-                                        body,
-                                        return_type: (return_type, ret_type_start, ret_type_end), var_count
-                                    })))
-                                },
-                                Ok(_) => Parsed::None,
-                                Err(err) => Parsed::Error(err)
-                            }
-                        }
-                        Err(err) => Parsed::Error(err)
-                    }
-                    // Function definition
-                    Ok(TokenType::Arrow) => {
-                        let ret_type_start = self.toks.current().unwrap().start;
-                        let (return_type, ret_type_end, is_extern) = match self.toks.peek().map(|t| t.ty) {
-                            Some(TokenType::LBrace | TokenType::Colon)
-                                => (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, false),
-                            Some(TokenType::Keyword(Keyword::Extern)) => {
-                                self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
-                                (UnresolvedType::Primitive(Primitive::Unit), ret_type_start, true)
-                            }
-                            _ => {
-                                let ty = self.parse_type()?;
-                                let end = self.toks.previous().unwrap().end;
-                                (ty, end, self.toks.step_if(TokenType::Keyword(Keyword::Extern)).is_some())
-                            }
-                        };
-                        let mut var_count = 1; // return type, no params
-                        let body = (!is_extern).then(|| {
-                            self.parse_block_or_expr(&mut var_count)
-                        }).transpose()?;
-                        Parsed::Item(Item::Definition(name.to_owned(), Definition::Function(Function {
-                            params: Vec::new(),
-                            varargs: false,
-                            body,
-                            return_type: (return_type, ret_type_start, ret_type_end),
-                            var_count
-                        })))
-                    }*/
                     // Struct definition
                     Some(TokenType::DoubleColon) => {
                         self.toks.step_assert(TokenType::DoubleColon);
@@ -386,7 +314,7 @@ impl<'a> Parser<'a> {
                             if self.toks.current()?.ty == TokenType::Comma {
                                 self.toks.step()?;
                             }
-                            members.push((member_name.to_owned(), member_type, start, end))
+                            members.push((member_name.to_owned(), member_type, start, end));
                         }
                         self.toks.step_expect(TokenType::RBrace)?;
                         log!("Successfully constructed {}", name);
@@ -424,33 +352,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /*fn parse_params(&mut self) -> EyeResult<(Vec<(String, UnresolvedType, u32, u32)>, bool)> {
-        let mut params = Vec::new();
-        let mut vararg = false;
-        match self.toks.peek() {
-            Some(tok) if tok.ty == TokenType::RParen => return Ok((params, vararg)),
-            _ => ()
-        }
-        loop {
-            if self.toks.step_if(TokenType::TripleDot).is_some() {
-                vararg = true;
-                self.toks.step_expect(TokenType::RParen)?;
-                break;
-            }
-            let name_tok = self.toks.step_expect(TokenType::Ident)?;
-            let start = name_tok.start;
-            let name = name_tok.get_val(self.src).to_owned();
-            let ty = self.parse_type()?;
-            params.push((name, ty, start, self.toks.previous().unwrap().end));
-            match_or_unexpected!(self.toks.step()?,
-                self.toks.module,
-                TokenType::RParen => break,
-                TokenType::Comma => ()
-            );
-        }
-        Ok((params, vararg))
-    }*/
-
     fn parse_expr(&mut self, var_index: &mut u32) -> EyeResult<Expr> {
         let lhs = self.parse_factor(var_index, true)?;
         self.parse_bin_op_rhs(var_index, 0, lhs)
@@ -481,7 +382,7 @@ impl<'a> Parser<'a> {
             TokenType::IntLiteral => Expr::IntLiteral(IntLiteral::from_tok(first, self.src)),
             TokenType::FloatLiteral => Expr::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
             TokenType::StringLiteral => Expr::StringLiteral(
-                self.src[first.start as usize + 1 ..= first.end as usize - 1]
+                self.src[first.start as usize + 1 .. first.end as usize]
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
                     .replace("\\r", "\r")
@@ -518,7 +419,7 @@ impl<'a> Parser<'a> {
                                 self.toks.module,
                                 TokenType::Comma => (),
                                 TokenType::RParen => break
-                            )
+                            );
                         }
                     }
                     Expr::FunctionCall(Box::new(expr), args)
@@ -543,7 +444,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expr) -> EyeResult<Expr> {
-        while let Some(op) = self.toks.peek().map(|t| Option::<Operator>::from(t.ty)).flatten() {
+        while let Some(op) = self.toks.peek().and_then(|t| Option::<Operator>::from(t.ty)) {
             self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
             if op_prec < expr_prec { break; }
@@ -551,7 +452,7 @@ impl<'a> Parser<'a> {
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
-            if let Some(next_op) = self.toks.peek().map(|t| Option::<Operator>::from(t.ty)).flatten() {
+            if let Some(next_op) = self.toks.peek().and_then(|t| Option::<Operator>::from(t.ty)) {
                 if op_prec < next_op.precedence() {
                     rhs = self.parse_bin_op_rhs(var_index, op.precedence() + 1, rhs)?;
                 }
@@ -571,7 +472,7 @@ impl<'a> Parser<'a> {
                 let tok = self.toks.step_assert(TokenType::Keyword(Keyword::Else));
                 let else_pos = tok.end;
                 let next = self.toks.peek()
-                    .ok_or(Error::UnexpectedEndOfFile.at(else_pos, else_pos, self.toks.module))?;
+                    .ok_or_else(|| Error::UnexpectedEndOfFile.at(else_pos, else_pos, self.toks.module))?;
                 
                 match next.ty {
                     TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block(var_index)?)),

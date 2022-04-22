@@ -45,12 +45,11 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors, require_main_func: boo
 
     let mut main = None;
     if require_main_func {
-        main = Some(match globals[ModuleId::ROOT].get("main") {
-            Some(Symbol::Func(func)) => *func,
-            _ => {
-                errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
-                return Err(errors)
-            }
+        main = Some(if let Some(Symbol::Func(func)) = globals[ModuleId::ROOT].get("main") {
+            *func
+        } else {
+            errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
+            return Err(errors)
         });
     }
     
@@ -60,7 +59,7 @@ pub fn reduce(modules: &ast::Modules, mut errors: Errors, require_main_func: boo
             name: "MainModule".to_owned(),
             funcs,
             main,
-            types: ctx.types.into_iter().map(|def| def.finalize()).collect(),
+            types: ctx.types.into_iter().map(TypeDef::finalize).collect(),
         },
         globals
     ))
@@ -107,7 +106,7 @@ fn gen_func_bodies(
                 expected,
                 expected,
             );
-            if block == false
+            if !block
                 || header.return_type == TypeRef::Base(BaseType::Prim(Primitive::Unit))
             {
                 builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
@@ -155,7 +154,7 @@ impl<'a> ScopeInfo<'a> {
             self.parent()
                 .map(|parent| parent.resolve_local(name))
                 .transpose()?
-                .ok_or_else(|| Error::UnknownIdent)
+                .ok_or(Error::UnknownIdent)
         }
     }
 }
@@ -254,7 +253,7 @@ impl<'s> Scope<'s> {
             },
         }
     }
-    pub fn child<'c>(&'c mut self, symbols: HashMap<String, Symbol>) -> Scope<'c> {
+    pub fn child(&mut self, symbols: HashMap<String, Symbol>) -> Scope {
         Scope {
             ctx: &mut *self.ctx,
             globals: self.globals,
@@ -277,6 +276,7 @@ impl<'s> Scope<'s> {
                 let (root, iter, last) = path.segments();
                 // no last segment means it must point to the root module
                 let Some(last) = last else { return Err(Error::TypeExpected) };
+                
                 enum ModuleOrLocal {
                     Module(ModuleId),
                     Local
@@ -382,7 +382,7 @@ impl<'s> Scope<'s> {
                 self.reduce_block(errors, ir, block, block_ty, ret);
             }
             BlockItem::Declare(name, _index, ty, val) => {
-                let ty = match ty.as_ref().map(|ty| self.resolve_type(&ty, &mut ir.types)).transpose() {
+                let ty = match ty.as_ref().map(|ty| self.resolve_type(ty, &mut ir.types)).transpose() {
                     Ok(t) => t,
                     Err(err) => {
                         errors.emit(err, 0, 0, self.module);
@@ -559,7 +559,7 @@ impl<'s> Scope<'s> {
                 ir.add_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
                 ir.begin_block(then_block);
 
-                let val = if let Some(else_) = else_ {
+                if let Some(else_) = else_ {
                     let after_block = ir.create_block();
                     let (then_val, _) = self.reduce_block_or_expr(errors, ir, then, expected, ret);
                     let then_exit = ir.current_block();
@@ -583,8 +583,7 @@ impl<'s> Scope<'s> {
                     ir.begin_block(other_block);
 
                     Ref::val(RefVal::Unit)
-                };
-                val
+                }
             }
             ast::Expr::While(while_) => {
                 let ast::While { cond, body } = &**while_;
@@ -639,7 +638,7 @@ impl<'s> Scope<'s> {
                             let mut bytes = Vec::with_capacity(8 + 4 * args.len());
                             bytes.extend(&key.bytes());
                             for (arg, ty) in args.iter().zip(params) {
-                                let info = ty.map(|ty| ty.into_info(&mut ir.types)).unwrap_or(TypeInfo::Unknown);
+                                let info = ty.map_or(TypeInfo::Unknown, |ty| ty.into_info(&mut ir.types));
                                 let ty = ir
                                     .types
                                     .add(info);
@@ -660,10 +659,7 @@ impl<'s> Scope<'s> {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
                         ir.specify(expected, TypeInfo::Resolved(ty), errors);
 
-                        if args.len() != struct_.members.len() {
-                            errors.emit(Error::InvalidArgCount, 0, 0, self.module);
-                            Ref::val(RefVal::Undef)
-                        } else {
+                        if args.len() == struct_.members.len() {
                             let var = get_var(ir);
                             let member_types: Vec<TypeInfo> =
                                 struct_.members.iter().map(|(_, ty)| ty.into_info(&mut ir.types)).collect();
@@ -683,6 +679,9 @@ impl<'s> Scope<'s> {
                                 ir.add_untyped(Tag::Store, Data { bin_op: (member, member_val) });
                             }
                             return ExprResult::Stored(var);
+                        } else {
+                            errors.emit(Error::InvalidArgCount, 0, 0, self.module);
+                            Ref::val(RefVal::Undef)
                         }
                     }
                     _ => {
@@ -741,12 +740,12 @@ impl<'s> Scope<'s> {
                         TypeInfo::Float | TypeInfo::Int | TypeInfo::Unknown => Ok(()),
                         TypeInfo::Primitive(p) => {
                             if let Some(int) = p.as_int() {
-                                if !int.is_signed() {
-                                    Err(Error::CantNegateType)
-                                } else {
+                                if int.is_signed() {
                                     Ok(())
+                                } else {
+                                    Err(Error::CantNegateType)
                                 }
-                            } else if let Some(_) = p.as_float() {
+                            } else if p.as_float().is_some() {
                                 Ok(())
                             } else {
                                 Err(Error::CantNegateType)
