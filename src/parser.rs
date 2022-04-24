@@ -39,6 +39,14 @@ impl Tokens {
         self.tokens.last().map_or(0, |tok| tok.end)
     }
 
+    fn current_end_pos(&self) -> u32 {
+        self.current()
+            .map(|tok| tok.end)
+            .ok()
+            .or_else(|| self.tokens.last().map(|last| last.end))
+            .unwrap_or(0)
+    }
+
     pub fn position(&self) -> usize {
         self.index
     }
@@ -140,7 +148,7 @@ impl<'a> Parser<'a> {
             match self.parse_item(&mut 0)? {
                 Item::Block(_) => return Err(CompileError {
                     err: Error::InvalidTopLevelBlockItem,
-                    span: Span::new(start, self.toks.current().unwrap().end, self.toks.module)
+                    span: Span::new(start, self.toks.current_end_pos(), self.toks.module)
                 }),
                 Item::Definition(name, def) => if let Some(_existing) = definitions.insert(name, def) {
                     return Err(Error::DuplicateDefinition.at(

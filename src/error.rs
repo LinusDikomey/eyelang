@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use colored::Colorize;
 
@@ -31,6 +32,10 @@ impl Errors {
 
     pub fn error_count(&self) -> usize {
         self.errors.len()
+    }
+
+    pub fn get(&self) -> &[CompileError] {
+        &self.errors
     }
 
     pub fn print(&self, modules: &Modules) {
@@ -186,6 +191,11 @@ pub enum Error {
     CantDeref,
     CantUseRootPath,
     InferredTypeNotAllowedHere
+}
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 impl Error {
     pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {
