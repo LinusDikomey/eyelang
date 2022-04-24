@@ -9,7 +9,7 @@ use lsp_types::{
     notification::{Notification, DidSaveTextDocument},
     DidSaveTextDocumentParams
 };
-use std::io::Write;
+use std::{io::Write, path::Path};
 use crate::Args;
 
 use self::dispatch::RequestDispatcher;
@@ -136,17 +136,13 @@ impl State {
                 let p: DidSaveTextDocumentParams = serde_json::from_value(not.params)?;
                 let sender = self.sender.clone();
                 let res = std::panic::catch_unwind(|| {
-                    if let Err(err) = validate::validate(p.text_document, sender) {
-                        debug(format!("Error while validating: {err:?}"));
-                    }
+                    std::thread::spawn(|| {
+                        if let Err(err) = validate::validate(p.text_document, sender) {
+                            debug(format!("Error while validating: {err:?}"));
+                        }
+                    });
                 });
                 debug(format!("Finished validation: {res:?}"));
-                
-                /*std::thread::spawn(|| {
-                    if let Err(err) = validate::validate(p.text_document, sender) {
-                        debug(format!("Error while validating: {err:?}"));
-                    }
-                });*/
             }
             _ => debug(format!("notification: {not:?}"))
         }
@@ -162,7 +158,7 @@ pub fn debug<S: AsRef<str>>(s: S) {
     let mut f = std::fs::File::options()
         .write(true)
         .append(true)
-        .open("/home/linus/log.txt")
+        .open(Path::join(std::env::current_exe().unwrap().parent().unwrap(), "log.txt"))
         .expect("Failed to open");
     writeln!(f, "{}", s.as_ref()).unwrap();
 }

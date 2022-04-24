@@ -7,7 +7,7 @@ pub fn handle_hover(_state: &mut State, _params: HoverParams) -> Result<Option<l
     Ok(Some(lsp_types::Hover {
         contents: lsp_types::HoverContents::Markup(MarkupContent {
             kind: lsp_types::MarkupKind::Markdown,
-            value: "Markus Söder in Town".to_owned()
+            value: "TODO: Hover".to_owned()
         }),
         range: None
     }))
