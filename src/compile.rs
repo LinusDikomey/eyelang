@@ -131,7 +131,7 @@ fn file(
             if reconstruct_src {
                 log!("Module: {:#?}", module);
                 println!("\n---------- Start of AST code reconstruction for file {path:?} ----------\n");
-                let ast_repr_ctx = ast::repr::ReprPrinter::new("  ");
+                let ast_repr_ctx = ast::repr::ReprPrinter::new("  ", &src);
                 module.repr(&ast_repr_ctx);
                 println!("------------ End of AST code reconstruction for file {path:?} ----------");
             }

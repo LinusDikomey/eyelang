@@ -1,6 +1,6 @@
 use std::{u128, fmt};
 
-use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes};
+use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, ast::TSpan};
 
 #[derive(Debug)]
 pub struct Token {
@@ -16,6 +16,10 @@ impl Token {
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
         &src[self.start as usize ..= self.end as usize]
+    }
+
+    pub fn span(&self) -> TSpan {
+        TSpan::new(self.start, self.end)
     }
 
     pub fn is<const N: usize>(&self, types: impl Into<TokenTypes<N>>) -> bool {
@@ -85,10 +89,8 @@ pub struct IntLiteral {
     pub ty: Option<IntType>
 }
 impl IntLiteral {
-    pub fn from_tok(token: &Token, src: &str) -> Self {
-        let val = &token.get_val(src);
-        let val = val.parse::<u128>().unwrap();
-
+    pub fn parse(s: &str) -> Self {
+        let val = s.parse::<u128>().unwrap();
         Self { val, ty: None }
     }
 }
@@ -104,8 +106,8 @@ pub struct FloatLiteral {
     pub ty: Option<FloatType>
 }
 impl FloatLiteral {
-    pub fn from_tok(token: &Token, src: &str) -> Self {
-        Self { val: token.get_val(src).parse::<f64>().unwrap(), ty: None }
+    pub fn parse(s: &str) -> Self {
+        Self { val: s.parse().unwrap(), ty: None }
     }
 }
 impl fmt::Display for FloatLiteral {

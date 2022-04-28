@@ -99,6 +99,7 @@ pub struct Args {
 fn main() {
     let args = Args::parse();
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
+    log!("Size of Expr: {}", std::mem::size_of::<ast::Expr>());
     run(&args);
 }
 

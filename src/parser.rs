@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use crate::{
-    log,
     ast::*,
     error::{CompileError, EyeResult, Error},
-    lexer::{tokens::{FloatLiteral, IntLiteral, Keyword, Token, TokenType, Operator}, Span},
+    lexer::{tokens::{Keyword, Token, TokenType, Operator}, Span},
     types::Primitive
 };
 
@@ -306,8 +305,7 @@ impl<'a> Parser<'a> {
             // either a struct or a variable
             TokenType::Ident => {
                 let ident = self.toks.step_expect(TokenType::Ident)?;
-                let ident_start = ident.start;
-                let ident_end = ident.end;
+                let ident_span = ident.span();
                 let name = ident.get_val(self.src);
                 match self.toks.peek().map(|t| t.ty) {
                     // Struct definition
@@ -326,7 +324,6 @@ impl<'a> Parser<'a> {
                             members.push((member_name.to_owned(), member_type, start, end));
                         }
                         self.toks.step_expect(TokenType::RBrace)?;
-                        log!("Successfully constructed {}", name);
                         Item::Definition(
                             name.to_owned(),
                             Definition::Struct(StructDefinition { members })
@@ -348,11 +345,7 @@ impl<'a> Parser<'a> {
                         Item::Block(BlockItem::Declare(name.to_owned(), None, Some(val)))
                     }
                     _ => {
-                        let expr = self.parse_expr_starting_with(Expr {
-                            ty: ExprTy::Variable(name.to_owned()),
-                            start: ident_start,
-                            end: ident_end,
-                        })?;
+                        let expr = self.parse_expr_starting_with(Expr::Variable(ident_span))?;
                         Item::Block(BlockItem::Expr(expr))
                     }
                 }
@@ -374,52 +367,47 @@ impl<'a> Parser<'a> {
     fn parse_factor(&mut self, include_as: bool) -> Result<Expr, CompileError> {
         let first = self.toks.step()?;
         let start = first.start;
-        let ty = match_or_unexpected!(first,
+        let expr = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Minus => ExprTy::UnOp(Box::new((UnOp::Neg, self.parse_factor(false)?))),
-            TokenType::Bang => ExprTy::UnOp(Box::new((UnOp::Not, self.parse_factor(false)?))),
-            TokenType::Ampersand => ExprTy::UnOp(Box::new((UnOp::Ref, self.parse_factor(false)?))),
+            TokenType::Minus => Expr::UnOp(Box::new((start, UnOp::Neg, self.parse_factor(false)?))),
+            TokenType::Bang => Expr::UnOp(Box::new((start, UnOp::Not, self.parse_factor(false)?))),
+            TokenType::Ampersand => Expr::UnOp(Box::new((start, UnOp::Ref, self.parse_factor(false)?))),
             TokenType::LParen => {
-                if self.toks.step_if(TokenType::RParen).is_some() {
-                    ExprTy::Unit
+                if let Some(closing) = self.toks.step_if(TokenType::RParen) {
+                    Expr::Unit(TSpan::new(start, closing.end))
                 } else {
                     let inner = self.parse_expr()?;
-                    self.toks.step_expect(TokenType::RParen)?;
-                    ExprTy::Nested(Box::new(inner))
+                    let end = self.toks.step_expect(TokenType::RParen)?.end;
+                    Expr::Nested(Box::new((TSpan::new(start, end), inner)))
                 }
             },
-            TokenType::Keyword(Keyword::Ret) => ExprTy::Return(Box::new(self.parse_expr()?)),
-            TokenType::IntLiteral => ExprTy::IntLiteral(IntLiteral::from_tok(first, self.src)),
-            TokenType::FloatLiteral => ExprTy::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
-            TokenType::StringLiteral => ExprTy::StringLiteral(
-                self.src[first.start as usize + 1 .. first.end as usize]
-                    .replace("\\n", "\n")
-                    .replace("\\t", "\t")
-                    .replace("\\r", "\r")
-                    .replace("\\0", "\0")
-                    .replace("\\\"", "\"")
-            ),
-            TokenType::Keyword(Keyword::True) => ExprTy::BoolLiteral(true),
-            TokenType::Keyword(Keyword::False) => ExprTy::BoolLiteral(false),
-            TokenType::Ident => ExprTy::Variable(first.get_val(self.src).to_owned()),
-            TokenType::Keyword(Keyword::If) => ExprTy::If(Box::new(self.parse_if_from_cond()?)),
-            TokenType::Keyword(Keyword::While) => ExprTy::While(Box::new(self.parse_while_from_cond()?)),
+            TokenType::Keyword(Keyword::Ret) => Expr::Return(Box::new((start, self.parse_expr()?))),
+            TokenType::IntLiteral => Expr::IntLiteral(first.span()),
+            TokenType::FloatLiteral => Expr::FloatLiteral(first.span()),
+            TokenType::StringLiteral => Expr::StringLiteral(TSpan::new(first.start, first.end)),
+            TokenType::Keyword(Keyword::True) => Expr::BoolLiteral { start, val: true },
+            TokenType::Keyword(Keyword::False) => Expr::BoolLiteral { start, val: false },
+            TokenType::Ident => Expr::Variable(first.span()),
+            TokenType::Keyword(Keyword::If) => Expr::If(Box::new(self.parse_if_from_cond(start)?)),
+            TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(start)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let inner = self.parse_factor(false)?;
-                ExprTy::Cast(Box::new((UnresolvedType::Primitive(p), inner)))
+                Expr::Cast(Box::new((
+                    TSpan::new(start, self.toks.current_end_pos()),
+                    UnresolvedType::Primitive(p),
+                    inner
+                )))
             },
             TokenType::Keyword(Keyword::Root) => {
-                ExprTy::Root
+                Expr::Root(start)
             }
         );
-        let expr = Expr { ty, start, end: self.toks.current_end_pos() };
         self.parse_factor_postfix(expr, include_as)
     }
 
     fn parse_factor_postfix(&mut self, mut expr: Expr, include_as: bool) -> EyeResult<Expr> {
         loop {
-            let start = expr.start;
-            let ty = match self.toks.peek().map(|t| t.ty) {
+            expr = match self.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
                     // function call
                     self.toks.step_expect(TokenType::LParen)?;
@@ -434,25 +422,25 @@ impl<'a> Parser<'a> {
                             );
                         }
                     }
-                    ExprTy::FunctionCall(Box::new((expr, args)))
+                    let end = self.toks.current_end_pos();
+                    Expr::FunctionCall(Box::new((expr, args, end)))
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
-                    let field = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
-                    ExprTy::MemberAccess(Box::new((expr, field)))
+                    let span = self.toks.step_expect(TokenType::Ident)?.span();
+                    Expr::MemberAccess(Box::new((expr, span)))
                 }
                 Some(TokenType::Caret) => {
                     self.toks.step_assert(TokenType::Caret);
-                    ExprTy::UnOp(Box::new((UnOp::Deref, expr)))
+                    Expr::UnOp(Box::new((self.toks.current_end_pos(), UnOp::Deref, expr)))
                 }
                 Some(TokenType::Keyword(Keyword::As)) if include_as => {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
                     let target_ty = self.parse_type()?;
-                    ExprTy::Cast(Box::new((target_ty, expr)))
+                    Expr::Cast(Box::new((TSpan::new(expr.start(), self.toks.current_end_pos()), target_ty, expr)))
                 }
                 _ => break Ok(expr)
             };
-            expr = Expr { ty, start, end: self.toks.current_end_pos() }
         }
     }
 
@@ -470,19 +458,13 @@ impl<'a> Parser<'a> {
                     rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs)?;
                 }
             }
-            let start = lhs.start;
-            let end = rhs.end;
-            lhs = Expr {
-                ty: ExprTy::BinOp(Box::new((op, lhs, rhs))),
-                start,
-                end
-            }
+            lhs = Expr::BinOp(Box::new((op, lhs, rhs)))
         }
         Ok(lhs)
     }
 
     /// Starts after the if keyword has already been parsed
-    fn parse_if_from_cond(&mut self) -> EyeResult<If> {
+    fn parse_if_from_cond(&mut self, start: u32) -> EyeResult<If> {
         let cond = self.parse_expr()?;
         let then = self.parse_block_or_expr()?;
         
@@ -500,14 +482,16 @@ impl<'a> Parser<'a> {
             } else { None }
         } else { None };
 
-        Ok(If { cond, then, else_ })
+        let end = self.toks.current_end_pos();
+
+        Ok(If { span: TSpan::new(start, end), cond, then, else_ })
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(&mut self) -> EyeResult<While> {
+    fn parse_while_from_cond(&mut self, start: u32) -> EyeResult<While> {
         let cond = self.parse_expr()?;
         let body = self.parse_block_or_expr()?;
-        Ok(While { cond, body })
+        Ok(While { cond, body, span: TSpan::new(start, self.toks.current_end_pos()) })
     }
     
     fn parse_path(&mut self) -> EyeResult<IdentPath> {

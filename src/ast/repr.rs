@@ -10,6 +10,7 @@ pub trait Repr<C: Representer> {
 }
 
 pub trait Representer {
+    fn src<'a>(&'a self, span: TSpan) -> &'a str;
     fn child(&self) -> Self;
     fn begin_line(&self);
     fn write_start<B: Borrow<str>>(&self, s: B);
@@ -23,19 +24,24 @@ pub trait Representer {
 
 pub struct ReprPrinter<'a> {
     indent: &'a str,
-    count: u32
+    count: u32,
+    src: &'a str,
 }
 impl<'a> ReprPrinter<'a> {
-    pub fn new(indent: &'a str) -> Self {
-        Self { indent, count: 0 }
+    pub fn new(indent: &'a str, src: &'a str) -> Self {
+        Self { indent, count: 0, src }
     }
 }
 
 impl Representer for ReprPrinter<'_> {
+    fn src<'a>(&'a self, span: TSpan) -> &'a str {
+        &self.src[span.start as usize ..= span.end as usize]
+    }
     fn child(&self) -> Self {
         Self {
             indent: self.indent,
-            count: self.count + 1
+            count: self.count + 1,
+            src: self.src
         }
     }
 
@@ -176,35 +182,28 @@ impl<C: Representer> Repr<C> for BlockItem {
 
 impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
-        self.ty.repr(c);
-    }
-}
-
-
-impl<C: Representer> Repr<C> for ExprTy {
-    fn repr(&self, c: &C) {
         match &self {
-            Self::Return(val) => {
+            Self::Return(box (_, val)) => {
                 c.write_add("ret");
                 c.space();
                 val.repr(c);
             }
-            Self::IntLiteral(lit) => c.write_add(format!("{lit}")),
-            Self::FloatLiteral(lit) => c.write_add(format!("{lit}")),
-            Self::StringLiteral(s) => {
-                c.write_add("\"");
-                c.write_add(s.as_str().replace('\n', "\\n"));
-                c.write_add("\"");
+            Self::IntLiteral(span) => c.write_add(c.src(*span)),
+            Self::FloatLiteral(span) => c.write_add(c.src(*span)),
+            Self::StringLiteral(span) => {
+                //c.write_add("\"");
+                c.write_add(c.src(*span));
+                //c.write_add("\"");
             }
-            Self::BoolLiteral(b) => c.write_add(if *b { "true" } else { "false" }),
-            Self::Nested(inner) => {
+            Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
+            Self::Nested(box (_, inner)) => {
                 c.char('(');
                 inner.repr(c);
                 c.char(')');
             }
-            Self::Unit => c.write_add("()"),
-            Self::Variable(name) => c.write_add(name.as_str()),
-            Self::If(box If { cond, then, else_ }) => {
+            Self::Unit(_) => c.write_add("()"),
+            Self::Variable(span) => c.write_add(c.src(*span)),
+            Self::If(box If { span: _, cond, then, else_ }) => {
                 c.write_add("if ");
                 cond.repr(c);
                 if let BlockOrExpr::Block(_) = then {
@@ -218,7 +217,7 @@ impl<C: Representer> Repr<C> for ExprTy {
                     else_block.repr(c);
                 }
             }
-            Self::While(box While { cond, body }) => {
+            Self::While(box While { span: _, cond, body }) => {
                 c.write_add("while ");
                 cond.repr(c);
                 if let BlockOrExpr::Block(_) = body {
@@ -228,7 +227,7 @@ impl<C: Representer> Repr<C> for ExprTy {
                 }
                 body.repr(c);
             }
-            Self::FunctionCall(box (func, args)) => {
+            Self::FunctionCall(box (func, args, _)) => {
                 func.repr(c);
                 c.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
@@ -239,12 +238,16 @@ impl<C: Representer> Repr<C> for ExprTy {
                 }
                 c.write_add(")");
             }
-            Self::UnOp(box (un_op, expr)) => {
+            Self::UnOp(box (_, un_op, expr)) => {
                 c.char(match un_op {
                     UnOp::Neg => '-',
                     UnOp::Not => '!',
                     UnOp::Ref => '&',
-                    UnOp::Deref => '~',
+                    UnOp::Deref => {
+                        expr.repr(c);
+                        c.char('^');
+                        return;
+                    }
                 });
                 expr.repr(c);
             }
@@ -260,14 +263,14 @@ impl<C: Representer> Repr<C> for ExprTy {
             Self::MemberAccess(box (expr, member)) => {
                 expr.repr(c);
                 c.write_add(".");
-                c.write_add(member.as_str());
+                c.write_add(c.src(*member));
             }
-            Self::Cast(box (ty, expr)) => {
+            Self::Cast(box (_, ty, expr)) => {
                 ty.repr(c);
                 c.space();
                 expr.repr(c);
             },
-            Self::Root => c.write_add("root")
+            Self::Root(_) => c.write_add("root")
         }
     }
 }
