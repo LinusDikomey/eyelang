@@ -56,17 +56,18 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     }
 }
 
-unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
-    let base_ty = |base| {
-        match base {
-            BaseType::Prim(p) => llvm_primitive_ty(ctx, p),
-            BaseType::Id(id) => types[id.idx()],
-        }
-    };
+unsafe fn base_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: BaseType) -> LLVMTypeRef {
     match ty {
-        Type::Base(base) => base_ty(*base),
+        BaseType::Prim(p) => llvm_primitive_ty(ctx, p),
+        BaseType::Id(id) => types[id.idx()],
+    }
+}
+
+unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
+    match ty {
+        Type::Base(base) => base_ty(ctx, &types, *base),
         Type::Pointer { count, inner } => {
-            let mut base = base_ty(*inner);
+            let mut base = base_ty(ctx, &types, *inner);
             for _ in 0..count.get() {
                 base = LLVMPointerType(base, 0);
             }
@@ -146,7 +147,15 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
 }
 
 
-unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMContextRef, builder: LLVMBuilderRef, llvm_func: LLVMValueRef, types: &[LLVMTypeRef], funcs: &[LLVMValueRef]) {
+unsafe fn build_func(
+    func: &ir::FinalFunction,
+    ir: &ir::FunctionIr,
+    ctx: LLVMContextRef,
+    builder: LLVMBuilderRef,
+    llvm_func: LLVMValueRef,
+    types: &[LLVMTypeRef],
+    funcs: &[LLVMValueRef]
+) {
     crate::log!("-------------------- Building LLVM IR for func {}", func.name);
     let zero_i32 = LLVMConstInt(LLVMInt32TypeInContext(ctx), 0, FALSE);
     let blocks = (0..ir.block_count).map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) ).collect::<Vec<_>>();
@@ -237,7 +246,11 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
             }
             ir::Tag::Float => LLVMConstReal(table_ty(*ty), data.float),
             ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty), NONE),
-            ir::Tag::Load => LLVMBuildLoad(builder, get_ref(&instructions, data.un_op), NONE),
+            ir::Tag::Load => {
+                let (val, ty) = get_ref_and_type(&instructions, data.un_op);
+                //TODO: Load2
+                LLVMBuildLoad2(builder, llvm_ty(ctx, types, &ty), val, NONE)
+            }
             ir::Tag::Store => LLVMBuildStore(
                 builder,
                 get_ref(&instructions, data.bin_op.1),
@@ -257,7 +270,8 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
                     r_bytes.copy_from_slice(&ir.extra[begin + 8 + 4*i..begin + 8 + 4*(i+1)]);
                     get_ref(&instructions, ir::Ref::from_bytes(r_bytes))
                 }).collect::<Vec<_>>();
-                LLVMBuildCall(builder, llvm_func, args.as_mut_ptr(), args.len() as u32, NONE)
+                // TODO: Call2
+                LLVMBuildCall(builder, /*table_ty(inst.ty),*/ llvm_func, args.as_mut_ptr(), args.len() as u32, NONE)
             }
             ir::Tag::Neg => {
                 let r = get_ref(&instructions, data.un_op);
@@ -356,7 +370,7 @@ unsafe fn build_func(func: &ir::FinalFunction, ir: &ir::FunctionIr, ctx: LLVMCon
             ir::Tag::Member => {
                 let r = get_ref(&instructions, data.member.0);
                 let mut elems = [zero_i32, LLVMConstInt(LLVMInt32TypeInContext(ctx), data.member.1 as u64, FALSE)];
-                LLVMBuildInBoundsGEP(builder, r, elems.as_mut_ptr(), 2, NONE)
+                LLVMBuildInBoundsGEP(builder/*, ty*/, r, elems.as_mut_ptr(), 2, NONE)
             }
             ir::Tag::Cast => {
                 // cast just panics here right now when the cast is invalid because cast checks aren't implemented

@@ -96,7 +96,6 @@ pub struct Function {
     //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
     pub return_type: (UnresolvedType, u32, u32),
-    pub var_count: u32,
     pub body: Option<BlockOrExpr>,
 }
 
@@ -124,26 +123,34 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum BlockItem {
     Block(Block),
-    Declare(String, u32, Option<UnresolvedType>, Option<Expr>),
+    Declare(String, Option<UnresolvedType>, Option<Expr>),
     Expr(Expr),
 }
 
 #[derive(Debug, Clone)]
-pub enum Expr {
+pub struct Expr {
+    pub ty: ExprTy,
+    pub start: u32,
+    pub end: u32
+}
+
+#[derive(Debug, Clone)]
+pub enum ExprTy {
     Return(Box<Expr>),
     IntLiteral(IntLiteral),
     FloatLiteral(FloatLiteral),
     StringLiteral(String),
     BoolLiteral(bool),
+    Nested(Box<Expr>),
     Unit,
     Variable(String),
     If(Box<If>),
     While(Box<While>),
-    FunctionCall(Box<Expr>, Vec<Expr>),
-    UnOp(UnOp, Box<Expr>),
-    BinOp(Operator, Box<(Expr, Expr)>),
-    MemberAccess(Box<Expr>, String),
-    Cast(UnresolvedType, Box<Expr>),
+    FunctionCall(Box<(Expr, Vec<Expr>)>),
+    UnOp(Box<(UnOp, Expr)>),
+    BinOp(Box<(Operator, Expr, Expr)>),
+    MemberAccess(Box<(Expr, String)>),
+    Cast(Box<(UnresolvedType, Expr)>),
     Root
 }
 

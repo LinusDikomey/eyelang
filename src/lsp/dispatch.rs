@@ -1,7 +1,7 @@
 use lsp_server::Response;
 use serde::{de::DeserializeOwned, Serialize};
 
-use super::{State, LspError, debug};
+use super::{State, LspError};
 
 
 pub struct RequestDispatcher<'a> {
@@ -21,7 +21,6 @@ impl<'a> RequestDispatcher<'a> {
     {
         if self.req.method == R::METHOD {
             let r: R::Params = serde_json::from_value(self.req.params).map_err(|e| Err(e.into()))?;
-            debug(format!("Parsed {:?} for method {}", r, self.req.method));
             match f(self.state, r) {
                 Ok(resp) => {
                     let resp = Response::new_ok(self.req.id, resp);
@@ -30,6 +29,28 @@ impl<'a> RequestDispatcher<'a> {
                 Err(e) => return Err(Err(e))
             }
             Err(Ok(()))
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+pub struct NotificationDispatcher<'a> {
+    pub not: lsp_server::Notification,
+    pub state: &'a mut State
+}
+impl<'a> NotificationDispatcher<'a> {
+    pub fn on<N>(
+        self,
+        f: fn(&mut State, N::Params) -> Result<(), LspError>
+    ) -> Result<Self, Result<(), LspError>>
+    where
+        N: lsp_types::notification::Notification + 'static,
+        N::Params: DeserializeOwned + Send + std::fmt::Debug + 'static,
+    {
+        if self.not.method == N::METHOD {
+            let n: N::Params = serde_json::from_value(self.not.params).map_err(|e| Err(e.into()))?;
+            Err(f(self.state, n))
         } else {
             Ok(self)
         }

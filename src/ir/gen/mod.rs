@@ -381,7 +381,7 @@ impl<'s> Scope<'s> {
                 let block_ty = ir.types.add(TypeInfo::Unknown);
                 self.reduce_block(errors, ir, block, block_ty, ret);
             }
-            BlockItem::Declare(name, _index, ty, val) => {
+            BlockItem::Declare(name, ty, val) => {
                 let ty = match ty.as_ref().map(|ty| self.resolve_type(ty, &mut ir.types)).transpose() {
                     Ok(t) => t,
                     Err(err) => {
@@ -482,14 +482,14 @@ impl<'s> Scope<'s> {
         ret: TypeTableIndex,
         get_var: impl Fn(&mut IrBuilder) -> Ref,
     ) -> ExprResult {
-        let r = match expr {
-            ast::Expr::Return(ret_val) => {
+        let r = match &expr.ty {
+            ast::ExprTy::Return(ret_val) => {
                 let r = self.reduce_expr_val(errors, ir, ret_val, ret, ret);
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
                 ir.add_untyped(Tag::Ret, Data { un_op: r });
                 Ref::val(RefVal::Undef)
             }
-            ast::Expr::IntLiteral(lit) => {
+            ast::ExprTy::IntLiteral(lit) => {
                 let int_ty = lit
                     .ty
                     .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
@@ -507,14 +507,14 @@ impl<'s> Scope<'s> {
                     ir.add(Data { extra }, Tag::LargeInt, expected)
                 }
             }
-            ast::Expr::FloatLiteral(lit) => {
+            ast::ExprTy::FloatLiteral(lit) => {
                 let float_ty = lit.ty.map_or(TypeInfo::Float, |float_ty| {
                     TypeInfo::Primitive(float_ty.into())
                 });
                 ir.specify(expected, float_ty, errors);
                 ir.add(Data { float: lit.val }, Tag::Float, expected)
             }
-            ast::Expr::StringLiteral(string) => {
+            ast::ExprTy::StringLiteral(string) => {
                 let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
                 ir.specify(expected, TypeInfo::Pointer(i8_ty), errors);
                 let extra_len = ir._extra_len(string.as_bytes());
@@ -522,15 +522,16 @@ impl<'s> Scope<'s> {
                 ir.extra_data(&[b'\0']);
                 ir.add(Data { extra_len }, Tag::String, expected)
             }
-            ast::Expr::BoolLiteral(b) => {
+            ast::ExprTy::BoolLiteral(b) => {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors);
                 Ref::val(if *b { RefVal::True } else { RefVal::False })
             }
-            ast::Expr::Unit => {
+            ast::ExprTy::Nested(inner) => return self.reduce_expr_any(errors, ir, inner, expected, ret, get_var),
+            ast::ExprTy::Unit => {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                 Ref::val(RefVal::Unit)
             }
-            ast::Expr::Variable(name) => match self.resolve(&mut ir.types, name) {
+            ast::ExprTy::Variable(name) => match self.resolve(&mut ir.types, name) {
                 Ok(resolved) => match resolved {
                     Resolved::Var(ty, var) => {
                         ir.types.merge(ty, expected, errors, self.module);
@@ -546,7 +547,7 @@ impl<'s> Scope<'s> {
                     Ref::val(RefVal::Undef)
                 }
             },
-            ast::Expr::If(if_) => {
+            ast::ExprTy::If(if_) => {
                 let ast::If { cond, then, else_ } = &**if_;
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
                 let cond = self.reduce_expr_val(errors, ir, cond, b, ret);
@@ -585,7 +586,7 @@ impl<'s> Scope<'s> {
                     Ref::val(RefVal::Unit)
                 }
             }
-            ast::Expr::While(while_) => {
+            ast::ExprTy::While(while_) => {
                 let ast::While { cond, body } = &**while_;
 
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
@@ -610,7 +611,7 @@ impl<'s> Scope<'s> {
                 ir.begin_block(after_block);
                 Ref::val(RefVal::Unit)
             }
-            ast::Expr::FunctionCall(func_expr, args) => {
+            ast::ExprTy::FunctionCall(box (func_expr, args)) => {
                 let func_ty = ir.types.add(TypeInfo::Unknown);
                 match self.reduce_expr(errors, ir, func_expr, func_ty, ret) {
                     ExprResult::Func(key) => {
@@ -693,7 +694,7 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expr::UnOp(un_op, val) => {
+            ast::ExprTy::UnOp(box (un_op, val)) => {
                 let (expected, tag) = match un_op {
                     UnOp::Neg => (expected, Tag::Neg),
                     UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
@@ -761,8 +762,7 @@ impl<'s> Scope<'s> {
                 }
                 ir.add(Data { un_op: inner }, tag, expected)
             }
-            ast::Expr::BinOp(op, sides) => {
-                let (l, r) = &**sides;
+            ast::ExprTy::BinOp(box (op, l, r)) => {
                 if let Operator::Assignment(assignment) = op {
                     ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
                     let var_ty = ir.types.add_unknown();
@@ -829,7 +829,7 @@ impl<'s> Scope<'s> {
                     ir.add(Data { bin_op: (l, r) }, tag, expected)
                 }
             }
-            ast::Expr::MemberAccess(left, member) => {
+            ast::ExprTy::MemberAccess(box (left, member)) => {
                 let left_ty = ir.types.add(TypeInfo::Unknown);
                 enum MemberAccessType {
                     Var(Ref),
@@ -906,7 +906,7 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expr::Cast(target, val) => {
+            ast::ExprTy::Cast(box (target, val)) => {
                 let target = match self.resolve_type(target, &mut ir.types) {
                     Ok(target) => target,
                     Err(err) => {
@@ -921,7 +921,7 @@ impl<'s> Scope<'s> {
                 //TODO: check table for available casts
                 ir.add(Data { un_op: val, }, Tag::Cast, expected)
             }
-            ast::Expr::Root => {
+            ast::ExprTy::Root => {
                 return ExprResult::Module(ModuleId::ROOT)
             }
         };

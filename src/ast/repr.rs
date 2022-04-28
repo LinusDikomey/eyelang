@@ -148,7 +148,7 @@ impl<C: Representer> Repr<C> for BlockItem {
     fn repr(&self, c: &C) {
         match self {
             Self::Block(block) => block.repr(c),
-            Self::Declare(name, _idx, ty, expr) => {
+            Self::Declare(name, ty, expr) => {
                 c.write_start(name.as_str());
                 if let Some(ty) = ty {
                     c.write_add(": ");
@@ -176,7 +176,14 @@ impl<C: Representer> Repr<C> for BlockItem {
 
 impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
-        match self {
+        self.ty.repr(c);
+    }
+}
+
+
+impl<C: Representer> Repr<C> for ExprTy {
+    fn repr(&self, c: &C) {
+        match &self {
             Self::Return(val) => {
                 c.write_add("ret");
                 c.space();
@@ -190,6 +197,11 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add("\"");
             }
             Self::BoolLiteral(b) => c.write_add(if *b { "true" } else { "false" }),
+            Self::Nested(inner) => {
+                c.char('(');
+                inner.repr(c);
+                c.char(')');
+            }
             Self::Unit => c.write_add("()"),
             Self::Variable(name) => c.write_add(name.as_str()),
             Self::If(box If { cond, then, else_ }) => {
@@ -216,7 +228,7 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 body.repr(c);
             }
-            Self::FunctionCall(func, args) => {
+            Self::FunctionCall(box (func, args)) => {
                 func.repr(c);
                 c.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
@@ -227,7 +239,7 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.write_add(")");
             }
-            Self::UnOp(un_op, expr) => {
+            Self::UnOp(box (un_op, expr)) => {
                 c.char(match un_op {
                     UnOp::Neg => '-',
                     UnOp::Not => '!',
@@ -236,9 +248,8 @@ impl<C: Representer> Repr<C> for Expr {
                 });
                 expr.repr(c);
             }
-            Self::BinOp(op, exprs) => {
+            Self::BinOp(box (op, l, r)) => {
                 c.write_add("(");
-                let (l, r) = &**exprs;
                 l.repr(c);
                 c.space();
                 op.repr(c);
@@ -246,12 +257,12 @@ impl<C: Representer> Repr<C> for Expr {
                 r.repr(c);
                 c.write_add(")");
             }
-            Self::MemberAccess(expr, member) => {
+            Self::MemberAccess(box (expr, member)) => {
                 expr.repr(c);
                 c.write_add(".");
                 c.write_add(member.as_str());
             }
-            Self::Cast(ty, expr) => {
+            Self::Cast(box (ty, expr)) => {
                 ty.repr(c);
                 c.space();
                 expr.repr(c);

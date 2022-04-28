@@ -145,7 +145,7 @@ impl<'a> Parser<'a> {
         
         while self.toks.index < self.toks.len {
             let start = self.toks.current().unwrap().start;
-            match self.parse_item(&mut 0)? {
+            match self.parse_item()? {
                 Item::Block(_) => return Err(CompileError {
                     err: Error::InvalidTopLevelBlockItem,
                     span: Span::new(start, self.toks.current_end_pos(), self.toks.module)
@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
         Ok(Module { definitions, uses })
     }
 
-    fn parse_block_or_expr(&mut self, var_index: &mut u32) -> EyeResult<BlockOrExpr> {
+    fn parse_block_or_expr(&mut self) -> EyeResult<BlockOrExpr> {
         match_or_unexpected!(
             self.toks.peek()
                 .ok_or_else(|| Error::UnexpectedEndOfFile.at(
@@ -173,16 +173,16 @@ impl<'a> Parser<'a> {
                     self.toks.module
                 ))?,
             self.toks.module,
-            TokenType::LBrace => self.parse_block(var_index).map(BlockOrExpr::Block),
+            TokenType::LBrace => self.parse_block().map(BlockOrExpr::Block),
             TokenType::Colon => {
                 self.toks.step_expect(TokenType::Colon)?;
-                let expr = self.parse_expr(var_index)?;
+                let expr = self.parse_expr()?;
                 Ok(BlockOrExpr::Expr(expr))
             }
         )
     }
 
-    fn parse_block(&mut self, var_index: &mut u32) -> EyeResult<Block> {
+    fn parse_block(&mut self) -> EyeResult<Block> {
         self.toks.step_expect(TokenType::LBrace)?;
         let mut defs = HashMap::new();
         let mut uses = Vec::new();
@@ -190,7 +190,7 @@ impl<'a> Parser<'a> {
 
         while self.toks.current()?.ty != TokenType::RBrace {
             let start = self.toks.current().unwrap().start;
-            match self.parse_item(var_index)? {
+            match self.parse_item()? {
                 Item::Block(item) => items.push(item),
                 Item::Definition(name, def) => if let Some(_existing) = defs.insert(name, def) {
                     let end = self.toks.current().unwrap().end;
@@ -205,8 +205,9 @@ impl<'a> Parser<'a> {
         Ok( Block { items, defs, uses })
     }
 
-    fn parse_item(&mut self, var_index: &mut u32) -> Result<Item, CompileError> {
-        Ok(match self.toks.current()?.ty {
+    fn parse_item(&mut self) -> Result<Item, CompileError> {
+        let cur = self.toks.current()?;
+        Ok(match cur.ty {
             // use statement
             TokenType::Keyword(Keyword::Use) => {
                 self.toks.step_assert(TokenType::Keyword(Keyword::Use));
@@ -258,7 +259,6 @@ impl<'a> Parser<'a> {
                         params.push((name, ty, s, e));
                     }
                 }
-                let mut var_count = 0;
                 let cur_tok = self.toks.peek().ok_or(CompileError {
                         err: Error::UnexpectedEndOfFile,
                         span: Span::new(self.toks.last_src_pos(), self.toks.last_src_pos(), self.toks.module)
@@ -267,14 +267,14 @@ impl<'a> Parser<'a> {
                     TokenType::LBrace => {
                         (
                             (UnresolvedType::Primitive(Primitive::Unit), cur_tok.start, cur_tok.end),
-                            Some(BlockOrExpr::Block(self.parse_block(&mut var_count)?))
+                            Some(BlockOrExpr::Block(self.parse_block()?))
                         )
                     }
                     TokenType::Colon => {
                         let cur_tok = self.toks.step_assert(TokenType::Colon);
                         (
                             (UnresolvedType::Primitive(Primitive::Unit), cur_tok.start, cur_tok.end),
-                            Some(BlockOrExpr::Expr(self.parse_expr(&mut var_count)?)))
+                            Some(BlockOrExpr::Expr(self.parse_expr()?)))
                     }
                     TokenType::Keyword(Keyword::Extern) => {
                         let cur_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
@@ -289,7 +289,7 @@ impl<'a> Parser<'a> {
                         let r_e = self.toks.position() as u32;
                         let body = self.toks.step_if(TokenType::Keyword(Keyword::Extern))
                             .is_none()
-                            .then(|| self.parse_block_or_expr(var_index))
+                            .then(|| self.parse_block_or_expr())
                             .transpose()?;
                         ((return_type, r_s, r_e), body)
                     }
@@ -298,15 +298,16 @@ impl<'a> Parser<'a> {
                     params,
                     varargs,
                     return_type,
-                    var_count,
                     body
                 }))
             }
             // block
-            TokenType::LBrace => Item::Block(BlockItem::Block(self.parse_block(var_index)?)),
+            TokenType::LBrace => Item::Block(BlockItem::Block(self.parse_block()?)),
             // either a struct or a variable
             TokenType::Ident => {
                 let ident = self.toks.step_expect(TokenType::Ident)?;
+                let ident_start = ident.start;
+                let ident_end = ident.end;
                 let name = ident.get_val(self.src);
                 match self.toks.peek().map(|t| t.ty) {
                     // Struct definition
@@ -337,59 +338,60 @@ impl<'a> Parser<'a> {
                         let ty = self.parse_type()?;
                         let val = self.toks.step_if(TokenType::Equals)
                             .is_some()
-                            .then(|| self.parse_expr(var_index)).transpose()?;
-                        let index = *var_index;
-                        *var_index += 1;
-                        Item::Block(BlockItem::Declare(name.to_owned(), index, Some(ty), val))
+                            .then(|| self.parse_expr()).transpose()?;
+                        Item::Block(BlockItem::Declare(name.to_owned(), Some(ty), val))
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
                         self.toks.step_assert(TokenType::Declare);
-                        let val = self.parse_expr(var_index)?;
-                        let index = *var_index;
-                        *var_index += 1;
-                        Item::Block(BlockItem::Declare(name.to_owned(), index, None, Some(val)))
+                        let val = self.parse_expr()?;
+                        Item::Block(BlockItem::Declare(name.to_owned(), None, Some(val)))
                     }
                     _ => {
-                        let expr = self.parse_expr_starting_ident(var_index, name.to_owned())?;
+                        let expr = self.parse_expr_starting_with(Expr {
+                            ty: ExprTy::Variable(name.to_owned()),
+                            start: ident_start,
+                            end: ident_end,
+                        })?;
                         Item::Block(BlockItem::Expr(expr))
                     }
                 }
             }
-            _ => Item::Block(BlockItem::Expr(self.parse_expr(var_index)?))
+            _ => Item::Block(BlockItem::Expr(self.parse_expr()?))
         })
     }
 
-    fn parse_expr(&mut self, var_index: &mut u32) -> EyeResult<Expr> {
-        let lhs = self.parse_factor(var_index, true)?;
-        self.parse_bin_op_rhs(var_index, 0, lhs)
+    fn parse_expr(&mut self) -> EyeResult<Expr> {
+        let lhs = self.parse_factor(true)?;
+        self.parse_bin_op_rhs(0, lhs)
     }
 
-    fn parse_expr_starting_ident(&mut self, var_index: &mut u32, ident_val: String) -> Result<Expr, CompileError> {
-        let lhs = self.parse_factor_postfix(var_index, Expr::Variable(ident_val), true)?;
-        self.parse_bin_op_rhs(var_index, 0, lhs)
+    fn parse_expr_starting_with(&mut self, expr: Expr) -> Result<Expr, CompileError> {
+        let lhs = self.parse_factor_postfix(expr, true)?;
+        self.parse_bin_op_rhs(0, lhs)
     } 
 
-    fn parse_factor(&mut self, var_index: &mut u32, include_as: bool) -> Result<Expr, CompileError> {
+    fn parse_factor(&mut self, include_as: bool) -> Result<Expr, CompileError> {
         let first = self.toks.step()?;
-        let expr = match_or_unexpected!(first,
+        let start = first.start;
+        let ty = match_or_unexpected!(first,
             self.toks.module,
-            TokenType::Minus => Expr::UnOp(UnOp::Neg, Box::new(self.parse_factor(var_index, false)?)),
-            TokenType::Bang => Expr::UnOp(UnOp::Not, Box::new(self.parse_factor(var_index, false)?)),
-            TokenType::Ampersand => Expr::UnOp(UnOp::Ref, Box::new(self.parse_factor(var_index, false)?)),
+            TokenType::Minus => ExprTy::UnOp(Box::new((UnOp::Neg, self.parse_factor(false)?))),
+            TokenType::Bang => ExprTy::UnOp(Box::new((UnOp::Not, self.parse_factor(false)?))),
+            TokenType::Ampersand => ExprTy::UnOp(Box::new((UnOp::Ref, self.parse_factor(false)?))),
             TokenType::LParen => {
                 if self.toks.step_if(TokenType::RParen).is_some() {
-                    Expr::Unit
+                    ExprTy::Unit
                 } else {
-                    let inner = self.parse_expr(var_index)?;
+                    let inner = self.parse_expr()?;
                     self.toks.step_expect(TokenType::RParen)?;
-                    inner
+                    ExprTy::Nested(Box::new(inner))
                 }
             },
-            TokenType::Keyword(Keyword::Ret) => Expr::Return(Box::new(self.parse_expr(var_index)?)),
-            TokenType::IntLiteral => Expr::IntLiteral(IntLiteral::from_tok(first, self.src)),
-            TokenType::FloatLiteral => Expr::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
-            TokenType::StringLiteral => Expr::StringLiteral(
+            TokenType::Keyword(Keyword::Ret) => ExprTy::Return(Box::new(self.parse_expr()?)),
+            TokenType::IntLiteral => ExprTy::IntLiteral(IntLiteral::from_tok(first, self.src)),
+            TokenType::FloatLiteral => ExprTy::FloatLiteral(FloatLiteral::from_tok(first, self.src)),
+            TokenType::StringLiteral => ExprTy::StringLiteral(
                 self.src[first.start as usize + 1 .. first.end as usize]
                     .replace("\\n", "\n")
                     .replace("\\t", "\t")
@@ -397,32 +399,34 @@ impl<'a> Parser<'a> {
                     .replace("\\0", "\0")
                     .replace("\\\"", "\"")
             ),
-            TokenType::Keyword(Keyword::True) => Expr::BoolLiteral(true),
-            TokenType::Keyword(Keyword::False) => Expr::BoolLiteral(false),
-            TokenType::Ident => Expr::Variable(first.get_val(self.src).to_owned()),
-            TokenType::Keyword(Keyword::If) => Expr::If(Box::new(self.parse_if_from_cond(var_index)?)),
-            TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(var_index)?)),
+            TokenType::Keyword(Keyword::True) => ExprTy::BoolLiteral(true),
+            TokenType::Keyword(Keyword::False) => ExprTy::BoolLiteral(false),
+            TokenType::Ident => ExprTy::Variable(first.get_val(self.src).to_owned()),
+            TokenType::Keyword(Keyword::If) => ExprTy::If(Box::new(self.parse_if_from_cond()?)),
+            TokenType::Keyword(Keyword::While) => ExprTy::While(Box::new(self.parse_while_from_cond()?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
-                let inner = self.parse_factor(var_index, false)?;
-                Expr::Cast(UnresolvedType::Primitive(p), Box::new(inner))
+                let inner = self.parse_factor(false)?;
+                ExprTy::Cast(Box::new((UnresolvedType::Primitive(p), inner)))
             },
             TokenType::Keyword(Keyword::Root) => {
-                Expr::Root
+                ExprTy::Root
             }
         );
-        self.parse_factor_postfix(var_index, expr, include_as)
+        let expr = Expr { ty, start, end: self.toks.current_end_pos() };
+        self.parse_factor_postfix(expr, include_as)
     }
 
-    fn parse_factor_postfix(&mut self, var_index: &mut u32, mut expr: Expr, include_as: bool) -> EyeResult<Expr> {
+    fn parse_factor_postfix(&mut self, mut expr: Expr, include_as: bool) -> EyeResult<Expr> {
         loop {
-            expr = match self.toks.peek().map(|t| t.ty) {
+            let start = expr.start;
+            let ty = match self.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
                     // function call
                     self.toks.step_expect(TokenType::LParen)?;
                     let mut args = Vec::new();
                     if self.toks.step_if(TokenType::RParen).is_none() {
                         loop {
-                            args.push(self.parse_expr(var_index)?);
+                            args.push(self.parse_expr()?);
                             match_or_unexpected!(self.toks.step()?,
                                 self.toks.module,
                                 TokenType::Comma => (),
@@ -430,50 +434,57 @@ impl<'a> Parser<'a> {
                             );
                         }
                     }
-                    Expr::FunctionCall(Box::new(expr), args)
+                    ExprTy::FunctionCall(Box::new((expr, args)))
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
                     let field = self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned();
-                    Expr::MemberAccess(Box::new(expr), field)
+                    ExprTy::MemberAccess(Box::new((expr, field)))
                 }
                 Some(TokenType::Caret) => {
                     self.toks.step_assert(TokenType::Caret);
-                    Expr::UnOp(UnOp::Deref, Box::new(expr))
+                    ExprTy::UnOp(Box::new((UnOp::Deref, expr)))
                 }
                 Some(TokenType::Keyword(Keyword::As)) if include_as => {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
                     let target_ty = self.parse_type()?;
-                    Expr::Cast(target_ty, Box::new(expr))
+                    ExprTy::Cast(Box::new((target_ty, expr)))
                 }
                 _ => break Ok(expr)
-            }
+            };
+            expr = Expr { ty, start, end: self.toks.current_end_pos() }
         }
     }
 
-    fn parse_bin_op_rhs(&mut self, var_index: &mut u32, expr_prec: u8, mut lhs: Expr) -> EyeResult<Expr> {
+    fn parse_bin_op_rhs(&mut self, expr_prec: u8, mut lhs: Expr) -> EyeResult<Expr> {
         while let Some(op) = self.toks.peek().and_then(|t| Option::<Operator>::from(t.ty)) {
             self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
             if op_prec < expr_prec { break; }
-            let mut rhs = self.parse_factor(var_index, true)?;
+            let mut rhs = self.parse_factor(true)?;
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
             if let Some(next_op) = self.toks.peek().and_then(|t| Option::<Operator>::from(t.ty)) {
                 if op_prec < next_op.precedence() {
-                    rhs = self.parse_bin_op_rhs(var_index, op.precedence() + 1, rhs)?;
+                    rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs)?;
                 }
             }
-            lhs = Expr::BinOp(op, Box::new((lhs, rhs)));
+            let start = lhs.start;
+            let end = rhs.end;
+            lhs = Expr {
+                ty: ExprTy::BinOp(Box::new((op, lhs, rhs))),
+                start,
+                end
+            }
         }
         Ok(lhs)
     }
 
     /// Starts after the if keyword has already been parsed
-    fn parse_if_from_cond(&mut self, var_index: &mut u32) -> EyeResult<If> {
-        let cond = self.parse_expr(var_index)?;
-        let then = self.parse_block_or_expr(var_index)?;
+    fn parse_if_from_cond(&mut self) -> EyeResult<If> {
+        let cond = self.parse_expr()?;
+        let then = self.parse_block_or_expr()?;
         
         let else_ = if let Some(tok) = self.toks.peek() {
             if tok.ty == TokenType::Keyword(Keyword::Else) {
@@ -483,8 +494,8 @@ impl<'a> Parser<'a> {
                     .ok_or_else(|| Error::UnexpectedEndOfFile.at(else_pos, else_pos, self.toks.module))?;
                 
                 match next.ty {
-                    TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block(var_index)?)),
-                    _ => Some(BlockOrExpr::Expr(self.parse_expr(var_index)?))
+                    TokenType::LBrace => Some(BlockOrExpr::Block(self.parse_block()?)),
+                    _ => Some(BlockOrExpr::Expr(self.parse_expr()?))
                 }
             } else { None }
         } else { None };
@@ -493,9 +504,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(&mut self, var_index: &mut u32) -> EyeResult<While> {
-        let cond = self.parse_expr(var_index)?;
-        let body = self.parse_block_or_expr(var_index)?;
+    fn parse_while_from_cond(&mut self) -> EyeResult<While> {
+        let cond = self.parse_expr()?;
+        let body = self.parse_block_or_expr()?;
         Ok(While { cond, body })
     }
     

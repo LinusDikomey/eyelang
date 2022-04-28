@@ -4,7 +4,7 @@
     variant_count,
     path_try_exists,
     bool_to_option,
-    nonzero_ops
+    nonzero_ops,
 )]
 #![warn(unused_qualifications)]
 
@@ -14,7 +14,6 @@ mod lexer;
 mod parser;
 mod types;
 mod ir;
-#[cfg(feature = "llvm-backend")]
 mod link;
 mod compile;
 mod backend;

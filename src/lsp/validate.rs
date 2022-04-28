@@ -1,10 +1,28 @@
+use std::time::Instant;
+
 use crossbeam::channel::Sender;
 use lsp_server::{Message, Notification};
 use lsp_types::{PublishDiagnosticsParams, Position};
-use lsp_types::{TextDocumentIdentifier, Diagnostic, DiagnosticSeverity, notification::PublishDiagnostics};
+use lsp_types::{Diagnostic, DiagnosticSeverity, notification::PublishDiagnostics};
 use lsp_types::notification::Notification as _;
 
-use super::LspError;
+use super::{LspError, debug};
+
+pub fn start_checking(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
+    std::thread::spawn(|| {
+        let now = Instant::now();
+        let res = std::panic::catch_unwind(|| {
+            if let Err(err) = check(uri, sender) {
+                debug(format!("Error while validating: {err:?}"));
+            }
+        });
+        if let Err(err) = res {
+            debug(format!("Validation panicked: {err:?}"));
+        }
+        debug(format!("Validation took {:?}", now.elapsed()))
+    });
+    Ok(())
+}
 
 fn calc_range(span: crate::lexer::Span, modules: &crate::ast::Modules) -> lsp_types::Range {
     let (src, _) = modules.src(span.module);
@@ -33,16 +51,14 @@ fn calc_range(span: crate::lexer::Span, modules: &crate::ast::Modules) -> lsp_ty
     lsp_types::Range::new(Position::new(line, line_char), Position::new(end_line, end_line_char))
 }
 
-pub fn validate(doc: TextDocumentIdentifier, sender: Sender<Message>) -> Result<(), LspError> {
-    let path = doc.uri.to_file_path().map_err(|_| LspError::InvalidPath)?;
-    super::debug(format!("validation path: {path:?}"));
+fn check(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
+    let path = uri.to_file_path().map_err(|_| LspError::InvalidPath)?;
+    debug(format!("validation path: {path:?}"));
     let diagnostics = match crate::compile::project(&path, false, true, &[], true) {
         Ok(_) => {
-            super::debug("validating ok");
             Vec::new()
         }
         Err((modules, errors)) => {
-            super::debug("creating validation diagnostics");
             errors.get().iter().map(|error| {
                 Diagnostic {
                     severity: Some(DiagnosticSeverity::ERROR),
@@ -54,13 +70,13 @@ pub fn validate(doc: TextDocumentIdentifier, sender: Sender<Message>) -> Result<
             }).collect::<Vec<Diagnostic>>()
         }
     };
-    send_diagnostics(doc.uri, sender, diagnostics)?;
+    send_diagnostics(uri, sender, diagnostics)?;
     Ok(())
 }
 
 fn send_diagnostics(uri: lsp_types::Url, sender: Sender<Message>, diagnostics: Vec<Diagnostic>)
 -> Result<(), LspError> {
-    super::debug(format!("Sending {} diagnostics", diagnostics.len()));
+    debug(format!("Sending {} diagnostics", diagnostics.len()));
     sender.send(Message::Notification(Notification {
         method: PublishDiagnostics::METHOD.to_owned(),
         params: serde_json::to_value(PublishDiagnosticsParams {

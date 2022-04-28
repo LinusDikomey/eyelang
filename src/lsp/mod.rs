@@ -7,12 +7,11 @@ use lsp_types::{
     CompletionOptions,
     TextDocumentSyncCapability,
     notification::{Notification, DidSaveTextDocument},
-    DidSaveTextDocumentParams
 };
 use std::{io::Write, path::Path};
 use crate::Args;
 
-use self::dispatch::RequestDispatcher;
+use self::dispatch::{RequestDispatcher, NotificationDispatcher};
 
 mod dispatch;
 mod handlers;
@@ -61,15 +60,6 @@ pub fn lsp(_args: &Args) -> Result<(), LspError> {
     debug(format!("init: {}", initialize_params));
 
     let _initialize_params: lsp_types::InitializeParams = serde_json::from_value(initialize_params)?;
-    /*let root_path = match initialize_params.root_uri
-        .and_then(|it| it.to_file_path().ok()) {
-            Some(it) => it,
-            None => {
-                let cwd = todo!();
-                cwd
-            }
-        };
-    */
     
     let initialize_result = lsp_types::InitializeResult {
         capabilities: ServerCapabilities {
@@ -85,17 +75,14 @@ pub fn lsp(_args: &Args) -> Result<(), LspError> {
             name: String::from("eye-analyzer"),
             version: Some("0.0.1".to_owned()),
         }),
-        //offset_encoding: Some("utf-8".to_owned())
     };
-
 
     connection.initialize_finish(initialize_id, serde_json::to_value(initialize_result)?)?;
     
-    debug("init finished");
+    debug("init finished, ready for commands");
 
     loop {
         let mut state = State { sender: connection.sender.clone() };
-        debug("Main LSP loop!");
         match connection.receiver.recv()? {
             lsp_server::Message::Request(req) => match state.on_request(req) {
                 Ok(()) | Err(Ok(())) => {},
@@ -108,8 +95,8 @@ pub fn lsp(_args: &Args) -> Result<(), LspError> {
                         break Ok(());
                     }
                     _ => match state.on_notification(not) {
-                        Ok(()) => {}
-                        Err(e) => debug(format!("Error occurred: {:?}", e))
+                        Ok(()) | Err(Ok(())) => {}
+                        Err(Err(e)) => debug(format!("Error occurred: {:?}", e))
                     }
                 }
             }
@@ -119,33 +106,29 @@ pub fn lsp(_args: &Args) -> Result<(), LspError> {
 
 impl State {
     fn on_request(&mut self, req: Request) -> Result<(), Result<(), LspError>> {
-        debug(format!("req: {:?}", req));
+        debug(format!("req: {}", req.method));
 
         RequestDispatcher { req, state: self }
             .on::<lsp_types::request::HoverRequest>(handlers::handle_hover)?
-            //.on::<lsp_types::notification::DidSaveTextDocument>(handlers::handle_save)?
-        ;
+            ;
 
         Ok(())
     }
 
-    fn on_notification(&mut self, not: lsp_server::Notification) -> Result<(), LspError> {
-        match not.method.as_str() {
-            DidSaveTextDocument::METHOD => {
-                debug("validating because of save...");
-                let p: DidSaveTextDocumentParams = serde_json::from_value(not.params)?;
-                let sender = self.sender.clone();
-                let res = std::panic::catch_unwind(|| {
-                    std::thread::spawn(|| {
-                        if let Err(err) = validate::validate(p.text_document, sender) {
-                            debug(format!("Error while validating: {err:?}"));
-                        }
-                    });
-                });
-                debug(format!("Finished validation: {res:?}"));
-            }
-            _ => debug(format!("notification: {not:?}"))
-        }
+    fn on_notification(&mut self, not: lsp_server::Notification) -> Result<(), Result<(), LspError>> {
+        debug(format!("Notification: {}", not.method));
+        NotificationDispatcher { not, state: self }
+            .on::<DidSaveTextDocument>(
+                |state, p| validate::start_checking(p.text_document.uri, state.sender.clone())
+            )?
+            .on::<lsp_types::notification::DidOpenTextDocument>(
+                |state, p| validate::start_checking(p.text_document.uri, state.sender.clone())
+            )?
+            .on::<lsp_types::notification::DidCloseTextDocument>(
+                |_state, _p| { Ok(()) /* TODO: remove from parsed document map */}
+            )?
+            ;
+
         Ok(())
     }
 
@@ -156,8 +139,8 @@ impl State {
 
 pub fn debug<S: AsRef<str>>(s: S) {
     let mut f = std::fs::File::options()
-        .write(true)
         .append(true)
+        .create(true)
         .open(Path::join(std::env::current_exe().unwrap().parent().unwrap(), "log.txt"))
         .expect("Failed to open");
     writeln!(f, "{}", s.as_ref()).unwrap();
