@@ -1,6 +1,6 @@
 use std::{collections::HashMap, num::NonZeroU8};
 use crate::{
-    ast::{Modules, ModuleId, StructDefinition, self, UnresolvedType},
+    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType},
     error::{Errors, Error},
     ir::{gen::FunctionOrHeader, BaseType}
 };
@@ -31,12 +31,13 @@ impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
     }
 }
 
-pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) -> Globals {
-    let mut symbols = (0..modules.len()).map(|_| HashMap::new()).collect::<Vec<_>>();
+pub fn gen_globals(ast: &Ast, ctx: &mut TypingCtx, errors: &mut Errors) -> Globals {
+    let mut symbols = (0..ast.modules.len()).map(|_| HashMap::new()).collect::<Vec<_>>();
 
-    for (module_id, module) in modules.iter() {
+    for (module_id, module) in ast.modules.iter().enumerate() {
+        let module_id = ModuleId::new(module_id as u32);
         for (name, def) in &module.definitions {
-            add_global_def(def, ctx, modules, &mut symbols, module_id, name, errors);
+            add_global_def(def, ctx, ast, &mut symbols, module_id, name, errors);
         }
     }
     Globals(symbols)
@@ -45,7 +46,7 @@ pub fn gen_globals(modules: &Modules, ctx: &mut TypingCtx, errors: &mut Errors) 
 fn add_global_def(
     def: &ast::Definition,
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     module: ModuleId,
     name: &str,
@@ -53,17 +54,17 @@ fn add_global_def(
 ) -> Option<Symbol> {
     Some(match def {
         ast::Definition::Function(func) => {
-            Symbol::Func(add_func(ctx, modules, symbols, func, module, name, errors))
+            Symbol::Func(add_func(ctx, ast, symbols, func, module, name, errors))
         }
         ast::Definition::Struct(struct_) => {
-            Symbol::Type(add_struct(ctx, modules, symbols, struct_, module, name, errors))
+            Symbol::Type(add_struct(ctx, ast, symbols, struct_, module, name, errors))
         }
         ast::Definition::Module(inner_module) => {
             symbols[module.idx()].insert(name.to_owned(), Symbol::Module(*inner_module));
             Symbol::Module(*inner_module)
         }
         ast::Definition::Use(path) => {
-            if let Some(symbol) = resolve_global_path(ctx, modules, symbols, path, module, errors) {
+            if let Some(symbol) = resolve_global_path(ctx, ast, symbols, path, module, errors) {
                 symbols[module.idx()].insert(name.to_owned(), symbol);
                 symbol
             } else {
@@ -206,7 +207,7 @@ pub fn gen_locals(
 
 pub fn add_func(
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     func: &ast::Function,
     module: ModuleId,
@@ -220,10 +221,10 @@ pub fn add_func(
 
     let params = func.params.iter()
         .map(|(name, param_ty, _start, _end)| 
-            (name.clone(), resolve(ctx, modules, symbols, module, param_ty, errors))
+            (name.clone(), resolve(ctx, ast, symbols, module, param_ty, errors))
         )
         .collect();
-    let return_type = resolve(ctx, modules, symbols, module, &func.return_type.0, errors);
+    let return_type = resolve(ctx, ast, symbols, module, &func.return_type.0, errors);
     let key = ctx.add_func(super::gen::FunctionOrHeader::Header(FunctionHeader {
         name: name.to_owned(),
         params,
@@ -236,7 +237,7 @@ pub fn add_func(
 
 pub fn add_struct(
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    modules: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     def: &StructDefinition,
     module: ModuleId,
@@ -258,7 +259,7 @@ pub fn add_struct(
 
 fn resolve_global_path(
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     path: &ast::IdentPath,
     module: ModuleId,
@@ -272,7 +273,7 @@ fn resolve_global_path(
     let mut module = if root { ModuleId::ROOT } else { module };
     // handle all but the last path segments to go to the correct module
     let mut update = |name| {
-        if let Some(def) = modules[module].definitions.get(name) {
+        if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
             if let ast::Definition::Module(new_module) = def {
                 module = *new_module;
             } else {
@@ -288,12 +289,12 @@ fn resolve_global_path(
     for name in segments {
         if !update(name) { return None };
     }
-    resolve_in_module(ctx, modules, symbols, module, last, errors)
+    resolve_in_module(ctx, ast, symbols, module, last, errors)
 }
 
 fn resolve(
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     module: ModuleId,
     unresolved: &UnresolvedType,
@@ -309,7 +310,7 @@ fn resolve(
             };
             let mut module = if root { ModuleId::ROOT } else { module };
             let mut update = |name| {
-                if let Some(def) = modules[module].definitions.get(name) {
+                if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
                     if let ast::Definition::Module(new_module) = def {
                         module = *new_module;
                     } else {
@@ -325,7 +326,7 @@ fn resolve(
             for name in segments {
                 if let Some(err) = update(name) { return err };
             }
-            match resolve_in_module(ctx, modules, symbols, module, last, errors) {
+            match resolve_in_module(ctx, ast, symbols, module, last, errors) {
                 Some(Symbol::Type(ty)) => TypeRef::Base(BaseType::Id(ty)),
                 Some(_) => {
                     errors.emit(Error::TypeExpected, 0, 0, module);
@@ -335,7 +336,7 @@ fn resolve(
             }
         }
         UnresolvedType::Pointer(inner) => {
-            match resolve(ctx, modules, symbols, module, inner, errors) {
+            match resolve(ctx, ast, symbols, module, inner, errors) {
                 TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
                 TypeRef::Pointer { count, inner } => { 
                     if count.get() == u8::MAX {
@@ -356,7 +357,7 @@ fn resolve(
 
 fn resolve_in_module(
     ctx: &mut TypingCtx,
-    modules: &Modules,
+    ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     module: ModuleId,
     name: &str,
@@ -364,8 +365,8 @@ fn resolve_in_module(
 ) -> Option<Symbol> {
     if let Some(symbol) = symbols[module.idx()].get(name) {
         Some(*symbol)
-    } else if let Some(def) = modules[module].definitions.get(name) {
-        add_global_def(def, ctx, modules, symbols, module, name, errors)
+    } else if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
+        add_global_def(def, ctx, ast, symbols, module, name, errors)
     } else {
         errors.emit(Error::UnknownIdent, 0, 0, module);
         None

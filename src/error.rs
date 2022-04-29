@@ -4,7 +4,7 @@ use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use colored::Colorize;
 
-use crate::{lexer::Span, ast::{Modules, ModuleId}};
+use crate::{lexer::Span, ast::{Ast, ModuleId}};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ impl Errors {
         &self.errors
     }
 
-    pub fn print(&self, modules: &Modules) {
+    pub fn print(&self, modules: &Ast) {
         for error in &self.errors {
             let (src, file) = modules.src(error.span.module);
 

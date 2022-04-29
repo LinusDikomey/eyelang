@@ -11,6 +11,7 @@ pub trait Repr<C: Representer> {
 
 pub trait Representer {
     fn src<'a>(&'a self, span: TSpan) -> &'a str;
+    fn ast<'a>(&'a self) -> &'a Ast;
     fn child(&self) -> Self;
     fn begin_line(&self);
     fn write_start<B: Borrow<str>>(&self, s: B);
@@ -25,11 +26,12 @@ pub trait Representer {
 pub struct ReprPrinter<'a> {
     indent: &'a str,
     count: u32,
+    ast: &'a Ast,
     src: &'a str,
 }
 impl<'a> ReprPrinter<'a> {
-    pub fn new(indent: &'a str, src: &'a str) -> Self {
-        Self { indent, count: 0, src }
+    pub fn new(indent: &'a str, ast: &'a Ast, src: &'a str) -> Self {
+        Self { indent, count: 0, ast, src }
     }
 }
 
@@ -37,10 +39,12 @@ impl Representer for ReprPrinter<'_> {
     fn src<'a>(&'a self, span: TSpan) -> &'a str {
         &self.src[span.start as usize ..= span.end as usize]
     }
+    fn ast<'a>(&'a self) -> &'a Ast { &self.ast }
     fn child(&self) -> Self {
         Self {
             indent: self.indent,
             count: self.count + 1,
+            ast: self.ast,
             src: self.src
         }
     }
@@ -91,6 +95,7 @@ impl Definition {
 
 impl Function {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.write_add("fn");
         c.write_add(name);
         if !self.params.is_empty() {
             c.write_add("(");
@@ -104,16 +109,15 @@ impl Function {
             }
             c.write_add(")");
         }
-        c.write_add(" -> ");
         self.return_type.0.repr(c);
-        match &self.body {
-            Some(body@BlockOrExpr::Expr(_)) => {
-                c.write_add(": ");
-                body.repr(c);
-            }
-            Some(body) => {
+        match &self.body.map(|body| &c.ast()[body]) {
+            Some(block@Expr::Block { .. }) => {
                 c.space();
-                body.repr(c);
+                block.repr(c);
+            }
+            Some(expr) => {
+                c.write_add(": ");
+                expr.repr(c);
             }
             None => c.write_add(" extern")
         }
@@ -136,57 +140,38 @@ impl StructDefinition {
     }
 }
 
-impl<C: Representer> Repr<C> for Block {
-    fn repr(&self, c: &C) {
-        c.write_add("{\n");
-        let child = c.child();
-        for (name, def) in &self.defs {
-            def.repr(&child, name);
-        }
-        for item in &self.items {
-            item.repr(&child);
-        }
-        c.write_start("}");
-    }
-}
-
-impl<C: Representer> Repr<C> for BlockItem {
-    fn repr(&self, c: &C) {
-        match self {
-            Self::Block(block) => block.repr(c),
-            Self::Declare(name, ty, expr) => {
-                c.write_start(name.as_str());
-                if let Some(ty) = ty {
-                    c.write_add(": ");
-                    ty.repr(c);
-                    if expr.is_some() {
-                        c.space();
-                    }
-                } else {
-                    debug_assert!(expr.is_some());
-                    c.write_add(" :");
-                }
-                if let Some(expr) = expr {
-                    c.write_add("= ");
-                    expr.repr(c);
-                }
-            }
-            Self::Expr(expr) => {
-                c.begin_line();
-                expr.repr(c);
-            }
-        }
-        c.write_add("\n");
-    }
-}
-
 impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
+        let ast = c.ast();
         match &self {
-            Self::Return(box (_, val)) => {
+            Self::Block { span: _, items, defs } => {
+                c.write_add("{\n");
+                let child = c.child();
+                for (name, def) in defs {
+                    def.repr(&child, name);
+                }
+                for item in items {
+                    ast[*item].repr(&child);
+                }
+                c.write_start("}");
+            },
+            Self::Declare { name, end: _, annotated_ty, val } => {
+                c.write_start(c.src(*name));
+                if let Some(annotated) = annotated_ty {
+                    c.write_add(": ");
+                    annotated.repr(c);
+                    if val.is_some() {
+                        c.write_add(" = ");
+                    }
+                } else {
+                    c.write_add(" := ");
+                }
+                val.map(|v| ast[v].repr(c));
+            }
+            Self::Return { start: _, val } => {
                 c.write_add("ret");
                 c.space();
-                val.repr(c);
+                ast[*val].repr(c);
             }
             Self::IntLiteral(span) => c.write_add(c.src(*span)),
             Self::FloatLiteral(span) => c.write_add(c.src(*span)),
@@ -196,49 +181,52 @@ impl<C: Representer> Repr<C> for Expr {
                 //c.write_add("\"");
             }
             Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
-            Self::Nested(box (_, inner)) => {
+            Self::Nested(_, inner) => {
                 c.char('(');
-                inner.repr(c);
+                ast[*inner].repr(c);
                 c.char(')');
             }
             Self::Unit(_) => c.write_add("()"),
             Self::Variable(span) => c.write_add(c.src(*span)),
-            Self::If(box If { span: _, cond, then, else_ }) => {
+            Self::If { span: _, cond, then, else_ } => {
                 c.write_add("if ");
-                cond.repr(c);
-                if let BlockOrExpr::Block(_) = then {
-                    c.space();
-                } else {
-                    c.write_add(": ");
+                ast[*cond].repr(c);
+                let then = &ast[*then];
+                match then {
+                    Expr::Block { .. } => c.space(),
+                    _ => c.write_add(": ")
                 }
                 then.repr(c);
                 if let Some(else_block) = else_ {
                     c.write_add(" else ");
-                    else_block.repr(c);
+                    ast[*else_block].repr(c);
                 }
             }
             Self::While(box While { span: _, cond, body }) => {
                 c.write_add("while ");
-                cond.repr(c);
-                if let BlockOrExpr::Block(_) = body {
+                ast[*cond].repr(c);
+                let body = &ast[*body];
+                if body.is_block() {
                     c.space();
                 } else {
                     c.write_add(": ");
                 }
                 body.repr(c);
             }
-            Self::FunctionCall(box (func, args, _)) => {
+            Self::FunctionCall(func, args, _) => {
+                let func = &ast[*func];
                 func.repr(c);
                 c.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
-                    arg.repr(c);
+                    ast[*arg].repr(c);
                     if i != (args.len() - 1) {
                         c.write_add(", ");
                     }
                 }
                 c.write_add(")");
             }
-            Self::UnOp(box (_, un_op, expr)) => {
+            Self::UnOp(_, un_op, expr) => {
+                let expr = &ast[*expr];
                 c.char(match un_op {
                     UnOp::Neg => '-',
                     UnOp::Not => '!',
@@ -251,24 +239,24 @@ impl<C: Representer> Repr<C> for Expr {
                 });
                 expr.repr(c);
             }
-            Self::BinOp(box (op, l, r)) => {
+            Self::BinOp(op, l, r) => {
                 c.write_add("(");
-                l.repr(c);
+                ast[*l].repr(c);
                 c.space();
                 op.repr(c);
                 c.space();
-                r.repr(c);
+                ast[*r].repr(c);
                 c.write_add(")");
             }
-            Self::MemberAccess(box (expr, member)) => {
-                expr.repr(c);
+            Self::MemberAccess(expr, member) => {
+                ast[*expr].repr(c);
                 c.write_add(".");
                 c.write_add(c.src(*member));
             }
-            Self::Cast(box (_, ty, expr)) => {
+            Self::Cast(_, ty, expr) => {
                 ty.repr(c);
                 c.space();
-                expr.repr(c);
+                ast[*expr].repr(c);
             },
             Self::Root(_) => c.write_add("root")
         }

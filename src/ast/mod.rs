@@ -1,23 +1,45 @@
 use std::{collections::HashMap, fmt, ops::{Index, IndexMut}, path::{PathBuf, Path}};
 use crate::{lexer::tokens::Operator, types::Primitive};
-use self::repr::{Representer, Repr};
 
 pub mod repr;
 
-pub struct Modules {
-    modules: Vec<Module>,
-    sources: Vec<(String, PathBuf)>
+pub struct Ast {
+    pub modules: Vec<Module>,
+    pub sources: Vec<(String, PathBuf)>,
+    pub exprs: Vec<Expr>,
 }
-impl Modules {
+impl Ast {
     pub fn new() -> Self {
-        Self { modules: Vec::new(), sources: Vec::new() }
+        Self {
+            modules: Vec::new(),
+            sources: Vec::new(),
+            exprs: Vec::new()
+        }
     }
-
-    pub fn len(&self) -> usize {
-        self.modules.len()
+    pub fn sources(&self) -> &[(String, PathBuf)] {
+        &self.sources
     }
+    pub fn add_expr(&mut self, expr: Expr) -> ExprRef {
+        let r = ExprRef(self.exprs.len() as u32);
+        self.exprs.push(expr);
+        r
+    }
+}
+impl Index<ExprRef> for Ast {
+    type Output = Expr;
 
-    pub fn add(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
+    fn index(&self, index: ExprRef) -> &Self::Output {
+        &self.exprs[index.0 as usize]    
+    }
+    
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExprRef(u32);
+
+impl Ast {
+    pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
         let id = ModuleId(self.modules.len() as u32);
         self.modules.push(module);
         self.sources.push((src, path));
@@ -33,25 +55,15 @@ impl Modules {
         let t = &self.sources[id.0 as usize];
         (&t.0, &t.1)
     }
-
-    pub fn sources(&self) -> &[(String, PathBuf)] {
-        &self.sources
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (ModuleId, &Module)> {
-        self.modules.iter()
-            .enumerate()
-            .map(|(i, m)| (ModuleId(i as u32), m))
-    }
 }
-impl Index<ModuleId> for Modules {
+impl Index<ModuleId> for Ast {
     type Output = Module;
 
     fn index(&self, index: ModuleId) -> &Self::Output {
         &self.modules[index.0 as usize]
     }
 }
-impl IndexMut<ModuleId> for Modules {
+impl IndexMut<ModuleId> for Ast {
     fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
         &mut self.modules[index.0 as usize]
     }
@@ -60,6 +72,9 @@ impl IndexMut<ModuleId> for Modules {
 #[derive(Clone, Copy, Debug)]
 pub struct ModuleId(u32);
 impl ModuleId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
     pub const ROOT: Self = Self(0);
     pub fn idx(self) -> usize { self.0 as usize }
 }
@@ -78,7 +93,7 @@ impl Module {
 #[derive(Debug, Clone)]
 pub enum Item {
     Definition(String, Definition),
-    Block(BlockItem)
+    Expr(ExprRef)
 }
 
 #[derive(Debug, Clone)]
@@ -100,87 +115,75 @@ pub struct Function {
     //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
     pub return_type: (UnresolvedType, u32, u32),
-    pub body: Option<BlockOrExpr>,
-}
-
-#[derive(Debug, Clone)]
-pub enum BlockOrExpr {
-    Block(Block),
-    Expr(Expr)
-}
-impl<C: Representer> Repr<C> for BlockOrExpr {
-    fn repr(&self, c: &C) {
-        match self {
-            BlockOrExpr::Block(block) => block.repr(c),
-            BlockOrExpr::Expr(expr) => expr.repr(c)
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Block {
-    pub items: Vec<BlockItem>,
-    pub defs: HashMap<String, Definition>,
-    pub uses: Vec<IdentPath>
-}
-
-#[derive(Debug, Clone)]
-pub enum BlockItem {
-    Block(Block),
-    Declare(String, Option<UnresolvedType>, Option<Expr>),
-    Expr(Expr),
+    pub body: Option<ExprRef>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Return(Box<(u32, Expr)>),
+    Block {
+        span: TSpan,
+        items: Vec<ExprRef>,
+        defs: HashMap<String, Definition>
+    },
+    Declare { name: TSpan, end: u32, annotated_ty: Option<UnresolvedType>, val: Option<ExprRef> },
+    Return { start: u32, val: ExprRef },
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
     StringLiteral(TSpan),
     BoolLiteral { start: u32, val: bool },
-    Nested(Box<(TSpan, Expr)>),
+    Nested(TSpan, ExprRef),
     Unit(TSpan),
     Variable(TSpan),
-    If(Box<If>),
-    While(Box<While>),
-    FunctionCall(Box<(Expr, Vec<Expr>, u32)>),
-    UnOp(Box<(u32, UnOp, Expr)>),
-    BinOp(Box<(Operator, Expr, Expr)>),
-    MemberAccess(Box<(Expr, TSpan)>),
-    Cast(Box<(TSpan, UnresolvedType, Expr)>),
+    If {
+        span: TSpan,
+        cond: ExprRef,
+        then: ExprRef,
+        else_: Option<ExprRef>
+    },
+    While(Box<While>), //TODO: no more boxing
+    FunctionCall(ExprRef, Vec<ExprRef>, u32),
+    UnOp(u32, UnOp, ExprRef),
+    BinOp(Operator, ExprRef, ExprRef),
+    MemberAccess(ExprRef, TSpan),
+    Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32)
 }
 impl Expr {
-    pub fn span(&self) -> TSpan {
+    pub fn is_block(&self) -> bool {
+        matches!(self, Self::Block { .. })
+    }
+    pub fn span(&self, ast: &Ast) -> TSpan {
         match self {
-            Expr::Return(box (start, inner)) => TSpan::new(*start, inner.end()),
+            Expr::Block { span, .. } => *span,
+            Expr::Declare { name, end, .. } => TSpan::new(name.start, *end),
+            Expr::Return { start, val } => TSpan::new(*start, ast[*val].end(ast)),
             Expr::IntLiteral(span) | Expr::FloatLiteral(span) => *span,
             Expr::StringLiteral(span) => *span,
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
-            Expr::Nested(box (span, _)) => *span,
+            Expr::Nested(span, _) => *span,
             Expr::Unit(span) => *span,
             Expr::Variable(span) => *span,
-            Expr::If(box if_) => if_.span,
+            Expr::If { span, .. } => *span,
             Expr::While(box while_) => while_.span,
-            Expr::FunctionCall(box (inner, _, end)) => TSpan::new(inner.start(), *end),
-            Expr::UnOp(box (start_or_end, un_op, expr)) => if un_op.postfix() {
-                TSpan::new(expr.start(), *start_or_end)
+            Expr::FunctionCall(inner, _, end) => TSpan::new(ast[*inner].start(ast), *end),
+            Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
+                TSpan::new(ast[*expr].start(ast), *start_or_end)
             } else {
-                TSpan::new(*start_or_end, expr.end())
+                TSpan::new(*start_or_end, ast[*expr].end(ast))
             }
-            Expr::BinOp(box (_, l, r)) => TSpan::new(l.start(), r.end()),
-            Expr::MemberAccess(box (expr, span)) => TSpan::new(expr.start(), span.end),
-            Expr::Cast(box (span, _, _)) => *span,
+            Expr::BinOp(_, l, r) => TSpan::new(ast[*l].start(ast), ast[*r].end(ast)),
+            Expr::MemberAccess(expr, span) => TSpan::new(ast[*expr].start(ast), span.end),
+            Expr::Cast(span, _, _) => *span,
             Expr::Root(start) => TSpan::new(*start, *start + 4),
         }
     }
-    pub fn start(&self) -> u32 {
+    pub fn start(&self, ast: &Ast) -> u32 {
         //TODO: more efficient implementation
-        self.span().start
+        self.span(ast).start
     }
-    pub fn end(&self) -> u32 {
+    pub fn end(&self, ast: &Ast) -> u32 {
         //TODO: more efficient implementation
-        self.span().end
+        self.span(ast).end
     }
 }
 
@@ -209,18 +212,10 @@ impl UnOp {
 }
 
 #[derive(Debug, Clone)]
-pub struct If {
-    pub span: TSpan,
-    pub cond: Expr,
-    pub then: BlockOrExpr,
-    pub else_: Option<BlockOrExpr>
-}
-
-#[derive(Debug, Clone)]
 pub struct While {
     pub span: TSpan,
-    pub cond: Expr,
-    pub body: BlockOrExpr
+    pub cond: ExprRef,
+    pub body: ExprRef
 }
 
 #[derive(Debug, Clone)]

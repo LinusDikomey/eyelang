@@ -142,7 +142,7 @@ fn run_path(
     path: &Path,
     args: &Args,
     output_name: &str
-) -> Result<(), (ast::Modules, Errors)> {
+) -> Result<(), (ast::Ast, Errors)> {
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj)?;
     
     log!("\n\n{ir}\n");

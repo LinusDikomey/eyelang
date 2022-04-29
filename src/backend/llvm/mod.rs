@@ -173,7 +173,7 @@ unsafe fn build_func(
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
                     Type::Base(BaseType::Prim(Primitive::Unit))
                 ),
-                ir::RefVal::Undef => panic!(),
+                ir::RefVal::Undef => panic!("Tried to use an undefined IR value. This is an internal compiler error."),
             }
         } else {
             let i = r.into_ref().unwrap() as usize;

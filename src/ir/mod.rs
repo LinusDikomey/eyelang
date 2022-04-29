@@ -463,6 +463,7 @@ const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;
 pub struct Ref(u32);
 impl Ref {
     pub const UNDEF: Self = Self::val(RefVal::Undef);
+    pub const UNIT: Self = Self::val(RefVal::Unit);
 
     pub const fn val(val: RefVal) -> Self {
         Self(val as u32)

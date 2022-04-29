@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::{
     log,
-    ast::{self, Modules, ModuleId, Module, repr::Repr},
+    ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
     lexer,
     parser::Parser
@@ -14,31 +14,26 @@ pub struct Dependency<'a> {
 }
 
 pub fn project(module_path: &Path, reconstruct_src: bool, std: bool, _deps: &[Dependency], require_main_func: bool)
--> Result<crate::ir::Module, (Modules, Errors)> {
+-> Result<crate::ir::Module, (Ast, Errors)> {
     let mut errors = Errors::new();
-    let mut modules = Modules::new();
-
-    /*let deps = deps.into_iter()
-        .map(|dep| Ok::<_, (Modules, Errors)>((dep.name.clone(), crate::ir::Symbol::project(dep.path, args, &[])?)))
-        .collect::<Result<HashMap<_, _>, _>>()?;
-    */
+    let mut ast = Ast::new();
 
     let main = if module_path.is_dir() {
-        tree(module_path, &mut modules, &mut errors, TreeType::Main, reconstruct_src)
+        tree(module_path, &mut ast, &mut errors, TreeType::Main, reconstruct_src)
     } else {
-        file(module_path, &mut modules, &mut errors, reconstruct_src)
+        file(module_path, &mut ast, &mut errors, reconstruct_src)
     };
     
     if let Some(std) = (std).then(std_path) {
-        let std_mod = tree(&std, &mut modules, &mut errors, TreeType::Main, reconstruct_src);
-        modules[main].definitions.insert(
+        let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, reconstruct_src);
+        ast[main].definitions.insert(
             "std".to_owned(),
             ast::Definition::Module(std_mod)    
         );
     }
-    match crate::ir::reduce(&modules, errors, require_main_func) {
+    match crate::ir::reduce(&ast, errors, require_main_func) {
         Ok((ir, _globals)) => Ok(ir),
-        Err(err) => Err((modules, err))
+        Err(err) => Err((ast, err))
     }
 }
 
@@ -65,7 +60,7 @@ impl TreeType {
 
 fn tree(
     path: &Path,
-    modules: &mut Modules,
+    modules: &mut Ast,
     errors: &mut Errors,
     t: TreeType,
     reconstruct_src: bool,
@@ -76,7 +71,7 @@ fn tree(
     let base_module = if base_exists {
         file(&base_file, modules, errors, reconstruct_src)
     } else {
-        let main_mod = modules.add(Module::empty(), "".to_owned(), path.to_owned());
+        let main_mod = modules.add_module(Module::empty(), "".to_owned(), path.to_owned());
         if let TreeType::Main = t {
             errors.emit(Error::MissingMainFile, 0, 0, main_mod);
         }
@@ -109,7 +104,7 @@ fn tree(
 
 fn file(
     path: &Path,
-    modules: &mut Modules,
+    ast: &mut Ast,
     errors: &mut Errors,
     reconstruct_src: bool,
 ) -> ModuleId {
@@ -118,27 +113,27 @@ fn file(
         Err(err) => panic!("Failed to read file {path:?}: {err}")
     };
 
-    let module_id = modules.add(Module::empty(), String::new(), path.to_owned());
+    let module_id = ast.add_module(Module::empty(), String::new(), path.to_owned());
 
     let Some(tokens) = lexer::parse(&src, errors, module_id) else {
-        modules.update(module_id, Module::empty(), src, path.to_owned());
+        ast.update(module_id, Module::empty(), src, path.to_owned());
         return module_id;
     };
     
-    let mut parser = Parser::new(tokens, &src, module_id);
+    let mut parser = Parser::new(tokens, &src, ast, module_id);
     match parser.parse() {
         Ok(module) => {
             if reconstruct_src {
                 log!("Module: {:#?}", module);
                 println!("\n---------- Start of AST code reconstruction for file {path:?} ----------\n");
-                let ast_repr_ctx = ast::repr::ReprPrinter::new("  ", &src);
+                let ast_repr_ctx = ast::repr::ReprPrinter::new("  ", &ast, &src);
                 module.repr(&ast_repr_ctx);
                 println!("------------ End of AST code reconstruction for file {path:?} ----------");
             }
-            modules.update(module_id, module, src, path.to_owned());
+            ast.update(module_id, module, src, path.to_owned());
         },
         Err(err) => {
-            modules.update(module_id, Module::empty(), src, path.to_owned());
+            ast.update(module_id, Module::empty(), src, path.to_owned());
             errors.emit(err.err, err.span.start, err.span.end, module_id);
         }
     };
