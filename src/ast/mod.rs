@@ -147,7 +147,7 @@ pub enum Expr {
         else_: Option<ExprRef>
     },
     While(Box<While>), //TODO: no more boxing
-    FunctionCall(ExprRef, Vec<ExprRef>, u32),
+    FunctionCall { func: ExprRef, args: Vec<ExprRef>, end: u32 },
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
     MemberAccess(ExprRef, TSpan),
@@ -171,7 +171,7 @@ impl Expr {
             Expr::Variable(span) => *span,
             Expr::If { span, .. } => *span,
             Expr::While(box while_) => while_.span,
-            Expr::FunctionCall(inner, _, end) => TSpan::new(ast[*inner].start(ast), *end),
+            Expr::FunctionCall { func, args: _, end } => TSpan::new(ast[*func].start(ast), *end),
             Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
                 TSpan::new(ast[*expr].start(ast), *start_or_end)
             } else {
@@ -201,6 +201,9 @@ pub struct TSpan {
 impl TSpan {
     pub fn new(start: u32, end: u32) -> Self {
         Self { start, end }
+    }
+    pub fn in_mod(self, module: ModuleId) -> crate::lexer::Span {
+        crate::lexer::Span::new(self.start, self.end, module)
     }
 }
 

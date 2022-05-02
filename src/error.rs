@@ -21,6 +21,10 @@ impl Errors {
     pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
         self.errors.push(CompileError { err, span: Span { start, end, module } });
     }
+    
+    pub fn emit_span(&mut self, err: Error, span: Span) {
+        self.errors.push(CompileError { err, span })
+    }
 
     pub fn emit_err(&mut self, err: CompileError) {
         self.errors.push(err);
@@ -63,7 +67,7 @@ impl Errors {
 
             let src_loc: std::borrow::Cow<str> = if e >= src.len() {
                 if s >= src.len() {
-                    format!("[end of file {s} {e} >= {}]", src.len()).into()
+                    "[no file location]".into()
                 } else {
                     (&src[s..]).into()
                 }
@@ -75,7 +79,7 @@ impl Errors {
             let pre = &src[start_of_line_byte..s];
 
             // find end of the line to print the rest of the line
-            let post = if src.as_bytes()[e] == b'\n' || e == src.len() {
+            let post = if e == src.len() || src.as_bytes()[e] == b'\n' {
                 ""
             } else {
                 let mut surrounding_end = std::cmp::min(src.len(), e);

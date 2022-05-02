@@ -1,7 +1,7 @@
 use crate::{
     ast::{self, Expr, ModuleId, UnOp, TSpan},
     error::{Error, Errors},
-    lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
+    lexer::{tokens::{Operator, AssignType, IntLiteral, FloatLiteral}, Span},
     types::Primitive,
 };
 use std::{borrow::Cow, collections::HashMap, ptr::NonNull};
@@ -101,12 +101,13 @@ fn gen_func_bodies(
             let return_type = header.return_type.into_info(&mut builder.types);
             let expected = builder.types.add(return_type);
             let body = &scope.ast[*body];
-            let val = scope.reduce_expr_val(
+            let val = scope.reduce_expr_val_spanned(
                 errors,
                 &mut builder,
                 &body,
                 expected,
                 expected,
+                body.span(scope.ast)
             );
             //TODO: refactor to branch return analysis
             if body.is_block() {
@@ -216,10 +217,10 @@ impl ExprResult {
         ir: &mut IrBuilder,
         ty: TypeTableIndex,
         errors: &mut Errors,
-        module: ModuleId,
+        span: Span
     ) -> Ref {
         self.try_get_or_load(ir, ty).unwrap_or_else(|| {
-            errors.emit(Error::ExpectedValueFoundDefinition, 0, 0, module);
+            errors.emit_span(Error::ExpectedValueFoundDefinition, span);
             Ref::UNDEF
         })
     }
@@ -260,6 +261,9 @@ impl<'s> Scope<'s> {
                 symbols: Cow::Borrowed(symbols),
             },
         }
+    }
+    pub fn span(&self, expr: ast::ExprRef) -> TSpan {
+        self.ast[expr].span(self.ast)
     }
     pub fn src<'src>(&'src self, span: TSpan) -> &'src str {
         &self.ast.sources()[self.module.idx()].0[span.start as usize ..= span.end as usize]
@@ -341,16 +345,28 @@ impl<'s> Scope<'s> {
         var
     }
 
-    fn reduce_expr_val(
+    fn reduce_expr_val_spanned(
         &mut self,
         errors: &mut Errors,
         ir: &mut IrBuilder,
         expr: &Expr,
         expected: TypeTableIndex,
         ret: TypeTableIndex,
+        span: TSpan
     ) -> Ref {
         self.reduce_expr(errors, ir, expr, expected, ret)
-            .get_or_load(ir, expected, errors, self.module)
+            .get_or_load(ir, expected, errors, span.in_mod(self.module))
+    }
+
+    fn reduce_expr_idx_val(
+        &mut self,
+        errors: &mut Errors,
+        ir: &mut IrBuilder,
+        expr: ast::ExprRef,
+        expected: TypeTableIndex,
+        ret: TypeTableIndex
+    ) -> Ref {
+        self.reduce_expr_val_spanned(errors, ir, &self.ast[expr], expected, ret, self.span(expr))
     }
 
     fn reduce_expr(
@@ -451,8 +467,8 @@ impl<'s> Scope<'s> {
                 Ref::UNIT
             }
             ast::Expr::Return { start: _, val } => {
-                let r = self.reduce_expr_val(errors, ir, &self.ast[*val], ret, ret);
-                ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors);
+                let r = self.reduce_expr_idx_val(errors, ir, *val, ret, ret);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors, self.span(*val));
                 ir.add_untyped(Tag::Ret, Data { un_op: r });
                 Ref::val(RefVal::Undef)
             }
@@ -462,7 +478,7 @@ impl<'s> Scope<'s> {
                 let int_ty = lit
                     .ty
                     .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
-                ir.specify(expected, int_ty, errors);
+                ir.specify(expected, int_ty, errors, *span);
                 if lit.val <= std::u64::MAX as u128 {
                     ir.add(
                         Data {
@@ -481,12 +497,12 @@ impl<'s> Scope<'s> {
                 let float_ty = lit.ty.map_or(TypeInfo::Float, |float_ty| {
                     TypeInfo::Primitive(float_ty.into())
                 });
-                ir.specify(expected, float_ty, errors);
+                ir.specify(expected, float_ty, errors, *span);
                 ir.add(Data { float: lit.val }, Tag::Float, expected)
             }
             ast::Expr::StringLiteral(span) => {
                 let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
-                ir.specify(expected, TypeInfo::Pointer(i8_ty), errors);
+                ir.specify(expected, TypeInfo::Pointer(i8_ty), errors, *span);
                 
                 let string = self.src(TSpan::new(span.start + 1, span.end - 1))
                     .replace("\\n", "\n")
@@ -499,15 +515,16 @@ impl<'s> Scope<'s> {
                 ir.extra_data(&[b'\0']);
                 ir.add(Data { extra_len }, Tag::String, expected)
             }
-            ast::Expr::BoolLiteral { val, .. } => {
-                ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors);
+            ast::Expr::BoolLiteral { val, start } => {
+                let span = TSpan::new(*start, start + if *val {4} else {5});
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors, span);
                 Ref::val(if *val { RefVal::True } else { RefVal::False })
             }
             ast::Expr::Nested(_, inner) => {
                 return self.reduce_expr_any(errors, ir, &self.ast[*inner], expected, ret, get_var);
             }
-            ast::Expr::Unit(_) => {
-                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+            ast::Expr::Unit(span) => {
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors, *span);
                 Ref::val(RefVal::Unit)
             }
             ast::Expr::Variable(span) => {
@@ -515,7 +532,7 @@ impl<'s> Scope<'s> {
                 match self.resolve(&mut ir.types, name) {
                     Ok(resolved) => match resolved {
                         Resolved::Var(ty, var) => {
-                            ir.types.merge(ty, expected, errors, self.module);
+                            ir.types.merge(ty, expected, errors, self.module, *span);
                             return ExprResult::VarRef(var);
                         }
                         Resolved::Func(f) => return ExprResult::Func(f),
@@ -524,14 +541,14 @@ impl<'s> Scope<'s> {
                     },
                     Err(err) => {
                         errors.emit(err, 0, 0, self.module);
-                        ir.specify(expected, TypeInfo::Invalid, errors);
+                        ir.invalidate(expected);
                         Ref::val(RefVal::Undef)
                     }
                 }
             }
-            ast::Expr::If { span: _, cond, then, else_ } => {
+            ast::Expr::If { span, cond, then, else_ } => {
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
-                let cond = self.reduce_expr_val(errors, ir, &self.ast[*cond], b, ret);
+                let cond = self.reduce_expr_idx_val(errors, ir, *cond, b, ret);
                 let then_block = ir.create_block();
                 let other_block = ir.create_block();
 
@@ -543,11 +560,11 @@ impl<'s> Scope<'s> {
 
                 if let Some(else_) = else_ {
                     let after_block = ir.create_block();
-                    let then_val = self.reduce_expr_val(errors, ir, &self.ast[*then], expected, ret);
+                    let then_val = self.reduce_expr_idx_val(errors, ir, *then, expected, ret);
                     let then_exit = ir.current_block();
                     ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(other_block);
-                    let else_val = self.reduce_expr_val(errors, ir, &self.ast[*else_], expected, ret);
+                    let else_val = self.reduce_expr_idx_val(errors, ir, *else_, expected, ret);
                     let else_exit = ir.current_block();
                     ir.add_untyped(Tag::Goto, Data { int32: after_block.0, });
                     ir.begin_block(after_block);
@@ -558,7 +575,7 @@ impl<'s> Scope<'s> {
                     ir.extra_data(&else_val.to_bytes());
                     ir.add(Data { extra_len: (extra, 2) }, Tag::Phi, expected)
                 } else {
-                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors, *span);
                     let then_ty = ir.types.add(TypeInfo::Unknown);
                     self.reduce_expr(errors, ir, &self.ast[*then], then_ty, ret);
                     ir.add_untyped(Tag::Goto, Data { int32: other_block.0 });
@@ -568,9 +585,9 @@ impl<'s> Scope<'s> {
                 }
             }
             ast::Expr::While(while_) => {
-                let ast::While { span: _, cond, body } = &**while_;
+                let ast::While { span, cond, body } = &**while_;
 
-                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors, *span);
 
                 let cond_block = ir.create_block();
                 let body_block = ir.create_block();
@@ -580,25 +597,25 @@ impl<'s> Scope<'s> {
                 ir.begin_block(cond_block);
                 
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
-                let cond = self.reduce_expr_val(errors, ir, &self.ast[*cond], b, ret);
+                let cond = self.reduce_expr_idx_val(errors, ir, *cond, b, ret);
 
                 let branch_extra = ir.extra_data(&body_block.0.to_le_bytes());
                 ir.extra_data(&after_block.0.to_le_bytes());
                 ir.add_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
                 ir.begin_block(body_block);
                 let body_ty = ir.types.add(TypeInfo::Unknown);
-                self.reduce_expr_val(errors, ir, &self.ast[*body], body_ty, ret);
+                self.reduce_expr_idx_val(errors, ir, *body, body_ty, ret);
                 ir.add_untyped(Tag::Goto, Data { int32: cond_block.0 });
                 ir.begin_block(after_block);
                 Ref::val(RefVal::Unit)
             }
-            ast::Expr::FunctionCall(func_expr, args, _) => {
+            ast::Expr::FunctionCall { func, args, end: _ } => {
                 let func_ty = ir.types.add(TypeInfo::Unknown);
-                match self.reduce_expr(errors, ir, &self.ast[*func_expr], func_ty, ret) {
+                match self.reduce_expr(errors, ir, &self.ast[*func], func_ty, ret) {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
                         let info = header.return_type.into_info(&mut ir.types);
-                        ir.specify(expected, info, errors);
+                        ir.specify(expected, info, errors, expr.span(self.ast));
                         let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
                         } else {
@@ -624,7 +641,7 @@ impl<'s> Scope<'s> {
                                 let ty = ir
                                     .types
                                     .add(info);
-                                let expr = self.reduce_expr_val(errors, ir, &self.ast[*arg], ty, ret);
+                                let expr = self.reduce_expr_idx_val(errors, ir, *arg, ty, ret);
                                 bytes.extend(&expr.to_bytes());
                             }
                             let extra = ir.extra_data(&bytes);
@@ -639,7 +656,7 @@ impl<'s> Scope<'s> {
                     }
                     ExprResult::Type(ty) => {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
-                        ir.specify(expected, TypeInfo::Resolved(ty), errors);
+                        ir.specify(expected, TypeInfo::Resolved(ty), errors, expr.span(self.ast));
 
                         if args.len() == struct_.members.len() {
                             let var = get_var(ir);
@@ -650,7 +667,7 @@ impl<'s> Scope<'s> {
                             {
                                 let member_ty = ir.types.add(member_ty);
                                 let member_val =
-                                    self.reduce_expr_val(errors, ir, &self.ast[*member_val], member_ty, ret);
+                                    self.reduce_expr_idx_val(errors, ir, *member_val, member_ty, ret);
                                 let member = ir.add(
                                     Data {
                                         member: (var, i as u32),
@@ -667,32 +684,38 @@ impl<'s> Scope<'s> {
                         }
                     }
                     _ => {
-                        if matches!(ir.types.get_type(func_ty), TypeInfo::Invalid) {
-                            errors.emit(Error::FunctionOrTypeExpected, 0, 0, self.module);
+                        if !matches!(ir.types.get_type(func_ty), TypeInfo::Invalid) {
+                            errors.emit_span(Error::FunctionOrTypeExpected, expr.span(self.ast).in_mod(self.module));
                         }
-                        ir.specify(expected, TypeInfo::Invalid, errors);
+                        ir.invalidate(expected);
                         Ref::val(RefVal::Undef)
                     }
                 }
             }
             ast::Expr::UnOp(_, un_op, val) => {
+                let span = expr.span(self.ast);
                 let (expected, tag) = match un_op {
                     UnOp::Neg => (expected, Tag::Neg),
                     UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
                     UnOp::Ref => {
                         let unknown_ty = ir.types.add(TypeInfo::Unknown);
                         let ptr_ty = TypeInfo::Pointer(unknown_ty);
-                        ir.types.specify(expected, ptr_ty, errors, self.module);
+                        ir.types.specify(expected, ptr_ty, errors, span.in_mod(self.module));
                         let inner_expected = match ir.types.get_type(expected) {
                             TypeInfo::Pointer(inner) => inner,
                             _ => ir.types.add(TypeInfo::Invalid)
                         };
-                        return ExprResult::Val(match self.reduce_expr(errors, ir, &self.ast[*val], inner_expected, ret) {
+                        return ExprResult::Val(match 
+                            self.reduce_expr(errors, ir, &self.ast[*val], inner_expected, ret)
+                        {
                             ExprResult::VarRef(r) | ExprResult::Stored(r) => {
                                 let idx = r.into_ref().expect("VarRef should never be constant");
                                 let inner_ty =ir.ir()[idx as usize].ty;
 
-                                ir.types.specify(expected, TypeInfo::Pointer(inner_ty), errors, self.module);
+                                ir.types.specify(
+                                    expected,
+                                    TypeInfo::Pointer(inner_ty), errors,
+                                    span.in_mod(self.module));
                                 ir.add(Data { un_op: r }, Tag::AsPointer, expected)
                             }
                             ExprResult::Val(val) => {
@@ -712,11 +735,12 @@ impl<'s> Scope<'s> {
                     }
                     UnOp::Deref => {
                         let expected = ir.types.add(TypeInfo::Pointer(expected));
-                        let pointer_val = self.reduce_expr_val(errors, ir, &self.ast[*val], expected, ret);
+                        let pointer_val = 
+                            self.reduce_expr_idx_val(errors, ir, *val, expected, ret);
                         return ExprResult::VarRef(pointer_val); // just use the pointer value as variable
                     }
                 };
-                let inner = self.reduce_expr_val(errors, ir, &self.ast[*val], expected, ret);
+                let inner = self.reduce_expr_idx_val(errors, ir, *val, expected, ret);
                 let res = match un_op {
                     UnOp::Neg => match ir.types.get_type(expected) {
                         TypeInfo::Float | TypeInfo::Int | TypeInfo::Unknown => Ok(()),
@@ -745,10 +769,10 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::BinOp(op, l, r) => {
                 if let Operator::Assignment(assignment) = op {
-                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors);
+                    ir.specify(expected, TypeInfo::Primitive(Primitive::Unit), errors, expr.span(self.ast));
                     let var_ty = ir.types.add_unknown();
                     let lval = self.reduce_lval_expr(errors, ir, &self.ast[*l], var_ty, ret);
-                    let r = self.reduce_expr_val(errors, ir, &self.ast[*r], var_ty, ret);
+                    let r = self.reduce_expr_idx_val(errors, ir, *r, var_ty, ret);
 
                     let val = if *assignment == AssignType::Assign {
                         r
@@ -785,8 +809,8 @@ impl<'s> Scope<'s> {
                     } else {
                         expected
                     };
-                    let l = self.reduce_expr_val(errors, ir, &self.ast[*l], inner_ty, ret);
-                    let r = self.reduce_expr_val(errors, ir, &self.ast[*r], inner_ty, ret);
+                    let l = self.reduce_expr_idx_val(errors, ir, *l, inner_ty, ret);
+                    let r = self.reduce_expr_idx_val(errors, ir, *r, inner_ty, ret);
                     let tag = match op {
                         Operator::Add => Tag::Add,
                         Operator::Sub => Tag::Sub,
@@ -859,7 +883,7 @@ impl<'s> Scope<'s> {
                                 (TypeInfo::Invalid, 0)
                             }
                         };
-                        ir.specify(expected, ty, errors);
+                        ir.specify(expected, ty, errors, expr.span(self.ast));
                         let member = ir.add(
                             Data {
                                 member: (var, idx as u32),
@@ -879,7 +903,7 @@ impl<'s> Scope<'s> {
                                 Symbol::Var { ty: _, var } => ExprResult::VarRef(var),
                             };
                         } else {
-                            errors.emit(Error::UnknownIdent, 0, 0, self.module);
+                            errors.emit_span(Error::UnknownIdent, member_span.in_mod(self.module));
                             Ref::UNDEF
                         }
                     }
@@ -897,9 +921,9 @@ impl<'s> Scope<'s> {
                     }
                 };
 
-                ir.specify(expected, target, errors);
+                ir.specify(expected, target, errors, expr.span(self.ast));
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
-                let val = self.reduce_expr_val(errors, ir, &self.ast[*val], inner_ty, ret);
+                let val = self.reduce_expr_idx_val(errors, ir, *val, inner_ty, ret);
                 //TODO: check table for available casts
                 ir.add(Data { un_op: val, }, Tag::Cast, expected)
             }

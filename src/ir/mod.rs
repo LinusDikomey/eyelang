@@ -1,6 +1,6 @@
 use std::{fmt, num::NonZeroU8};
 use colored::{Colorize, ColoredString};
-use crate::{types::Primitive, lexer::Span, error::Error};
+use crate::{types::Primitive, error::Error};
 use typing::FinalTypeTable;
 
 mod gen;
@@ -289,7 +289,6 @@ pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
     pub ty: TypeTableIndex,
-    pub span: Span,
     pub used: bool
 }
 impl Instruction {

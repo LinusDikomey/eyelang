@@ -1,7 +1,6 @@
 use crate::{
-    ast::ModuleId,
+    ast::{ModuleId, TSpan},
     ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
-    lexer::Span,
     error::Errors
 };
 
@@ -20,7 +19,6 @@ impl IrBuilder {
             ir: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
                 tag: Tag::BlockBegin,
-                span: Span::new(0, 0, module),
                 ty: TypeTableIndex::NONE,
                 used: false
             }],
@@ -39,7 +37,6 @@ impl IrBuilder {
             data,
             tag,
             ty,
-            span: Span::todo(self.module),
             used: true
         });
         Ref::index(idx)
@@ -51,7 +48,6 @@ impl IrBuilder {
             data,
             tag,
             ty: TypeTableIndex::NONE,
-            span: Span::todo(self.module),
             used: false
         });
     }
@@ -62,7 +58,6 @@ impl IrBuilder {
             data,
             tag,
             ty,
-            span: Span::todo(self.module),
             used: false
         });
     }
@@ -73,7 +68,6 @@ impl IrBuilder {
             data,
             tag,
             ty: TypeTableIndex::NONE,
-            span: Span::todo(self.module),
             used: false
         });
     }
@@ -108,7 +102,6 @@ impl IrBuilder {
             data: Data { block: idx },
             tag: Tag::BlockBegin,
             ty: TypeTableIndex::NONE,
-            span: Span::todo(self.module),
             used: false
         });
     }
@@ -132,8 +125,12 @@ impl IrBuilder {
         block
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors) {
-        self.types.specify(idx, info, errors, self.module);
+    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan) {
+        self.types.specify(idx, info, errors, span.in_mod(self.module));
+    }
+
+    pub fn invalidate(&mut self, idx: TypeTableIndex) {
+        self.types.update_type(idx, TypeInfo::Invalid);
     }
 
     pub fn ir(&self) -> &[Instruction] {

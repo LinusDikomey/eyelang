@@ -182,7 +182,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
         };
 
         for inst in &ir.inst {
-            let Instruction { data, tag, ty: _, span: _, used: _ } = inst;
+            let Instruction { data, tag, ty: _, used: _ } = inst;
             let val = match *tag {
                 Tag::BlockBegin => {
                     w.label(index, data.int32);

@@ -221,7 +221,7 @@ unsafe fn build_func(
             print!("Generating %{i} = {} ->", inst.display(&ir.extra, &ir.types));
             std::io::stdout().flush().unwrap();
         }
-        let ir::Instruction { tag, data, span: _, ty, used: _} = inst;
+        let ir::Instruction { tag, data, ty, used: _} = inst;
         let val: LLVMValueRef = match tag {
             ir::Tag::BlockBegin => {
                 LLVMPositionBuilderAtEnd(builder, blocks[data.int32 as usize]);

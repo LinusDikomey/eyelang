@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{error::*, ast::ModuleId};
+use crate::{error::*, ast::{ModuleId, TSpan}, lexer::Span};
 use super::*;
 
 /// Type inference debugging
@@ -53,17 +53,17 @@ impl TypeTable {
         self.add(TypeInfo::Unknown)
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, module: ModuleId) {
+    pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span) {
         let prev = self.get_type(idx);
         ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self).unwrap_or_else(|err| {
-            errors.emit(err, 0, 0, module);
+            errors.emit_span(err, span);
             TypeInfo::Invalid
         });
         self.update_type(idx, ty);
     }
 
-    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId) {
+    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId, span: TSpan) {
         let a_idx = self.indices[a.idx()];
         let a_ty = self.types[a_idx.get()];
         let b_idx = &mut self.indices[b.idx()];
@@ -76,7 +76,7 @@ impl TypeTable {
         self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self) {
             Ok(ty) => ty,
             Err(err) => {
-                errors.emit(err, 0, 0, module);
+                errors.emit_span(err,span.in_mod(module));
                 TypeInfo::Invalid
             }
         }
@@ -166,7 +166,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                 Int => Ok(other),
                 Primitive(p) if p.as_int().is_some() => Ok(other),
                 Unknown => Ok(Int),
-                _ => Err(Error::IntExpected)
+                _ => Err(Error::MismatchedType)
             }
         }
         Float => {
@@ -174,7 +174,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                 Float => Ok(other),
                 Primitive(p) if p.as_float().is_some() => Ok(other),
                 Unknown => Ok(Float),
-                _ => Err(Error::FloatExpected)
+                _ => Err(Error::MismatchedType)
             }
         }
         Primitive(prim) => {

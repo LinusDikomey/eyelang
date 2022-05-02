@@ -80,6 +80,7 @@ pub fn gen_locals(
     errors: &mut Errors
 ) -> HashMap<String, Symbol> {
     //TODO: split off path resolving into it's own function for use statements
+    //TODO: make UnresolvedTypes use spans to prevent String cloning and provide error spans
     fn ty(
         unresolved: &UnresolvedType,
         symbols: &mut HashMap<String, Symbol>,

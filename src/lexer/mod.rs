@@ -333,7 +333,7 @@ impl Span {
     pub fn new(start: u32, end: u32, module: ModuleId) -> Self {
         Self { start, end, module }
     }
-    pub fn todo(module: ModuleId) -> Self {
+    pub fn _todo(module: ModuleId) -> Self {
         Self { start: 0, end: 0, module }
     }
 }

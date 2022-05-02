@@ -451,18 +451,19 @@ impl<'a> Parser<'a> {
                     // function call
                     self.toks.step_expect(TokenType::LParen)?;
                     let mut args = Vec::new();
-                    if self.toks.step_if(TokenType::RParen).is_none() {
-                        loop {
+                    let end = match self.toks.step_if(TokenType::RParen) {
+                        None => loop {
                             args.push(self.parse_expr()?);
-                            match_or_unexpected!(self.toks.step()?,
+                            let step = self.toks.step()?;
+                            match_or_unexpected!(step,
                                 self.toks.module,
                                 TokenType::Comma => (),
-                                TokenType::RParen => break
+                                TokenType::RParen => break step.end
                             );
                         }
-                    }
-                    let end = self.toks.current_end_pos();
-                    Expr::FunctionCall(expr, args, end)
+                        Some(rparen) => rparen.end
+                    };
+                    Expr::FunctionCall { func: expr, args, end }
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();

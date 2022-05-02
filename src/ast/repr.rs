@@ -213,7 +213,7 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 body.repr(c);
             }
-            Self::FunctionCall(func, args, _) => {
+            Self::FunctionCall { func, args, end: _ } => {
                 let func = &ast[*func];
                 func.repr(c);
                 c.write_add("(");

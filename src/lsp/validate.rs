@@ -24,8 +24,8 @@ pub fn start_checking(uri: lsp_types::Url, sender: Sender<Message>) -> Result<()
     Ok(())
 }
 
-fn calc_range(span: crate::lexer::Span, modules: &crate::ast::Modules) -> lsp_types::Range {
-    let (src, _) = modules.src(span.module);
+fn calc_range(span: crate::lexer::Span, ast: &crate::ast::Ast) -> lsp_types::Range {
+    let (src, _) = ast.src(span.module);
     let mut line = 0;
     let mut line_char = 0;
     for c in (&src[0..span.start as usize]).chars() {
