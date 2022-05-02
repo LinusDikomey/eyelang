@@ -44,6 +44,16 @@ impl Type {
             }
         })
     }
+    pub fn pointee(self) -> Option<Self> {
+        match self {
+            Type::Base(_) => None,
+            Type::Pointer { count, inner } if count.get() == 1 => Some(Type::Base(inner)),
+            Type::Pointer { count, inner } => Some(Type::Pointer {
+                count: NonZeroU8::new(count.get() - 1).unwrap(),
+                inner
+            })
+        }
+    }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -113,6 +123,7 @@ impl fmt::Display for FinalFunction {
     }
 }
 
+#[derive(Debug)]
 pub struct FinalFunction {
     pub name: String,
     pub params: Vec<(String, Type)>,
@@ -121,6 +132,7 @@ pub struct FinalFunction {
     pub ir: Option<FunctionIr>
 }
 
+#[derive(Debug)]
 pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,

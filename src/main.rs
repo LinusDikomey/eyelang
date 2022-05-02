@@ -4,29 +4,32 @@
     variant_count,
     path_try_exists,
     bool_to_option,
-    nonzero_ops,
+    nonzero_ops
 )]
 #![warn(unused_qualifications)]
 
 mod ast;
-mod error;
-mod lexer;
-mod parser;
-mod types;
-mod ir;
-mod link;
-mod compile;
 mod backend;
+mod compile;
+mod error;
+mod ir;
+mod lexer;
+mod link;
 #[cfg(feature = "lsp")]
 mod lsp;
+mod parser;
+mod types;
 
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
 use crate::error::Errors;
-use std::{path::{Path, PathBuf}, sync::atomic::AtomicBool};
 use clap::StructOpt;
 use colored::Colorize;
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
+};
 
 static LOG: AtomicBool = AtomicBool::new(false);
 
@@ -42,7 +45,7 @@ pub(crate) use log;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
 enum Cmd {
-    /// Check a file or project for errors and warnings. 
+    /// Check a file or project for errors and warnings.
     Check,
     /// Build an executable and run it immediately.
     #[cfg(feature = "llvm-backend")]
@@ -58,7 +61,7 @@ enum Cmd {
     X86Run,
     /// Starts a language server that can be used by IDEs for syntax highlighting, autocompletions etc.
     #[cfg(feature = "lsp")]
-    Lsp
+    Lsp,
 }
 impl Default for Cmd {
     fn default() -> Self {
@@ -67,7 +70,11 @@ impl Default for Cmd {
 }
 
 #[derive(clap::Parser)]
-#[clap(version, about, long_about = "Eye is a simple, compiled, performant programming language")]
+#[clap(
+    version,
+    about,
+    long_about = "Eye is a simple, compiled, performant programming language"
+)]
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Args {
@@ -77,7 +84,7 @@ pub struct Args {
     /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
     #[clap(short, long)]
     reconstruct_src: bool,
-    
+
     /// Enable debug logging
     #[clap(short, long)]
     log: bool,
@@ -93,7 +100,7 @@ pub struct Args {
 
     /// Just emit an object file. Doesn't require a main function
     #[clap(long)]
-    emit_obj: bool
+    emit_obj: bool,
 }
 
 fn main() {
@@ -117,10 +124,15 @@ fn run(args: &Args) {
     }
 
     let path = Path::new(args.file.as_deref().unwrap_or("./"));
-    println!("{} {} ...", "Compiling".green(), args.file.as_deref().unwrap_or("").underline().bright_blue());
+    println!(
+        "{} {} ...",
+        "Compiling".green(),
+        args.file.as_deref().unwrap_or("").underline().bright_blue()
+    );
 
     let no_extension = path.with_extension("");
-    let name = no_extension.file_name()
+    let name = no_extension
+        .file_name()
         .expect("Failed to retrieve filename for input file")
         .to_str()
         .expect("Invalid filename");
@@ -128,7 +140,8 @@ fn run(args: &Args) {
     match run_path(path, args, name) {
         Ok(()) => {}
         Err((modules, errors)) => {
-            println!("{} {} {}",
+            println!(
+                "{} {} {}",
                 "Finished with".red(),
                 errors.error_count().to_string().underline().bright_red(),
                 "errors".red()
@@ -138,13 +151,9 @@ fn run(args: &Args) {
     }
 }
 
-fn run_path(
-    path: &Path,
-    args: &Args,
-    output_name: &str
-) -> Result<(), (ast::Ast, Errors)> {
+fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast, Errors)> {
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj)?;
-    
+
     log!("\n\n{ir}\n");
     let obj_file = format!("eyebuild/{output_name}.o");
     let exe_file = format!("eyebuild/{output_name}");
@@ -175,8 +184,10 @@ fn run_path(
             } else {
                 match std::fs::create_dir("eyebuild") {
                     Ok(()) => {}
-                    Err(err) => if err.kind() != std::io::ErrorKind::AlreadyExists {
-                        panic!("Failed to create build directory: {err}")
+                    Err(err) => {
+                        if err.kind() != std::io::ErrorKind::AlreadyExists {
+                            panic!("Failed to create build directory: {err}")
+                        }
                     }
                 }
                 // temporary: compile help.c for some helper methods implemented in c
@@ -205,11 +216,11 @@ fn run_path(
                     println!("{}", format!("Built {}", output_name).green());
                 }
             }
-        }
+        },
         Cmd::X86Run => {
             let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
-            let asm_file = std::fs::File::create(&asm_path)
-                .expect("Failed to create assembly file");
+            let asm_file =
+                std::fs::File::create(&asm_path).expect("Failed to create assembly file");
             unsafe { backend::x86::emit(&ir, asm_file) };
             if !backend::x86::assemble(&asm_path, Path::new(&obj_file)) {
                 eprintln!("Assembler failed! Exiting");
@@ -222,7 +233,7 @@ fn run_path(
             exec();
         }
         #[cfg(feature = "lsp")]
-        Cmd::Lsp => unreachable!()
+        Cmd::Lsp => unreachable!(),
     }
     Ok(())
 }

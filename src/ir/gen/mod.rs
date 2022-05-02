@@ -434,14 +434,13 @@ impl<'s> Scope<'s> {
                 Ref::val(RefVal::Undef)
             }
             ast::Expr::Declare { name, end, annotated_ty, val } => {
-                let ty = match annotated_ty.as_ref().map(|ty| self.resolve_type(ty, &mut ir.types)).transpose() {
+                let ty = match self.resolve_type(annotated_ty, &mut ir.types) {
                     Ok(t) => t,
                     Err(err) => {
                         errors.emit(err, name.start, *end, self.module);
                         return ExprResult::Val(Ref::UNIT);
                     }
-                }
-                .unwrap_or(TypeInfo::Unknown);
+                };
                 let ty = ir.types.add(ty);
 
                 let var = self.declare_var(ir, self.src(*name).to_owned(), ty);

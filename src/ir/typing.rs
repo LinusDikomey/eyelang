@@ -1,3 +1,5 @@
+use std::ops::Index;
+
 use crate::{error::*, ast::ModuleId};
 use super::*;
 
@@ -88,6 +90,7 @@ impl TypeTable {
     }
 }
 
+#[derive(Debug)]
 pub struct FinalTypeTable {
     types: Vec<Type>
 }
@@ -97,6 +100,13 @@ impl FinalTypeTable {
         // for generic types this will get a bit more complicated but the base
         // principle of indexing into the Vec should stay
         self.types[idx.idx()]
+    }
+}
+impl Index<TypeTableIndex> for FinalTypeTable {
+    type Output = Type;
+
+    fn index(&self, index: TypeTableIndex) -> &Self::Output {
+        &self.types[index.idx()]
     }
 }
 

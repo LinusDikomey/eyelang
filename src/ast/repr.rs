@@ -157,9 +157,9 @@ impl<C: Representer> Repr<C> for Expr {
             },
             Self::Declare { name, end: _, annotated_ty, val } => {
                 c.write_start(c.src(*name));
-                if let Some(annotated) = annotated_ty {
+                if *annotated_ty != UnresolvedType::Infer {
                     c.write_add(": ");
-                    annotated.repr(c);
+                    annotated_ty.repr(c);
                     if val.is_some() {
                         c.write_add(" = ");
                     }

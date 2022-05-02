@@ -343,7 +343,7 @@ impl<'a> Parser<'a> {
                         Item::Expr(self.ast.add_expr(Expr::Declare {
                             name: ident_span,
                             end: self.toks.current_end_pos(),
-                            annotated_ty: Some(ty),
+                            annotated_ty: ty,
                             val
                         }))
                     }
@@ -355,7 +355,7 @@ impl<'a> Parser<'a> {
                         Item::Expr(self.ast.add_expr(Expr::Declare {
                             name: ident_span,
                             end: self.toks.current_end_pos(),
-                            annotated_ty: None,
+                            annotated_ty: UnresolvedType::Infer,
                             val: Some(val)
                         }))
                     }

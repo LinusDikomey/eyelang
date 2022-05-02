@@ -125,7 +125,13 @@ pub enum Expr {
         items: Vec<ExprRef>,
         defs: HashMap<String, Definition>
     },
-    Declare { name: TSpan, end: u32, annotated_ty: Option<UnresolvedType>, val: Option<ExprRef> },
+    Declare {
+        name: TSpan,
+        end: u32,
+        annotated_ty:
+        UnresolvedType,
+        val: Option<ExprRef>
+    },
     Return { start: u32, val: ExprRef },
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
@@ -218,7 +224,7 @@ pub struct While {
     pub body: ExprRef
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentPath {
     Root,
     Single(String),
@@ -273,7 +279,7 @@ impl fmt::Display for IdentPath {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnresolvedType {
     Primitive(Primitive),
     Unresolved(IdentPath),

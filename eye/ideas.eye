@@ -17,3 +17,8 @@ SomeEnum :: {
     OtherVariant
     ThirdVariant
 }
+
+fn main {
+    [1, 2, 3].map(|x| 2*x)
+    [1, 2, 3].map(2*_) # scala-like closure shorthands
+}

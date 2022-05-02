@@ -1,7 +1,6 @@
 # This doesn't work right now because string equality is not implemented
 
 fn main {
-    x := 1
     mode := std.input("Enter operation: ")
     a := std.parse_int(std.input("First number: "))
     b := std.parse_int(std.input("Second number: "))
