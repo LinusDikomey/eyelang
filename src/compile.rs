@@ -134,7 +134,7 @@ fn file(
         },
         Err(err) => {
             ast.update(module_id, Module::empty(), src, path.to_owned());
-            errors.emit(err.err, err.span.start, err.span.end, module_id);
+            errors.emit_err(err);
         }
     };
     

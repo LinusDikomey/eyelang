@@ -37,7 +37,7 @@ impl<'a> ReprPrinter<'a> {
 
 impl Representer for ReprPrinter<'_> {
     fn src<'a>(&'a self, span: TSpan) -> &'a str {
-        &self.src[span.start as usize ..= span.end as usize]
+        &self.src[span.range()]
     }
     fn ast<'a>(&'a self) -> &'a Ast { &self.ast }
     fn child(&self) -> Self {
@@ -74,7 +74,7 @@ impl<C: Representer> Repr<C> for Module {
     fn repr(&self, c: &C) {
         for (name, def) in &self.definitions {
             def.repr(c, name);
-            c.writeln("");
+            c.writeln("\n");
         }
     }
 }
@@ -95,7 +95,7 @@ impl Definition {
 
 impl Function {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
-        c.write_add("fn");
+        c.write_start("fn ");
         c.write_add(name);
         if !self.params.is_empty() {
             c.write_add("(");
@@ -109,6 +109,7 @@ impl Function {
             }
             c.write_add(")");
         }
+        c.space();
         self.return_type.0.repr(c);
         match &self.body.map(|body| &c.ast()[body]) {
             Some(block@Expr::Block { .. }) => {
@@ -121,7 +122,6 @@ impl Function {
             }
             None => c.write_add(" extern")
         }
-        c.writeln("");
     }
 }
 
@@ -151,13 +151,15 @@ impl<C: Representer> Repr<C> for Expr {
                     def.repr(&child, name);
                 }
                 for item in items {
+                    child.write_start("");
                     ast[*item].repr(&child);
+                    child.writeln("");
                 }
                 c.write_start("}");
             },
             Self::Declare { name, end: _, annotated_ty, val } => {
-                c.write_start(c.src(*name));
-                if *annotated_ty != UnresolvedType::Infer {
+                c.write_add(c.src(*name));
+                if !matches!(annotated_ty, UnresolvedType::Infer(_)) {
                     c.write_add(": ");
                     annotated_ty.repr(c);
                     if val.is_some() {
@@ -270,18 +272,19 @@ impl<R: Representer> Repr<R> for IdentPath {
             c.write_add("root");
         }
         let mut has_segments = false;
-        for (i, name) in iter.enumerate() {
+        for (i, segment) in iter.enumerate() {
             has_segments = true;
             if i != 0 || has_root {
                 c.write_add(".");
             }
-            c.write_add(name.as_str());
+            let name = c.src(*segment);
+            c.write_add(name);
         }
         if let Some(last) = last {
             if has_root || has_segments {
                 c.write_add(".");
             }
-            c.write_add(last.as_str());
+            c.write_add(c.src(last));
         }
     }
 }
@@ -289,13 +292,13 @@ impl<R: Representer> Repr<R> for IdentPath {
 impl<R: Representer> Repr<R> for UnresolvedType {
     fn repr(&self, c: &R) {
         match self {
-            Self::Primitive(p) => p.repr(c),
+            Self::Primitive(p, _) => p.repr(c),
             Self::Unresolved(path) => path.repr(c),
-            Self::Pointer(inner) => {
+            Self::Pointer(inner, _) => {
                 c.char('*');
                 inner.repr(c);
             }
-            Self::Infer => c.char('_')
+            Self::Infer(_) => c.char('_')
         }
     }
 }

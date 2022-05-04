@@ -225,7 +225,10 @@ impl<'a> Parser<'a> {
                         err: Error::CantUseRootPath,
                         span: Span::new(use_start, use_end, self.toks.module)
                     })?;
-                Item::Definition(last.clone(), Definition::Use(path))
+                Item::Definition(
+                    self.src[last.start as usize..=last.end as usize].to_owned(),
+                    Definition::Use(path)
+                )
             }
             // function definition
             TokenType::Keyword(Keyword::Fn) => {
@@ -238,53 +241,66 @@ impl<'a> Parser<'a> {
 
                 if self.toks.step_if(TokenType::LParen).is_some() { 
                     let mut first = true;
-                    'param_loop: loop {
-                        if first {
-                            first = false;
-                        } else {
-                            match_or_unexpected!{ self.toks.step()?, self.toks.module,
-                                TokenType::RParen => break 'param_loop,
-                                TokenType::Comma => ()
+                    if self.toks.step_if(TokenType::RParen).is_none() {
+                        'param_loop: loop {
+                            if first {
+                                first = false;
+                            } else {
+                                match_or_unexpected!{ self.toks.step()?, self.toks.module,
+                                    TokenType::RParen => break 'param_loop,
+                                    TokenType::Comma => ()
+                                }
+                                if self.toks.step_if(TokenType::TripleDot).is_some() {
+                                    varargs = true;
+                                    self.toks.step_expect(TokenType::RParen)?;
+                                    break 'param_loop;
+                                }
+                                if self.toks.step_if(TokenType::RParen).is_some() {
+                                    break 'param_loop
+                                }
                             }
-                            if self.toks.step_if(TokenType::TripleDot).is_some() {
-                                varargs = true;
-                                self.toks.step_expect(TokenType::RParen)?;
-                                break 'param_loop;
-                            }
-                            // trailing comma
-                            if self.toks.step_if(TokenType::RParen).is_some() {
-                                break 'param_loop
-                            }
+                            let name_tok = self.toks.step_expect(TokenType::Ident)?;
+                            let name = name_tok.get_val(self.src).to_owned();
+                            let (s, e) = (name_tok.start, name_tok.end);
+                            let ty = self.parse_type()?;
+                            params.push((name, ty, s, e));
                         }
-                        let name_tok = self.toks.step_expect(TokenType::Ident)?;
-                        let name = name_tok.get_val(self.src).to_owned();
-                        let (s, e) = (name_tok.start, name_tok.end);
-                        let ty = self.parse_type()?;
-                        params.push((name, ty, s, e));
                     }
                 }
-                let cur_tok = self.toks.peek().ok_or(CompileError {
+                let cur_tok = self.toks.peek().ok_or_else(|| CompileError {
                         err: Error::UnexpectedEndOfFile,
                         span: Span::new(self.toks.last_src_pos(), self.toks.last_src_pos(), self.toks.module)
                     })?;
                 let (return_type, body) = match cur_tok.ty {
                     TokenType::LBrace => {
                         (
-                            (UnresolvedType::Primitive(Primitive::Unit), cur_tok.start, cur_tok.end),
+                            (
+                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                                cur_tok.start,
+                                cur_tok.end
+                            ),
                             Some(self.parse_block()?)
                         )
                     }
                     TokenType::Colon => {
                         let cur_tok = self.toks.step_assert(TokenType::Colon);
                         (
-                            (UnresolvedType::Primitive(Primitive::Unit), cur_tok.start, cur_tok.end),
+                            (
+                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                                cur_tok.start,
+                                cur_tok.end
+                            ),
                             Some(self.parse_expr()?)
                         )
                     }
                     TokenType::Keyword(Keyword::Extern) => {
                         let cur_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
                         (
-                            (UnresolvedType::Primitive(Primitive::Unit), cur_tok.start, cur_tok.end),
+                            (
+                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                                cur_tok.start,
+                                cur_tok.end
+                            ),
                             None
                         )
                     }
@@ -342,20 +358,20 @@ impl<'a> Parser<'a> {
                             .then(|| self.parse_expr()).transpose()?;
                         Item::Expr(self.ast.add_expr(Expr::Declare {
                             name: ident_span,
-                            end: self.toks.current_end_pos(),
+                            end: self.toks.previous().unwrap().end,
                             annotated_ty: ty,
                             val
                         }))
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
-                        self.toks.step_assert(TokenType::Declare);
+                        let decl_start = self.toks.step_assert(TokenType::Declare).start;
                         let val = self.parse_expr()?;
                         
                         Item::Expr(self.ast.add_expr(Expr::Declare {
                             name: ident_span,
                             end: self.toks.current_end_pos(),
-                            annotated_ty: UnresolvedType::Infer,
+                            annotated_ty: UnresolvedType::Infer(decl_start),
                             val: Some(val)
                         }))
                     }
@@ -429,10 +445,11 @@ impl<'a> Parser<'a> {
             },
             TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(start)?)),
             TokenType::Keyword(Keyword::Primitive(p)) => {
+                let prim_span = first.span();
                 let inner = self.parse_factor(false)?;
                 Expr::Cast(
                     TSpan::new(start, self.toks.current_end_pos()),
-                    UnresolvedType::Primitive(p),
+                    UnresolvedType::Primitive(p, prim_span),
                     inner
                 )
             },
@@ -515,8 +532,8 @@ impl<'a> Parser<'a> {
     fn parse_path(&mut self) -> EyeResult<IdentPath> {
         let first = self.toks.step_expect([TokenType::Keyword(Keyword::Root), TokenType::Ident])?;
         let path_start = match first.ty {
-            TokenType::Keyword(Keyword::Root) => IdentPath::Root,
-            TokenType::Ident => IdentPath::Single(first.get_val(self.src).to_owned()),
+            TokenType::Keyword(Keyword::Root) => IdentPath::Root(first.start),
+            TokenType::Ident => IdentPath::Single(first.span()),
             _ => unreachable!()
         };
         self.parse_rest_of_path(path_start)
@@ -524,7 +541,7 @@ impl<'a> Parser<'a> {
 
     fn parse_rest_of_path(&mut self, mut path: IdentPath) -> EyeResult<IdentPath> {
         while self.toks.step_if(TokenType::Dot).is_some() {
-            path.push(self.toks.step_expect(TokenType::Ident)?.get_val(self.src).to_owned());
+            path.push(self.toks.step_expect(TokenType::Ident)?.span());
         }
         Ok(path)
     }
@@ -533,24 +550,29 @@ impl<'a> Parser<'a> {
         let type_tok = self.toks.step()?;
         match_or_unexpected!(type_tok,
             self.toks.module,
-            TokenType::Keyword(Keyword::Root) => Ok(UnresolvedType::Unresolved(
-                self.parse_rest_of_path(IdentPath::Root)?
-            )),
+            TokenType::Keyword(Keyword::Root) => {
+                let start = type_tok.start;
+                Ok(UnresolvedType::Unresolved(
+                    self.parse_rest_of_path(IdentPath::Root(start))?
+                ))
+            },
             TokenType::Ident => {
-                let val = type_tok.get_val(self.src).to_owned();
-                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(IdentPath::Single(val))?))
+                let span = type_tok.span();
+                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(IdentPath::Single(span))?))
             },
             TokenType::Keyword(Keyword::Primitive(primitive)) => {
-                Ok(UnresolvedType::Primitive(primitive))
+                Ok(UnresolvedType::Primitive(primitive, type_tok.span()))
             },
             TokenType::LParen => {
+                let unit_span = type_tok.span();
                 self.toks.step_expect(TokenType::RParen)?;
-                Ok(UnresolvedType::Primitive(Primitive::Unit))
+                Ok(UnresolvedType::Primitive(Primitive::Unit, unit_span))
             },
             TokenType::Star => {
-                Ok(UnresolvedType::Pointer(Box::new(self.parse_type()?)))
+                let start = type_tok.start;
+                Ok(UnresolvedType::Pointer(Box::new(self.parse_type()?), start))
             },
-            TokenType::Underscore => Ok(UnresolvedType::Infer)
+            TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
         )
     }
 }

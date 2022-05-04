@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, ops::{Index, IndexMut}, path::{PathBuf, Path}};
+use std::{collections::HashMap, ops::{Index, IndexMut}, path::{PathBuf, Path}};
 use crate::{lexer::tokens::Operator, types::Primitive};
 
 pub mod repr;
@@ -180,8 +180,11 @@ impl Expr {
             Expr::BinOp(_, l, r) => TSpan::new(ast[*l].start(ast), ast[*r].end(ast)),
             Expr::MemberAccess(expr, span) => TSpan::new(ast[*expr].start(ast), span.end),
             Expr::Cast(span, _, _) => *span,
-            Expr::Root(start) => TSpan::new(*start, *start + 4),
+            Expr::Root(start) => TSpan::new(*start, *start + 3),
         }
+    }
+    pub fn span_in(&self, ast: &Ast, module: ModuleId) -> crate::lexer::Span {
+        self.span(ast).in_mod(module)
     }
     pub fn start(&self, ast: &Ast) -> u32 {
         //TODO: more efficient implementation
@@ -205,6 +208,9 @@ impl TSpan {
     pub fn in_mod(self, module: ModuleId) -> crate::lexer::Span {
         crate::lexer::Span::new(self.start, self.end, module)
     }
+    pub fn range(self) -> std::ops::RangeInclusive<usize> {
+        self.start as usize ..= self.end as usize
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -227,20 +233,20 @@ pub struct While {
     pub body: ExprRef
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum IdentPath {
-    Root,
-    Single(String),
-    Path { starts_with_root: bool, segments: Vec<String> }
+    Root(u32),
+    Single(TSpan),
+    Path { starts_with_root: Option<u32>, segments: Vec<TSpan> }
 }
 
 impl IdentPath {
-    pub fn push(&mut self, segment: String) {
+    pub fn push(&mut self, segment: TSpan) {
         match self {
-            Self::Root => *self = Self::Path { starts_with_root: true, segments: vec![segment] },
+            Self::Root(start) => *self = Self::Path { starts_with_root: Some(*start), segments: vec![segment] },
             Self::Single(first) => *self = Self::Path { 
-                starts_with_root: false,
-                segments: vec![std::mem::take(first), segment]
+                starts_with_root: None,
+                segments: vec![std::mem::replace(first, TSpan::new(u32::MAX, u32::MAX)), segment]
             },
             Self::Path { segments, .. } => segments.push(segment)
         }
@@ -248,18 +254,38 @@ impl IdentPath {
     
     /// Returns: (`root`, `segments_without_last`, `last_segment`)
     /// `last_segment` will only be None if the path is a single root item
-    pub fn segments(&self) -> (bool, std::slice::Iter<String>, Option<&String>) {
+    pub fn segments(&self) -> (bool, std::slice::Iter<TSpan>, Option<TSpan>) {
         match self {
-            Self::Root => (true, (&[]).iter(), None),
-            Self::Single(s) => (false, (&[]).iter(), Some(s)),
+            Self::Root(_) => (true, (&[]).iter(), None),
+            Self::Single(s) => (false, (&[]).iter(), Some(*s)),
             Self::Path { starts_with_root, segments } => (
-                *starts_with_root,
+                starts_with_root.is_some(),
                 if segments.is_empty() { &[] } else { &segments[..segments.len() - 1] }.iter(),
-                segments.last()
+                segments.last().cloned()
             )
         }
     }
+
+    pub fn span(&self) -> TSpan {
+        match self {
+            IdentPath::Root(start) => TSpan::new(*start, *start + 3),
+            IdentPath::Single(span) => *span,
+            IdentPath::Path { starts_with_root, segments } => if let Some(start) = starts_with_root {
+                let end = if let Some(last) = segments.last() {
+                    last.end
+                } else {
+                    *start + 3
+                };
+                TSpan::new(*start, end)
+            } else {
+                let first = segments.first().expect("Path should have at least one segment here");
+                let last = segments.last().unwrap();
+                TSpan::new(first.start, last.end)
+            }
+        }
+    }
 }
+/*
 impl fmt::Display for IdentPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -281,14 +307,26 @@ impl fmt::Display for IdentPath {
         }
     }
 }
+*/
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum UnresolvedType {
-    Primitive(Primitive),
+    Primitive(Primitive, TSpan),
     Unresolved(IdentPath),
-    Pointer(Box<UnresolvedType>),
-    Infer,
+    Pointer(Box<UnresolvedType>, u32),
+    Infer(u32),
 }
+impl UnresolvedType {
+    pub fn span(&self) -> TSpan {
+        match self {
+            UnresolvedType::Primitive(_, span) => *span,
+            UnresolvedType::Unresolved(path) => path.span(),
+            UnresolvedType::Pointer(inner, start) => TSpan::new(*start, inner.span().end),
+            UnresolvedType::Infer(s) => TSpan::new(*s, *s),
+        }
+    }
+}
+/*
 impl fmt::Display for UnresolvedType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -299,3 +337,4 @@ impl fmt::Display for UnresolvedType {
         }
     }
 }
+*/

@@ -262,11 +262,14 @@ impl<'s> Scope<'s> {
             },
         }
     }
-    pub fn span(&self, expr: ast::ExprRef) -> TSpan {
+    pub fn tspan(&self, expr: ast::ExprRef) -> TSpan {
         self.ast[expr].span(self.ast)
     }
+    pub fn _span(&self, expr: ast::ExprRef) -> Span {
+        self.ast[expr].span_in(self.ast, self.module)
+    }
     pub fn src<'src>(&'src self, span: TSpan) -> &'src str {
-        &self.ast.sources()[self.module.idx()].0[span.start as usize ..= span.end as usize]
+        &self.ast.sources()[self.module.idx()].0[span.range()]
     }
     pub fn child(&mut self,symbols: HashMap<String, Symbol>) -> Scope {
         Scope {
@@ -287,7 +290,7 @@ impl<'s> Scope<'s> {
 
     fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, types: &mut TypeTable) -> Result<TypeInfo, Error> {
         match unresolved {
-            ast::UnresolvedType::Primitive(p) => Ok(TypeInfo::Primitive(*p)),
+            ast::UnresolvedType::Primitive(p, _) => Ok(TypeInfo::Primitive(*p)),
             ast::UnresolvedType::Unresolved(path) => {
                 let (root, iter, last) = path.segments();
                 // no last segment means it must point to the root module
@@ -304,35 +307,36 @@ impl<'s> Scope<'s> {
                     ModuleOrLocal::Local
                 };
 
-                for name in iter {
+                for segment in iter {
                     let look_from = match current_module {
                         ModuleOrLocal::Module(m) => m,
                         ModuleOrLocal::Local => self.module
                     };
-                    match self.globals[look_from].get(name) {
+                    match self.globals[look_from].get(self.src(*segment)) {
                         Some(Symbol::Module(m)) => current_module = ModuleOrLocal::Module(*m),
                         Some(_) => panic!("1"),//return Err(Error::ModuleExpected),
                         None => return Err(Error::UnknownModule)
                     }
                 }
+                let last = self.src(last);
                 match current_module {
                     ModuleOrLocal::Module(m) => match self.globals[m]
-                        .get(last.as_str())
+                        .get(last)
                         .ok_or(Error::UnknownIdent)? {
                             Symbol::Type(ty) => Ok(TypeInfo::Resolved(*ty)),
                             _ => Err(Error::TypeExpected)
                         },
-                    ModuleOrLocal::Local => match self.info.resolve_local(last.as_str())? {
+                    ModuleOrLocal::Local => match self.info.resolve_local(last)? {
                         Resolved::Type(ty) => Ok(TypeInfo::Resolved(ty)),
                         _ => Err(Error::TypeExpected)
                     }
                 }
             }
-            ast::UnresolvedType::Pointer(inner) => {
+            ast::UnresolvedType::Pointer(inner, _) => {
                 let inner = self.resolve_type(inner, types)?;
                 Ok(TypeInfo::Pointer(types.add(inner)))
             }
-            ast::UnresolvedType::Infer => Ok(TypeInfo::Unknown)
+            ast::UnresolvedType::Infer(_) => Ok(TypeInfo::Unknown)
         }
     }
 
@@ -366,7 +370,7 @@ impl<'s> Scope<'s> {
         expected: TypeTableIndex,
         ret: TypeTableIndex
     ) -> Ref {
-        self.reduce_expr_val_spanned(errors, ir, &self.ast[expr], expected, ret, self.span(expr))
+        self.reduce_expr_val_spanned(errors, ir, &self.ast[expr], expected, ret, self.tspan(expr))
     }
 
     fn reduce_expr(
@@ -397,7 +401,7 @@ impl<'s> Scope<'s> {
             ExprResult::VarRef(other_var) => ir.add(Data { un_op: other_var }, Tag::Load, expected),
             ExprResult::Val(val) => val,
             _ => {
-                errors.emit(Error::ExpectedValueFoundDefinition, 0, 0, self.module);
+                errors.emit_span(Error::ExpectedValueFoundDefinition, expr.span(self.ast).in_mod(self.module));
                 Ref::UNDEF
             }
         };
@@ -418,7 +422,9 @@ impl<'s> Scope<'s> {
         ) {
             ExprResult::VarRef(var) => var,
             ExprResult::Val(_) | ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
-                errors.emit(Error::CantAssignTo, 0, 0, self.module);
+                if !ir.types.get_type(expected).is_invalid() {
+                    errors.emit_span(Error::CantAssignTo, expr.span(self.ast).in_mod(self.module));
+                }
                 Ref::UNDEF
             }
             ExprResult::Stored(_) => unreachable!(),
@@ -449,12 +455,13 @@ impl<'s> Scope<'s> {
                 }
                 Ref::val(RefVal::Undef)
             }
-            ast::Expr::Declare { name, end, annotated_ty, val } => {
+            ast::Expr::Declare { name, end: _, annotated_ty, val } => {
                 let ty = match self.resolve_type(annotated_ty, &mut ir.types) {
                     Ok(t) => t,
                     Err(err) => {
-                        errors.emit(err, name.start, *end, self.module);
-                        return ExprResult::Val(Ref::UNIT);
+                        errors.emit_span(err, annotated_ty.span().in_mod(self.module));
+                        //return ExprResult::Val(Ref::UNIT);
+                        TypeInfo::Invalid
                     }
                 };
                 let ty = ir.types.add(ty);
@@ -468,7 +475,7 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::Return { start: _, val } => {
                 let r = self.reduce_expr_idx_val(errors, ir, *val, ret, ret);
-                ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors, self.span(*val));
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Never), errors, self.tspan(*val));
                 ir.add_untyped(Tag::Ret, Data { un_op: r });
                 Ref::val(RefVal::Undef)
             }
@@ -528,7 +535,7 @@ impl<'s> Scope<'s> {
                 Ref::val(RefVal::Unit)
             }
             ast::Expr::Variable(span) => {
-                let name = &self.ast.sources[self.module.idx()].0[span.start as usize ..= span.end as usize];
+                let name = &self.ast.sources[self.module.idx()].0[span.range()];
                 match self.resolve(&mut ir.types, name) {
                     Ok(resolved) => match resolved {
                         Resolved::Var(ty, var) => {
@@ -540,7 +547,7 @@ impl<'s> Scope<'s> {
                         Resolved::Module(m) => return ExprResult::Module(m),
                     },
                     Err(err) => {
-                        errors.emit(err, 0, 0, self.module);
+                        errors.emit_span(err, span.in_mod(self.module));
                         ir.invalidate(expected);
                         Ref::val(RefVal::Undef)
                     }
@@ -622,7 +629,7 @@ impl<'s> Scope<'s> {
                             args.len() != header.params.len()
                         };
                         if invalid_arg_count {
-                            errors.emit(Error::InvalidArgCount, 0, 0, self.module);
+                            errors.emit_span(Error::InvalidArgCount, expr.span(self.ast).in_mod(self.module));
                             Ref::val(RefVal::Undef)
                         } else {
                             let params = header.params.iter().map(|(_, ty)| Some(*ty));
@@ -679,12 +686,12 @@ impl<'s> Scope<'s> {
                             }
                             return ExprResult::Stored(var);
                         } else {
-                            errors.emit(Error::InvalidArgCount, 0, 0, self.module);
+                            errors.emit_span(Error::InvalidArgCount, expr.span(self.ast).in_mod(self.module));
                             Ref::val(RefVal::Undef)
                         }
                     }
                     _ => {
-                        if !matches!(ir.types.get_type(func_ty), TypeInfo::Invalid) {
+                        if !ir.types.get_type(func_ty).is_invalid() {
                             errors.emit_span(Error::FunctionOrTypeExpected, expr.span(self.ast).in_mod(self.module));
                         }
                         ir.invalidate(expected);
@@ -728,7 +735,7 @@ impl<'s> Scope<'s> {
                                 ir.add(Data { un_op: var }, Tag::AsPointer, expected)
                             }
                             _ => {
-                                errors.emit(Error::CantTakeRef, 0, 0, self.module);
+                                errors.emit_span(Error::CantTakeRef, expr.span(self.ast).in_mod(self.module));
                                 Ref::UNDEF
                             }
                         })
@@ -763,7 +770,7 @@ impl<'s> Scope<'s> {
                     UnOp::Ref | UnOp::Deref => unreachable!(),
                 };
                 if let Err(err) = res {
-                    errors.emit(err, 0, 0, self.module);
+                    errors.emit_span(err, expr.span(self.ast).in_mod(self.module));
                 }
                 ir.add(Data { un_op: inner }, tag, expected)
             }
@@ -835,14 +842,15 @@ impl<'s> Scope<'s> {
                 }
             }
             ast::Expr::MemberAccess(left, member_span) => {
-                let member = &self.ast.src(self.module).0[member_span.start as usize ..= member_span.end as usize];
+                let member = &self.ast.src(self.module).0[member_span.range()];
                 let left_ty = ir.types.add(TypeInfo::Unknown);
                 enum MemberAccessType {
                     Var(Ref),
                     Module(ModuleId),
                     Invalid
                 }
-                let left = match self.reduce_expr(errors, ir, &self.ast[*left], left_ty, ret) {
+                let left = &self.ast[*left];
+                let left_val = match self.reduce_expr(errors, ir, left, left_ty, ret) {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                     ExprResult::Val(val) => {
                         let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
@@ -850,13 +858,13 @@ impl<'s> Scope<'s> {
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Func(_) | ExprResult::Type(_) => {
-                        errors.emit(Error::NonexistantMember, 0, 0, self.module);
+                        errors.emit_span(Error::NonexistantMember, member_span.in_mod(self.module));
                         MemberAccessType::Invalid
                     }
                     ExprResult::Module(id) => MemberAccessType::Module(id),
                 };
 
-                match left {
+                match left_val {
                     MemberAccessType::Var(var) => {
                         let (ty, idx) = match ir.types.get_type(left_ty) {
                             TypeInfo::Resolved(key) => {
@@ -869,17 +877,17 @@ impl<'s> Scope<'s> {
                                 {
                                     (ty.into_info(&mut ir.types), i)
                                 } else {
-                                    errors.emit(Error::NonexistantMember, 0, 0, self.module);
+                                    errors.emit_span(Error::NonexistantMember, member_span.in_mod(self.module));
                                     (TypeInfo::Invalid, 0)
                                 }
                             }
                             TypeInfo::Invalid => (TypeInfo::Invalid, 0),
                             TypeInfo::Unknown => {
-                                errors.emit(Error::TypeMustBeKnownHere, 0, 0, self.module);
+                                errors.emit_span(Error::TypeMustBeKnownHere, left.span_in(self.ast, self.module));
                                 (TypeInfo::Invalid, 0)
                             }
                             _ => {
-                                errors.emit(Error::NonexistantMember, 0, 0, self.module);
+                                errors.emit_span(Error::NonexistantMember, left.span_in(self.ast, self.module));
                                 (TypeInfo::Invalid, 0)
                             }
                         };
@@ -904,19 +912,21 @@ impl<'s> Scope<'s> {
                             };
                         } else {
                             errors.emit_span(Error::UnknownIdent, member_span.in_mod(self.module));
+                            ir.invalidate(expected);
                             Ref::UNDEF
                         }
                     }
                     MemberAccessType::Invalid => {
+                        ir.invalidate(expected);
                         Ref::UNDEF
                     }
                 }
             }
-            ast::Expr::Cast(_, target, val) => {
+            ast::Expr::Cast(span, target, val) => {
                 let target = match self.resolve_type(target, &mut ir.types) {
                     Ok(target) => target,
                     Err(err) => {
-                        errors.emit(err, 0, 0, self.module);
+                        errors.emit_span(err, span.in_mod(self.module));
                         TypeInfo::Invalid
                     }
                 };

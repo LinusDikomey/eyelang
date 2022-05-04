@@ -134,6 +134,9 @@ pub enum TypeInfo {
     Invalid,
 }
 impl TypeInfo {
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, TypeInfo::Invalid)
+    }
     fn finalize(self, types: &TypeTable) -> Type {
         match self {
             Self::Unknown | Self::Invalid => Type::Base(BaseType::Prim(Primitive::Unit)),

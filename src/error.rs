@@ -130,7 +130,7 @@ impl Errors {
         match res {
             Ok(t) => t,
             Err(err) => {
-                self.emit(err.err, err.span.start, err.span.end, err.span.module);
+                self.emit_err(err);
                 otherwise
             }
         }
@@ -140,7 +140,7 @@ impl Errors {
         match res {
             Ok(t) => t,
             Err(err) => {
-                self.emit(err.err, err.span.start, err.span.end, err.span.module);
+                self.emit_err(err);
                 otherwise()
             }
         }

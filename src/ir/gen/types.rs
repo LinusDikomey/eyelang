@@ -1,8 +1,8 @@
 use std::{collections::HashMap, num::NonZeroU8};
 use crate::{
-    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType},
+    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, TSpan},
     error::{Errors, Error},
-    ir::{gen::FunctionOrHeader, BaseType}
+    ir::{gen::FunctionOrHeader, BaseType}, lexer::Span
 };
 use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, TypeRef, FunctionHeader, Scope};
 
@@ -89,25 +89,25 @@ pub fn gen_locals(
         errors: &mut Errors
     ) -> TypeRef {
         match unresolved {
-            UnresolvedType::Primitive(p) => TypeRef::Base(BaseType::Prim(*p)),
+            UnresolvedType::Primitive(p, _) => TypeRef::Base(BaseType::Prim(*p)),
             UnresolvedType::Unresolved(path) => {
                 let (root, segments, last) = path.segments();
                 let Some(last) = last else {
-                    errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                    errors.emit_span(Error::TypeExpected, path.span().in_mod(scope.module));
                     return TypeRef::Invalid
                 };
                 let mut current_module = root.then_some(ModuleId::ROOT);
 
                 for segment in segments {
                     if let Some(module) = current_module {
-                        match scope.globals[module].get(segment) {
+                        match scope.globals[module].get(scope.src(*segment)) {
                             Some(Symbol::Module(id)) => current_module = Some(*id),
                             Some(_) => {
-                                errors.emit(Error::ModuleExpected, 0, 0, scope.module);
+                                errors.emit_span(Error::ModuleExpected, segment.in_mod(scope.module));
                                 return TypeRef::Invalid
                             }
                             None => {
-                                errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                                errors.emit_span(Error::UnknownIdent, segment.in_mod(scope.module));
                                 return TypeRef::Invalid
                             }
                         }
@@ -115,40 +115,40 @@ pub fn gen_locals(
                     }
                 }
 
-                let mut symbol_to_ty = |symbol: &Symbol| {
+                let mut symbol_to_ty = |symbol: &Symbol, span: TSpan| {
                     if let Symbol::Type(key) = symbol {
                         TypeRef::Base(BaseType::Id(*key))
                     } else {
-                        errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                        errors.emit_span(Error::TypeExpected, span.in_mod(scope.module));
                         TypeRef::Invalid
                     }
                 };
+                let last_str = &scope.ast.sources()[scope.module.idx()].0[last.range()];
                 if let Some(module) = current_module {
-                    let Some(symbol) = scope.globals[module].get(last) else {
-                        errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                    let Some(symbol) = scope.globals[module].get(last_str) else {
+                        errors.emit_span(Error::UnknownIdent, last.in_mod(scope.module));
                         return TypeRef::Invalid;
                     };
-                    symbol_to_ty(symbol)
-
-                } else if let Some(symbol) = symbols.get(last) {
-                    symbol_to_ty(symbol)
-                } else if let Some(def) = defs.get(last) {
+                    symbol_to_ty(symbol, last)
+                } else if let Some(symbol) = symbols.get(last_str) {
+                    symbol_to_ty(symbol, last)
+                } else if let Some(def) = defs.get(last_str) {
                     if let ast::Definition::Struct(struct_) = def {
-                        gen_struct(last, struct_, symbols, defs, scope, errors)
+                        gen_struct(last_str, struct_, symbols, defs, scope, errors)
                     } else {
-                        errors.emit(Error::TypeExpected, 0, 0, scope.module);
+                        errors.emit_span(Error::TypeExpected, last.in_mod(scope.module));
                         TypeRef::Invalid
                     }
                 } else {
-                    errors.emit(Error::UnknownIdent, 0, 0, scope.module);
+                    errors.emit_span(Error::UnknownIdent, last.in_mod(scope.module));
                     TypeRef::Invalid
                 }
             }
-            UnresolvedType::Pointer(inner) => {
+            UnresolvedType::Pointer(inner, _) => {
                 ty(inner, symbols, defs, scope, errors)
             }
-            UnresolvedType::Infer => {
-                errors.emit(Error::InferredTypeNotAllowedHere, 0, 0, scope.module);
+            UnresolvedType::Infer(start) => {
+                errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, scope.module);
                 TypeRef::Invalid
             }
         }
@@ -258,6 +258,21 @@ pub fn add_struct(
     key
 }
 
+fn update_path_module(ast: &Ast, name: &str, span: Span, module: &mut ModuleId, errors: &mut Errors) -> bool {
+    if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
+        if let ast::Definition::Module(new_module) = def {
+            *module = *new_module;
+        } else {
+            errors.emit_span(Error::ModuleExpected, span);
+            return false;
+        }
+    } else {
+        errors.emit_span(Error::UnknownIdent, span);
+        return false;
+    }
+    true
+}
+
 fn resolve_global_path(
     ctx: &mut TypingCtx,
     ast: &Ast,
@@ -266,90 +281,72 @@ fn resolve_global_path(
     module: ModuleId,
     errors: &mut Errors
 ) -> Option<Symbol> {
+    let path_module = module;
     let (root, segments, last) = path.segments();
     let Some(last) = last else {
-        errors.emit(Error::CantUseRootPath, 0, 0, module);
+        errors.emit_span(Error::CantUseRootPath, path.span().in_mod(module));
         return None;
     };
     let mut module = if root { ModuleId::ROOT } else { module };
     // handle all but the last path segments to go to the correct module
-    let mut update = |name| {
-        if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
-            if let ast::Definition::Module(new_module) = def {
-                module = *new_module;
-            } else {
-                errors.emit(Error::ModuleExpected, 0, 0, module);
-                return false;
-            }
-        } else {
-            errors.emit(Error::UnknownIdent, 0, 0, module);
-            return false;
+    for segment in segments {
+        let name = &ast.sources[path_module.idx()].0[segment.range()];
+        if !update_path_module(ast, name, Span::new(segment.start, segment.end, path_module), &mut module, errors) {
+            return None
         }
-        true
-    };
-    for name in segments {
-        if !update(name) { return None };
     }
-    resolve_in_module(ctx, ast, symbols, module, last, errors)
+    let last_str = &ast.sources[path_module.idx()].0[last.range()];
+    resolve_in_module(ctx, ast, symbols, module, last, last_str, errors)
 }
 
 fn resolve(
     ctx: &mut TypingCtx,
     ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
-    module: ModuleId,
+    path_module: ModuleId,
     unresolved: &UnresolvedType,
     errors: &mut Errors
 ) -> TypeRef {
+    let src = &ast.sources()[path_module.idx()].0;
     match unresolved {
-        crate::ast::UnresolvedType::Primitive(p) => TypeRef::Base(BaseType::Prim(*p)),
+        crate::ast::UnresolvedType::Primitive(p, _) => TypeRef::Base(BaseType::Prim(*p)),
         crate::ast::UnresolvedType::Unresolved(path) => {
             let (root, segments, last) = path.segments();
             let Some(last) = last else {
-                errors.emit(Error::TypeExpected, 0, 0, module);
+                errors.emit_span(Error::TypeExpected, path.span().in_mod(path_module));
                 return TypeRef::Invalid;
             };
-            let mut module = if root { ModuleId::ROOT } else { module };
-            let mut update = |name| {
-                if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
-                    if let ast::Definition::Module(new_module) = def {
-                        module = *new_module;
-                    } else {
-                        errors.emit(Error::ModuleExpected, 0, 0, module);
-                        return Some(TypeRef::Invalid);
-                    }
-                } else {
-                    errors.emit(Error::UnknownIdent, 0, 0, module);
-                    return Some(TypeRef::Invalid);
-                }
-                None
-            };
-            for name in segments {
-                if let Some(err) = update(name) { return err };
+            let mut module = if root { ModuleId::ROOT } else { path_module };
+            for segment in segments {
+                let name = &src[segment.range()];
+                if !update_path_module(ast, name, segment.in_mod(path_module), &mut module, errors) {
+                    return TypeRef::Invalid
+                };
             }
-            match resolve_in_module(ctx, ast, symbols, module, last, errors) {
+            let last_str = &ast.sources()[module.idx()].0[last.range()];
+            match resolve_in_module(ctx, ast, symbols, module, last, last_str, errors) {
                 Some(Symbol::Type(ty)) => TypeRef::Base(BaseType::Id(ty)),
                 Some(_) => {
-                    errors.emit(Error::TypeExpected, 0, 0, module);
+                    errors.emit_span(Error::TypeExpected, last.in_mod(module));
                     TypeRef::Invalid
                 }
                 None => TypeRef::Invalid // an error was already emitted in this case
             }
         }
-        UnresolvedType::Pointer(inner) => {
-            match resolve(ctx, ast, symbols, module, inner, errors) {
+        UnresolvedType::Pointer(inner, _) => {
+            match resolve(ctx, ast, symbols, path_module, inner, errors) {
                 TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
                 TypeRef::Pointer { count, inner } => { 
                     if count.get() == u8::MAX {
-                        errors.emit(Error::TooLargePointer, 0, 0, module);
+                        errors.emit_span(Error::TooLargePointer, unresolved.span().in_mod(path_module));
                     }
                     TypeRef::Pointer { count: count.saturating_add(1), inner }
                 }
                 TypeRef::Invalid => TypeRef::Invalid,
             }
         }
-        UnresolvedType::Infer => {
-            errors.emit(Error::InferredTypeNotAllowedHere, 0, 0, module);
+        UnresolvedType::Infer(start) => {
+            errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, path_module);
             TypeRef::Invalid
         }
         
@@ -361,6 +358,7 @@ fn resolve_in_module(
     ast: &Ast,
     symbols: &mut [HashMap<String, Symbol>],
     module: ModuleId,
+    span: TSpan,
     name: &str,
     errors: &mut Errors
 ) -> Option<Symbol> {
@@ -369,7 +367,7 @@ fn resolve_in_module(
     } else if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
         add_global_def(def, ctx, ast, symbols, module, name, errors)
     } else {
-        errors.emit(Error::UnknownIdent, 0, 0, module);
+        errors.emit_span(Error::UnknownIdent, span.in_mod(module));
         None
     }
 }
