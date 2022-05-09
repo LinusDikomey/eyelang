@@ -4,7 +4,8 @@
     variant_count,
     path_try_exists,
     bool_to_option,
-    nonzero_ops
+    nonzero_ops,
+    is_some_with,
 )]
 #![warn(unused_qualifications)]
 
@@ -62,6 +63,16 @@ enum Cmd {
     /// Starts a language server that can be used by IDEs for syntax highlighting, autocompletions etc.
     #[cfg(feature = "lsp")]
     Lsp,
+}
+impl Cmd {
+    pub fn is_compiled(self) -> bool {
+        match self {
+            Cmd::Check => false,
+            #[cfg(feature = "lsp")]
+            Cmd::Lsp => false,
+            _ => true
+        }
+    }
 }
 impl Default for Cmd {
     fn default() -> Self {
@@ -159,12 +170,25 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let exe_file = format!("eyebuild/{output_name}");
     let exec = || {
         println!("{}", format!("Running {}...", output_name).green());
-        std::process::Command::new(&exe_file)
+        let status = std::process::Command::new(&exe_file)
             .spawn()
             .expect("Failed to run the executable command")
             .wait()
             .expect("Running process failed");
+        println!("{}", format!("\nThe program {output_name} exited with status: {status}").green());
     };
+
+    if args.cmd.is_compiled() {
+        // temporary: compile help.c for some helper methods implemented in c
+        let res = std::process::Command::new("clang")
+            .args(["-c", "help/help.c", "-o", "eyebuild/help.o"])
+            .status()
+            .expect("Failed to run command to compile help.c");
+        if !res.success() {
+            eprintln!("The help.c compilation command failed. \
+                The help.o object file is assumed to be found in the eyebuild directory now.");
+        }
+    }
 
     match args.cmd {
         Cmd::Check => {
@@ -189,15 +213,6 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
                             panic!("Failed to create build directory: {err}")
                         }
                     }
-                }
-                // temporary: compile help.c for some helper methods implemented in c
-                let res = std::process::Command::new("clang")
-                    .args(["-c", "help/help.c", "-o", "eyebuild/help.o"])
-                    .status()
-                    .expect("Failed to run command to compile help.c");
-                if !res.success() {
-                    eprintln!("The help.c compilation command failed. \
-                        The help.o object file is assumed to be found in the eyebuild directory now.");
                 }
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 llvm::core::LLVMContextDispose(context);

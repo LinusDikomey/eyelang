@@ -38,10 +38,12 @@ pub fn project(module_path: &Path, reconstruct_src: bool, std: bool, _deps: &[De
 }
 
 fn std_path() -> PathBuf {
-    std::env::current_exe()
+    match std::env::current_exe()
         .ok()
-        .and_then(|path| path.parent().map(|p| Path::join(p, "std")))
-        .unwrap_or_else(|| "std".into())
+        .and_then(|path| path.parent().map(|p| Path::join(p, "std"))) {
+            Some(path) if std::fs::try_exists(&path).is_ok_and(|v| *v) => path,
+            _ => "std".into()
+        }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

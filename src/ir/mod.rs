@@ -108,8 +108,9 @@ impl fmt::Display for FinalFunction {
                     writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
                     continue;
                 }
-                write!(f, "    {:>4} = {}", 
+                write!(f, "    {:>4}{}= {}",
                     format!("%{i}").cyan(),
+                    if inst.used {' '} else {'!'},
                     inst.display(&ir.extra, &ir.types)
                 )?;
                 if inst.ty.is_present() {
