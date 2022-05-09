@@ -15,7 +15,7 @@ A simple unoptimized x86 backend is also on it's way.
 
 ### Basic
 ```
-main -> {
+fn main {
     std.println("Hello World")
     x := 3
     y := 2 * x + 3
@@ -28,9 +28,9 @@ main -> {
 ```
 use std.c.printf
 
-add_pointer_values(x *i32, y *i32) -> i32: x^ + y^
+fn add_pointer_values(x *i32, y *i32) i32: x^ + y^
 
-main -> {
+fn main {
     x := 5
     y := 7
     printf("Result: %d\n", add_pointer_values(&x, &y))
@@ -39,9 +39,9 @@ main -> {
 
 ### Expressions, type inference
 ```
-add(x i64, y i64) -> i32: x + y
+fn add(x i64, y i64) i32: x + y
 
-main -> {
+fn main {
     x := 3 # x is inferred to have type i64
     pointer := &x
     std.c.printf("Result: %d\n", if 1 < 2: add(pointer^, 4) else -1)
@@ -54,11 +54,11 @@ use std.c
 
 Vec3 :: { x f64, y f64, z f64 }
 
-print_vec3(v *Vec3) -> {
+fn print_vec3(v *Vec3) {
     c.printf("Vec3: [%.1f, %.1f, %.1f]\n", v^.x, v^.y, v^.z)
 }
 
-main -> {
+fn main {
     v := c.malloc(12) as *Vec3
     v^ = Vec3(1.0, 2.0, 3.0)
     print_vec3(v)
