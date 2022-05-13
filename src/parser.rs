@@ -493,7 +493,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(TokenType::Keyword(Keyword::As)) if include_as => {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
-                    let span = TSpan::new(self.ast[expr].start(&self.ast), self.toks.current_end_pos());
+                    let span = TSpan::new(self.ast[expr].start(self.ast), self.toks.current_end_pos());
                     let target_ty = self.parse_type()?;
                     Expr::Cast(span, target_ty, expr)
                 }
@@ -517,7 +517,7 @@ impl<'a> Parser<'a> {
                     rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs)?;
                 }
             }
-            lhs = self.ast.add_expr(Expr::BinOp(op, lhs, rhs))
+            lhs = self.ast.add_expr(Expr::BinOp(op, lhs, rhs));
         }
         Ok(lhs)
     }

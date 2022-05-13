@@ -1,4 +1,4 @@
-use std::{u128, fmt};
+use std::{u128, fmt, str::FromStr};
 
 use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, ast::TSpan};
 
@@ -134,13 +134,13 @@ pub enum Keyword {
     Root,
     Use,
 }
+impl FromStr for Keyword {
+    type Err = ();
 
-impl Keyword {
-
-    pub fn from_str(s: &str) -> Option<Keyword> {
+    fn from_str(s: &str) -> Result<Keyword, ()> {
         use Keyword::Primitive as P;
         use Primitive::*;
-        Some(match s {
+        Ok(match s {
             "i8"   => P(I8),
             "i16"  => P(I16),
             "i32"  => P(I32),
@@ -173,7 +173,7 @@ impl Keyword {
             "extern" => Keyword::Extern,
             "root" => Keyword::Root,
             "use" => Keyword::Use,
-            _ => return None
+            _ => return Err(())
         })
     }
 }

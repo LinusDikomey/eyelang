@@ -66,9 +66,9 @@ unsafe fn base_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: BaseType, ptr:
 
 unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
     match ty {
-        Type::Base(base) => base_ty(ctx, &types, *base, false),
+        Type::Base(base) => base_ty(ctx, types, *base, false),
         Type::Pointer { count, inner } => {
-            let mut base = base_ty(ctx, &types, *inner, true);
+            let mut base = base_ty(ctx, types, *inner, true);
             for _ in 0..count.get() {
                 base = LLVMPointerType(base, 0);
             }
@@ -255,9 +255,9 @@ unsafe fn build_func(
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
                 let Type::Pointer { count, inner } = ty else { panic!("Invalid IR, loading non-pointer type: {ty}"); };
                 let pointee_ty = if count.get() == 1 {
-                    base_ty(ctx, &types, inner, true)
+                    base_ty(ctx, types, inner, true)
                 } else {
-                    llvm_ty(ctx, &types, &Type::Pointer { count: NonZeroU8::new(count.get() - 1).unwrap(), inner })
+                    llvm_ty(ctx, types, &Type::Pointer { count: NonZeroU8::new(count.get() - 1).unwrap(), inner })
                 };
                 LLVMBuildLoad2(builder, pointee_ty, val, NONE)
             }
@@ -380,7 +380,7 @@ unsafe fn build_func(
                 let (r, origin_ty) = get_ref_and_type(&instructions, data.member.0);
                 let pointee = origin_ty.pointee().expect("Tried to get member of non-pointer");
                 let mut elems = [zero_i32, LLVMConstInt(LLVMInt32TypeInContext(ctx), data.member.1 as u64, FALSE)];
-                LLVMBuildInBoundsGEP2(builder, llvm_ty(ctx, &types, &pointee), r, elems.as_mut_ptr(), 2, NONE)
+                LLVMBuildInBoundsGEP2(builder, llvm_ty(ctx, types, &pointee), r, elems.as_mut_ptr(), 2, NONE)
             }
             ir::Tag::Cast => {
                 // cast just panics here right now when the cast is invalid because cast checks aren't implemented

@@ -35,6 +35,18 @@ impl Primitive {
             _ => return None
         })
     }
+
+    pub fn size(self) -> u32 {
+        use Primitive::*;
+        match self {
+            Unit | Never => 0,
+            I8 | U8 | Bool => 1,
+            I16 | U16 => 2,
+            I32 | U32 | F32 => 4,
+            I64 | U64 | F64 => 8,
+            I128 | U128 => 16,
+        }
+    }
 }
 impl fmt::Display for Primitive {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

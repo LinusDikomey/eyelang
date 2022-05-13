@@ -104,7 +104,7 @@ fn gen_func_bodies(
             let val = scope.reduce_expr_val_spanned(
                 errors,
                 &mut builder,
-                &body,
+                body,
                 expected,
                 expected,
                 body.span(scope.ast)
@@ -268,7 +268,7 @@ impl<'s> Scope<'s> {
     pub fn _span(&self, expr: ast::ExprRef) -> Span {
         self.ast[expr].span_in(self.ast, self.module)
     }
-    pub fn src<'src>(&'src self, span: TSpan) -> &'src str {
+    pub fn src(&self, span: TSpan) -> &str {
         &self.ast.sources()[self.module.idx()].0[span.range()]
     }
     pub fn child(&mut self,symbols: HashMap<String, Symbol>) -> Scope {

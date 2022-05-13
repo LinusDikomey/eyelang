@@ -2,7 +2,7 @@ pub mod tokens;
 
 use tokens::Token;
 use crate::{error::{Errors, Error}, ast::ModuleId};
-use self::tokens::{Keyword, TokenType};
+use self::tokens::TokenType;
 
 pub fn parse(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
     if src.len() > u32::MAX as usize {
@@ -222,7 +222,7 @@ impl<'a> Lexer<'a> {
                     while let Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') = self.peek() {
                         self.step().unwrap();
                     }
-                    if let Some(keyword) = Keyword::from_str(&self.src[start as usize ..= self.pos() as usize]) {
+                    if let Ok(keyword) = self.src[start as usize ..= self.pos() as usize].parse() {
                         TokenType::Keyword(keyword)
                     } else {
                         TokenType::Ident

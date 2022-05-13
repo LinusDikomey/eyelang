@@ -8,4 +8,4 @@ fn main {
 }
 
 
-fn calc(a i32, b i32) i32: a + a + b
+fn calc(a i64, b i64) i64: a / b

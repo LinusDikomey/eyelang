@@ -10,8 +10,8 @@ pub trait Repr<C: Representer> {
 }
 
 pub trait Representer {
-    fn src<'a>(&'a self, span: TSpan) -> &'a str;
-    fn ast<'a>(&'a self) -> &'a Ast;
+    fn src(&self, span: TSpan) -> &str;
+    fn ast(&self) -> &Ast;
     fn child(&self) -> Self;
     fn begin_line(&self);
     fn write_start<B: Borrow<str>>(&self, s: B);
@@ -36,10 +36,10 @@ impl<'a> ReprPrinter<'a> {
 }
 
 impl Representer for ReprPrinter<'_> {
-    fn src<'a>(&'a self, span: TSpan) -> &'a str {
+    fn src(&self, span: TSpan) -> &str {
         &self.src[span.range()]
     }
-    fn ast<'a>(&'a self) -> &'a Ast { &self.ast }
+    fn ast(&self) -> &Ast { self.ast }
     fn child(&self) -> Self {
         Self {
             indent: self.indent,
