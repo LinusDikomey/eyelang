@@ -11,6 +11,7 @@ pub trait Repr<C: Representer> {
 
 pub trait Representer {
     fn src(&self, span: TSpan) -> &str;
+    fn whole_src(&self) -> &str;
     fn ast(&self) -> &Ast;
     fn child(&self) -> Self;
     fn begin_line(&self);
@@ -38,6 +39,9 @@ impl<'a> ReprPrinter<'a> {
 impl Representer for ReprPrinter<'_> {
     fn src(&self, span: TSpan) -> &str {
         &self.src[span.range()]
+    }
+    fn whole_src(&self) -> &str {
+        self.src
     }
     fn ast(&self) -> &Ast { self.ast }
     fn child(&self) -> Self {
@@ -147,41 +151,39 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Block { span: _, items, defs } => {
                 c.write_add("{\n");
                 let child = c.child();
-                for (name, def) in defs {
+                for (name, def) in &ast.expr_builder[*defs] {
                     def.repr(&child, name);
                 }
-                for item in items {
+                for item in ast.get_extra(*items) {
                     child.write_start("");
                     ast[*item].repr(&child);
                     child.writeln("");
                 }
                 c.write_start("}");
             },
-            Self::Declare { name, end: _, annotated_ty, val } => {
+            Self::Declare { name, end: _, annotated_ty } => {
+                c.write_add(c.src(*name));
+                c.write_add(": ");
+                annotated_ty.repr(c);
+            }
+            Self::DeclareWithVal { name, annotated_ty, val } => {
                 c.write_add(c.src(*name));
                 if !matches!(annotated_ty, UnresolvedType::Infer(_)) {
                     c.write_add(": ");
                     annotated_ty.repr(c);
-                    if val.is_some() {
-                        c.write_add(" = ");
-                    }
+                    c.write_add(" = ");
                 } else {
                     c.write_add(" := ");
                 }
-                val.map(|v| ast[v].repr(c));
+                ast[*val].repr(c);
             }
             Self::Return { start: _, val } => {
                 c.write_add("ret");
                 c.space();
                 ast[*val].repr(c);
             }
-            Self::IntLiteral(span) => c.write_add(c.src(*span)),
-            Self::FloatLiteral(span) => c.write_add(c.src(*span)),
-            Self::StringLiteral(span) => {
-                //c.write_add("\"");
-                c.write_add(c.src(*span));
-                //c.write_add("\"");
-            }
+            Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) 
+                => c.write_add(c.src(*span)),
             Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
             Self::Nested(_, inner) => {
                 c.char('(');
@@ -190,7 +192,19 @@ impl<C: Representer> Repr<C> for Expr {
             }
             Self::Unit(_) => c.write_add("()"),
             Self::Variable(span) => c.write_add(c.src(*span)),
-            Self::If { span: _, cond, then, else_ } => {
+            Self::Array(_, elems) => {
+                c.char('[');
+                let mut elems = elems.iter().cloned();
+                if let Some(first) = elems.next() {
+                    ast[first].repr(c);
+                }
+                for elem in elems {
+                    c.write_add(", ");
+                    ast[elem].repr(c);
+                }
+                c.char(']');
+            }
+            Self::If { start: _, cond, then } => {
                 c.write_add("if ");
                 ast[*cond].repr(c);
                 let then = &ast[*then];
@@ -199,12 +213,20 @@ impl<C: Representer> Repr<C> for Expr {
                     _ => c.write_add(": ")
                 }
                 then.repr(c);
-                if let Some(else_block) = else_ {
-                    c.write_add(" else ");
-                    ast[*else_block].repr(c);
-                }
             }
-            Self::While(box While { span: _, cond, body }) => {
+            Self::IfElse { start: _, cond, then, else_ } => {
+                c.write_add("if ");
+                ast[*cond].repr(c);
+                let then = &ast[*then];
+                match then {
+                    Expr::Block { .. } => c.space(),
+                    _ => c.write_add(": ")
+                }
+                then.repr(c);
+                c.write_add(" else ");
+                ast[*else_].repr(c);
+            }
+            Self::While { start: _, cond, body } => {
                 c.write_add("while ");
                 ast[*cond].repr(c);
                 let body = &ast[*body];
@@ -250,15 +272,15 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*r].repr(c);
                 c.write_add(")");
             }
-            Self::MemberAccess(expr, member) => {
-                ast[*expr].repr(c);
+            Self::MemberAccess { left, name } => {
+                ast[*left].repr(c);
                 c.write_add(".");
-                c.write_add(c.src(*member));
+                c.write_add(c.src(*name));
             }
             Self::Cast(_, ty, expr) => {
-                ty.repr(c);
-                c.space();
                 ast[*expr].repr(c);
+                c.write_add(" as ");
+                ty.repr(c);
             },
             Self::Root(_) => c.write_add("root")
         }
@@ -267,7 +289,8 @@ impl<C: Representer> Repr<C> for Expr {
 
 impl<R: Representer> Repr<R> for IdentPath {
     fn repr(&self, c: &R) {
-        let (has_root, iter, last) = self.segments();
+        let (root, iter, last) = self.segments(&c.whole_src());
+        let has_root = root.is_some();
         if has_root {
             c.write_add("root");
         }
@@ -277,14 +300,13 @@ impl<R: Representer> Repr<R> for IdentPath {
             if i != 0 || has_root {
                 c.write_add(".");
             }
-            let name = c.src(*segment);
-            c.write_add(name);
+            c.write_add(segment.0);
         }
         if let Some(last) = last {
             if has_root || has_segments {
                 c.write_add(".");
             }
-            c.write_add(c.src(last));
+            c.write_add(last.0);
         }
     }
 }
@@ -294,7 +316,7 @@ impl<R: Representer> Repr<R> for UnresolvedType {
         match self {
             Self::Primitive(p, _) => p.repr(c),
             Self::Unresolved(path) => path.repr(c),
-            Self::Pointer(inner, _) => {
+            Self::Pointer(box (inner, _)) => {
                 c.char('*');
                 inner.repr(c);
             }

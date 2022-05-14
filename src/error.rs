@@ -152,6 +152,11 @@ pub struct CompileError {
     pub err: Error,
     pub span: Span
 }
+impl CompileError {
+    pub fn new(err: Error, span: Span) -> Self {
+        Self { err, span }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Error {

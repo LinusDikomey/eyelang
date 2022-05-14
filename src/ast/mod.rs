@@ -6,37 +6,85 @@ pub mod repr;
 pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
-    pub exprs: Vec<Expr>,
+    pub expr_builder: ExprBuilder
 }
 impl Ast {
     pub fn new() -> Self {
         Self {
             modules: Vec::new(),
             sources: Vec::new(),
-            exprs: Vec::new()
+            expr_builder: ExprBuilder {
+                exprs: Vec::new(),
+                extra: Vec::new(),
+                defs: Vec::new()
+            }
         }
     }
     pub fn sources(&self) -> &[(String, PathBuf)] {
         &self.sources
     }
     pub fn add_expr(&mut self, expr: Expr) -> ExprRef {
-        let r = ExprRef(self.exprs.len() as u32);
-        self.exprs.push(expr);
-        r
+        self.expr_builder.add(expr)
+    }
+    pub fn extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
+        self.expr_builder.extra(extra)
+    }
+    pub fn get_extra(&self, idx: ExprExtra) -> &[ExprRef] {
+        &self.expr_builder.extra[idx.0 as usize .. idx.0 as usize + idx.1 as usize]
     }
 }
 impl Index<ExprRef> for Ast {
     type Output = Expr;
 
     fn index(&self, index: ExprRef) -> &Self::Output {
-        &self.exprs[index.0 as usize]    
+        &self.expr_builder.exprs[index.0 as usize]    
     }
     
 }
 
+pub struct ExprBuilder {
+    exprs: Vec<Expr>,
+    extra: Vec<ExprRef>,
+    defs: Vec<HashMap<String, Definition>>
+}
+impl ExprBuilder {
+    pub fn add(&mut self, expr: Expr) -> ExprRef {
+        let r = ExprRef(self.exprs.len() as u32);
+        self.exprs.push(expr);
+        r
+    }
+    pub fn extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
+        let idx = ExprExtra(self.extra.len() as u32, extra.len() as u32);
+        self.extra.extend(extra);
+        idx
+    }
+    pub fn defs(&mut self, defs: HashMap<String, Definition>) -> Defs {
+        let idx = self.defs.len();
+        self.defs.push(defs);
+        Defs(idx as u32)
+    }
+}
+impl Index<Defs> for ExprBuilder {
+    type Output = HashMap<String, Definition>;
+
+    fn index(&self, index: Defs) -> &Self::Output {
+        &self.defs[index.0 as usize]
+    }
+}
+
 
 #[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
 pub struct ExprRef(u32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExprExtra(u32, u32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExprExtraSpans(u32, u32);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Defs(u32);
 
 impl Ast {
     pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
@@ -118,19 +166,22 @@ pub struct Function {
     pub body: Option<ExprRef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, eye_derive::EnumSizeDebug)]
 pub enum Expr {
     Block {
         span: TSpan,
-        items: Vec<ExprRef>,
-        defs: HashMap<String, Definition>
+        items: ExprExtra,
+        defs: Defs
     },
     Declare {
         name: TSpan,
-        end: u32,
-        annotated_ty:
-        UnresolvedType,
-        val: Option<ExprRef>
+        annotated_ty: UnresolvedType,
+        end: u32
+    },
+    DeclareWithVal {
+        name: TSpan,
+        annotated_ty: UnresolvedType,
+        val: ExprRef
     },
     Return { start: u32, val: ExprRef },
     IntLiteral(TSpan),
@@ -140,17 +191,27 @@ pub enum Expr {
     Nested(TSpan, ExprRef),
     Unit(TSpan),
     Variable(TSpan),
+    Array(TSpan, Vec<ExprRef>),
     If {
-        span: TSpan,
+        start: u32,
         cond: ExprRef,
         then: ExprRef,
-        else_: Option<ExprRef>
     },
-    While(Box<While>), //TODO: no more boxing
+    IfElse {
+        start: u32,
+        cond: ExprRef,
+        then: ExprRef,
+        else_: ExprRef
+    },
+    While {
+        start: u32,
+        cond: ExprRef,
+        body: ExprRef
+    },
     FunctionCall { func: ExprRef, args: Vec<ExprRef>, end: u32 },
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
-    MemberAccess(ExprRef, TSpan),
+    MemberAccess { left: ExprRef, name: TSpan },
     Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32)
 }
@@ -159,27 +220,34 @@ impl Expr {
         matches!(self, Self::Block { .. })
     }
     pub fn span(&self, ast: &Ast) -> TSpan {
+        // shorthands for getting start and end position of an ExprRef
+        let s = |r: &ExprRef| ast[*r].start(ast);
+        let e = |r: &ExprRef| ast[*r].end(ast);
+
         match self {
-            Expr::Block { span, .. } => *span,
+            Expr::Block { span, .. }
+                | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
+                | Expr::Nested(span, _) 
+                | Expr::Unit(span)
+                | Expr::Variable(span)
+                | Expr::Array(span, _)
+                | Expr::Cast(span, _, _)
+                => *span,
             Expr::Declare { name, end, .. } => TSpan::new(name.start, *end),
-            Expr::Return { start, val } => TSpan::new(*start, ast[*val].end(ast)),
-            Expr::IntLiteral(span) | Expr::FloatLiteral(span) => *span,
-            Expr::StringLiteral(span) => *span,
+            Expr::DeclareWithVal { name, val, .. } => TSpan::new(name.start, e(val)),
+            Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
-            Expr::Nested(span, _) => *span,
-            Expr::Unit(span) => *span,
-            Expr::Variable(span) => *span,
-            Expr::If { span, .. } => *span,
-            Expr::While(box while_) => while_.span,
-            Expr::FunctionCall { func, args: _, end } => TSpan::new(ast[*func].start(ast), *end),
+            Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
+            Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
+            Expr::While { start, cond: _, body } => TSpan::new(*start, e(body)),
+            Expr::FunctionCall { func, args: _, end } => TSpan::new(s(func), *end),
             Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
-                TSpan::new(ast[*expr].start(ast), *start_or_end)
+                TSpan::new(s(expr), *start_or_end)
             } else {
-                TSpan::new(*start_or_end, ast[*expr].end(ast))
+                TSpan::new(*start_or_end, e(expr))
             }
-            Expr::BinOp(_, l, r) => TSpan::new(ast[*l].start(ast), ast[*r].end(ast)),
-            Expr::MemberAccess(expr, span) => TSpan::new(ast[*expr].start(ast), span.end),
-            Expr::Cast(span, _, _) => *span,
+            Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
+            Expr::MemberAccess { left, name } => TSpan::new(s(left), name.end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
         }
     }
@@ -203,6 +271,7 @@ pub struct TSpan {
 }
 impl TSpan {
     pub fn new(start: u32, end: u32) -> Self {
+        debug_assert!(start-1 <= end, "Invalid span constructed");
         Self { start, end }
     }
     pub fn in_mod(self, module: ModuleId) -> crate::lexer::Span {
@@ -227,62 +296,39 @@ impl UnOp {
 }
 
 #[derive(Debug, Clone)]
-pub struct While {
-    pub span: TSpan,
-    pub cond: ExprRef,
-    pub body: ExprRef
-}
-
-#[derive(Debug, Clone)]
-pub enum IdentPath {
-    Root(u32),
-    Single(TSpan),
-    Path { starts_with_root: Option<u32>, segments: Vec<TSpan> }
-}
+pub struct IdentPath(TSpan); // just save the span and reparse when it is resolved
 
 impl IdentPath {
-    pub fn push(&mut self, segment: TSpan) {
-        match self {
-            Self::Root(start) => *self = Self::Path { starts_with_root: Some(*start), segments: vec![segment] },
-            Self::Single(first) => *self = Self::Path { 
-                starts_with_root: None,
-                segments: vec![std::mem::replace(first, TSpan::new(u32::MAX, u32::MAX)), segment]
-            },
-            Self::Path { segments, .. } => segments.push(segment)
-        }
+    pub fn new(span: TSpan) -> Self {
+        debug_assert!(!span.range().is_empty(), "Tried to construct empty path");
+        Self(span)
     }
-    
     /// Returns: (`root`, `segments_without_last`, `last_segment`)
     /// `last_segment` will only be None if the path is a single root item
-    pub fn segments(&self) -> (bool, std::slice::Iter<TSpan>, Option<TSpan>) {
-        match self {
-            Self::Root(_) => (true, (&[]).iter(), None),
-            Self::Single(s) => (false, (&[]).iter(), Some(*s)),
-            Self::Path { starts_with_root, segments } => (
-                starts_with_root.is_some(),
-                if segments.is_empty() { &[] } else { &segments[..segments.len() - 1] }.iter(),
-                segments.last().cloned()
-            )
+    pub fn segments<'a>(&'a self, src: &'a str)
+    -> (Option<TSpan>, impl Iterator<Item = (&str, TSpan)>, Option<(&str, TSpan)>) {
+        let start_addr = src.as_ptr() as usize;
+
+        let s = &src[self.0.range()];
+
+        let mut split = s.split('.').map(move |segment| {
+            let trimmed = segment.trim();
+            let idx = (trimmed.as_ptr() as usize - start_addr) as u32;
+            (trimmed, TSpan::new(idx, idx + trimmed.len() as u32 - 1))
+        }).peekable();
+        let first = split.peek().cloned();
+        let last = split.next_back().unwrap();
+        if let Some(("root", first_span)) = first {
+            split.next();
+            let last = if last.0 == "root" { None } else { Some(last) };
+            (Some(first_span), split, last)
+        } else {
+            (None, split, Some(last))
         }
     }
 
     pub fn span(&self) -> TSpan {
-        match self {
-            IdentPath::Root(start) => TSpan::new(*start, *start + 3),
-            IdentPath::Single(span) => *span,
-            IdentPath::Path { starts_with_root, segments } => if let Some(start) = starts_with_root {
-                let end = if let Some(last) = segments.last() {
-                    last.end
-                } else {
-                    *start + 3
-                };
-                TSpan::new(*start, end)
-            } else {
-                let first = segments.first().expect("Path should have at least one segment here");
-                let last = segments.last().unwrap();
-                TSpan::new(first.start, last.end)
-            }
-        }
+        self.0
     }
 }
 /*
@@ -313,15 +359,15 @@ impl fmt::Display for IdentPath {
 pub enum UnresolvedType {
     Primitive(Primitive, TSpan),
     Unresolved(IdentPath),
-    Pointer(Box<UnresolvedType>, u32),
+    Pointer(Box<(UnresolvedType, u32)>),
     Infer(u32),
 }
 impl UnresolvedType {
-    pub fn span(&self) -> TSpan {
+    pub fn span(&self, expr_builder: &ExprBuilder) -> TSpan {
         match self {
             UnresolvedType::Primitive(_, span) => *span,
             UnresolvedType::Unresolved(path) => path.span(),
-            UnresolvedType::Pointer(inner, start) => TSpan::new(*start, inner.span().end),
+            UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span(expr_builder).end),
             UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }

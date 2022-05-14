@@ -91,23 +91,23 @@ pub fn gen_locals(
         match unresolved {
             UnresolvedType::Primitive(p, _) => TypeRef::Base(BaseType::Prim(*p)),
             UnresolvedType::Unresolved(path) => {
-                let (root, segments, last) = path.segments();
+                let (root, segments, last) = path.segments(scope.whole_src());
                 let Some(last) = last else {
                     errors.emit_span(Error::TypeExpected, path.span().in_mod(scope.module));
                     return TypeRef::Invalid
                 };
-                let mut current_module = root.then_some(ModuleId::ROOT);
+                let mut current_module = root.map(|_| ModuleId::ROOT);
 
                 for segment in segments {
                     if let Some(module) = current_module {
-                        match scope.globals[module].get(scope.src(*segment)) {
+                        match scope.globals[module].get(segment.0) {
                             Some(Symbol::Module(id)) => current_module = Some(*id),
                             Some(_) => {
-                                errors.emit_span(Error::ModuleExpected, segment.in_mod(scope.module));
+                                errors.emit_span(Error::ModuleExpected, segment.1.in_mod(scope.module));
                                 return TypeRef::Invalid
                             }
                             None => {
-                                errors.emit_span(Error::UnknownIdent, segment.in_mod(scope.module));
+                                errors.emit_span(Error::UnknownIdent, segment.1.in_mod(scope.module));
                                 return TypeRef::Invalid
                             }
                         }
@@ -123,28 +123,30 @@ pub fn gen_locals(
                         TypeRef::Invalid
                     }
                 };
-                let last_str = &scope.ast.sources()[scope.module.idx()].0[last.range()];
+                let last_str = last.0;
                 if let Some(module) = current_module {
                     let Some(symbol) = scope.globals[module].get(last_str) else {
-                        errors.emit_span(Error::UnknownIdent, last.in_mod(scope.module));
+                        errors.emit_span(Error::UnknownIdent, last.1.in_mod(scope.module));
                         return TypeRef::Invalid;
                     };
-                    symbol_to_ty(symbol, last)
+                    symbol_to_ty(symbol, last.1)
                 } else if let Some(symbol) = symbols.get(last_str) {
-                    symbol_to_ty(symbol, last)
+                    symbol_to_ty(symbol, last.1)
                 } else if let Some(def) = defs.get(last_str) {
                     if let ast::Definition::Struct(struct_) = def {
+                        // borrow last_str again seperately for the borrow checker
+                        let last_str = &scope.ast.sources[scope.module.idx()].0[last.1.range()];
                         gen_struct(last_str, struct_, symbols, defs, scope, errors)
                     } else {
-                        errors.emit_span(Error::TypeExpected, last.in_mod(scope.module));
+                        errors.emit_span(Error::TypeExpected, last.1.in_mod(scope.module));
                         TypeRef::Invalid
                     }
                 } else {
-                    errors.emit_span(Error::UnknownIdent, last.in_mod(scope.module));
+                    errors.emit_span(Error::UnknownIdent, last.1.in_mod(scope.module));
                     TypeRef::Invalid
                 }
             }
-            UnresolvedType::Pointer(inner, _) => {
+            UnresolvedType::Pointer(box (inner, _)) => {
                 ty(inner, symbols, defs, scope, errors)
             }
             UnresolvedType::Infer(start) => {
@@ -282,21 +284,21 @@ fn resolve_global_path(
     errors: &mut Errors
 ) -> Option<Symbol> {
     let path_module = module;
-    let (root, segments, last) = path.segments();
+    let (root, segments, last) = path.segments(ast.src(module).0);
     let Some(last) = last else {
         errors.emit_span(Error::CantUseRootPath, path.span().in_mod(module));
         return None;
     };
-    let mut module = if root { ModuleId::ROOT } else { module };
+    let mut module = if root.is_some() { ModuleId::ROOT } else { module };
     // handle all but the last path segments to go to the correct module
     for segment in segments {
-        let name = &ast.sources[path_module.idx()].0[segment.range()];
-        if !update_path_module(ast, name, Span::new(segment.start, segment.end, path_module), &mut module, errors) {
+        let name = &ast.sources[path_module.idx()].0[segment.1.range()];
+        if !update_path_module(ast, name, Span::new(segment.1.start, segment.1.end, path_module), &mut module, errors) {
             return None
         }
     }
-    let last_str = &ast.sources[path_module.idx()].0[last.range()];
-    resolve_in_module(ctx, ast, symbols, module, last, last_str, errors)
+    let last_str = &ast.sources[path_module.idx()].0[last.1.range()];
+    resolve_in_module(ctx, ast, symbols, module, last.1, last_str, errors)
 }
 
 fn resolve(
@@ -311,34 +313,37 @@ fn resolve(
     match unresolved {
         crate::ast::UnresolvedType::Primitive(p, _) => TypeRef::Base(BaseType::Prim(*p)),
         crate::ast::UnresolvedType::Unresolved(path) => {
-            let (root, segments, last) = path.segments();
+            let (root, segments, last) = path.segments(src);
             let Some(last) = last else {
                 errors.emit_span(Error::TypeExpected, path.span().in_mod(path_module));
                 return TypeRef::Invalid;
             };
-            let mut module = if root { ModuleId::ROOT } else { path_module };
+            let mut module = if root.is_some() { ModuleId::ROOT } else { path_module };
             for segment in segments {
-                let name = &src[segment.range()];
-                if !update_path_module(ast, name, segment.in_mod(path_module), &mut module, errors) {
+                let name = &src[segment.1.range()];
+                if !update_path_module(ast, name, segment.1.in_mod(path_module), &mut module, errors) {
                     return TypeRef::Invalid
                 };
             }
-            let last_str = &ast.sources()[module.idx()].0[last.range()];
-            match resolve_in_module(ctx, ast, symbols, module, last, last_str, errors) {
+            let last_str = &ast.sources()[module.idx()].0[last.1.range()];
+            match resolve_in_module(ctx, ast, symbols, module, last.1, last_str, errors) {
                 Some(Symbol::Type(ty)) => TypeRef::Base(BaseType::Id(ty)),
                 Some(_) => {
-                    errors.emit_span(Error::TypeExpected, last.in_mod(module));
+                    errors.emit_span(Error::TypeExpected, last.1.in_mod(module));
                     TypeRef::Invalid
                 }
                 None => TypeRef::Invalid // an error was already emitted in this case
             }
         }
-        UnresolvedType::Pointer(inner, _) => {
+        UnresolvedType::Pointer(box (inner, _)) => {
             match resolve(ctx, ast, symbols, path_module, inner, errors) {
                 TypeRef::Base(inner) => TypeRef::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
                 TypeRef::Pointer { count, inner } => { 
                     if count.get() == u8::MAX {
-                        errors.emit_span(Error::TooLargePointer, unresolved.span().in_mod(path_module));
+                        errors.emit_span(
+                            Error::TooLargePointer,
+                            unresolved.span(&ast.expr_builder).in_mod(path_module)
+                        );
                     }
                     TypeRef::Pointer { count: count.saturating_add(1), inner }
                 }

@@ -10,6 +10,7 @@ lsp = ["lsp-server", "lsp-types", "serde", "serde_derive", "serde_json", "crossb
 debug_types = []
 
 [dependencies]
+eye-derive = { path = "eye-derive" }
 colored = "2.0.0"
 clap = { version = "3.1.6", features = ["derive"] }
 llvm-sys = { version = "140.0.2", optional = true }

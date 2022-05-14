@@ -203,8 +203,8 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.toks.step_expect(TokenType::RBrace)?.end;
-        items.shrink_to_fit();
-        defs.shrink_to_fit();
+        let items = self.ast.extra(&items);
+        let defs = self.ast.expr_builder.defs(defs);
         
         Ok(self.ast.add_expr(Expr::Block { span: TSpan::new(start, end), items, defs }))
     }
@@ -220,13 +220,13 @@ impl<'a> Parser<'a> {
                 let use_end = use_tok.end;
                 
                 let path = self.parse_path()?;
-                let last = path.segments().2
+                let last = path.segments(&self.src).2
                     .ok_or(CompileError {
                         err: Error::CantUseRootPath,
                         span: Span::new(use_start, use_end, self.toks.module)
                     })?;
                 Item::Definition(
-                    self.src[last.start as usize..=last.end as usize].to_owned(),
+                    last.0.to_owned(),
                     Definition::Use(path)
                 )
             }
@@ -353,26 +353,30 @@ impl<'a> Parser<'a> {
                     Some(TokenType::Colon) => {
                         self.toks.step_assert(TokenType::Colon);
                         let ty = self.parse_type()?;
-                        let val = self.toks.step_if(TokenType::Equals)
-                            .is_some()
-                            .then(|| self.parse_expr()).transpose()?;
-                        Item::Expr(self.ast.add_expr(Expr::Declare {
-                            name: ident_span,
-                            end: self.toks.previous().unwrap().end,
-                            annotated_ty: ty,
-                            val
-                        }))
+                        Item::Expr(if self.toks.step_if(TokenType::Equals).is_some() {
+                            let val = self.parse_expr()?;
+                            self.ast.add_expr(Expr::DeclareWithVal {
+                                name: ident_span,
+                                annotated_ty: ty,
+                                val
+                            })
+                        } else {
+                            self.ast.add_expr(Expr::Declare {
+                                name: ident_span,
+                                annotated_ty: ty,
+                                end: self.toks.previous().unwrap().end
+                            })
+                        })
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
                         let decl_start = self.toks.step_assert(TokenType::Declare).start;
                         let val = self.parse_expr()?;
                         
-                        Item::Expr(self.ast.add_expr(Expr::Declare {
+                        Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
                             name: ident_span,
-                            end: self.toks.current_end_pos(),
                             annotated_ty: UnresolvedType::Infer(decl_start),
-                            val: Some(val)
+                            val
                         }))
                     }
                     _ => {
@@ -404,6 +408,23 @@ impl<'a> Parser<'a> {
             TokenType::LBrace => {
                 let block = self.parse_block_from_lbrace(start)?;
                 return self.parse_factor_postfix(block, true);
+            },
+            TokenType::LBracket => {
+                let mut elems = Vec::new();
+                let closing = loop {
+                    if let Some(r) = self.toks.step_if(TokenType::RBracket) { break r; }
+                    elems.push(self.parse_expr()?);
+                    let next = self.toks.step()?;
+                    match next.ty {
+                        TokenType::RBracket => break next,
+                        TokenType::Comma => (),
+                        _ => return Err(CompileError::new(
+                            Error::UnexpectedToken,
+                            next.span().in_mod(self.toks.module)
+                        ))
+                    }
+                };
+                Expr::Array(TSpan::new(start, closing.end), elems)
             },
             TokenType::Minus => Expr::UnOp(start, UnOp::Neg, self.parse_factor(false)?),
             TokenType::Bang => Expr::UnOp(start, UnOp::Not, self.parse_factor(false)?),
@@ -439,11 +460,13 @@ impl<'a> Parser<'a> {
                     } else { None }
                 } else { None };
 
-                let end = self.toks.current_end_pos();
-
-                Expr::If { span: TSpan::new(start, end), cond, then, else_ }
+                if let Some(else_) = else_ {
+                    Expr::IfElse { start, cond, then, else_ }
+                } else {
+                    Expr::If { start, cond, then }
+                }
             },
-            TokenType::Keyword(Keyword::While) => Expr::While(Box::new(self.parse_while_from_cond(start)?)),
+            TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(start)?,
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let prim_span = first.span();
                 let inner = self.parse_factor(false)?;
@@ -484,8 +507,8 @@ impl<'a> Parser<'a> {
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
-                    let span = self.toks.step_expect(TokenType::Ident)?.span();
-                    Expr::MemberAccess(expr, span)
+                    let name = self.toks.step_expect(TokenType::Ident)?.span();
+                    Expr::MemberAccess { left: expr, name }
                 }
                 Some(TokenType::Caret) => {
                     self.toks.step_assert(TokenType::Caret);
@@ -523,27 +546,23 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(&mut self, start: u32) -> EyeResult<While> {
+    fn parse_while_from_cond(&mut self, start: u32) -> EyeResult<Expr> {
         let cond = self.parse_expr()?;
         let body = self.parse_block_or_expr()?;
-        Ok(While { cond, body, span: TSpan::new(start, self.toks.current_end_pos()) })
+        Ok(Expr::While { start, cond, body })
     }
     
     fn parse_path(&mut self) -> EyeResult<IdentPath> {
         let first = self.toks.step_expect([TokenType::Keyword(Keyword::Root), TokenType::Ident])?;
-        let path_start = match first.ty {
-            TokenType::Keyword(Keyword::Root) => IdentPath::Root(first.start),
-            TokenType::Ident => IdentPath::Single(first.span()),
-            _ => unreachable!()
-        };
-        self.parse_rest_of_path(path_start)
+        let (s, e) = (first.start, first.end);
+        self.parse_rest_of_path(s, e)
     }
 
-    fn parse_rest_of_path(&mut self, mut path: IdentPath) -> EyeResult<IdentPath> {
+    fn parse_rest_of_path(&mut self, start: u32, mut end: u32) -> EyeResult<IdentPath> {
         while self.toks.step_if(TokenType::Dot).is_some() {
-            path.push(self.toks.step_expect(TokenType::Ident)?.span());
+            end = self.toks.step_expect(TokenType::Ident)?.end;
         }
-        Ok(path)
+        Ok(IdentPath::new(TSpan::new(start, end)))
     }
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {
@@ -551,14 +570,14 @@ impl<'a> Parser<'a> {
         match_or_unexpected!(type_tok,
             self.toks.module,
             TokenType::Keyword(Keyword::Root) => {
-                let start = type_tok.start;
+                let (s, e) = (type_tok.start, type_tok.end);
                 Ok(UnresolvedType::Unresolved(
-                    self.parse_rest_of_path(IdentPath::Root(start))?
+                    self.parse_rest_of_path(s, e)?
                 ))
             },
             TokenType::Ident => {
-                let span = type_tok.span();
-                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(IdentPath::Single(span))?))
+                let (s, e) = (type_tok.start, type_tok.end);
+                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(s, e)?))
             },
             TokenType::Keyword(Keyword::Primitive(primitive)) => {
                 Ok(UnresolvedType::Primitive(primitive, type_tok.span()))
@@ -570,7 +589,7 @@ impl<'a> Parser<'a> {
             },
             TokenType::Star => {
                 let start = type_tok.start;
-                Ok(UnresolvedType::Pointer(Box::new(self.parse_type()?), start))
+                Ok(UnresolvedType::Pointer(Box::new((self.parse_type()?, start))))
             },
             TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
         )

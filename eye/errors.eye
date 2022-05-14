@@ -16,9 +16,9 @@ InvalidTypes :: {
 
 # invalid character group with just spaces and newlines
 
-µ~∑®⁄¨Ω   µ∆
+µ∑®⁄¨Ω   µ∆
    º∂∑∑€®
-ƒ~ª©ƒ∂∂€®øπå√∫
+ƒª©ƒ∂∂€®øπå√∫
 
 fn test(x u32, y u33, z u34, valid InvalidTypes) {
     print("Test Function"); # oh no, a semicolon

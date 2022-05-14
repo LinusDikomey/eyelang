@@ -1,5 +1,3 @@
-# This doesn't work right now because string equality is not implemented
-
 fn main {
     mode := std.input("Enter operation: ")
     a := std.parse_int(std.input("First number: "))

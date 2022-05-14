@@ -1,6 +1,6 @@
 #!/bin/bash
 
-testing/run_examples > testing/output.txt
+testing/run_examples | tee testing/output.txt
 if [ "$(cat testing/expected_output.txt)" == "$(cat testing/output.txt)" ]; then
     echo "Tests OK"
 else
