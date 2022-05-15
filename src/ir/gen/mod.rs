@@ -39,8 +39,8 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         .funcs
         .into_iter()
         .map(|func| match func {
-            FunctionOrHeader::Header(_) => panic!("Function was generated"),
-            FunctionOrHeader::Func(func) => func.finalize(),
+            FunctionOrHeader::Header(_) => panic!("Function was not generated"),
+            FunctionOrHeader::Func(func) => func,
         })
         .collect();
 
@@ -60,7 +60,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
             name: "MainModule".to_owned(),
             funcs,
             main,
-            types: ctx.types.into_iter().map(TypeDef::finalize).collect(),
+            types: ctx.types,
         },
         globals
     ))
@@ -111,7 +111,7 @@ fn gen_func_bodies(
             );
             //TODO: refactor to branch return analysis
             if body.is_block() {
-                if header.return_type == TypeRef::Base(BaseType::Prim(Primitive::Unit)) {
+                if header.return_type == Type::Prim(Primitive::Unit) {
                     builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
                 }
             } else {
@@ -148,6 +148,10 @@ impl<'a> ScopeInfo<'a> {
     }
 
     fn resolve_local(&self, name: &str) -> Result<Resolved, Error> {
+        self.resolve_local_recursive(name, 0)
+    }
+
+    fn resolve_local_recursive(&self, name: &str, depth: usize) -> Result<Resolved, Error> {
         //TODO: check if this is recursing with some kind of stack and return recursive type def error.
         if let Some(symbol) = self.symbols.get(name) {
             Ok(match symbol {
@@ -158,7 +162,7 @@ impl<'a> ScopeInfo<'a> {
             })
         } else {
             self.parent()
-                .map(|parent| parent.resolve_local(name))
+                .map(|parent| parent.resolve_local_recursive(name, depth + 1))
                 .transpose()?
                 .ok_or(Error::UnknownIdent)
         }
@@ -172,7 +176,7 @@ pub enum FunctionOrHeader {
 impl FunctionOrHeader {
     fn header(&self) -> &FunctionHeader {
         match self {
-            Self::Func(f) => f.header(),
+            Self::Func(f) => &f.header,
             Self::Header(h) => h,
         }
     }
@@ -199,6 +203,16 @@ enum Resolved {
     Func(SymbolKey),
     Type(SymbolKey),
     Module(ModuleId),
+}
+impl Resolved {
+    pub fn into_symbol(self) -> Option<Symbol> {
+        match self {
+            Resolved::Var(_, _) => None,
+            Resolved::Func(id) => Some(Symbol::Func(id)),
+            Resolved::Type(id) => Some(Symbol::Type(id)),
+            Resolved::Module(id) => Some(Symbol::Module(id)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -271,9 +285,6 @@ impl<'s> Scope<'s> {
     pub fn src(&self, span: TSpan) -> &str {
         &self.ast.sources()[self.module.idx()].0[span.range()]
     }
-    pub fn whole_src(&self) -> &str {
-        &self.ast.sources()[self.module.idx()].0
-    }
     pub fn child(&mut self,symbols: HashMap<String, Symbol>) -> Scope {
         Scope {
             ctx: &mut *self.ctx,
@@ -287,7 +298,7 @@ impl<'s> Scope<'s> {
         }
     }
 
-    fn resolve(&mut self, _types: &mut TypeTable, name: &str) -> Result<Resolved, Error> {
+    fn resolve(&self, name: &str) -> Result<Resolved, Error> {
         self.info.resolve_local(name)
     }
 
@@ -337,6 +348,11 @@ impl<'s> Scope<'s> {
             ast::UnresolvedType::Pointer(box (inner, _)) => {
                 let inner = self.resolve_type(inner, types)?;
                 Ok(TypeInfo::Pointer(types.add(inner)))
+            }
+            ast::UnresolvedType::Array(box (inner, _, count)) => {
+                let inner = self.resolve_type(inner, types)?;
+                let inner = types.add(inner);
+                Ok(TypeInfo::Array(*count, inner))
             }
             ast::UnresolvedType::Infer(_) => Ok(TypeInfo::Unknown)
         }
@@ -550,7 +566,7 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::Variable(span) => {
                 let name = &self.ast.sources[self.module.idx()].0[span.range()];
-                match self.resolve(&mut ir.types, name) {
+                match self.resolve(name) {
                     Ok(resolved) => match resolved {
                         Resolved::Var(ty, var) => {
                             ir.types.merge(ty, expected, errors, self.module, *span);
@@ -567,7 +583,20 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::Expr::Array(_, _) => todo!(),
+            ast::Expr::Array(span, elems) => {
+                let elems = &self.ast.expr_builder[*elems];
+                let elem_ty = ir.types.add(TypeInfo::Unknown);
+                let arr_ty = TypeInfo::Array(Some(elems.len() as u32), elem_ty);
+                ir.types.specify(expected, arr_ty, errors, span.in_mod(self.module));
+                //let arr = ir.add(Data { ty: expected }, Tag::Decl, expected);
+                let arr = get_var(ir);
+                for (i, elem) in elems.iter().enumerate() {
+                    let elem_val = self.reduce_expr_val_spanned(errors, ir, &self.ast[*elem], elem_ty, ret, *span);
+                    let elem_ptr = ir.add(Data { member: (arr, i as u32) }, Tag::Member, elem_ty);
+                    ir.add_untyped(Tag::Store, Data { bin_op: (elem_ptr, elem_val) });
+                }
+                return ExprResult::Stored(arr)
+            },
             ast::Expr::If { start: _, cond, then } => {
                 let after_block = self.gen_if_then(ir, errors, *cond, ret);
 
@@ -621,6 +650,7 @@ impl<'s> Scope<'s> {
                 Ref::val(RefVal::Unit)
             }
             ast::Expr::FunctionCall { func, args, end: _ } => {
+                let args = &self.ast.expr_builder[*args];
                 let func_ty = ir.types.add(TypeInfo::Unknown);
                 match self.reduce_expr(errors, ir, &self.ast[*func], func_ty, ret) {
                     ExprResult::Func(key) => {
@@ -636,7 +666,7 @@ impl<'s> Scope<'s> {
                             errors.emit_span(Error::InvalidArgCount, expr.span(self.ast).in_mod(self.module));
                             Ref::val(RefVal::Undef)
                         } else {
-                            let params = header.params.iter().map(|(_, ty)| Some(*ty));
+                            let params = header.params.iter().map(|(_, ty)| Some(ty.clone()));
                             let params = if header.varargs {
                                 params
                                     .chain(std::iter::repeat(None))
@@ -948,7 +978,8 @@ impl<'s> Scope<'s> {
         ExprResult::Val(r)
     }
 
-    fn gen_if_then(&mut self, ir: &mut IrBuilder, errors: &mut Errors, cond: ExprRef, ret: TypeTableIndex) -> BlockIndex {
+    fn gen_if_then(&mut self, ir: &mut IrBuilder, errors: &mut Errors, cond: ExprRef, ret: TypeTableIndex)
+    -> BlockIndex {
         let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
         let cond = self.reduce_expr_idx_val(errors, ir, cond, b, ret);
         let then_block = ir.create_block();

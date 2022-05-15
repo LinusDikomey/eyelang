@@ -100,6 +100,7 @@ impl<'a> Lexer<'a> {
                     }
                 },
                 ',' => TokenType::Comma,
+                ';' => TokenType::Semicolon,
                 '.' => {
                     if let Some('.') = self.peek() {
                         self.step();

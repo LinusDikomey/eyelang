@@ -199,7 +199,9 @@ pub enum Error {
     CantTakeRef,
     CantDeref,
     CantUseRootPath,
-    InferredTypeNotAllowedHere
+    InferredTypeNotAllowedHere,
+    ArrayTooLarge,
+    ArraySizeCantBeInferredHere
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

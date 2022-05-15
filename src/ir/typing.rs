@@ -95,11 +95,11 @@ pub struct FinalTypeTable {
     types: Vec<Type>
 }
 impl FinalTypeTable {
-    pub fn get(&self, idx: TypeTableIndex) -> Type {
+    pub fn get(&self, idx: TypeTableIndex) -> &Type {
         assert!(idx.0 != u32::MAX, "Tried to get none-type table index");
         // for generic types this will get a bit more complicated but the base
         // principle of indexing into the Vec should stay
-        self.types[idx.idx()]
+        &self.types[idx.idx()]
     }
 }
 impl Index<TypeTableIndex> for FinalTypeTable {
@@ -131,6 +131,7 @@ pub enum TypeInfo {
     Primitive(Primitive),
     Resolved(SymbolKey),
     Pointer(TypeTableIndex),
+    Array(Option<u32>, TypeTableIndex),
     Invalid,
 }
 impl TypeInfo {
@@ -139,14 +140,18 @@ impl TypeInfo {
     }
     fn finalize(self, types: &TypeTable) -> Type {
         match self {
-            Self::Unknown | Self::Invalid => Type::Base(BaseType::Prim(Primitive::Unit)),
-            Self::Int => Type::Base(BaseType::Prim(Primitive::I32)),
-            Self::Float => Type::Base(BaseType::Prim(Primitive::F32)),
-            Self::Primitive(p) => Type::Base(BaseType::Prim(p)),
-            Self::Resolved(id) => Type::Base(BaseType::Id(id)),
-            Self::Pointer(inner) => {
+            Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
+            Self::Int => Type::Prim(Primitive::I32),
+            Self::Float => Type::Prim(Primitive::F32),
+            Self::Primitive(p) => Type::Prim(p),
+            Self::Resolved(id) => Type::Id(id),
+            Self::Pointer(inner) => Type::Pointer(Box::new(types.get_type(inner).finalize(types))),
+            Self::Array(size, inner) => {
                 let inner = types.get_type(inner).finalize(types);
-                inner.pointer_to().expect("A pointer was too large. TODO: handle this properly")
+                size.map_or(
+                    Type::Prim(Primitive::Unit),
+                    |size| Type::Array(Box::new((inner, size)))
+                )
             }
         }
     }
@@ -197,10 +202,27 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
             match other {
                 Pointer(other_inner) => {
                     let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
-                    //TODO: if the type hasn't changed, no new type has to be added
                     types.update_type(inner, new_inner);
                     types.point_to(other_inner, inner);
                     Ok(Pointer(inner))
+                }
+                _ => Err(Error::MismatchedType)
+            }
+        }
+        Array(size, inner) => {
+            match other {
+                Array(other_size, other_inner) => {
+                    let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+                    types.update_type(inner, new_inner);
+                    types.point_to(other_inner, inner);
+                    
+                    let new_size = match (size, other_size) {
+                        (Some(a), Some(b)) if a == b => Some(a),
+                        (Some(size), None) | (None, Some(size)) => Some(size),
+                        (None, None) => None,
+                        _ => return Err(Error::MismatchedType)
+                    };
+                    Ok(Array(new_size, inner))
                 }
                 _ => Err(Error::MismatchedType)
             }

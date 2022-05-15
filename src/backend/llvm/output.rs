@@ -12,7 +12,6 @@ pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &s
         target_machine::LLVMGetDefaultTargetTriple()
     };
 
-    //TODO: are all of these needed?
     target::LLVM_InitializeAllTargetInfos();
     target::LLVM_InitializeAllTargets();
     target::LLVM_InitializeAllTargetMCs();

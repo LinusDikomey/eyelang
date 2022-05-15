@@ -5,6 +5,6 @@ if [ "$(cat testing/expected_output.txt)" == "$(cat testing/output.txt)" ]; then
     echo "Tests OK"
 else
     echo "Test failed. The outputs differ"
-    diff testing/expected_output.txt testing/output.txt
+    delta testing/expected_output.txt testing/output.txt
 fi
     

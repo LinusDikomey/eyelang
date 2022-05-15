@@ -32,6 +32,7 @@ pub enum TokenType {
     Colon,
     DoubleColon,
     Comma,
+    Semicolon,
     Dot,
     TripleDot,
 

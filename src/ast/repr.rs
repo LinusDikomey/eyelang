@@ -193,6 +193,7 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Unit(_) => c.write_add("()"),
             Self::Variable(span) => c.write_add(c.src(*span)),
             Self::Array(_, elems) => {
+                let elems = &ast.expr_builder[*elems];
                 c.char('[');
                 let mut elems = elems.iter().cloned();
                 if let Some(first) = elems.next() {
@@ -238,6 +239,7 @@ impl<C: Representer> Repr<C> for Expr {
                 body.repr(c);
             }
             Self::FunctionCall { func, args, end: _ } => {
+                let args = &ast.expr_builder[*args];
                 let func = &ast[*func];
                 func.repr(c);
                 c.write_add("(");
@@ -289,7 +291,7 @@ impl<C: Representer> Repr<C> for Expr {
 
 impl<R: Representer> Repr<R> for IdentPath {
     fn repr(&self, c: &R) {
-        let (root, iter, last) = self.segments(&c.whole_src());
+        let (root, iter, last) = self.segments(c.whole_src());
         let has_root = root.is_some();
         if has_root {
             c.write_add("root");
@@ -319,6 +321,17 @@ impl<R: Representer> Repr<R> for UnresolvedType {
             Self::Pointer(box (inner, _)) => {
                 c.char('*');
                 inner.repr(c);
+            }
+            Self::Array(box (inner, _, size)) => {
+                c.char('[');
+                inner.repr(c);
+                c.write_add("; ");
+                if let Some(size) = size {
+                    c.write_add(size.to_string());
+                } else {
+                    c.char('_');
+                }
+                c.char(']');
             }
             Self::Infer(_) => c.char('_')
         }

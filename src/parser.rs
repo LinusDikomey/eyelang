@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
                 let use_end = use_tok.end;
                 
                 let path = self.parse_path()?;
-                let last = path.segments(&self.src).2
+                let last = path.segments(self.src).2
                     .ok_or(CompileError {
                         err: Error::CantUseRootPath,
                         span: Span::new(use_start, use_end, self.toks.module)
@@ -424,7 +424,7 @@ impl<'a> Parser<'a> {
                         ))
                     }
                 };
-                Expr::Array(TSpan::new(start, closing.end), elems)
+                Expr::Array(TSpan::new(start, closing.end), self.ast.extra(&elems))
             },
             TokenType::Minus => Expr::UnOp(start, UnOp::Neg, self.parse_factor(false)?),
             TokenType::Bang => Expr::UnOp(start, UnOp::Not, self.parse_factor(false)?),
@@ -503,7 +503,7 @@ impl<'a> Parser<'a> {
                         }
                         Some(rparen) => rparen.end
                     };
-                    Expr::FunctionCall { func: expr, args, end }
+                    Expr::FunctionCall { func: expr, args: self.ast.extra(&args), end }
                 }
                 Some(TokenType::Dot) => {
                     self.toks.step().unwrap();
@@ -586,6 +586,28 @@ impl<'a> Parser<'a> {
                 let unit_span = type_tok.span();
                 self.toks.step_expect(TokenType::RParen)?;
                 Ok(UnresolvedType::Primitive(Primitive::Unit, unit_span))
+            },
+            TokenType::LBracket => {
+                let start = type_tok.start;
+                let elem_ty = self.parse_type()?;
+                self.toks.step_expect(TokenType::Semicolon)?;
+                let count = if self.toks.step_if(TokenType::Underscore).is_some() {
+                    None
+                } else {
+                    let int_span = self.toks.step_expect(TokenType::IntLiteral)?.span();
+                    match self.src[int_span.range()].parse::<u64>()
+                        .expect("Int Literal Error")
+                        .try_into() 
+                    {
+                        Ok(count) => Some(count),
+                        Err(_) => return Err(CompileError::new(
+                            Error::ArrayTooLarge,
+                            int_span.in_mod(self.toks.module)
+                        ))
+                    }
+                };
+                let end = self.toks.step_expect(TokenType::RBracket)?.end;
+                Ok(UnresolvedType::Array(Box::new((elem_ty, TSpan::new(start, end), count))))
             },
             TokenType::Star => {
                 let start = type_tok.start;

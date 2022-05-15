@@ -71,6 +71,13 @@ impl Index<Defs> for ExprBuilder {
         &self.defs[index.0 as usize]
     }
 }
+impl Index<ExprExtra> for ExprBuilder {
+    type Output = [ExprRef];
+
+    fn index(&self, index: ExprExtra) -> &Self::Output {
+        &self.extra[index.0 as usize .. index.0 as usize + index.1 as usize]
+    }
+}
 
 
 #[derive(Debug, Clone, Copy)]
@@ -191,7 +198,7 @@ pub enum Expr {
     Nested(TSpan, ExprRef),
     Unit(TSpan),
     Variable(TSpan),
-    Array(TSpan, Vec<ExprRef>),
+    Array(TSpan, ExprExtra),
     If {
         start: u32,
         cond: ExprRef,
@@ -208,7 +215,7 @@ pub enum Expr {
         cond: ExprRef,
         body: ExprRef
     },
-    FunctionCall { func: ExprRef, args: Vec<ExprRef>, end: u32 },
+    FunctionCall { func: ExprRef, args: ExprExtra, end: u32 },
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
     MemberAccess { left: ExprRef, name: TSpan },
@@ -271,7 +278,7 @@ pub struct TSpan {
 }
 impl TSpan {
     pub fn new(start: u32, end: u32) -> Self {
-        debug_assert!(start-1 <= end, "Invalid span constructed");
+        debug_assert!(start <= end+1, "Invalid span constructed");
         Self { start, end }
     }
     pub fn in_mod(self, module: ModuleId) -> crate::lexer::Span {
@@ -331,35 +338,13 @@ impl IdentPath {
         self.0
     }
 }
-/*
-impl fmt::Display for IdentPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Root => write!(f, "root"),
-            Self::Single(s) => write!(f, "{s}"),
-            Self::Path { starts_with_root, segments } => {
-                if *starts_with_root {
-                    write!(f, "root")?;
-                    if !segments.is_empty() {
-                        write!(f, ".")?;
-                    }
-                }
-                for (i, segment) in segments.iter().enumerate() {
-                    if i != 0 { write!(f, ".")?; }
-                    write!(f, "{segment}")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-*/
 
 #[derive(Debug, Clone)]
 pub enum UnresolvedType {
     Primitive(Primitive, TSpan),
     Unresolved(IdentPath),
     Pointer(Box<(UnresolvedType, u32)>),
+    Array(Box<(UnresolvedType, TSpan, Option<u32>)>),
     Infer(u32),
 }
 impl UnresolvedType {
@@ -368,19 +353,8 @@ impl UnresolvedType {
             UnresolvedType::Primitive(_, span) => *span,
             UnresolvedType::Unresolved(path) => path.span(),
             UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span(expr_builder).end),
+            UnresolvedType::Array(box (_, span, _)) => *span,
             UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }
 }
-/*
-impl fmt::Display for UnresolvedType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            UnresolvedType::Primitive(p) => p.fmt(f),
-            UnresolvedType::Unresolved(path) => write!(f, "{path}"),
-            UnresolvedType::Pointer(inner) => write!(f, "*{inner}"),
-            UnresolvedType::Infer => write!(f, "_")
-        }
-    }
-}
-*/

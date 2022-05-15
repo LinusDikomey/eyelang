@@ -1,6 +1,6 @@
-use std::{fmt, num::NonZeroU8};
+use std::fmt;
 use colored::{Colorize, ColoredString};
-use crate::{types::Primitive, error::Error};
+use crate::types::Primitive;
 use typing::FinalTypeTable;
 
 mod gen;
@@ -8,61 +8,49 @@ mod typing;
 pub use gen::Symbol;
 pub use gen::reduce;
 
-use self::typing::{TypeInfo, TypeTable};
+use self::typing::TypeInfo;
+use self::typing::TypeTable;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BaseType {
-    Prim(Primitive),
-    Id(SymbolKey)
-}
-impl fmt::Display for BaseType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BaseType::Prim(p) => write!(f, "{p}"),
-            BaseType::Id(id) => write!(f, "{{t{}}}", id.idx()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-    Base(BaseType),
-    Pointer {
-        count: NonZeroU8,
-        inner: BaseType
-    }
+    Prim(Primitive),
+    Id(SymbolKey),
+    Pointer(Box<Type>),
+    Array(Box<(Type, u32)>),
+    Invalid
 }
 impl Type {
-    pub fn pointer_to(self) -> Result<Self, Error> {
-        Ok(match self {
-            Self::Base(inner) => Self::Pointer { count: unsafe { NonZeroU8::new_unchecked(1) }, inner },
-            Self::Pointer { count, inner } => {
-                if count.get() == u8::MAX {
-                    return Err(Error::TooLargePointer);
-                }
-                Self::Pointer { count: unsafe { count.unchecked_add(1) }, inner }
-            }
-        })
+    pub fn pointer_to(self) -> Self {
+        Self::Pointer(Box::new(self))
     }
-    pub fn pointee(self) -> Option<Self> {
+    pub fn into_info(&self, types: &mut TypeTable) -> TypeInfo {
         match self {
-            Type::Base(_) => None,
-            Type::Pointer { count, inner } if count.get() == 1 => Some(Type::Base(inner)),
-            Type::Pointer { count, inner } => Some(Type::Pointer {
-                count: NonZeroU8::new(count.get() - 1).unwrap(),
-                inner
-            })
+            Self::Prim(p) => TypeInfo::Primitive(*p),
+            Self::Id(id) => TypeInfo::Resolved(*id),
+            Self::Pointer(inner) => {
+                let inner = inner.into_info(types);
+                TypeInfo::Pointer(types.add(inner))
+            }
+            Self::Array(box (ty, count)) => {
+                let inner = ty.into_info(types);
+                TypeInfo::Array(Some(*count), types.add(inner))
+            }
+            Self::Invalid => unreachable!()
         }
     }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Base(base) => write!(f, "{base}"),
-            Self::Pointer { count, inner } => write!(f, "{}{inner}", "*".repeat(count.get() as usize))
+            Self::Prim(p) => write!(f, "{p}"),
+            Self::Id(id) => write!(f, "t{}", id.idx()),
+            Self::Pointer(inner) => write!(f, "*{inner}"),
+            Self::Array(box (ty, count)) => write!(f, "[{}; {}]", ty, count),
+            Self::Invalid => write!(f, "[invalid]"),
         }
     }
 }
+
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
@@ -77,30 +65,16 @@ pub struct Function {
     pub header: FunctionHeader,
     pub ir: Option<FunctionIr>
 }
-impl Function {
-    pub fn header(&self) -> &FunctionHeader { &self.header }
-    pub fn finalize(self) -> FinalFunction {
-        FinalFunction {
-            name: self.name,
-            params: self.header.params.into_iter()
-                .map(|(name, ty)| (name, ty.finalize()))
-                .collect(),
-                varargs: self.header.varargs,
-                return_type: self.header.return_type.finalize(),
-                ir: self.ir
-            }
-    }
-}
-impl fmt::Display for FinalFunction {
+impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(")?;
-        for (i, (name, param)) in self.params.iter().enumerate() {
+        for (i, (name, param)) in self.header.params.iter().enumerate() {
             if i != 0 {
                 write!(f, ", ")?;
             }
             write!(f, "{name} {param}")?;
         }
-        writeln!(f, ") -> {}", self.return_type)?;
+        writeln!(f, ") -> {}", self.header.return_type)?;
 
         if let Some(ir) = &self.ir {
             for (i, inst) in ir.inst.iter().enumerate() {
@@ -124,6 +98,7 @@ impl fmt::Display for FinalFunction {
     }
 }
 
+/*
 #[derive(Debug)]
 pub struct FinalFunction {
     pub name: String,
@@ -132,6 +107,7 @@ pub struct FinalFunction {
     pub return_type: Type,
     pub ir: Option<FunctionIr>
 }
+*/
 
 #[derive(Debug)]
 pub struct FunctionIr {
@@ -143,30 +119,14 @@ pub struct FunctionIr {
 
 #[derive(Debug, Clone)]
 pub struct FunctionHeader {
-    pub name: String,
-    pub params: Vec<(String, TypeRef)>,
-    //pub vararg: Option<(String, TypeRef)>,
+    pub params: Vec<(String, Type)>,
     pub varargs: bool,
-    pub return_type: TypeRef
+    pub return_type: Type
 }
 
 #[derive(Debug)]
 pub enum TypeDef {
     Struct(Struct)
-}
-impl TypeDef {
-    pub fn finalize(self) -> FinalTypeDef {
-        match self {
-            Self::Struct(struct_) => {
-                FinalTypeDef::Struct(FinalStruct {
-                    members: struct_.members.into_iter()
-                        .map(|(name, member)| (name, member.finalize()))
-                        .collect(),
-                    name: struct_.name
-                })
-            }
-        }
-    }
 }
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -174,14 +134,9 @@ impl fmt::Display for TypeDef {
         write!(f, "{struct_}")
     }
 }
-
-pub enum FinalTypeDef {
-    Struct(FinalStruct)
-}
-
 #[derive(Debug, Clone)]
 pub struct Struct {
-    pub members: Vec<(String, TypeRef)>,
+    pub members: Vec<(String, Type)>,
     pub name: String
 }
 impl fmt::Display for Struct {
@@ -206,66 +161,15 @@ impl fmt::Display for FinalStruct {
         Ok(())
     }
 }
-
-//TODO: fit type ref into u64 by offsetting symbol key references by the amount of primitives
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TypeRef {
-    Base(BaseType),
-    Pointer {
-        count: NonZeroU8,
-        inner: BaseType
-    },
-    Invalid,
-}
-impl TypeRef {
-    pub fn into_info(self, types: &mut TypeTable) -> TypeInfo {
-        let base_from = |base| {
-            match base {
-                BaseType::Prim(p) => TypeInfo::Primitive(p),
-                BaseType::Id(id) => TypeInfo::Resolved(id),
-            }
-        };
-        match self {
-            TypeRef::Base(base) => base_from(base),
-            TypeRef::Pointer { count, inner } => {
-                let mut current = base_from(inner);
-                for _ in 0..count.get() {
-                    current = TypeInfo::Pointer(types.add(current));
-                }
-                current
-            }
-            TypeRef::Invalid => TypeInfo::Invalid,
-        }
-    }
-    
-    pub fn finalize(self) -> Type {
-        match self {
-            Self::Base(base) => Type::Base(base),
-            Self::Pointer { count, inner } => Type::Pointer { count, inner },
-            Self::Invalid => 
-                panic!("Tried to finalize invalid type. Finalization shouldn't happen with errors present"),
-        }
-    }
-}
-impl fmt::Display for TypeRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeRef::Base(base) => write!(f, "{base}"),
-            TypeRef::Pointer { count, inner } => write!(f, "{}{inner}", "*".repeat(count.get() as usize)),
-            TypeRef::Invalid => write!(f, "Invalid")
-        }
-    }
-}
-
 pub struct Module {
     pub name: String,
-    pub funcs: Vec<FinalFunction>,
-    pub types: Vec<FinalTypeDef>,
+    pub funcs: Vec<Function>,
+    pub types: Vec<TypeDef>,
     pub main: Option<SymbolKey>
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for FinalTypeDef::Struct(struct_) in &self.types {
+        for TypeDef::Struct(struct_) in &self.types {
             let name = &struct_.name;
             writeln!(f, "{begin} {name}\n{}{end} {name}\n",
                 struct_,

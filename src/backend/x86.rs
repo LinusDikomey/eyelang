@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufWriter, Write}, fmt, process::Command, path::Path};
 use std::fmt::Write as _;
 
-use crate::{ir::{self, Instruction, Tag, SymbolKey, Ref, BaseType}, types::Primitive};
+use crate::{ir::{self, Instruction, Tag, SymbolKey, Ref}, types::Primitive};
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -303,7 +303,7 @@ const CALL_REGS: [Val; 6] = [rdi, rsi, rdx, rcx, r8, r9];
 
 const CALL_STACK_ALIGNMENT: u32 = 16;
 
-unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunction], w: &mut AsmWriter) {
+unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &mut AsmWriter) {
     if let Some(ir) = &func.ir {
         w.begin_func(&func.name);
         w.inst(push(rbp));
@@ -348,9 +348,9 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                     CALL_REGS[idx as usize]
                 }
                 Tag::Int => {
-                    match ir.types[inst.ty] {
-                        ir::Type::Base(BaseType::Prim(p)) => {
-                            let ty = Type::try_from(p)
+                    match &ir.types[inst.ty] {
+                        ir::Type::Prim(p) => {
+                            let ty = Type::try_from(*p)
                                 .expect("Unsupported int size");
                             Int(ty, data.int)
                         }
@@ -362,9 +362,11 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                 Tag::Float => todo!(),
                 Tag::Decl => {
                     let size = match ir.types[inst.ty] {
-                        ir::Type::Base(BaseType::Prim(p)) => p.size(),
-                        ir::Type::Base(BaseType::Id(_)) => panic!("Non-primitives not supported in x86 backend"),
+                        ir::Type::Prim(p) => p.size(),
+                        ir::Type::Id(_) => todo!("Non-primitives not supported in x86 backend"),
                         ir::Type::Pointer {.. } => 8,
+                        ir::Type::Array(_) => todo!(),
+                        ir::Type::Invalid => panic!("Invalid type reached codegen")
                     };
                     stack_pos += size;
                     w.inst(sub(rsp, Int(Type::qword, size as u64)));
@@ -410,8 +412,8 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                         let val = get_ref(ref_val, &r);
                         val.move_into(w, reg);
                     }
-                    if func.varargs {
-                        let vararg_count = arg_count - func.params.len();
+                    if func.header.varargs {
+                        let vararg_count = arg_count - func.header.params.len();
                         w.inst(mov(al, Int(Type::byte, vararg_count as u64)));
                     }
                     // align the stack to the required alignment before calling
@@ -460,22 +462,7 @@ unsafe fn gen_func(index: u32, func: &ir::FinalFunction, funcs: &[ir::FinalFunct
                         _ => unreachable!()
                     }
                 }
-                Tag::Mod => todo!(),
-                Tag::Or => todo!(),
-                Tag::And => todo!(),
-                Tag::Eq => todo!(),
-                Tag::Ne => todo!(),
-                Tag::LT => todo!(),
-                Tag::GT => todo!(),
-                Tag::LE => todo!(),
-                Tag::GE => todo!(),
-                Tag::Member => todo!(),
-                Tag::Cast => todo!(),
-                Tag::AsPointer => todo!(),
-                Tag::Goto => todo!(),
-                Tag::Branch => todo!(),
-                Tag::Phi => todo!(),
-                
+                _ => todo!()
             };
             if inst.used && val != NoVal {
                 if val.is_reg() {

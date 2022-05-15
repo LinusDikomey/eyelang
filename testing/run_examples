@@ -1,6 +1,7 @@
 #!/bin/bash
 cargo build
 ./target/debug/eyelang run eye/project --nostd
+./target/debug/eyelang run eye/array.eye
 ./target/debug/eyelang run eye/basic.eye
 printf "+\n3\n4" | ./target/debug/eyelang run eye/calculator.eye
 ./target/debug/eyelang run eye/fib.eye
