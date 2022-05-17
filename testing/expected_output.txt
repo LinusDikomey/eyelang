@@ -8,8 +8,8 @@ Hello from function in file in folder
 The program project exited with status: exit status: 0
 Compiling eye/array.eye ...
 Running array...
-ABD
-ABD
+ABCD
+ABDD
 
 The program array exited with status: exit status: 0
 Compiling eye/basic.eye ...

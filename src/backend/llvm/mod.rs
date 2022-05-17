@@ -69,7 +69,6 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVM
 }
 
 unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointee: bool) -> LLVMTypeRef {
-    //dbg!(ty, pointee);
     match ty {
         Type::Prim(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
         Type::Prim(p) => llvm_primitive_ty(ctx, *p),
@@ -166,7 +165,6 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)]
 ) {
     crate::log!("-------------------- Building LLVM IR for func {}", func.name);
-    let zero_i32 = LLVMConstInt(LLVMInt32TypeInContext(ctx), 0, FALSE);
     let blocks = (0..ir.block_count).map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) ).collect::<Vec<_>>();
 
     let mut instructions = Vec::new();
@@ -384,10 +382,13 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::Member => {
-                let (r, origin_ty) = get_ref_and_type(&instructions, data.member.0);
+                let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
+                let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
                 let Type::Pointer(pointee) = origin_ty else { panic!("Tried to get member of non-pointer") };
-                let mut elems = [zero_i32, LLVMConstInt(LLVMInt32TypeInContext(ctx), data.member.1 as u64, FALSE)];
-                LLVMBuildInBoundsGEP2(builder, llvm_ty(ctx, types, &pointee), r, elems.as_mut_ptr(), 2, NONE)
+                let int_ty = llvm_ty(ctx, &types, &idx_ty);
+                let mut elems = [LLVMConstInt(int_ty, 0, FALSE), idx];
+                let pointee_ty = llvm_ty(ctx, types, &*pointee);
+                LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
             }
             ir::Tag::Cast => {
                 // cast just panics here right now when the cast is invalid because cast checks aren't implemented

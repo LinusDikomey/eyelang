@@ -276,9 +276,6 @@ impl Instruction {
                 format!("{}, {}", write_ref(self.data.bin_op.0), write_ref(self.data.bin_op.1)).normal()
             }
             DataVariant::Type => types.get(self.data.ty).to_string().purple(),
-            DataVariant::Member => {
-                format!("{}, [member {}]", write_ref(self.data.member.0), self.data.member.1).normal()
-            }
             DataVariant::Cast => {
                 format!("{} as {}", write_ref(self.data.un_op), types.get(self.ty)).normal()
             }
@@ -354,8 +351,7 @@ impl Tag {
             Tag::Call => Call,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
-            | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE => BinOp,
-            Tag::Member => Member,
+            | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
             Tag::Cast => Cast,
             Tag::Goto => Block,
             Tag::Branch => Branch,
@@ -449,7 +445,6 @@ pub union Data {
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),
     pub ty: TypeTableIndex,
-    pub member: (Ref, u32),
     pub branch: (Ref, u32),
     pub none: (),
     pub block: BlockIndex
@@ -488,7 +483,6 @@ enum DataVariant {
     UnOp,
     BinOp,
     Type,
-    Member,
     Cast
 }
 

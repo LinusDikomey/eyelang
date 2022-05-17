@@ -201,7 +201,8 @@ pub enum Error {
     CantUseRootPath,
     InferredTypeNotAllowedHere,
     ArrayTooLarge,
-    ArraySizeCantBeInferredHere
+    ArraySizeCantBeInferredHere,
+    InvalidArgumentCountForArrayIndex,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -590,9 +590,11 @@ impl<'s> Scope<'s> {
                 ir.types.specify(expected, arr_ty, errors, span.in_mod(self.module));
                 //let arr = ir.add(Data { ty: expected }, Tag::Decl, expected);
                 let arr = get_var(ir);
+                let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 for (i, elem) in elems.iter().enumerate() {
                     let elem_val = self.reduce_expr_val_spanned(errors, ir, &self.ast[*elem], elem_ty, ret, *span);
-                    let elem_ptr = ir.add(Data { member: (arr, i as u32) }, Tag::Member, elem_ty);
+                    let idx = ir.add(Data { int: i as u64 }, Tag::Int, u64_ty);
+                    let elem_ptr = ir.add(Data { bin_op: (arr, idx) }, Tag::Member, elem_ty);
                     ir.add_untyped(Tag::Store, Data { bin_op: (elem_ptr, elem_val) });
                 }
                 return ExprResult::Stored(arr)
@@ -651,8 +653,8 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::FunctionCall { func, args, end: _ } => {
                 let args = &self.ast.expr_builder[*args];
-                let func_ty = ir.types.add(TypeInfo::Unknown);
-                match self.reduce_expr(errors, ir, &self.ast[*func], func_ty, ret) {
+                let called_ty = ir.types.add(TypeInfo::Unknown);
+                match self.reduce_expr(errors, ir, &self.ast[*func], called_ty, ret) {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
                         let info = header.return_type.into_info(&mut ir.types);
@@ -703,15 +705,17 @@ impl<'s> Scope<'s> {
                             let var = get_var(ir);
                             let member_types: Vec<TypeInfo> =
                                 struct_.members.iter().map(|(_, ty)| ty.into_info(&mut ir.types)).collect();
+                            let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                             for (i, (member_val, member_ty)) in
                                 args.iter().zip(member_types).enumerate()
                             {
                                 let member_ty = ir.types.add(member_ty);
                                 let member_val =
                                     self.reduce_expr_idx_val(errors, ir, *member_val, member_ty, ret);
+                                let idx = ir.add(Data { int: i as u64 }, Tag::Int, i32_ty);
                                 let member = ir.add(
                                     Data {
-                                        member: (var, i as u32),
+                                        bin_op: (var, idx),
                                     },
                                     Tag::Member,
                                     member_ty,
@@ -724,8 +728,46 @@ impl<'s> Scope<'s> {
                             Ref::val(RefVal::Undef)
                         }
                     }
+                    ExprResult::VarRef(val) => {
+                        let span = self.ast[*func].span(self.ast);
+                        match ir.types.get_type(called_ty) {
+                            TypeInfo::Invalid => { ir.invalidate(expected); Ref::UNDEF }
+                            TypeInfo::Array(_, member_ty) => {
+                                ir.types.merge(expected, member_ty, errors, self.module, span);
+
+                                if args.len() != 1 {
+                                    errors.emit_span(
+                                        Error::InvalidArgumentCountForArrayIndex,
+                                        expr.span_in(self.ast, self.module)
+                                    );
+                                    ir.invalidate(expected);
+                                    Ref::UNDEF
+                                } else {
+                                    let idx_ty = ir.types.add(TypeInfo::Int);
+                                    let idx_expr = &self.ast[args[0]];
+                                    let idx = self.reduce_expr_val_spanned(
+                                        errors, ir, idx_expr, idx_ty, ret,
+                                        idx_expr.span(self.ast)
+                                    );
+                                    return ExprResult::VarRef(
+                                        ir.add(Data { bin_op: (val, idx) }, Tag::Member, expected)
+                                    )
+                                }
+                            }
+                            TypeInfo::Unknown => {
+                                errors.emit_span(Error::TypeMustBeKnownHere, span.in_mod(self.module));
+                                ir.invalidate(expected);
+                                Ref::UNDEF
+                            }
+                            _ => {
+                                errors.emit_span(Error::UnexpectedType, span.in_mod(self.module));
+                                ir.invalidate(expected);
+                                Ref::UNDEF
+                            }
+                        }
+                    }
                     _ => {
-                        if !ir.types.get_type(func_ty).is_invalid() {
+                        if !ir.types.get_type(called_ty).is_invalid() {
                             errors.emit_span(Error::FunctionOrTypeExpected, expr.span(self.ast).in_mod(self.module));
                         }
                         ir.invalidate(expected);
@@ -926,9 +968,15 @@ impl<'s> Scope<'s> {
                             }
                         };
                         ir.specify(expected, ty, errors, expr.span(self.ast));
+                        let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
+                        let idx = ir.add(
+                            Data { int: idx as u64 },
+                            Tag::Int,
+                            i32_ty
+                        );
                         let member = ir.add(
                             Data {
-                                member: (var, idx as u32),
+                                bin_op: (var, idx),
                             },
                             Tag::Member,
                             expected,
