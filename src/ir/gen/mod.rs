@@ -110,11 +110,9 @@ fn gen_func_bodies(
                 body.span(scope.ast)
             );
             //TODO: refactor to branch return analysis
-            if body.is_block() {
-                if header.return_type == Type::Prim(Primitive::Unit) {
-                    builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
-                }
-            } else {
+            if header.return_type == Type::Prim(Primitive::Unit) {
+                builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
+            } else if !body.is_block() {
                 builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
             }
             builder.finish()
@@ -438,14 +436,13 @@ impl<'s> Scope<'s> {
             errors, ir, expr, expected, ret,
             |ir| ir.add(Data { ty: expected }, Tag::Decl, expected)
         ) {
-            ExprResult::VarRef(var) => var,
+            ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
             ExprResult::Val(_) | ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
                 if !ir.types.get_type(expected).is_invalid() {
                     errors.emit_span(Error::CantAssignTo, expr.span(self.ast).in_mod(self.module));
                 }
                 Ref::UNDEF
             }
-            ExprResult::Stored(_) => unreachable!(),
         }
     }
 
@@ -730,6 +727,7 @@ impl<'s> Scope<'s> {
                     }
                     ExprResult::VarRef(val) => {
                         let span = self.ast[*func].span(self.ast);
+
                         match ir.types.get_type(called_ty) {
                             TypeInfo::Invalid => { ir.invalidate(expected); Ref::UNDEF }
                             TypeInfo::Array(_, member_ty) => {

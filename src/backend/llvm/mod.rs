@@ -56,14 +56,6 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     }
 }
 
-/*
-unsafe fn base_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: BaseType, ptr: bool) -> LLVMTypeRef {
-    match ty {
-        BaseType::Prim(Primitive::Unit) if ptr => LLVMInt8TypeInContext(ctx),
-        BaseType::Prim(p) => llvm_primitive_ty(ctx, p),
-        BaseType::Id(id) => types[id.idx()],
-    }
-}*/
 unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVMTypeRef {
     llvm_ty_(ctx, types, ty, false)
 }
@@ -78,11 +70,7 @@ unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointe
         }
         Type::Array(box (inner, count)) => {
             let elem_ty = llvm_ty_(ctx, types, inner, false);
-            if pointee {
-                elem_ty
-            } else {
-                LLVMArrayType(elem_ty, *count)
-            }
+            LLVMArrayType(elem_ty, *count)
         }
         Type::Invalid => {
             eprintln!("ERROR: Invalid type reached codegen type");
@@ -165,7 +153,9 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)]
 ) {
     crate::log!("-------------------- Building LLVM IR for func {}", func.name);
-    let blocks = (0..ir.block_count).map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) ).collect::<Vec<_>>();
+    let blocks = (0..ir.block_count)
+        .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
+        .collect::<Vec<_>>();
 
     let mut instructions = Vec::new();
 
