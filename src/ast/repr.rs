@@ -185,6 +185,10 @@ impl<C: Representer> Repr<C> for Expr {
             Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) 
                 => c.write_add(c.src(*span)),
             Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
+            Self::EnumLiteral { dot: _, ident } => {
+                c.char('.');
+                c.write_add(c.src(*ident));
+            }
             Self::Nested(_, inner) => {
                 c.char('(');
                 ast[*inner].repr(c);

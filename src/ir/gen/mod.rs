@@ -554,6 +554,26 @@ impl<'s> Scope<'s> {
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Bool), errors, span);
                 Ref::val(if *val { RefVal::True } else { RefVal::False })
             }
+            ast::Expr::EnumLiteral { dot: _, ident } => {
+                let variant_name = self.src(*ident);
+                // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
+                if let TypeInfo::Enum(names) = ir.types.get_type(expected) {
+                    if !ir.types.get_names(names).iter().find(|s| *s == variant_name).is_some() {
+                        let new_names = ir.types.extend_names(names, std::iter::once(variant_name.to_owned()));
+                        ir.types.update_type(expected, TypeInfo::Enum(new_names));
+                    }
+                } else {
+                    let variant = ir.types.add_names(std::iter::once(variant_name.to_owned()));
+                    ir.types.specify(
+                        expected,
+                        TypeInfo::Enum(variant),
+                        errors,
+                        expr.span(self.ast).in_mod(self.module)
+                    );
+                }
+                let extra = ir.extra_data(variant_name.as_bytes());
+                ir.add(Data { extra_len: (extra, variant_name.len() as u32)  }, Tag::EnumLit, expected)
+            }
             ast::Expr::Nested(_, inner) => {
                 return self.reduce_expr_any(errors, ir, &self.ast[*inner], expected, ret, get_var);
             }

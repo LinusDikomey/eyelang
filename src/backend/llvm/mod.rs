@@ -60,6 +60,15 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type) -> LLVM
     llvm_ty_(ctx, types, ty, false)
 }
 
+unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeRef {
+    if count < 2 {
+        LLVMVoidTypeInContext(ctx)
+    } else {
+        let bit_size = (count-1).log2() + 1;
+        LLVMIntTypeInContext(ctx, bit_size)
+    }
+}
+
 unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointee: bool) -> LLVMTypeRef {
     match ty {
         Type::Prim(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
@@ -71,6 +80,9 @@ unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointe
         Type::Array(box (inner, count)) => {
             let elem_ty = llvm_ty_(ctx, types, inner, false);
             LLVMArrayType(elem_ty, *count)
+        }
+        Type::Enum(variants) => {
+            int_from_variant_count(ctx, variants.len())
         }
         Type::Invalid => {
             eprintln!("ERROR: Invalid type reached codegen type");
@@ -249,6 +261,18 @@ unsafe fn build_func(
                 LLVMConstIntOfArbitraryPrecision(table_ty(*ty), 2, words.as_ptr())
             }
             ir::Tag::Float => LLVMConstReal(table_ty(*ty), data.float),
+            ir::Tag::EnumLit => {
+                let range = data.extra_len.0 as usize .. data.extra_len.0 as usize + data.extra_len.1 as usize;
+                let name = &ir.extra[range];
+                let ir::Type::Enum(variants) = &ir.types[*ty] else { panic!("Enum variant found for non-enum type")};
+                let index = variants.iter()
+                    .enumerate()
+                    .find(|(_, s)| s.as_bytes() == name)
+                    .unwrap_or_else(|| panic!("Missing enum variant {}.", std::str::from_utf8(name).unwrap()))
+                    .0;
+                let ty = int_from_variant_count(ctx, variants.len());
+                LLVMConstInt(ty, index as _, FALSE)
+            }
             ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty), NONE),
             ir::Tag::Load => {
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
@@ -328,7 +352,7 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                if Type::Prim(Primitive::Bool) == ty || info_to_num(&ty).int() {
+                if matches!(ty, Type::Enum(_) | Type::Prim(Primitive::Bool)) || info_to_num(&ty).int() {
                     LLVMBuildICmp(builder, if *tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
                     LLVMBuildFCmp(builder, if *tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
@@ -389,6 +413,7 @@ unsafe fn build_func(
                 let target = ir.types.get(*ty);
                 match target {
                     Type::Prim(target) => {
+                        //TODO: enum to int casts
                         match origin {
                             Type::Prim(origin) => {
                                 let origin = prim_to_num(origin);
@@ -435,6 +460,10 @@ unsafe fn build_func(
                             Type::Pointer(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
                             t => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
+                    }
+                    Type::Enum(_variants) => {
+                        //TODO: int to enum casts
+                        panic!("Enum casts unsupported")
                     }
                     Type::Invalid => unreachable!()
                 }

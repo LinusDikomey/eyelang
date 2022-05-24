@@ -478,6 +478,10 @@ impl<'a> Parser<'a> {
             },
             TokenType::Keyword(Keyword::Root) => {
                 Expr::Root(start)
+            },
+            TokenType::Dot => {
+                let ident = self.toks.step_expect(TokenType::Ident)?.span();
+                Expr::EnumLiteral { dot: start, ident }
             }
         );
         let expr = self.ast.add_expr(expr);

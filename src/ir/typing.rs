@@ -15,14 +15,16 @@ fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
 #[derive(Clone, Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfo>,
-    indices: Vec<TypeIdx>
+    indices: Vec<TypeIdx>,
+    names: Vec<String>,
 }
 impl TypeTable {
     pub fn new() -> Self {
         ty_dbg("Creating type table", ());
         Self {
             types: Vec::new(),
-            indices: Vec::new()
+            indices: Vec::new(),
+            names: Vec::new(),
         }
     }
 
@@ -82,12 +84,38 @@ impl TypeTable {
         }
     }
 
+    pub fn add_names(&mut self, names: impl IntoIterator<Item = String>) -> TypeTableNames {
+        let idx = self.names.len();
+        self.names.extend(names);
+        TypeTableNames { idx: idx as u32, count: (self.names.len() - idx) as u32 }
+    }
+    pub fn _remove_names(&mut self, names: TypeTableNames) {
+        self.names.drain(names.idx as usize .. names.idx as usize + names.count as usize);
+    }
+
+    pub fn get_names(&self, names: TypeTableNames) -> &[String] {
+        &self.names[names.idx as usize .. names.idx as usize + names.count as usize]
+    }
+    #[must_use = "Range should be used to update"]
+    pub fn extend_names(&mut self, idx: TypeTableNames, names: impl IntoIterator<Item = String>) -> TypeTableNames {
+        let prev_len = self.names.len();
+        let insert_at = idx.idx as usize + idx.count as usize;
+        self.names.splice(insert_at..insert_at, names);
+        TypeTableNames { idx: idx.idx, count: idx.count + (self.names.len() - prev_len) as u32 }
+    } 
+
     pub fn finalize(self) -> FinalTypeTable {
         let types = self.indices.iter()
             .map(|&i| self.types[i.0 as usize].finalize(&self))
             .collect();
         FinalTypeTable { types }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TypeTableNames {
+    idx: u32,
+    count: u32
 }
 
 #[derive(Debug)]
@@ -132,6 +160,7 @@ pub enum TypeInfo {
     Resolved(SymbolKey),
     Pointer(TypeTableIndex),
     Array(Option<u32>, TypeTableIndex),
+    Enum(TypeTableNames),
     Invalid,
 }
 impl TypeInfo {
@@ -152,6 +181,9 @@ impl TypeInfo {
                     Type::Prim(Primitive::Unit),
                     |size| Type::Array(Box::new((inner, size)))
                 )
+            }
+            Self::Enum(idx) => {
+                Type::Enum(types.get_names(idx).into_iter().cloned().collect())
             }
         }
     }
@@ -225,6 +257,17 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                     Ok(Array(new_size, inner))
                 }
                 _ => Err(Error::MismatchedType)
+            }
+        }
+        Enum(names) => {
+            if let Enum(other_names) = other {
+                let a = types.get_names(names);
+                let b = types.get_names(other_names);
+                let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
+                let new_variants = types.extend_names(names, new_variants);
+                Ok(Enum(new_variants))
+            } else {
+                Err(Error::MismatchedType)
             }
         }
         Invalid => Ok(Invalid), // invalid type 'spreading'

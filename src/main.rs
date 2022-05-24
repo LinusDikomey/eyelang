@@ -6,6 +6,7 @@
     bool_to_option,
     nonzero_ops,
     is_some_with,
+    int_log
 )]
 #![warn(unused_qualifications)]
 
@@ -20,6 +21,7 @@ mod link;
 mod lsp;
 mod parser;
 mod types;
+mod help;
 
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;

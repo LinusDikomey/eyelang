@@ -1,5 +1,7 @@
 use std::fmt;
 use colored::{Colorize, ColoredString};
+use crate::help::write_delimited;
+use crate::help::write_delimited_with;
 use crate::types::Primitive;
 use typing::FinalTypeTable;
 
@@ -17,6 +19,8 @@ pub enum Type {
     Id(SymbolKey),
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
+    //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
+    Enum(Vec<String>),
     Invalid
 }
 impl Type {
@@ -35,6 +39,8 @@ impl Type {
                 let inner = ty.into_info(types);
                 TypeInfo::Array(Some(*count), types.add(inner))
             }
+            Self::Enum(variants) =>
+                TypeInfo::Enum(types.add_names(variants.as_slice().into_iter().cloned())),
             Self::Invalid => unreachable!()
         }
     }
@@ -46,6 +52,10 @@ impl fmt::Display for Type {
             Self::Id(id) => write!(f, "t{}", id.idx()),
             Self::Pointer(inner) => write!(f, "*{inner}"),
             Self::Array(box (ty, count)) => write!(f, "[{}; {}]", ty, count),
+            Self::Enum(variants) => {
+                write_delimited(f, variants, " | ")?;
+                Ok(())
+            }
             Self::Invalid => write!(f, "[invalid]"),
         }
     }
@@ -68,12 +78,7 @@ pub struct Function {
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(")?;
-        for (i, (name, param)) in self.header.params.iter().enumerate() {
-            if i != 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{name} {param}")?;
-        }
+        write_delimited_with(f, &self.header.params, |f, (name, param)| write!(f, "{name} {param}"), ", ")?;
         writeln!(f, ") -> {}", self.header.return_type)?;
 
         if let Some(ir) = &self.ir {
@@ -223,11 +228,11 @@ impl Instruction {
                 u128::from_le_bytes(bytes_arr).to_string().yellow()
             }
             DataVariant::String => {
-                let bytes = &extra[
+                let string = String::from_utf8_lossy(&extra[
                     self.data.extra_len.0 as usize
                     .. (self.data.extra_len.0 + self.data.extra_len.1) as usize
-                ];
-                format!("{bytes:?}").yellow()
+                ]);
+                format!("{string:?}").yellow()
             }
             DataVariant::Call => {
                 let start = self.data.extra_len.0 as usize;
@@ -305,6 +310,7 @@ pub enum Tag {
     Int,
     LargeInt,
     Float,
+    EnumLit,
     Decl,
     Load,
     Store,
@@ -346,6 +352,7 @@ impl Tag {
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
+            Tag::EnumLit => String,
             Tag::Decl => Type,
             Tag::String => String,
             Tag::Call => Call,

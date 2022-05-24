@@ -366,6 +366,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                         ir::Type::Id(_) => todo!("Non-primitives not supported in x86 backend"),
                         ir::Type::Pointer {.. } => 8,
                         ir::Type::Array(_) => todo!(),
+                        ir::Type::Enum(_) => todo!(),
                         ir::Type::Invalid => panic!("Invalid type reached codegen")
                     };
                     stack_pos += size;

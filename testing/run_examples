@@ -4,6 +4,7 @@ cargo build
 ./target/debug/eyelang run eye/array.eye
 ./target/debug/eyelang run eye/basic.eye
 printf "+\n3\n4" | ./target/debug/eyelang run eye/calculator.eye
+./target/debug/eyelang run eye/enums.eye
 ./target/debug/eyelang run eye/fib.eye
 ./target/debug/eyelang run eye/infer.eye
 ./target/debug/eyelang run eye/operators.eye
