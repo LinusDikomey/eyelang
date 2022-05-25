@@ -23,7 +23,7 @@ impl Errors {
     }
     
     pub fn emit_span(&mut self, err: Error, span: Span) {
-        self.errors.push(CompileError { err, span })
+        self.errors.push(CompileError { err, span });
     }
 
     pub fn emit_err(&mut self, err: CompileError) {

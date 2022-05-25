@@ -114,7 +114,7 @@ impl Function {
             c.write_add(")");
         }
         c.space();
-        self.return_type.0.repr(c);
+        self.return_type.repr(c);
         match &self.body.map(|body| &c.ast()[body]) {
             Some(block@Expr::Block { .. }) => {
                 c.space();
@@ -168,12 +168,12 @@ impl<C: Representer> Repr<C> for Expr {
             }
             Self::DeclareWithVal { name, annotated_ty, val } => {
                 c.write_add(c.src(*name));
-                if !matches!(annotated_ty, UnresolvedType::Infer(_)) {
+                if matches!(annotated_ty, UnresolvedType::Infer(_)) {
+                    c.write_add(" := ");
+                } else {
                     c.write_add(": ");
                     annotated_ty.repr(c);
                     c.write_add(" = ");
-                } else {
-                    c.write_add(" := ");
                 }
                 ast[*val].repr(c);
             }
@@ -199,7 +199,7 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Array(_, elems) => {
                 let elems = &ast.expr_builder[*elems];
                 c.char('[');
-                let mut elems = elems.iter().cloned();
+                let mut elems = elems.iter().copied();
                 if let Some(first) = elems.next() {
                     ast[first].repr(c);
                 }

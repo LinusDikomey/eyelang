@@ -115,16 +115,11 @@ pub fn gen_locals(
     defs: &HashMap<String, ast::Definition>,
     errors: &mut Errors
 ) -> HashMap<String, Symbol> {
-    //TODO: split off path resolving into it's own function for use statements
     let mut symbols = HashMap::with_capacity(defs.len());
-
     for (name, def) in defs {
         if symbols.contains_key(name) { continue }
-        gen_local(name.to_owned(), def, &mut symbols, defs, scope, errors);
-
-        
+        gen_local(name.clone(), def, &mut symbols, defs, scope, errors);
     }
-
     symbols
 }
 
@@ -147,7 +142,7 @@ pub fn add_func(
             (name.clone(), resolve_ty(ctx, ast, symbols, module, param_ty, errors))
         )
         .collect();
-    let return_type = resolve_ty(ctx, ast, symbols, module, &func.return_type.0, errors);
+    let return_type = resolve_ty(ctx, ast, symbols, module, &func.return_type, errors);
     let key = ctx.add_func(super::gen::FunctionOrHeader::Header(FunctionHeader {
         params,
         varargs: func.varargs,
@@ -201,7 +196,7 @@ impl<'a> ResolveSymbols<'a> {
                 }
             }
             ResolveSymbols::Finished(symbols) => {
-                let symbol = symbols[module].get(name).cloned();
+                let symbol = symbols[module].get(name).copied();
                 if symbol.is_none() {
                     errors.emit_span(Error::UnknownIdent, span);
                 }
@@ -211,7 +206,7 @@ impl<'a> ResolveSymbols<'a> {
     }
 }
 
-/// Resolving of IdentPaths. This function is complicated because it can handle 2 different states:
+/// Resolving of `IdentPath`. This function is complicated because it can handle 2 different states:
 /// generating globals or generating locals.
 fn resolve_path(
     path: &IdentPath,
@@ -380,7 +375,7 @@ fn gen_local(name: String, def: &ast::Definition, symbols: &mut HashMap<String, 
                     (name.clone(), local_ty(unresolved, symbols, defs, scope, errors))
                 })
                 .collect();
-            let return_type = local_ty(&func.return_type.0, symbols, defs, scope, errors);
+            let return_type = local_ty(&func.return_type, symbols, defs, scope, errors);
             let symbol = Symbol::Func(
                 scope.ctx.add_func(FunctionOrHeader::Header(FunctionHeader {
                     params,
@@ -388,7 +383,7 @@ fn gen_local(name: String, def: &ast::Definition, symbols: &mut HashMap<String, 
                     return_type,
                 })
             ));
-            symbols.insert(name.to_owned(), symbol);
+            symbols.insert(name, symbol);
             Some(symbol)
         }
         ast::Definition::Struct(struct_) => {
