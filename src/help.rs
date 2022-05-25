@@ -11,7 +11,7 @@ where
     let mut i =i.into_iter();
     i.next().map(|first| write!(f, "{first}")).transpose()?;
     for elem in i {
-        write!(f, "{delim}{elem}")?
+        write!(f, "{delim}{elem}")?;
     }
     Ok(())
 }
@@ -26,7 +26,7 @@ where
     i.next().map(|t| write_func(f, t)).transpose()?;
     for elem in i {
         write_func(f, elem)?;
-        write!(f, "{delim}")?
+        write!(f, "{delim}")?;
     }
     Ok(())
 }

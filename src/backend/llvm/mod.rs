@@ -222,7 +222,7 @@ unsafe fn build_func(
 
     let table_ty = |ty: ir::TypeTableIndex| {
         let info = ir.types.get(ty);
-        llvm_ty(ctx, types, &info)
+        llvm_ty(ctx, types, info)
     };
     #[derive(Clone, Copy, Debug)]
     enum Numeric { Float(u32), Int(bool, u32) }
@@ -420,7 +420,7 @@ unsafe fn build_func(
                 let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
                 let Type::Pointer(pointee) = origin_ty else { panic!("Tried to get member of non-pointer") };
-                let int_ty = llvm_ty(ctx, &types, &idx_ty);
+                let int_ty = llvm_ty(ctx, types, &idx_ty);
                 let mut elems = [LLVMConstInt(int_ty, 0, FALSE), idx];
                 let pointee_ty = llvm_ty(ctx, types, &*pointee);
                 LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
@@ -476,7 +476,7 @@ unsafe fn build_func(
                     }
                     Type::Id(_) | Type::Array(_) => panic!("Invalid cast"),
                     Type::Pointer(_) => {
-                        let llvm_target = llvm_ty(ctx, types, &target);
+                        let llvm_target = llvm_ty(ctx, types, target);
                         match origin {
                             Type::Pointer(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
                             t => panic!("Can't cast from non-pointer type {t} to pointer")

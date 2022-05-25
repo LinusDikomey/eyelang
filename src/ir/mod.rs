@@ -27,20 +27,20 @@ impl Type {
     pub fn pointer_to(self) -> Self {
         Self::Pointer(Box::new(self))
     }
-    pub fn into_info(&self, types: &mut TypeTable) -> TypeInfo {
+    pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
         match self {
             Self::Prim(p) => TypeInfo::Primitive(*p),
             Self::Id(id) => TypeInfo::Resolved(*id),
             Self::Pointer(inner) => {
-                let inner = inner.into_info(types);
+                let inner = inner.as_info(types);
                 TypeInfo::Pointer(types.add(inner))
             }
             Self::Array(box (ty, count)) => {
-                let inner = ty.into_info(types);
+                let inner = ty.as_info(types);
                 TypeInfo::Array(Some(*count), types.add(inner))
             }
             Self::Enum(variants) =>
-                TypeInfo::Enum(types.add_names(variants.as_slice().into_iter().cloned())),
+                TypeInfo::Enum(types.add_names(variants.as_slice().iter().cloned())),
             Self::Invalid => unreachable!()
         }
     }

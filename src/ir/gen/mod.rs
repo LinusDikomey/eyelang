@@ -89,7 +89,7 @@ fn gen_func_bodies(
             let mut builder = IrBuilder::new(scope.module);
             let mut scope: Scope<'_> = scope.child(HashMap::with_capacity(header.params.len()));
             for (i, (name, ty)) in header.params.iter().enumerate() {
-                let info = ty.into_info(&mut builder.types);
+                let info = ty.as_info(&mut builder.types);
                 let ty = builder.types.add(info);
                 let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
                 scope
@@ -98,7 +98,7 @@ fn gen_func_bodies(
                     .to_mut()
                     .insert(name.clone(), Symbol::Var { ty, var: param });
             }
-            let return_type = header.return_type.into_info(&mut builder.types);
+            let return_type = header.return_type.as_info(&mut builder.types);
             let expected = builder.types.add(return_type);
             let body = &scope.ast[*body];
             let val = scope.reduce_expr_val_spanned(
@@ -558,7 +558,7 @@ impl<'s> Scope<'s> {
                 let variant_name = self.src(*ident);
                 // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
                 if let TypeInfo::Enum(names) = ir.types.get_type(expected) {
-                    if !ir.types.get_names(names).iter().find(|s| *s == variant_name).is_some() {
+                    if !ir.types.get_names(names).iter().any(|s| *s == variant_name) {
                         let new_names = ir.types.extend_names(names, std::iter::once(variant_name.to_owned()));
                         ir.types.update_type(expected, TypeInfo::Enum(new_names));
                     }
@@ -674,7 +674,7 @@ impl<'s> Scope<'s> {
                 match self.reduce_expr(errors, ir, &self.ast[*func], called_ty, ret) {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
-                        let info = header.return_type.into_info(&mut ir.types);
+                        let info = header.return_type.as_info(&mut ir.types);
                         ir.specify(expected, info, errors, expr.span(self.ast));
                         let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
@@ -697,7 +697,7 @@ impl<'s> Scope<'s> {
                             let mut bytes = Vec::with_capacity(8 + 4 * args.len());
                             bytes.extend(&key.bytes());
                             for (arg, ty) in args.iter().zip(params) {
-                                let info = ty.map_or(TypeInfo::Unknown, |ty| ty.into_info(&mut ir.types));
+                                let info = ty.map_or(TypeInfo::Unknown, |ty| ty.as_info(&mut ir.types));
                                 let ty = ir
                                     .types
                                     .add(info);
@@ -721,7 +721,7 @@ impl<'s> Scope<'s> {
                         if args.len() == struct_.members.len() {
                             let var = get_var(ir);
                             let member_types: Vec<TypeInfo> =
-                                struct_.members.iter().map(|(_, ty)| ty.into_info(&mut ir.types)).collect();
+                                struct_.members.iter().map(|(_, ty)| ty.as_info(&mut ir.types)).collect();
                             let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                             for (i, (member_val, member_ty)) in
                                 args.iter().zip(member_types).enumerate()
@@ -969,7 +969,7 @@ impl<'s> Scope<'s> {
                                     .enumerate()
                                     .find(|(_, (name, _))| name == member)
                                 {
-                                    (ty.into_info(&mut ir.types), i)
+                                    (ty.as_info(&mut ir.types), i)
                                 } else {
                                     errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
                                     (TypeInfo::Invalid, 0)

@@ -47,7 +47,7 @@ impl Tokens {
             .unwrap_or(0)
     }
 
-    pub fn position(&self) -> usize {
+    pub fn _position(&self) -> usize {
         self.index
     }
 
@@ -274,45 +274,31 @@ impl<'a> Parser<'a> {
                 let (return_type, body) = match cur_tok.ty {
                     TokenType::LBrace => {
                         (
-                            (
-                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                                cur_tok.start,
-                                cur_tok.end
-                            ),
+                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
                             Some(self.parse_block()?)
                         )
                     }
                     TokenType::Colon => {
                         let cur_tok = self.toks.step_assert(TokenType::Colon);
                         (
-                            (
-                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                                cur_tok.start,
-                                cur_tok.end
-                            ),
+                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
                             Some(self.parse_expr()?)
                         )
                     }
                     TokenType::Keyword(Keyword::Extern) => {
                         let cur_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
                         (
-                            (
-                                UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                                cur_tok.start,
-                                cur_tok.end
-                            ),
+                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
                             None
                         )
                     }
                     _ => {
-                        let r_s = self.toks.position() as u32;
                         let return_type = self.parse_type()?;
-                        let r_e = self.toks.position() as u32;
                         let body = self.toks.step_if(TokenType::Keyword(Keyword::Extern))
                             .is_none()
                             .then(|| self.parse_block_or_expr())
                             .transpose()?;
-                        ((return_type, r_s, r_e), body)
+                        (return_type, body)
                     }
                 };
                 Item::Definition(name, Definition::Function(Function {

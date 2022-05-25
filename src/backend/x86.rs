@@ -475,7 +475,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                 }
                 
             } else {
-                r.push(NoVal)
+                r.push(NoVal);
             }
         }
     } else {

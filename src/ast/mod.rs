@@ -169,7 +169,7 @@ pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
     //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
-    pub return_type: (UnresolvedType, u32, u32),
+    pub return_type: UnresolvedType,
     pub body: Option<ExprRef>,
 }
 
@@ -325,7 +325,7 @@ impl IdentPath {
             let idx = (trimmed.as_ptr() as usize - start_addr) as u32;
             (trimmed, TSpan::new(idx, idx + trimmed.len() as u32 - 1))
         }).peekable();
-        let first = split.peek().cloned();
+        let first = split.peek().copied();
         let last = split.next_back().unwrap();
         if let Some(("root", first_span)) = first {
             split.next();

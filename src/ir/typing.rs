@@ -183,7 +183,7 @@ impl TypeInfo {
                 )
             }
             Self::Enum(idx) => {
-                Type::Enum(types.get_names(idx).into_iter().cloned().collect())
+                Type::Enum(types.get_names(idx).to_vec())
             }
         }
     }
