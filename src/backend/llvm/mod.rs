@@ -1,6 +1,8 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{ir::{self, Type}, types::Primitive};
-use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write};
+use crate::{ir::{self, Type}, types::Primitive, BackendStats};
+use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
+
+pub mod output;
 
 pub struct Module(LLVMModuleRef);
 impl Module {
@@ -30,7 +32,6 @@ impl Drop for Module {
     }
 }
 
-pub mod output;
 
 const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
@@ -91,12 +92,16 @@ unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointe
     }
 }
 
-pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
+pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> (Module, BackendStats) {
+    let start_time = Instant::now();
     // Set up the module
     let module_name = ffi::CString::new(module.name.as_bytes()).unwrap();
     let llvm_module = LLVMModuleCreateWithNameInContext(module_name.as_ptr(), ctx);
+    
+    let init_time = start_time.elapsed();
 
     // define types
+    let start_time = Instant::now();
 
     let types = module.types.iter()
         .map(|ty| {
@@ -112,7 +117,10 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
         LLVMStructSetBody(*struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
     }
 
+    let type_creation_time = start_time.elapsed();
+
     // define function headers
+    let start_time = Instant::now();
 
     let funcs = module.funcs.iter()
         .map(|func| {
@@ -126,7 +134,10 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
         })
         .collect::<Vec<_>>();
 
+    let func_header_time = start_time.elapsed();
     // set up a builder and build the function bodies
+    let start_time = Instant::now();
+
     let builder = LLVMCreateBuilderInContext(ctx);
     
     for (i, (func, _)) in funcs.iter().enumerate() {
@@ -135,6 +146,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
             build_func(ir_func, ir, ctx, builder, *func, &types, &funcs);
         }
     }
+    let emit_time = start_time.elapsed();
 
     if crate::LOG.load(std::sync::atomic::Ordering::Relaxed) {
         println!("\n ---------- LLVM IR BEGIN ----------\n");
@@ -151,7 +163,16 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> Module {
 
     // done building
     LLVMDisposeBuilder(builder);
-    Module(llvm_module)
+    (
+        Module(llvm_module),
+        BackendStats {
+            name: "LLVM",
+            init: init_time,
+            type_creation: type_creation_time,
+            func_header_creation: func_header_time,
+            emit: emit_time
+        }
+    )
 }
 
 

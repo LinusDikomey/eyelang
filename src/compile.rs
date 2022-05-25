@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{path::{Path, PathBuf}, time::{Instant, Duration}};
 use crate::{
     log,
     ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
     lexer,
-    parser::Parser
+    parser::Parser, Stats
 };
 
 //TODO: proper dependencies / project handling
@@ -13,25 +13,34 @@ pub struct Dependency<'a> {
     _path: &'a Path
 }
 
-pub fn project(module_path: &Path, reconstruct_src: bool, std: bool, _deps: &[Dependency], require_main_func: bool)
--> Result<crate::ir::Module, (Ast, Errors)> {
+pub fn project(
+    module_path: &Path,
+    reconstruct_src: bool,
+    std: bool,
+    _deps: &[Dependency],
+    require_main_func: bool,
+    stats: &mut Stats
+) -> Result<crate::ir::Module, (Ast, Errors)> {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
 
     let main = if module_path.is_dir() {
-        tree(module_path, &mut ast, &mut errors, TreeType::Main, reconstruct_src)
+        tree(module_path, &mut ast, &mut errors, TreeType::Main, reconstruct_src, stats)
     } else {
-        file(module_path, &mut ast, &mut errors, reconstruct_src)
+        file(module_path, &mut ast, &mut errors, reconstruct_src, stats)
     };
     
     if let Some(std) = (std).then(std_path) {
-        let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, reconstruct_src);
+        let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, reconstruct_src, stats);
         ast[main].definitions.insert(
             "std".to_owned(),
             ast::Definition::Module(std_mod)    
         );
     }
-    match crate::ir::reduce(&ast, errors, require_main_func) {
+    let reduce_start_time = Instant::now();
+    let reduce_res = crate::ir::reduce(&ast, errors, require_main_func);
+    stats.irgen += reduce_start_time.elapsed();
+    match reduce_res {
         Ok((ir, _globals)) => Ok(ir),
         Err(err) => Err((ast, err))
     }
@@ -66,12 +75,13 @@ fn tree(
     errors: &mut Errors,
     t: TreeType,
     reconstruct_src: bool,
+    stats: &mut Stats,
 ) -> ModuleId {
     let base_file = path.join(t.file());
     let base_exists = std::fs::try_exists(&base_file)
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
     let base_module = if base_exists {
-        file(&base_file, modules, errors, reconstruct_src)
+        file(&base_file, modules, errors, reconstruct_src, stats)
     } else {
         let main_mod = modules.add_module(Module::empty(), "".to_owned(), path.to_owned());
         if let TreeType::Main = t {
@@ -86,11 +96,11 @@ fn tree(
         if entry.file_name() == t.file() { continue; }
         let file_ty = entry.file_type().expect("Failed to retrieve file type");
         let child_module = if file_ty.is_dir() {
-            tree(&path, modules, errors, TreeType::Mod, reconstruct_src)
+            tree(&path, modules, errors, TreeType::Mod, reconstruct_src, stats)
         } else if file_ty.is_file() {
             let is_eye = matches!(path.extension(), Some(extension) if extension == "eye");
             if !is_eye { continue; }
-            file(&path, modules, errors, reconstruct_src)
+            file(&path, modules, errors, reconstruct_src, stats)
         } else {
             eprintln!("Invalid file type found in module tree");
             continue;
@@ -109,7 +119,16 @@ fn file(
     ast: &mut Ast,
     errors: &mut Errors,
     reconstruct_src: bool,
+    stats: &mut Stats,
 ) -> ModuleId {
+    stats.file_times.push(crate::FileStats {
+        name: path.to_string_lossy().into_owned(),
+        lex: Duration::ZERO,
+        parse: Duration::ZERO,
+    });
+    let file_stats = stats.file_times.last_mut().unwrap();
+    
+    let lex_start_time = Instant::now();
     let src = match std::fs::read_to_string(path) {
         Ok(f) => f,
         Err(err) => panic!("Failed to read file {path:?}: {err}")
@@ -117,13 +136,19 @@ fn file(
 
     let module_id = ast.add_module(Module::empty(), String::new(), path.to_owned());
 
-    let Some(tokens) = lexer::parse(&src, errors, module_id) else {
+    let lex_res = lexer::parse(&src, errors, module_id);
+    file_stats.lex = lex_start_time.elapsed();
+    let Some(tokens) = lex_res else {
         ast.update(module_id, Module::empty(), src, path.to_owned());
         return module_id;
     };
     
+    let parse_start_time = Instant::now();
     let mut parser = Parser::new(tokens, &src, ast, module_id);
-    match parser.parse() {
+    let parse_res = parser.parse();
+    file_stats.parse = parse_start_time.elapsed();
+    
+    match parse_res {
         Ok(module) => {
             if reconstruct_src {
                 log!("Module: {:#?}", module);
