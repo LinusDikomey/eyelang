@@ -1,5 +1,6 @@
 
-fn printf(fmt *i8, ...) i32 extern
+# fn printf(fmt *i8, ...) i32 extern
+use std.c.printf
 
 Point :: { x i32, y i32 }
 

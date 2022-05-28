@@ -94,7 +94,7 @@ fn local_ty(
             }
         }
         UnresolvedType::Pointer(box (inner, _)) => {
-            local_ty(inner, symbols, defs, scope, errors)
+            Type::Pointer(Box::new(local_ty(inner, symbols, defs, scope, errors)))
         }
         UnresolvedType::Array(box (inner, span, count)) => {
             let Some(count) = *count else {
@@ -102,6 +102,9 @@ fn local_ty(
                 return Type::Invalid;
             };
             Type::Array(Box::new((local_ty(inner, symbols, defs, scope, errors), count)))
+        }
+        UnresolvedType::Tuple(elems, _) => {
+            Type::Tuple(elems.iter().map(|ty| local_ty(ty, symbols, defs, scope, errors)).collect())
         }
         UnresolvedType::Infer(start) => {
             errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, scope.module);
@@ -358,6 +361,9 @@ fn resolve_ty(
                 return Type::Invalid;
             };
             Type::Array(Box::new((resolve_ty(ctx, ast, symbols, path_module, inner, errors), count)))
+        }
+        UnresolvedType::Tuple(elems, _) => {
+            Type::Tuple(elems.iter().map(|ty| resolve_ty(ctx, ast, symbols, path_module, ty, errors)).collect())
         }
         UnresolvedType::Infer(start) => {
             errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, path_module);

@@ -352,6 +352,10 @@ impl<'s> Scope<'s> {
                 let inner = types.add(inner);
                 Ok(TypeInfo::Array(*count, inner))
             }
+            ast::UnresolvedType::Tuple(elems, _) => {
+                let elems = elems.iter().map(|ty| self.resolve_type(ty, types)).collect::<Result<Vec<_>, _>>()?;
+                Ok(TypeInfo::Tuple(types.add_multiple(elems)))
+            }
             ast::UnresolvedType::Infer(_) => Ok(TypeInfo::Unknown)
         }
     }
@@ -615,7 +619,22 @@ impl<'s> Scope<'s> {
                     ir.add_untyped(Tag::Store, Data { bin_op: (elem_ptr, elem_val) });
                 }
                 return ExprResult::Stored(arr)
-            },
+            }
+            ast::Expr::Tuple(span, elems) => {
+                let elems = self.ast.get_extra(*elems);
+                let var = get_var(ir);
+                let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
+                let types = ir.types.add_multiple(std::iter::repeat(TypeInfo::Unknown).take(elems.len()));
+                ir.types.specify(expected, TypeInfo::Tuple(types), errors, span.in_mod(self.module));
+                for (i, elem) in elems.iter().enumerate() {
+                    let member_ty = types.iter().nth(i).unwrap();
+                    let member_val = self.reduce_expr_idx_val(errors, ir, *elem, member_ty, ret);
+                    let idx = ir.add(Data { int: i as u64 }, Tag::Int, i32_ty);
+                    let member = ir.add(Data { bin_op: (var, idx) }, Tag::Member, member_ty);
+                    ir.add_untyped(Tag::Store, Data { bin_op: (member, member_val) });
+                }
+                return ExprResult::Stored(var);
+            }
             ast::Expr::If { start: _, cond, then } => {
                 let after_block = self.gen_if_then(ir, errors, *cond, ret);
 
@@ -1021,6 +1040,35 @@ impl<'s> Scope<'s> {
                         Ref::UNDEF
                     }
                 }
+            }
+            ast::Expr::TupleIdx { expr: indexed, idx, end: _ } => {
+                let indexed_ty = ir.types.add(TypeInfo::Unknown);
+                let expr_var = match self.reduce_expr(errors, ir, &self.ast[*indexed], indexed_ty, ret) {
+                    ExprResult::VarRef(r) | ExprResult::Stored(r) => r,
+                    ExprResult::Val(val) => {
+                        let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
+                        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                        var
+                    }
+                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
+                        errors.emit_span(Error::TupleIndexingOnNonValue, expr.span_in(self.ast, self.module));
+                        ir.invalidate(expected);
+                        return ExprResult::Val(Ref::UNDEF)
+                    }
+                };
+                let TypeInfo::Tuple(elems) = ir.types.get_type(indexed_ty) else {
+                    println!("Indexing non-tuple");
+                    errors.emit_span(Error::TypeMustBeKnownHere, expr.span_in(self.ast, self.module));
+                    return ExprResult::Val(Ref::UNDEF)
+                };
+                let Some(elem_ty) = elems.iter().nth(*idx as usize) else {
+                    errors.emit_span(Error::TupleIndexOutOfRange, expr.span_in(self.ast, self.module));
+                    return ExprResult::Val(Ref::UNDEF)
+                };
+                ir.types.merge(expected, elem_ty, errors, self.module, expr.span(self.ast));
+                let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
+                let idx = ir.add(Data { int: *idx as _ }, Tag::Int, i32_ty);
+                return ExprResult::VarRef(ir.add(Data { bin_op: (expr_var, idx) }, Tag::Member, elem_ty));
             }
             ast::Expr::Cast(span, target, val) => {
                 let target = match self.resolve_type(target, &mut ir.types) {

@@ -209,6 +209,20 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.char(']');
             }
+            Self::Tuple(_, elems) => {
+                let elems = &ast.expr_builder[*elems];
+                c.char('(');
+                let mut it = elems.iter().copied();
+                it.next().map(|f| ast[f].repr(c));
+                for elem in it {
+                    c.write_add(", ");
+                    ast[elem].repr(c);
+                }
+                if elems.len() == 1 {
+                    c.char(',');
+                }
+                c.char(')');
+            }
             Self::If { start: _, cond, then } => {
                 c.write_add("if ");
                 ast[*cond].repr(c);
@@ -280,8 +294,13 @@ impl<C: Representer> Repr<C> for Expr {
             }
             Self::MemberAccess { left, name } => {
                 ast[*left].repr(c);
-                c.write_add(".");
+                c.char('.');
                 c.write_add(c.src(*name));
+            }
+            Self::TupleIdx { expr, idx, end: _ } => {
+                ast[*expr].repr(c);
+                c.char('.');
+                c.write_add(idx.to_string());
             }
             Self::Cast(_, ty, expr) => {
                 ast[*expr].repr(c);
@@ -336,6 +355,16 @@ impl<R: Representer> Repr<R> for UnresolvedType {
                     c.char('_');
                 }
                 c.char(']');
+            }
+            Self::Tuple(elems, _) => {
+                c.char('(');
+                let mut elems = elems.iter();
+                elems.next().map(|e| e.repr(c));
+                for elem in elems {
+                    c.write_add(", ");
+                    elem.repr(c);
+                }
+                c.char(')');
             }
             Self::Infer(_) => c.char('_')
         }

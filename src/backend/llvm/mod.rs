@@ -85,6 +85,10 @@ unsafe fn llvm_ty_(ctx: LLVMContextRef, types: &[LLVMTypeRef], ty: &Type, pointe
         Type::Enum(variants) => {
             int_from_variant_count(ctx, variants.len())
         }
+        Type::Tuple(elems) => {
+            let mut elem_tys = elems.iter().map(|ty| llvm_ty(ctx, types, ty)).collect::<Vec<_>>();
+            LLVMStructTypeInContext(ctx, elem_tys.as_mut_ptr(), elem_tys.len() as u32, FALSE)
+        }
         Type::Invalid => {
             eprintln!("ERROR: Invalid type reached codegen type");
             llvm_ty_(ctx, types, &Type::Prim(Primitive::Unit), pointee)
@@ -474,7 +478,7 @@ unsafe fn build_func(
                             _ => panic!("Invalid cast to primitive")
                         }
                     }
-                    Type::Id(_) | Type::Array(_) => panic!("Invalid cast"),
+                    Type::Id(_) | Type::Array(_) | Type::Tuple(_) => panic!("Invalid cast"),
                     Type::Pointer(_) => {
                         let llvm_target = llvm_ty(ctx, types, target);
                         match origin {

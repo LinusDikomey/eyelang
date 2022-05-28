@@ -35,6 +35,7 @@ use std::{
 };
 
 static LOG: AtomicBool = AtomicBool::new(false);
+static DEBUG_INFER: AtomicBool = AtomicBool::new(false);
 
 macro_rules! log {
     () => {
@@ -126,12 +127,17 @@ pub struct Args {
     #[clap(long)]
     timings: bool,
 
+    /// Debug the type inferer.
+    #[clap(long)]
+    debug_infer: bool,
+
     #[clap(short, long, arg_enum, default_value_t = Backend::LLVM)]
     backend: Backend
 }
 
 fn main() {
     let args = Args::parse();
+    DEBUG_INFER.store(args.debug_infer, std::sync::atomic::Ordering::Relaxed);
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
     log!("Size of Expr: {}", std::mem::size_of::<ast::Expr>());
     run(&args);
@@ -151,11 +157,6 @@ fn run(args: &Args) {
     }
 
     let path = Path::new(args.file.as_deref().unwrap_or("./"));
-    println!(
-        "{} {} ...",
-        "Compiling".green(),
-        args.file.as_deref().unwrap_or("").underline().bright_blue()
-    );
 
     let no_extension = path.with_extension("");
     let name = no_extension
@@ -163,6 +164,12 @@ fn run(args: &Args) {
         .expect("Failed to retrieve filename for input file")
         .to_str()
         .expect("Invalid filename");
+
+    println!(
+        "{} {} ...",
+        "Compiling".green(),
+        name.underline().bright_blue()
+    );
 
     match run_path(path, args, name) {
         Ok(()) => {}
@@ -241,7 +248,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let obj_file = format!("eyebuild/{output_name}.o");
     let exe_file = format!("eyebuild/{output_name}");
     let exec = || {
-        println!("{}", format!("Running {}...", output_name).green());
+        println!("{}", format!("Running {output_name}...").green());
         let status = std::process::Command::new(&exe_file)
             .spawn()
             .expect("Failed to run the executable command")

@@ -5,10 +5,9 @@ use super::*;
 
 /// Type inference debugging
 fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
-    #[cfg(feature = "debug_types")]
-    println!("[TypeInfer] {msg}: {d:?}");
-    #[cfg(not(feature = "debug_types"))]
-    { _ = msg; }
+    if crate::DEBUG_INFER.load(std::sync::atomic::Ordering::Relaxed) {
+        println!("[TypeInfer] {msg}: {d:?}");
+    }
     d
 }
 
@@ -43,12 +42,22 @@ impl TypeTable {
     }
 
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
-        let type_idx = TypeIdx::new(self.types.len());
+        let type_idx = TypeIdx(self.types.len() as u32);
         self.types.push(info);
-        let table_idx = TypeTableIndex::new(self.indices.len() as u32);
+        let table_idx = TypeTableIndex(self.indices.len() as u32);
         self.indices.push(type_idx);
         ty_dbg("Adding", &(info, type_idx));
         table_idx
+    }
+
+    pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> TypeTableIndices {
+        let infos = infos.into_iter();
+        let start_ty_idx = self.types.len() as u32;
+        self.types.extend(infos);
+        let count = (self.types.len() - start_ty_idx as usize) as u32;
+        let idx = self.indices.len() as u32;
+        self.indices.extend((start_ty_idx .. start_ty_idx+count).map(TypeIdx));
+        TypeTableIndices { idx, count }
     }
 
     pub fn add_unknown(&mut self) -> TypeTableIndex {
@@ -70,15 +79,16 @@ impl TypeTable {
         let a_ty = self.types[a_idx.get()];
         let b_idx = &mut self.indices[b.idx()];
         let prev_b_ty = self.types[b_idx.get()];
-        ty_dbg("Merging", (a_ty, prev_b_ty, a_idx, *b_idx));
+        ty_dbg("Merging ...", ((a_ty, a_idx, a), (prev_b_ty, *b_idx, b)));
         *b_idx = a_idx; // make b point to a's type
 
 
         // merge b's previous type into a
         self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self) {
-            Ok(ty) => ty,
+            Ok(ty) => ty_dbg("\t... merged", ty),
             Err(err) => {
-                errors.emit_span(err,span.in_mod(module));
+                ty_dbg("\t... failed to merge", err);
+                errors.emit_span(err, span.in_mod(module));
                 TypeInfo::Invalid
             }
         }
@@ -111,6 +121,32 @@ impl TypeTable {
         FinalTypeTable { types }
     }
 }
+impl Drop for TypeTable {
+    fn drop(&mut self) {
+        ty_dbg("Dropping Type Table: ", self);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TypeTableIndex(u32);
+impl TypeTableIndex {
+    pub const NONE: Self = Self(u32::MAX);
+
+    pub fn idx(self) -> usize { self.0 as usize }
+    pub fn is_present(self) -> bool { self.0 != u32::MAX }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TypeTableIndices {
+    idx: u32,
+    count: u32
+}
+
+impl TypeTableIndices {
+    pub fn iter(self) -> impl Iterator<Item = TypeTableIndex> {
+        (self.idx .. self.idx + self.count).map(TypeTableIndex)
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct TypeTableNames {
@@ -140,10 +176,7 @@ impl Index<TypeTableIndex> for FinalTypeTable {
 
 #[derive(Clone, Copy, Debug)]
 struct TypeIdx(u32);
-impl TypeIdx {    
-    fn new(idx: usize) -> Self {
-        Self(idx as u32)
-    }
+impl TypeIdx {
     fn get(self) -> usize {
         self.0 as usize
     }
@@ -161,6 +194,7 @@ pub enum TypeInfo {
     Pointer(TypeTableIndex),
     Array(Option<u32>, TypeTableIndex),
     Enum(TypeTableNames),
+    Tuple(TypeTableIndices),
     Invalid,
 }
 impl TypeInfo {
@@ -184,6 +218,9 @@ impl TypeInfo {
             }
             Self::Enum(idx) => {
                 Type::Enum(types.get_names(idx).to_vec())
+            }
+            Self::Tuple(indices) => {
+                Type::Tuple(indices.iter().map(|ty| types.get_type(ty).finalize(types)).collect())
             }
         }
     }
@@ -223,7 +260,8 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
             } else { false }
                 .then(|| ty)
                 .ok_or(Error::MismatchedType)
-        } | Resolved(id) => {
+        }
+        Resolved(id) => {
             if let Resolved(other) = other {
                 id == other
             } else { false }
@@ -231,44 +269,47 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                 .ok_or(Error::MismatchedType)
         }
         Pointer(inner) => {
-            match other {
-                Pointer(other_inner) => {
-                    let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
-                    types.update_type(inner, new_inner);
-                    types.point_to(other_inner, inner);
-                    Ok(Pointer(inner))
-                }
-                _ => Err(Error::MismatchedType)
-            }
+            let Pointer(other_inner) = other else { return Err(Error::MismatchedType) };
+            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+            types.update_type(inner, new_inner);
+            types.point_to(other_inner, inner);
+            Ok(Pointer(inner))
         }
         Array(size, inner) => {
-            match other {
-                Array(other_size, other_inner) => {
-                    let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
-                    types.update_type(inner, new_inner);
-                    types.point_to(other_inner, inner);
-                    
-                    let new_size = match (size, other_size) {
-                        (Some(a), Some(b)) if a == b => Some(a),
-                        (Some(size), None) | (None, Some(size)) => Some(size),
-                        (None, None) => None,
-                        _ => return Err(Error::MismatchedType)
-                    };
-                    Ok(Array(new_size, inner))
-                }
-                _ => Err(Error::MismatchedType)
-            }
+            let Array(other_size, other_inner) = other else { return Err(Error::MismatchedType) };
+    
+            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+            types.update_type(inner, new_inner);
+            types.point_to(other_inner, inner);
+            
+            let new_size = match (size, other_size) {
+                (Some(a), Some(b)) if a == b => Some(a),
+                (Some(size), None) | (None, Some(size)) => Some(size),
+                (None, None) => None,
+                _ => return Err(Error::MismatchedType)
+            };
+            Ok(Array(new_size, inner))
+                
         }
         Enum(names) => {
-            if let Enum(other_names) = other {
-                let a = types.get_names(names);
-                let b = types.get_names(other_names);
-                let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
-                let new_variants = types.extend_names(names, new_variants);
-                Ok(Enum(new_variants))
-            } else {
-                Err(Error::MismatchedType)
+            let Enum(other_names) = other else { return Err(Error::MismatchedType) };
+            let a = types.get_names(names);
+            let b = types.get_names(other_names);
+            let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
+            ty_dbg("New variants after merging", (&new_variants, a, b));
+            let merged_variants = types.extend_names(names, new_variants);
+            Ok(Enum(merged_variants))
+        }
+        Tuple(elems) => {
+            let Tuple(other_elems) = other else { return Err(Error::MismatchedType) };
+            if elems.count != other_elems.count { return Err(Error::MismatchedType) }
+            for (a, b) in elems.iter().zip(other_elems.iter()) {
+                let new_a = merge_onesided(types.get_type(a), types.get_type(b), types)?;
+                types.update_type(a, new_a);
+                types.point_to(b, a);
             }
+            Ok(ty)
+        
         }
         Invalid => Ok(Invalid), // invalid type 'spreading'
     }

@@ -203,6 +203,8 @@ pub enum Error {
     ArrayTooLarge,
     ArraySizeCantBeInferredHere,
     InvalidArgumentCountForArrayIndex,
+    TupleIndexingOnNonValue,
+    TupleIndexOutOfRange
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

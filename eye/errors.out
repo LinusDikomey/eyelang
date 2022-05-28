@@ -1,0 +1,30 @@
+Compiling errors ...
+Finished with 4 errors
+error: UnexpectedCharacters
+at: eye/errors.eye:12:1
+     | 
+  12 | µ
+     | ^
+
+error: UnexpectedCharacters
+at: eye/errors.eye:15:1
+     | 
+  15 | µ∆ºª©ƒ
+     | ^^^^^^
+
+error: UnexpectedCharacters
+at: eye/errors.eye:19:1
+     | 
+  19 | µ∑®⁄¨Ω   µ∆
+     | ^^^^^^^^^^^
+  20 |    º∂∑∑€®
+     | ^^^^^^^^^
+  21 | ƒª©ƒ∂∂€®øπå√∫
+     | ^^^^^^^^^^^^^
+
+error: UnexpectedToken
+at: eye/errors.eye:24:27
+     | 
+  24 |     print("Test Function"); # oh no, a semicolon
+     |                           ^
+

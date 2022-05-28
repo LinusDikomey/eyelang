@@ -1,17 +1,16 @@
 use std::fmt;
 use colored::{Colorize, ColoredString};
-use crate::help::write_delimited;
-use crate::help::write_delimited_with;
+use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
-use typing::FinalTypeTable;
+use typing::{TypeTable, TypeInfo, FinalTypeTable};
 
 mod gen;
 mod typing;
+
 pub use gen::Symbol;
 pub use gen::reduce;
+pub use self::typing::TypeTableIndex;
 
-use self::typing::TypeInfo;
-use self::typing::TypeTable;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -21,6 +20,7 @@ pub enum Type {
     Array(Box<(Type, u32)>),
     //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
     Enum(Vec<String>),
+    Tuple(Vec<Type>),
     Invalid
 }
 impl Type {
@@ -41,6 +41,11 @@ impl Type {
             }
             Self::Enum(variants) =>
                 TypeInfo::Enum(types.add_names(variants.as_slice().iter().cloned())),
+            Self::Tuple(elems) => {
+                let infos = elems.iter().map(|ty| ty.as_info(types)).collect::<Vec<_>>();
+                TypeInfo::Tuple(types.add_multiple(infos))
+
+            }
             Self::Invalid => unreachable!()
         }
     }
@@ -55,6 +60,11 @@ impl fmt::Display for Type {
             Self::Enum(variants) => {
                 write_delimited(f, variants, " | ")?;
                 Ok(())
+            }
+            Self::Tuple(elems) => {
+                write!(f, "(")?;
+                write_delimited(f, elems, ", ")?;
+                write!(f, ")")
             }
             Self::Invalid => write!(f, "[invalid]"),
         }
@@ -491,14 +501,4 @@ enum DataVariant {
     BinOp,
     Type,
     Cast
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TypeTableIndex(u32);
-impl TypeTableIndex {
-    pub const NONE: Self = Self(u32::MAX);
-
-    pub fn new(idx: u32) -> Self { Self(idx) }
-    pub fn idx(self) -> usize { self.0 as usize }
-    pub fn is_present(self) -> bool { self.0 != u32::MAX }
 }

@@ -200,6 +200,7 @@ pub enum Expr {
     Unit(TSpan),
     Variable(TSpan),
     Array(TSpan, ExprExtra),
+    Tuple(TSpan, ExprExtra),
     If {
         start: u32,
         cond: ExprRef,
@@ -220,6 +221,7 @@ pub enum Expr {
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
     MemberAccess { left: ExprRef, name: TSpan },
+    TupleIdx { expr: ExprRef, idx: u32, end: u32 },
     Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32)
 }
@@ -239,6 +241,7 @@ impl Expr {
                 | Expr::Unit(span)
                 | Expr::Variable(span)
                 | Expr::Array(span, _)
+                | Expr::Tuple(span, _)
                 | Expr::Cast(span, _, _)
                 => *span,
             Expr::Declare { name, end, .. } => TSpan::new(name.start, *end),
@@ -257,6 +260,7 @@ impl Expr {
             }
             Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name } => TSpan::new(s(left), name.end),
+            Expr::TupleIdx { expr, idx: _, end } => TSpan { start: s(expr), end: *end },
             Expr::Root(start) => TSpan::new(*start, *start + 3),
         }
     }
@@ -347,15 +351,17 @@ pub enum UnresolvedType {
     Unresolved(IdentPath),
     Pointer(Box<(UnresolvedType, u32)>),
     Array(Box<(UnresolvedType, TSpan, Option<u32>)>),
+    Tuple(Vec<UnresolvedType>, TSpan),
     Infer(u32),
 }
 impl UnresolvedType {
     pub fn span(&self, expr_builder: &ExprBuilder) -> TSpan {
         match self {
-            UnresolvedType::Primitive(_, span) => *span,
+            UnresolvedType::Primitive(_, span) 
+            | UnresolvedType::Array(box (_, span, _))
+            | UnresolvedType::Tuple(_, span) => *span,
             UnresolvedType::Unresolved(path) => path.span(),
             UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span(expr_builder).end),
-            UnresolvedType::Array(box (_, span, _)) => *span,
             UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }
