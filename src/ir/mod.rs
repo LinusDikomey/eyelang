@@ -24,9 +24,6 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn pointer_to(self) -> Self {
-        Self::Pointer(Box::new(self))
-    }
     pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
         match self {
             Self::Prim(p) => TypeInfo::Primitive(*p),

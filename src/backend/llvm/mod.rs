@@ -215,7 +215,7 @@ unsafe fn build_func(
             debug_assert!(!r.is_null());
             let mut ty = ir.types.get(ir.inst[i].ty).clone();
             if matches!(ir.inst[i].tag, ir::Tag::Decl | ir::Tag::Param | ir::Tag::Member) {
-                ty = ty.pointer_to();
+                ty = Type::Pointer(Box::new(ty));
             }
             (r, ty)
         }

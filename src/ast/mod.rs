@@ -346,6 +346,7 @@ impl IdentPath {
 }
 
 #[derive(Debug, Clone)]
+#[derive(eye_derive::EnumSizeDebug)]
 pub enum UnresolvedType {
     Primitive(Primitive, TSpan),
     Unresolved(IdentPath),

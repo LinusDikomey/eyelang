@@ -31,7 +31,7 @@ use clap::StructOpt;
 use colored::Colorize;
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool, time::{Duration, Instant}, fmt,
+    sync::atomic::AtomicBool, time::Duration, fmt,
 };
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -52,13 +52,10 @@ enum Cmd {
     /// Check a file or project for errors and warnings.
     Check,
     /// Build an executable and run it immediately.
-    #[cfg(feature = "llvm-backend")]
     Run,
     /// Build an executable.
-    #[cfg(feature = "llvm-backend")]
     Build,
     /// Compile and run using LLVMs JIT compiler. Might produce different results.
-    #[cfg(feature = "llvm-backend")]
     Jit,
     /// Starts a language server that can be used by IDEs for syntax highlighting, autocompletions etc.
     #[cfg(feature = "lsp")]
@@ -81,13 +78,20 @@ impl Default for Cmd {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
 pub enum Backend {
     // Run with the llvm backend
+    #[cfg(feature = "llvm-backend")]
     LLVM,
     /// W.I.P! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
     /// This backend is primarily used for fast compilations. It is mostly unfinished right now.
     X86
 }
 impl Default for Backend {
-    fn default() -> Self { Self::LLVM }
+    fn default() -> Self {    
+        #[cfg(feature = "llvm-backend")]
+        { Self::LLVM }
+
+        #[cfg(not(feature = "llvm-backend"))]
+        { Self::X86 }
+    }
 }
 
 #[derive(clap::Parser)]
@@ -131,7 +135,8 @@ pub struct Args {
     #[clap(long)]
     debug_infer: bool,
 
-    #[clap(short, long, arg_enum, default_value_t = Backend::LLVM)]
+    #[cfg_attr(feature = "llvm-backend", clap(short, long, arg_enum, default_value_t = Backend::LLVM))]
+    #[cfg_attr(not(feature = "llvm-backend"), clap(short, long, arg_enum, default_value_t = Backend::X86))]
     backend: Backend
 }
 
@@ -139,7 +144,10 @@ fn main() {
     let args = Args::parse();
     DEBUG_INFER.store(args.debug_infer, std::sync::atomic::Ordering::Relaxed);
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
-    log!("Size of Expr: {}", std::mem::size_of::<ast::Expr>());
+    if args.log {
+        ast::Expr::debug_sizes();
+        ast::UnresolvedType::debug_sizes();
+    }
     run(&args);
 }
 
@@ -189,6 +197,11 @@ pub struct Stats {
     file_times: Vec<FileStats>,
     irgen: Duration
 }
+impl Stats {
+    pub fn new() -> Self {
+        Self { file_times: Vec::new(), irgen: Duration::ZERO }
+    }
+}
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "----------------------------------------\nTimings of {} files:", self.file_times.len())?;
@@ -236,7 +249,7 @@ impl fmt::Display for BackendStats {
 }
 
 fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast, Errors)> {
-    let mut stats = Stats { file_times: Vec::new(), irgen: Duration::ZERO };
+    let mut stats = Stats::new();
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats)?;
 
     log!("\n\n{ir}\n");
@@ -296,7 +309,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
                         }
                     }
                 }
-                let bitcode_emit_start_time = Instant::now();
+                let bitcode_emit_start_time = std::time::Instant::now();
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 if args.timings {
                     println!("LLVM backend bitcode emit time: {:?}", bitcode_emit_start_time.elapsed());
@@ -339,7 +352,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
             }
         }
         #[cfg(feature = "lsp")]
-        Cmd::Lsp => unreachable!(),
+        (Cmd::Lsp, _) => unreachable!(),
     }
     Ok(())
 }
