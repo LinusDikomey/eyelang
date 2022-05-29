@@ -2,7 +2,7 @@ use std::{u128, fmt, str::FromStr};
 
 use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, ast::TSpan};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub start: u32,
     pub end: u32,

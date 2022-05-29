@@ -52,10 +52,10 @@ impl Tokens {
     }
 
     /// steps over the current token and returns it
-    pub fn step(&mut self) -> Result<&Token, CompileError> {
+    pub fn step(&mut self) -> Result<Token, CompileError> {
         self.index += 1;
         if self.index <= self.len { // <= because we are only getting the previous token
-            Ok(&self.tokens[self.index - 1])
+            Ok(self.tokens[self.index - 1])
         } else {
             let end = self.last_src_pos();
             Err(CompileError {
@@ -67,14 +67,14 @@ impl Tokens {
 
     /// steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
-    pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> &Token {
+    pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
         let tok = self.step().expect("step_assert failed");
         debug_assert_eq!(tok.ty, ty.into());
         tok
     }
 
     pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T)
-    -> Result<&Token, CompileError> {
+    -> Result<Token, CompileError> {
         let expected = expected.into().0;
         let module = self.module;
         let tok = self.step()?;
@@ -87,7 +87,7 @@ impl Tokens {
         Ok(tok)
     }
 
-    pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Option<&Token> {
+    pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Option<Token> {
         if let Some(next) = self.peek() {
             next.is(expected).then(|| self.step().unwrap())
         } else {
@@ -139,6 +139,32 @@ impl<'a> Parser<'a> {
         self.parse_module()
     }
 
+    /// Parses a delimited list. The `item` function parses an item and is supposed to handle the result itself.
+    /// `delim` is a delimiter. Trailing delimiters are allowed, but optional here.
+    /// `end` is the ending token. It will be returned from this function once parsed.
+    fn parse_delimited<F>(&mut self, delim: TokenType, end: TokenType, mut item: F) -> Result<Token, CompileError>
+    where F: FnMut(&mut Parser) -> Result<(), CompileError> {
+        if let Some(end_tok) = self.toks.step_if(end) { return Ok(end_tok) }
+        loop {
+            item(self)?;
+            let delim_or_end = self.toks.step()?;
+            match delim_or_end.ty {
+                x if x == delim => {
+                    if let Some(end_tok) = self.toks.step_if(end) { return Ok(end_tok) }
+                }
+                x if x == end => {
+                    return Ok(delim_or_end)
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        Error::UnexpectedToken,
+                        delim_or_end.span().in_mod(self.toks.module)
+                    ))
+                }
+            }
+        }
+    }
+
     fn parse_module(&mut self) -> Result<Module, CompileError> {
         let mut definitions = HashMap::new();
         let mut uses = Vec::new();
@@ -184,11 +210,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block(&mut self) -> EyeResult<ExprRef> {
-        let start = self.toks.step_expect(TokenType::LBrace)?.start;
-        self.parse_block_from_lbrace(start)
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+        self.parse_block_from_lbrace(lbrace)
     }
 
-    fn parse_block_from_lbrace(&mut self, start: u32) -> EyeResult<ExprRef> {
+    fn parse_block_from_lbrace(&mut self, lbrace: Token) -> EyeResult<ExprRef> {
+        debug_assert_eq!(lbrace.ty, TokenType::LBrace);
+
         let mut defs = HashMap::new();
         let mut items = Vec::new();
 
@@ -202,11 +230,11 @@ impl<'a> Parser<'a> {
                 Item::Expr(item) => items.push(item),
             }
         }
-        let end = self.toks.step_expect(TokenType::RBrace)?.end;
+        let rbrace = self.toks.step_expect(TokenType::RBrace)?;
         let items = self.ast.extra(&items);
         let defs = self.ast.expr_builder.defs(defs);
         
-        Ok(self.ast.add_expr(Expr::Block { span: TSpan::new(start, end), items, defs }))
+        Ok(self.ast.add_expr(Expr::Block { span: TSpan::new(lbrace.start, rbrace.end), items, defs }))
     }
 
     fn parse_item(&mut self) -> Result<Item, CompileError> {
@@ -240,32 +268,23 @@ impl<'a> Parser<'a> {
                 let mut varargs = false;
 
                 if self.toks.step_if(TokenType::LParen).is_some() { 
-                    let mut first = true;
-                    if self.toks.step_if(TokenType::RParen).is_none() {
-                        'param_loop: loop {
-                            if first {
-                                first = false;
-                            } else {
-                                match_or_unexpected!{ self.toks.step()?, self.toks.module,
-                                    TokenType::RParen => break 'param_loop,
-                                    TokenType::Comma => ()
-                                }
-                                if self.toks.step_if(TokenType::TripleDot).is_some() {
-                                    varargs = true;
-                                    self.toks.step_expect(TokenType::RParen)?;
-                                    break 'param_loop;
-                                }
-                                if self.toks.step_if(TokenType::RParen).is_some() {
-                                    break 'param_loop
-                                }
-                            }
-                            let name_tok = self.toks.step_expect(TokenType::Ident)?;
-                            let name = name_tok.get_val(self.src).to_owned();
+                    self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                        if varargs {
+                            let tok = p.toks.step()?;
+                            // no further tokens after varargs are allowed
+                            return Err(Error::UnexpectedToken.at(tok.start, tok.end, p.toks.module));
+                        }
+                        if p.toks.step_if(TokenType::TripleDot).is_some() {
+                            varargs = true;
+                        } else {
+                            let name_tok = p.toks.step_expect(TokenType::Ident)?;
+                            let name = name_tok.get_val(p.src).to_owned();
                             let (s, e) = (name_tok.start, name_tok.end);
-                            let ty = self.parse_type()?;
+                            let ty = p.parse_type()?;
                             params.push((name, ty, s, e));
                         }
-                    }
+                        Ok(())
+                    })?;
                 }
                 let cur_tok = self.toks.peek().ok_or_else(|| CompileError {
                         err: Error::UnexpectedEndOfFile,
@@ -319,17 +338,14 @@ impl<'a> Parser<'a> {
                         self.toks.step_assert(TokenType::DoubleColon);
                         self.toks.step_expect(TokenType::LBrace)?;
                         let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
-                        while self.toks.current()?.ty != TokenType::RBrace {
-                            let start = self.toks.current().unwrap().start;
-                            let member_name = self.toks.step_expect(TokenType::Ident)?.get_val(self.src);
-                            let member_type = self.parse_type()?;
-                            let end = self.toks.previous().unwrap().end;
-                            if self.toks.current()?.ty == TokenType::Comma {
-                                self.toks.step()?;
-                            }
-                            members.push((member_name.to_owned(), member_type, start, end));
-                        }
-                        self.toks.step_expect(TokenType::RBrace)?;
+                        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+                            let ident = p.toks.step_expect(TokenType::Ident)?;
+                            let member_name = ident.get_val(p.src);
+                            let member_type = p.parse_type()?;
+                            let end = member_type.span(&p.ast.expr_builder).end;
+                            members.push((member_name.to_owned(), member_type, ident.start, end));
+                            Ok(())
+                        })?;
                         Item::Definition(
                             name.to_owned(),
                             Definition::Struct(StructDefinition { members })
@@ -392,24 +408,15 @@ impl<'a> Parser<'a> {
         let expr = match_or_unexpected!(first,
             self.toks.module,
             TokenType::LBrace => {
-                let block = self.parse_block_from_lbrace(start)?;
+                let block = self.parse_block_from_lbrace(first)?;
                 return self.parse_factor_postfix(block, true);
             },
             TokenType::LBracket => {
                 let mut elems = Vec::new();
-                let closing = loop {
-                    if let Some(r) = self.toks.step_if(TokenType::RBracket) { break r; }
-                    elems.push(self.parse_expr()?);
-                    let next = self.toks.step()?;
-                    match next.ty {
-                        TokenType::RBracket => break next,
-                        TokenType::Comma => (),
-                        _ => return Err(CompileError::new(
-                            Error::UnexpectedToken,
-                            next.span().in_mod(self.toks.module)
-                        ))
-                    }
-                };
+                let closing = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+                    elems.push(p.parse_expr()?);
+                    Ok(())
+                })?;
                 Expr::Array(TSpan::new(start, closing.end), self.ast.extra(&elems))
             },
             TokenType::LParen => {
@@ -423,15 +430,10 @@ impl<'a> Parser<'a> {
                         TokenType::Comma => {
                             // tuple
                             let mut elems = vec![expr];
-                            let end = loop {
-                                if let Some(r) = self.toks.step_if(TokenType::RParen) { break r.end }
-                                elems.push(self.parse_expr()?);
-                                let after_expr = self.toks.step()?;
-                                match_or_unexpected! {after_expr, self.toks.module,
-                                    TokenType::RParen => break after_expr.end,
-                                    TokenType::Comma => {}
-                                }
-                            };
+                            let end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                                elems.push(p.parse_expr()?);
+                                Ok(())
+                            })?.end;
                             Expr::Tuple(TSpan::new(start, end), self.ast.extra(&elems))
                         }
                     }
@@ -468,7 +470,7 @@ impl<'a> Parser<'a> {
                     Expr::If { start, cond, then }
                 }
             },
-            TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(start)?,
+            TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first)?,
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let prim_span = first.span();
                 let inner = self.parse_factor(false)?;
@@ -497,18 +499,10 @@ impl<'a> Parser<'a> {
                     self.toks.step_assert(TokenType::LParen);
                     // function call
                     let mut args = Vec::new();
-                    let end = match self.toks.step_if(TokenType::RParen) {
-                        None => loop {
-                            args.push(self.parse_expr()?);
-                            let step = self.toks.step()?;
-                            match_or_unexpected!(step,
-                                self.toks.module,
-                                TokenType::Comma => (),
-                                TokenType::RParen => break step.end
-                            );
-                        }
-                        Some(rparen) => rparen.end
-                    };
+                    let end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                        args.push(p.parse_expr()?);
+                        Ok(())
+                    })?.end;
                     Expr::FunctionCall { func: expr, args: self.ast.extra(&args), end }
                 }
                 Some(TokenType::Dot) => {
@@ -560,10 +554,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(&mut self, start: u32) -> EyeResult<Expr> {
+    fn parse_while_from_cond(&mut self, while_tok: Token) -> EyeResult<Expr> {
+        debug_assert_eq!(while_tok.ty, TokenType::Keyword(Keyword::While));
         let cond = self.parse_expr()?;
         let body = self.parse_block_or_expr()?;
-        Ok(Expr::While { start, cond, body })
+        Ok(Expr::While { start: while_tok.start, cond, body })
     }
     
     fn parse_path(&mut self) -> EyeResult<IdentPath> {
@@ -602,22 +597,14 @@ impl<'a> Parser<'a> {
                     return Ok(UnresolvedType::Primitive(Primitive::Unit, TSpan::new(lparen_start, rparen.end)))
                 }
                 let mut tuple_types = Vec::new();
-                let rparen_end = loop {
-                    tuple_types.push(self.parse_type()?);
-                    let comma_or_rparen = self.toks.step()?;
-                    match_or_unexpected! {comma_or_rparen, self.toks.module,
-                        TokenType::Comma => {},
-                        TokenType::RParen => {
-                            println!("RPAREN");
-                            break comma_or_rparen.end
-                        }
-                    }
-                };
+                let rparen_end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                    tuple_types.push(p.parse_type()?);
+                    Ok(())
+                })?.end;
                 Ok(UnresolvedType::Tuple(tuple_types, TSpan::new(lparen_start, rparen_end)))
                 
             },
             TokenType::LBracket => {
-                let start = type_tok.start;
                 let elem_ty = self.parse_type()?;
                 self.toks.step_expect(TokenType::Semicolon)?;
                 let count = if self.toks.step_if(TokenType::Underscore).is_some() {
@@ -636,11 +623,10 @@ impl<'a> Parser<'a> {
                     }
                 };
                 let end = self.toks.step_expect(TokenType::RBracket)?.end;
-                Ok(UnresolvedType::Array(Box::new((elem_ty, TSpan::new(start, end), count))))
+                Ok(UnresolvedType::Array(Box::new((elem_ty, TSpan::new(type_tok.start, end), count))))
             },
             TokenType::Star => {
-                let start = type_tok.start;
-                Ok(UnresolvedType::Pointer(Box::new((self.parse_type()?, start))))
+                Ok(UnresolvedType::Pointer(Box::new((self.parse_type()?, type_tok.start))))
             },
             TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
         )

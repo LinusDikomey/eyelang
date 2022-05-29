@@ -213,7 +213,7 @@ impl<C: Representer> Repr<C> for Expr {
                 let elems = &ast.expr_builder[*elems];
                 c.char('(');
                 let mut it = elems.iter().copied();
-                it.next().map(|f| ast[f].repr(c));
+                if let Some(f) = it.next() { ast[f].repr(c) };
                 for elem in it {
                     c.write_add(", ");
                     ast[elem].repr(c);
@@ -359,7 +359,7 @@ impl<R: Representer> Repr<R> for UnresolvedType {
             Self::Tuple(elems, _) => {
                 c.char('(');
                 let mut elems = elems.iter();
-                elems.next().map(|e| e.repr(c));
+                if let Some(e) = elems.next() { e.repr(c) }
                 for elem in elems {
                     c.write_add(", ");
                     elem.repr(c);

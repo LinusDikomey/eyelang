@@ -54,7 +54,7 @@ fn calc_range(span: crate::lexer::Span, ast: &crate::ast::Ast) -> lsp_types::Ran
 fn check(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
     let path = uri.to_file_path().map_err(|_| LspError::InvalidPath)?;
     debug(format!("validation path: {path:?}"));
-    let diagnostics = match crate::compile::project(&path, false, true, &[], true, &mut crate::Stats::new()) {
+    let diagnostics = match crate::compile::project(&path, false, true, &[], true, &mut crate::Stats::default()) {
         Ok(_) => {
             Vec::new()
         }

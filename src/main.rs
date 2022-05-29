@@ -193,14 +193,10 @@ fn run(args: &Args) {
     }
 }
 
+#[derive(Default)]
 pub struct Stats {
     file_times: Vec<FileStats>,
     irgen: Duration
-}
-impl Stats {
-    pub fn new() -> Self {
-        Self { file_times: Vec::new(), irgen: Duration::ZERO }
-    }
 }
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -249,7 +245,7 @@ impl fmt::Display for BackendStats {
 }
 
 fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast, Errors)> {
-    let mut stats = Stats::new();
+    let mut stats = Stats::default();
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats)?;
 
     log!("\n\n{ir}\n");

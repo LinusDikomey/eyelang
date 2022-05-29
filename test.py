@@ -5,7 +5,8 @@ from sys import stdout
 
 from requests import patch
 
-run = ['cargo', 'run', '-q', '--', 'run']
+build = ['cargo', 'build']
+run = ['./target/debug/eyelang', 'run']
 
 GREEN = '\033[1;32m'
 RED = '\033[1;31m'
@@ -13,6 +14,11 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
+    print(f'{CYAN}Compiling...{R}')
+    if subprocess.run(build).returncode != 0:
+        print(f'{RED}An error occurred while compiling{R}')
+        exit(1)
+    print(f'{GREEN}Running tests ...{R}')
     errors = walk('eye')
     if errors > 0:
         s = 's' if errors > 1 else ''
