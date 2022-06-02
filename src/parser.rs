@@ -47,10 +47,6 @@ impl Tokens {
             .unwrap_or(0)
     }
 
-    pub fn _position(&self) -> usize {
-        self.index
-    }
-
     /// steps over the current token and returns it
     pub fn step(&mut self) -> Result<Token, CompileError> {
         self.index += 1;
@@ -79,6 +75,7 @@ impl Tokens {
         let module = self.module;
         let tok = self.step()?;
         if !expected.iter().any(|expected_tok| *expected_tok == tok.ty) {
+            dbg!(expected, tok);
             return Err(CompileError {
                 err: Error::UnexpectedToken,
                 span: Span::new(tok.start, tok.end, module)
@@ -95,9 +92,9 @@ impl Tokens {
         }
     }
 
-    pub fn peek(&self) -> Option<&Token> {
+    pub fn peek(&self) -> Option<Token> {
         if self.index < self.tokens.len() {
-            Some(&self.tokens[self.index])
+            Some(self.tokens[self.index])
         } else {
             None
         }
@@ -260,72 +257,9 @@ impl<'a> Parser<'a> {
             }
             // function definition
             TokenType::Keyword(Keyword::Fn) => {
-                self.toks.step_assert(Keyword::Fn);
-                let name_tok = self.toks.step_expect(TokenType::Ident)?;
-                let name = name_tok.get_val(self.src).to_owned();
-                
-                let mut params = Vec::new();
-                let mut varargs = false;
-
-                if self.toks.step_if(TokenType::LParen).is_some() { 
-                    self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                        if varargs {
-                            let tok = p.toks.step()?;
-                            // no further tokens after varargs are allowed
-                            return Err(Error::UnexpectedToken.at(tok.start, tok.end, p.toks.module));
-                        }
-                        if p.toks.step_if(TokenType::TripleDot).is_some() {
-                            varargs = true;
-                        } else {
-                            let name_tok = p.toks.step_expect(TokenType::Ident)?;
-                            let name = name_tok.get_val(p.src).to_owned();
-                            let (s, e) = (name_tok.start, name_tok.end);
-                            let ty = p.parse_type()?;
-                            params.push((name, ty, s, e));
-                        }
-                        Ok(())
-                    })?;
-                }
-                let cur_tok = self.toks.peek().ok_or_else(|| CompileError {
-                        err: Error::UnexpectedEndOfFile,
-                        span: Span::new(self.toks.last_src_pos(), self.toks.last_src_pos(), self.toks.module)
-                    })?;
-                let (return_type, body) = match cur_tok.ty {
-                    TokenType::LBrace => {
-                        (
-                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                            Some(self.parse_block()?)
-                        )
-                    }
-                    TokenType::Colon => {
-                        let cur_tok = self.toks.step_assert(TokenType::Colon);
-                        (
-                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                            Some(self.parse_expr()?)
-                        )
-                    }
-                    TokenType::Keyword(Keyword::Extern) => {
-                        let cur_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
-                        (
-                            UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
-                            None
-                        )
-                    }
-                    _ => {
-                        let return_type = self.parse_type()?;
-                        let body = self.toks.step_if(TokenType::Keyword(Keyword::Extern))
-                            .is_none()
-                            .then(|| self.parse_block_or_expr())
-                            .transpose()?;
-                        (return_type, body)
-                    }
-                };
-                Item::Definition(name, Definition::Function(Function {
-                    params,
-                    varargs,
-                    return_type,
-                    body
-                }))
+                let fn_tok = self.toks.step_assert(Keyword::Fn);
+                let (name, func) = self.parse_function_def(fn_tok)?;
+                Item::Definition(name, Definition::Function(func))
             }
             // either a struct or a variable
             TokenType::Ident => {
@@ -336,19 +270,30 @@ impl<'a> Parser<'a> {
                     // Struct definition
                     Some(TokenType::DoubleColon) => {
                         self.toks.step_assert(TokenType::DoubleColon);
+                        let generics = self.parse_optional_generics()?;
+
                         self.toks.step_expect(TokenType::LBrace)?;
                         let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
+                        let mut methods = Vec::new();
                         self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
-                            let ident = p.toks.step_expect(TokenType::Ident)?;
-                            let member_name = ident.get_val(p.src);
-                            let member_type = p.parse_type()?;
-                            let end = member_type.span(&p.ast.expr_builder).end;
-                            members.push((member_name.to_owned(), member_type, ident.start, end));
+                            let ident_or_fn = p.toks.step()?;
+                            match_or_unexpected!{ident_or_fn, p.toks.module,
+                                TokenType::Ident => {
+                                    let member_name = ident_or_fn.get_val(p.src);
+                                    let member_type = p.parse_type()?;
+                                    let end = member_type.span(&p.ast.expr_builder).end;
+                                    members.push((member_name.to_owned(), member_type, ident.start, end));
+                                },
+                                TokenType::Keyword(Keyword::Fn) => {
+                                    methods.push(p.parse_function_def(ident_or_fn)?);
+                                }
+                            }
+                            
                             Ok(())
                         })?;
                         Item::Definition(
                             name.to_owned(),
-                            Definition::Struct(StructDefinition { members })
+                            Definition::Struct(StructDefinition { generics, members, methods })
                         )
                     }
                     // Variable declaration with explicit type
@@ -390,6 +335,78 @@ impl<'a> Parser<'a> {
             }
             _ => Item::Expr(self.parse_expr()?)
         })
+    }
+
+    fn parse_function_def(&mut self, fn_tok: Token) -> EyeResult<(String, Function)> {
+        debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
+        let name_tok = self.toks.step_expect(TokenType::Ident)?;
+        let name = name_tok.get_val(self.src).to_owned();
+        
+        let generics = self.parse_optional_generics()?;
+        
+        let mut params = Vec::new();
+        let mut varargs = false;
+
+        if self.toks.step_if(TokenType::LParen).is_some() { 
+            self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                if varargs {
+                    let tok = p.toks.step()?;
+                    // no further tokens after varargs are allowed
+                    return Err(Error::UnexpectedToken.at(tok.start, tok.end, p.toks.module));
+                }
+                if p.toks.step_if(TokenType::TripleDot).is_some() {
+                    varargs = true;
+                } else {
+                    let name_tok = p.toks.step_expect(TokenType::Ident)?;
+                    let name = name_tok.get_val(p.src).to_owned();
+                    let (s, e) = (name_tok.start, name_tok.end);
+                    let ty = p.parse_type()?;
+                    params.push((name, ty, s, e));
+                }
+                Ok(())
+            })?;
+        }
+        let cur_tok = self.toks.peek().ok_or_else(|| CompileError {
+                err: Error::UnexpectedEndOfFile,
+                span: Span::new(self.toks.last_src_pos(), self.toks.last_src_pos(), self.toks.module)
+            })?;
+        let (return_type, body) = match cur_tok.ty {
+            TokenType::LBrace => {
+                (
+                    UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                    Some(self.parse_block()?)
+                )
+            }
+            TokenType::Colon => {
+                let cur_tok = self.toks.step_assert(TokenType::Colon);
+                (
+                    UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                    Some(self.parse_expr()?)
+                )
+            }
+            TokenType::Keyword(Keyword::Extern) => {
+                let cur_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Extern));
+                (
+                    UnresolvedType::Primitive(Primitive::Unit, TSpan::new(cur_tok.start, cur_tok.start)),
+                    None
+                )
+            }
+            _ => {
+                let return_type = self.parse_type()?;
+                let body = self.toks.step_if(TokenType::Keyword(Keyword::Extern))
+                    .is_none()
+                    .then(|| self.parse_block_or_expr())
+                    .transpose()?;
+                (return_type, body)
+            }
+        };
+        Ok((name, Function {
+            params,
+            generics,
+            varargs,
+            return_type,
+            body
+        }))
     }
 
     fn parse_expr(&mut self) -> EyeResult<ExprRef> {
@@ -630,5 +647,16 @@ impl<'a> Parser<'a> {
             },
             TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
         )
+    }
+
+    fn parse_optional_generics(&mut self) -> Result<Vec<TSpan>, CompileError> {
+        let mut generics = Vec::new();
+        if let Some(_) = self.toks.step_if(TokenType::LBracket) {
+            self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+                generics.push(p.toks.step_expect(TokenType::Ident)?.span());
+                Ok(())
+            })?;
+        }
+        Ok(generics)
     }
 }

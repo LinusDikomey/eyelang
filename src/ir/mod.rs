@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use colored::{Colorize, ColoredString};
 use crate::help::{write_delimited, write_delimited_with};
@@ -149,6 +150,7 @@ impl fmt::Display for TypeDef {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub members: Vec<(String, Type)>,
+    pub methods: HashMap<String, SymbolKey>,
     pub name: String
 }
 impl fmt::Display for Struct {
@@ -160,19 +162,6 @@ impl fmt::Display for Struct {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct FinalStruct {
-    pub members: Vec<(String, Type)>,
-    pub name: String
-}
-impl fmt::Display for FinalStruct {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (name, member) in &self.members {
-            writeln!(f, "  {name} {member}")?;
-        }
-        Ok(())
-    }
-}
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,

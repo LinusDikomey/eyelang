@@ -4,7 +4,7 @@ use crate::{
     lexer::{tokens::{Operator, AssignType, IntLiteral, FloatLiteral}, Span},
     types::Primitive,
 };
-use std::{borrow::Cow, collections::HashMap, ptr::NonNull};
+use std::{borrow::{Cow, Borrow}, collections::HashMap, ptr::NonNull};
 use builder::IrBuilder;
 use self::types::{GlobalsRef, Globals};
 
@@ -87,17 +87,20 @@ fn gen_func_bodies(
         };
         let ir = def.body.as_ref().map(|body| {
             let mut builder = IrBuilder::new(scope.module);
-            let mut scope: Scope<'_> = scope.child(HashMap::with_capacity(header.params.len()));
+            let mut scope_defs = HashMap::with_capacity(header.params.len() + def.generics.len());
+            
+            for generic in &def.generics {
+                let name = &scope.ast.src(scope.module).0[generic.range()];
+                let generic_ty = builder.types.add(TypeInfo::Unknown);
+                scope_defs.insert(name.to_owned(), Symbol::LocalType(generic_ty));
+            }
             for (i, (name, ty)) in header.params.iter().enumerate() {
                 let info = ty.as_info(&mut builder.types);
                 let ty = builder.types.add(info);
                 let param = builder.add(Data { int32: i as u32 }, Tag::Param, ty);
-                scope
-                    .info
-                    .symbols
-                    .to_mut()
-                    .insert(name.clone(), Symbol::Var { ty, var: param });
+                scope_defs.insert(name.clone(), Symbol::Var { ty, var: param });
             }
+            let mut scope: Scope<'_> = scope.child(scope_defs);
             let return_type = header.return_type.as_info(&mut builder.types);
             let expected = builder.types.add(return_type);
             let body = &scope.ast[*body];
@@ -130,6 +133,7 @@ fn gen_func_bodies(
 pub enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
+    LocalType(TypeTableIndex),
     Module(ModuleId),
     Var { ty: TypeTableIndex, var: Ref }
 }
@@ -144,6 +148,9 @@ impl<'a> ScopeInfo<'a> {
             .as_ref()
             .map(|parent| unsafe { parent.as_ref() })
     }
+    fn reborrow<'me>(&'me self) -> ScopeInfo<'me> {
+        ScopeInfo { parent: self.parent, symbols: Cow::Borrowed(self.symbols.borrow()) }
+    }
 
     fn resolve_local(&self, name: &str) -> Result<Resolved, Error> {
         self.resolve_local_recursive(name, 0)
@@ -155,6 +162,7 @@ impl<'a> ScopeInfo<'a> {
             Ok(match symbol {
                 Symbol::Func(f) => Resolved::Func(*f),
                 Symbol::Type(t) => Resolved::Type(*t),
+                Symbol::LocalType(t) => Resolved::LocalType(*t),
                 Symbol::Module(m) => Resolved::Module(*m),
                 Symbol::Var { ty, var } => Resolved::Var(*ty, *var),
             })
@@ -189,23 +197,27 @@ impl TypingCtx {
         self.funcs.push(func);
         SymbolKey((self.funcs.len() - 1) as u64)
     }
-
     pub fn add_type(&mut self, ty: TypeDef) -> SymbolKey {
         self.types.push(ty);
         SymbolKey((self.types.len() - 1) as u64)
     }
+    pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()] }
+    //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
+    //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
+    //pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()] }
 }
 
 enum Resolved {
     Var(TypeTableIndex, Ref),
     Func(SymbolKey),
     Type(SymbolKey),
+    LocalType(TypeTableIndex),
     Module(ModuleId),
 }
 impl Resolved {
     pub fn into_symbol(self) -> Option<Symbol> {
         match self {
-            Resolved::Var(_, _) => None,
+            Resolved::Var(_, _) | Resolved::LocalType(_) => None,
             Resolved::Func(id) => Some(Symbol::Func(id)),
             Resolved::Type(id) => Some(Symbol::Type(id)),
             Resolved::Module(id) => Some(Symbol::Module(id)),
@@ -219,6 +231,7 @@ enum ExprResult {
     Val(Ref),
     Func(SymbolKey),
     Type(SymbolKey),
+    LocalType(TypeTableIndex),
     Module(ModuleId),
     Stored(Ref),
 }
@@ -272,6 +285,15 @@ impl<'s> Scope<'s> {
                 parent: None,
                 symbols: Cow::Borrowed(symbols),
             },
+        }
+    }
+    pub fn reborrow<'me>(&'me mut self) -> Scope<'me> {
+        Scope {
+            ctx: &mut *self.ctx,
+            globals: self.globals,
+            ast: &*self.ast,
+            module: self.module,
+            info: self.info.reborrow()
         }
     }
     pub fn tspan(&self, expr: ExprRef) -> TSpan {
@@ -335,10 +357,13 @@ impl<'s> Scope<'s> {
                         .get(last.0)
                         .ok_or(Error::UnknownIdent)? {
                             Symbol::Type(ty) => Ok(TypeInfo::Resolved(*ty)),
+                            // TODO: might require a new solution to allow inference of local types
+                            Symbol::LocalType(ty) => Ok(types.get_type(*ty)),
                             _ => Err(Error::TypeExpected)
                         },
                     ModuleOrLocal::Local => match self.info.resolve_local(last.0)? {
                         Resolved::Type(ty) => Ok(TypeInfo::Resolved(ty)),
+                        Resolved::LocalType(ty) => Ok(types.get_type(ty)),
                         _ => Err(Error::TypeExpected)
                     }
                 }
@@ -441,7 +466,12 @@ impl<'s> Scope<'s> {
             |ir| ir.add(Data { ty: expected }, Tag::Decl, expected)
         ) {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
-            ExprResult::Val(_) | ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
+            ExprResult::Val(_)
+            | ExprResult::Func(_)
+            | ExprResult::Type(_)
+            | ExprResult::LocalType(_)
+            | ExprResult::Module(_)
+            => {
                 if !ir.types.get_type(expected).is_invalid() {
                     errors.emit_span(Error::CantAssignTo, expr.span(self.ast).in_mod(self.module));
                 }
@@ -595,6 +625,7 @@ impl<'s> Scope<'s> {
                         }
                         Resolved::Func(f) => return ExprResult::Func(f),
                         Resolved::Type(t) => return ExprResult::Type(t),
+                        Resolved::LocalType(t) => return ExprResult::LocalType(t),
                         Resolved::Module(m) => return ExprResult::Module(m),
                     },
                     Err(err) => {
@@ -970,7 +1001,7 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         MemberAccessType::Var(var)
                     }
-                    ExprResult::Func(_) | ExprResult::Type(_) => {
+                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::LocalType(_) => {
                         errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
                         MemberAccessType::Invalid
                     }
@@ -1026,6 +1057,7 @@ impl<'s> Scope<'s> {
                             return match *symbol {
                                 Symbol::Func(f) => ExprResult::Func(f),
                                 Symbol::Type(t) => ExprResult::Type(t),
+                                Symbol::LocalType(t) => ExprResult::LocalType(t),
                                 Symbol::Module(m) => ExprResult::Module(m),
                                 Symbol::Var { ty: _, var } => ExprResult::VarRef(var),
                             };
@@ -1050,7 +1082,7 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         var
                     }
-                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::Module(_) => {
+                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::Module(_) => {
                         errors.emit_span(Error::TupleIndexingOnNonValue, expr.span_in(self.ast, self.module));
                         ir.invalidate(expected);
                         return ExprResult::Val(Ref::UNDEF)

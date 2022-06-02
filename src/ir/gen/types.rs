@@ -37,82 +37,14 @@ pub fn gen_globals(ast: &Ast, ctx: &mut TypingCtx, errors: &mut Errors) -> Globa
     for (module_id, module) in ast.modules.iter().enumerate() {
         let module_id = ModuleId::new(module_id as u32);
         for (name, def) in &module.definitions {
-            add_global_def(def, ctx, ast, &mut symbols, module_id, name, errors);
+            if symbols[module_id.idx()].contains_key(name) { continue }
+            gen_ty(def, module_id, &name, errors,
+                TypegenResolveState::Global { symbols: &mut symbols, ctx, ast }
+            );
         }
     }
     Globals(symbols)
 }
-
-fn add_global_def(
-    def: &ast::Definition,
-    ctx: &mut TypingCtx,
-    ast: &Ast,
-    symbols: &mut [HashMap<String, Symbol>],
-    module: ModuleId,
-    name: &str,
-    errors: &mut Errors,
-) -> Option<Symbol> {
-    Some(match def {
-        ast::Definition::Function(func) => {
-            Symbol::Func(add_func(ctx, ast, symbols, func, module, name, errors))
-        }
-        ast::Definition::Struct(struct_) => {
-            Symbol::Type(add_struct(ctx, ast, symbols, struct_, module, name, errors))
-        }
-        ast::Definition::Module(inner_module) => {
-            symbols[module.idx()].insert(name.to_owned(), Symbol::Module(*inner_module));
-            Symbol::Module(*inner_module)
-        }
-        ast::Definition::Use(path) => {
-            if let Some(symbol) = resolve_global_path(path, ast, ctx, symbols, module, errors) {
-                symbols[module.idx()].insert(name.to_owned(), symbol);
-                symbol
-            } else {
-                return None;
-            }
-        }
-    })
-}
-
-fn local_ty(
-    unresolved: &UnresolvedType,
-    symbols: &mut HashMap<String, Symbol>,
-    defs: &HashMap<String, ast::Definition>,
-    scope: &mut Scope,
-    errors: &mut Errors
-) -> Type {
-    match unresolved {
-        UnresolvedType::Primitive(p, _) => Type::Prim(*p),
-        UnresolvedType::Unresolved(path) => {
-            match resolve_local_path(path, scope, symbols, defs, errors) {
-                Some(Symbol::Type(key)) => Type::Id(key),
-                Some(_) => {
-                    errors.emit_span(Error::TypeExpected, path.span().in_mod(scope.module));
-                    Type::Invalid
-                }
-                _ => Type::Invalid // an error was already emitted for this
-            }
-        }
-        UnresolvedType::Pointer(box (inner, _)) => {
-            Type::Pointer(Box::new(local_ty(inner, symbols, defs, scope, errors)))
-        }
-        UnresolvedType::Array(box (inner, span, count)) => {
-            let Some(count) = *count else {
-                errors.emit_span(Error::ArraySizeCantBeInferredHere, span.in_mod(scope.module));
-                return Type::Invalid;
-            };
-            Type::Array(Box::new((local_ty(inner, symbols, defs, scope, errors), count)))
-        }
-        UnresolvedType::Tuple(elems, _) => {
-            Type::Tuple(elems.iter().map(|ty| local_ty(ty, symbols, defs, scope, errors)).collect())
-        }
-        UnresolvedType::Infer(start) => {
-            errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, scope.module);
-            Type::Invalid
-        }
-    }
-}
-
 pub fn gen_locals(
     scope: &mut Scope,
     defs: &HashMap<String, ast::Definition>,
@@ -121,84 +53,236 @@ pub fn gen_locals(
     let mut symbols = HashMap::with_capacity(defs.len());
     for (name, def) in defs {
         if symbols.contains_key(name) { continue }
-        gen_local(name.clone(), def, &mut symbols, defs, scope, errors);
+        gen_ty(def, scope.module, name, errors,
+            TypegenResolveState::Local { symbols: &mut symbols, scope: scope.reborrow(), defs }
+        );
     }
     symbols
 }
 
-pub fn add_func(
-    ctx: &mut TypingCtx,
-    ast: &Ast,
-    symbols: &mut [HashMap<String, Symbol>],
-    func: &ast::Function,
+enum TypegenResolveState<'a, 's> {
+    Global {
+        symbols: &'a mut [HashMap<String, Symbol>],
+        ctx: &'a mut TypingCtx,
+        ast: &'a Ast,
+    },
+    Local {
+        symbols: &'a mut HashMap<String, Symbol>,
+        scope: Scope<'s>,
+        defs: &'a HashMap<String, ast::Definition>,
+    }
+}
+impl<'a, 's> TypegenResolveState<'a, 's> {
+    fn reborrow<'me>(&'me mut self) -> TypegenResolveState<'me, 'me> {
+        match self {
+            TypegenResolveState::Global { symbols, ctx, ast } 
+            => TypegenResolveState::Global { symbols: &mut *symbols, ctx: &mut *ctx, ast: &*ast },
+            TypegenResolveState::Local { symbols, scope, defs }
+            => TypegenResolveState::Local { symbols: &mut *symbols, scope: scope.reborrow(), defs: &*defs },
+        }
+    }
+    fn ctx(&mut self) -> &mut TypingCtx {
+        match self {
+            Self::Global { ctx, .. } => ctx,
+            Self::Local { scope, .. } => scope.ctx
+        }
+    }
+    fn resolve_ty(&mut self, unresolved: &UnresolvedType, module: ModuleId, errors: &mut Errors) -> Type {
+        match self {
+            TypegenResolveState::Global { symbols, ctx, ast }
+            => resolve_ty(unresolved, module, errors,
+                &mut |path, errors| resolve_global_path(path, ast, *ctx, *symbols, module, errors)
+            ),
+            TypegenResolveState::Local { symbols, scope, defs }
+            => resolve_ty(unresolved, module, errors,
+                &mut |path, errors| resolve_local_path(path, scope, *symbols, *defs, errors)
+            )
+        }
+    }
+    fn resolve_path(&mut self, path: &IdentPath, module: ModuleId, errors: &mut Errors) -> Option<Symbol> {
+        match self {
+            TypegenResolveState::Global { symbols, ctx, ast }
+            => resolve_global_path(path, ast, ctx, symbols, module, errors),
+            TypegenResolveState::Local { symbols, scope, defs }
+            => resolve_local_path(path, scope, symbols, defs, errors),
+        }
+    }
+    fn insert_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) {
+        let previous = match self {
+            Self::Global { symbols, .. } => symbols[module.idx()].insert(name.clone(), symbol),
+            Self::Local { scope, symbols, .. } => {
+                debug_assert_eq!(scope.module, module);
+                symbols.insert(name.clone(), symbol)
+            }
+        };
+        debug_assert!(previous.is_none(), "Duplicate symbol insertion '{name}' {previous:?}");
+    }
+    fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
+        match self {
+            TypegenResolveState::Global { symbols, ctx, ast } => gen_func(func,
+                |ty| resolve_ty(
+                    ty, module, errors,
+                    &mut |path, errors| resolve_global_path(path, ast, ctx, symbols, module, errors),
+                )
+            ),
+            TypegenResolveState::Local { symbols, scope, defs } => {
+                debug_assert_eq!(scope.module, module);
+                gen_func(func, |ty| resolve_ty(
+                    ty, module, errors,
+                    &mut |path, errors| resolve_local_path(path, scope, symbols, defs, errors),
+                ))
+            }
+        }
+        
+    }
+}
+
+fn gen_ty(
+    def: &ast::Definition,
+    //ast: &Ast,
     module: ModuleId,
     name: &str,
-    errors: &mut Errors
-) -> SymbolKey {
-    if let Some(existing) = symbols[module.idx()].get(name) {
-        let Symbol::Func(key) = existing else { unreachable!() };
-        return *key;
-    }
+    errors: &mut Errors,
+    mut state: TypegenResolveState,
+) -> Option<Symbol> {
+    Some(match def {
+        ast::Definition::Function(func) => {
+            let header = state.gen_func(module, func, errors);
+            let key = state.ctx().add_func(FunctionOrHeader::Header(header));
+            state.insert_symbol(module, name.to_owned(), Symbol::Func(key));
+            Symbol::Func(key)
+        }
+        ast::Definition::Struct(struct_) => {
+            let key = gen_struct(struct_, name, module, errors, state.reborrow());
+            Symbol::Type(key)
+        }
+        ast::Definition::Module(inner_module) => {
+            state.insert_symbol(module, name.to_owned(), Symbol::Module(*inner_module));
+            Symbol::Module(*inner_module)
+        }
+        ast::Definition::Use(path) => {
+            if let Some(symbol) = state.resolve_path(path, module, errors) {
+                state.insert_symbol(module, name.to_owned(), symbol);
+                symbol
+            } else {
+                return None;
+            }
+        }
+    })
+}
 
+fn resolve_ty<PathResolve: FnMut(&IdentPath, &mut Errors) -> Option<Symbol>>(
+    unresolved: &UnresolvedType,
+    module: ModuleId,
+    errors: &mut Errors,
+    path_resolve: &mut PathResolve,
+) -> Type {
+    match unresolved {
+        UnresolvedType::Primitive(p, _) => Type::Prim(*p),
+        UnresolvedType::Unresolved(path) => {
+            match path_resolve(path, errors) {
+                Some(Symbol::Type(ty)) => Type::Id(ty),
+                Some(_) => {
+                    errors.emit_span(Error::TypeExpected, path.span().in_mod(module));
+                    Type::Invalid
+                }
+                None => Type::Invalid // an error was already emitted in this case
+            }
+
+        }
+        UnresolvedType::Pointer(box (inner, _)) => {
+            let pointer_ty = resolve_ty(inner, module, errors, path_resolve);
+            Type::Pointer(Box::new(pointer_ty))
+        }
+        UnresolvedType::Array(box (inner, span, count)) => {
+            let Some(count) = *count else {
+                errors.emit_span(Error::ArraySizeCantBeInferredHere, span.in_mod(module));
+                return Type::Invalid;
+            };
+            let elem_ty = resolve_ty(inner, module, errors, path_resolve);
+            Type::Array(Box::new((elem_ty, count)))
+        }
+        UnresolvedType::Tuple(elems, _) => {
+            let mut tuple_types = Vec::with_capacity(elems.len());
+            for ty in elems {
+                let ty = resolve_ty(ty, module, errors, path_resolve);
+                tuple_types.push(ty);
+            }
+            Type::Tuple(tuple_types)
+        }
+        UnresolvedType::Infer(start) => {
+            errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, module);
+            Type::Invalid
+        }
+    }
+}
+
+fn gen_func<'a>(func: &ast::Function, mut resolve_ty_func: impl FnMut(&UnresolvedType) -> Type)
+-> FunctionHeader {
     let params = func.params.iter()
-        .map(|(name, param_ty, _start, _end)| 
-            (name.clone(), resolve_ty(ctx, ast, symbols, module, param_ty, errors))
-        )
+        .map(|(name, unresolved, _, _)| {
+            (name.clone(), resolve_ty_func(unresolved))
+        })
         .collect();
-    let return_type = resolve_ty(ctx, ast, symbols, module, &func.return_type, errors);
-    let key = ctx.add_func(super::gen::FunctionOrHeader::Header(FunctionHeader {
+    let return_type = resolve_ty_func(&func.return_type);
+
+    FunctionHeader {
         params,
         varargs: func.varargs,
-        return_type
-    }));
-    symbols[module.idx()].insert(name.to_owned(), Symbol::Func(key));
-    key
+        return_type,
+    }
 }
 
-pub fn add_struct(
-    ctx: &mut TypingCtx,
-    modules: &Ast,
-    symbols: &mut [HashMap<String, Symbol>],
+fn gen_struct(
     def: &StructDefinition,
-    module: ModuleId,
     name: &str,
-    errors: &mut Errors
+    module: ModuleId,
+    errors: &mut Errors,
+    mut state: TypegenResolveState,
 ) -> SymbolKey {
-    if let Some(existing) = symbols[module.idx()].get(name) {
-        let Symbol::Type(key) = existing else { unreachable!() };
-        return *key;
-    }
     let members = def.members.iter().map(|(name, unresolved, _start, _end)| {(
         name.clone(),
-        resolve_ty(ctx, modules, symbols, module, unresolved, errors)
+        state.resolve_ty(unresolved, module, errors),
     )}).collect::<Vec<_>>();
-    let key = ctx.add_type(TypeDef::Struct(crate::ir::Struct { members, name: name.to_owned() }));
-    symbols[module.idx()].insert(name.to_owned(), Symbol::Type(key));
+    let key = state.ctx().add_type(TypeDef::Struct(super::Struct {
+        members,
+        methods: HashMap::with_capacity(def.members.len()),
+        name: name.to_owned(),
+    }));
+    state.insert_symbol(module, name.to_owned(), Symbol::Type(key));
+    for (method_name, method) in &def.methods {
+        let header = gen_func(method, |ty| state.resolve_ty(ty, module, errors));
+        let method_key = state.ctx().add_func(super::gen::FunctionOrHeader::Header(header));
+        let TypeDef::Struct(struct_) = state.ctx().get_type_mut(key);
+        struct_.methods.insert(method_name.clone(), method_key);
+    }
     key
 }
 
-enum ResolveState <'a, 's, 'd> {
+enum PathResolveState<'a, 's, 'd> {
     Local(&'a mut Scope<'s>, &'a mut HashMap<String, Symbol>, &'d HashMap<String, ast::Definition>),
     Module(ModuleId)
 }
-enum ResolveSymbols<'a> {
+enum PathResolveSymbols<'a> {
     Mutable(&'a Ast, &'a mut [HashMap<String, Symbol>], &'a mut TypingCtx),
     Finished(GlobalsRef<'a>)
 }
-impl<'a> ResolveSymbols<'a> {
+impl<'a> PathResolveSymbols<'a> {
     fn get<'b>(&'b mut self, module: ModuleId, name: &str, span: Span, errors: &mut Errors) -> Option<Symbol> {
         match self {
-            ResolveSymbols::Mutable(ast, symbols, ctx) => {
+            PathResolveSymbols::Mutable(ast, symbols, ctx) => {
                 if let Some(symbol) = symbols[module.idx()].get(name) {
                     Some(*symbol)
                 } else  if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
-                    add_global_def(def, ctx, ast, symbols, module, name, errors)
+                    gen_ty(def, module, name, errors,
+                        TypegenResolveState::Global { symbols, ctx, ast }
+                    )
                 } else {
                     errors.emit_span(Error::UnknownIdent, span);
                     None
                 }
             }
-            ResolveSymbols::Finished(symbols) => {
+            PathResolveSymbols::Finished(symbols) => {
                 let symbol = symbols[module].get(name).copied();
                 if symbol.is_none() {
                     errors.emit_span(Error::UnknownIdent, span);
@@ -213,22 +297,22 @@ impl<'a> ResolveSymbols<'a> {
 /// generating globals or generating locals.
 fn resolve_path(
     path: &IdentPath,
-    mut symbols: ResolveSymbols,
-    mut state: ResolveState,
+    mut symbols: PathResolveSymbols,
+    mut state: PathResolveState,
     path_module: ModuleId,
     src: &str,
     errors: &mut Errors
 ) -> Option<Symbol> {
     let (root, segments, last) = path.segments(src);
     if root.is_some() {
-        state = ResolveState::Module(ModuleId::ROOT);
+        state = PathResolveState::Module(ModuleId::ROOT);
     }
 
     for (name, span) in segments {
         match state {
-            ResolveState::Local(scope, symbols, defs) => {
+            PathResolveState::Local(scope, symbols, defs) => {
                 match resolve_in_scope(name, span, scope, symbols, defs, errors) {
-                    Some(Symbol::Module(new_module)) => state = ResolveState::Module(new_module),
+                    Some(Symbol::Module(new_module)) => state = PathResolveState::Module(new_module),
                     Some(_) => {
                         errors.emit_span(Error::ModuleExpected, span.in_mod(path_module));
                         return None;
@@ -236,10 +320,10 @@ fn resolve_path(
                     None => return None
                 }
             },
-            ResolveState::Module(id) => {
+            PathResolveState::Module(id) => {
                 if let Some(def) = symbols.get(id, name, span.in_mod(path_module), errors) {
                     if let Symbol::Module(new_module) = def {
-                        state = ResolveState::Module(new_module);
+                        state = PathResolveState::Module(new_module);
                     } else {
                         errors.emit_span(Error::ModuleExpected, span.in_mod(path_module));
                         return None;
@@ -253,9 +337,9 @@ fn resolve_path(
 
     if let Some((name, span)) = last {
         match state {
-            ResolveState::Local(scope, symbols, defs)
+            PathResolveState::Local(scope, symbols, defs)
                 => resolve_in_scope(name, span, scope, symbols, defs, errors),
-            ResolveState::Module(id) => {
+            PathResolveState::Module(id) => {
                 let symbol = symbols.get(id, name, span.in_mod(path_module), errors);
                 if symbol.is_none() {
                     errors.emit_span(Error::UnknownIdent, span.in_mod(path_module));
@@ -265,8 +349,8 @@ fn resolve_path(
         }
     } else {
         match state {
-            ResolveState::Local(_, _, _) => unreachable!(),
-            ResolveState::Module(id) => Some(Symbol::Module(id))
+            PathResolveState::Local(_, _, _) => unreachable!(),
+            PathResolveState::Module(id) => Some(Symbol::Module(id))
         }
     }
 }
@@ -281,8 +365,8 @@ fn resolve_global_path(
 ) -> Option<Symbol> {
     resolve_path(
         path,
-        ResolveSymbols::Mutable(ast, symbols, ctx),
-        ResolveState::Module(module),
+        PathResolveSymbols::Mutable(ast, symbols, ctx),
+        PathResolveState::Module(module),
         module,
         ast.src(module).0,
         errors
@@ -301,8 +385,8 @@ fn resolve_local_path(
 
     resolve_path(
         path,
-        ResolveSymbols::Finished(scope.globals),
-        ResolveState::Local(scope, symbols, defs),
+        PathResolveSymbols::Finished(scope.globals),
+        PathResolveState::Local(scope, symbols, defs),
         module,
         src,
         errors
@@ -320,7 +404,9 @@ fn resolve_in_scope(
     if let Some(symbol) = symbols.get(name) {
         Some(*symbol)
     } else if let Some(def) = defs.get(name) {
-        gen_local(name.to_owned(), def, symbols, defs, scope, errors)
+        gen_ty(def, scope.module, name, errors,
+            TypegenResolveState::Local { symbols: symbols, scope: scope.reborrow(), defs }
+        )
     } else {
         scope.info.parent().and_then(|parent| match parent.resolve_local(name) {
             Ok(resolved) => resolved.into_symbol(),
@@ -329,91 +415,5 @@ fn resolve_in_scope(
                 None
             }
         })
-    }
-}
-
-fn resolve_ty(
-    ctx: &mut TypingCtx,
-    ast: &Ast,
-    symbols: &mut [HashMap<String, Symbol>],
-    path_module: ModuleId,
-    unresolved: &UnresolvedType,
-    errors: &mut Errors
-) -> Type {
-    match unresolved {
-        crate::ast::UnresolvedType::Primitive(p, _) => Type::Prim(*p),
-        crate::ast::UnresolvedType::Unresolved(path) => {
-            match resolve_global_path(path, ast, ctx, symbols, path_module, errors) {
-                Some(Symbol::Type(ty)) => Type::Id(ty),
-                Some(_) => {
-                    errors.emit_span(Error::TypeExpected, path.span().in_mod(path_module));
-                    Type::Invalid
-                }
-                None => Type::Invalid // an error was already emitted in this case
-            }
-
-        }
-        UnresolvedType::Pointer(box (inner, _))
-            => Type::Pointer(Box::new(resolve_ty(ctx, ast, symbols, path_module, inner, errors))),
-        UnresolvedType::Array(box (inner, span, count)) => {
-            let Some(count) = *count else {
-                errors.emit_span(Error::ArraySizeCantBeInferredHere, span.in_mod(path_module));
-                return Type::Invalid;
-            };
-            Type::Array(Box::new((resolve_ty(ctx, ast, symbols, path_module, inner, errors), count)))
-        }
-        UnresolvedType::Tuple(elems, _) => {
-            Type::Tuple(elems.iter().map(|ty| resolve_ty(ctx, ast, symbols, path_module, ty, errors)).collect())
-        }
-        UnresolvedType::Infer(start) => {
-            errors.emit(Error::InferredTypeNotAllowedHere, *start, *start, path_module);
-            Type::Invalid
-        }
-        
-    }
-}
-
-fn gen_local(name: String, def: &ast::Definition, symbols: &mut HashMap<String, Symbol>, defs: &HashMap<String, ast::Definition>, scope: &mut Scope, errors: &mut Errors) -> Option<Symbol> {
-    match def {
-        ast::Definition::Function(func) => {
-            let params = func.params.iter()
-                .map(|(name, unresolved, _, _)| {
-                    (name.clone(), local_ty(unresolved, symbols, defs, scope, errors))
-                })
-                .collect();
-            let return_type = local_ty(&func.return_type, symbols, defs, scope, errors);
-            let symbol = Symbol::Func(
-                scope.ctx.add_func(FunctionOrHeader::Header(FunctionHeader {
-                    params,
-                    varargs: func.varargs,
-                    return_type,
-                })
-            ));
-            symbols.insert(name, symbol);
-            Some(symbol)
-        }
-        ast::Definition::Struct(struct_) => {
-            let members = struct_.members.iter()
-                .map(|(name, unresolved, _, _)| {
-                    (name.clone(), local_ty(unresolved, symbols, defs, scope, errors))
-                })
-                .collect();
-
-            let idx = scope.ctx.add_type(TypeDef::Struct(super::Struct { name: name.clone(), members }));
-            let symbol = Symbol::Type(idx);
-            symbols.insert(name, symbol);
-            Some(symbol)
-        }
-        ast::Definition::Module(id) => {
-            let symbol = Symbol::Module(*id);
-            symbols.insert(name, symbol);
-            Some(symbol)
-        }
-        ast::Definition::Use(path) => {
-            resolve_local_path(path, scope, symbols, defs, errors).map(|symbol| {
-                symbols.insert(name, symbol);
-                symbol
-            })
-        }
     }
 }

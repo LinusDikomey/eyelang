@@ -124,7 +124,7 @@ impl IndexMut<ModuleId> for Ast {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModuleId(u32);
 impl ModuleId {
     pub fn new(id: u32) -> Self {
@@ -161,12 +161,15 @@ pub enum Definition {
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
+    pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
+    pub methods: Vec<(String, Function)>
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
+    pub generics: Vec<TSpan>,
     //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
