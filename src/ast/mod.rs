@@ -147,7 +147,7 @@ impl Module {
 
 #[derive(Debug, Clone)]
 pub enum Item {
-    Definition(String, Definition),
+    Definition { name: String, name_span: TSpan, def: Definition },
     Expr(ExprRef)
 }
 
@@ -163,7 +163,7 @@ pub enum Definition {
 pub struct StructDefinition {
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
-    pub methods: Vec<(String, Function)>
+    pub methods: HashMap<String, Function>
 }
 
 #[derive(Debug, Clone)]

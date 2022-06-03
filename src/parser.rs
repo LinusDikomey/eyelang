@@ -169,10 +169,10 @@ impl<'a> Parser<'a> {
         while self.toks.index < self.toks.len {
             let start = self.toks.current().unwrap().start;
             match self.parse_item()? {
-                Item::Definition(name, def) => if let Some(_existing) = definitions.insert(name, def) {
+                Item::Definition { name, name_span, def } => if let Some(_existing) = definitions.insert(name, def) {
                     return Err(Error::DuplicateDefinition.at(
-                        start,
-                        self.toks.current().unwrap().end,
+                        name_span.start,
+                        name_span.end,
                         self.toks.module
                     ));
                 }
@@ -220,7 +220,7 @@ impl<'a> Parser<'a> {
         while self.toks.current()?.ty != TokenType::RBrace {
             let start = self.toks.current().unwrap().start;
             match self.parse_item()? {
-                Item::Definition(name, def) => if let Some(_existing) = defs.insert(name, def) {
+                Item::Definition { name, name_span: _, def } => if let Some(_existing) = defs.insert(name, def) {
                     let end = self.toks.current().unwrap().end;
                     return Err(Error::DuplicateDefinition.at(start, end, self.toks.module));
                 }
@@ -250,16 +250,17 @@ impl<'a> Parser<'a> {
                         err: Error::CantUseRootPath,
                         span: Span::new(use_start, use_end, self.toks.module)
                     })?;
-                Item::Definition(
-                    last.0.to_owned(),
-                    Definition::Use(path)
-                )
+                Item::Definition {
+                    name: last.0.to_owned(),
+                    name_span: last.1,
+                    def: Definition::Use(path)
+                }
             }
             // function definition
             TokenType::Keyword(Keyword::Fn) => {
                 let fn_tok = self.toks.step_assert(Keyword::Fn);
-                let (name, func) = self.parse_function_def(fn_tok)?;
-                Item::Definition(name, Definition::Function(func))
+                let (name, name_span, func) = self.parse_function_def(fn_tok)?;
+                Item::Definition { name, name_span, def: Definition::Function(func) }
             }
             // either a struct or a variable
             TokenType::Ident => {
@@ -274,7 +275,7 @@ impl<'a> Parser<'a> {
 
                         self.toks.step_expect(TokenType::LBrace)?;
                         let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
-                        let mut methods = Vec::new();
+                        let mut methods = HashMap::new();
                         self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
                             let ident_or_fn = p.toks.step()?;
                             match_or_unexpected!{ident_or_fn, p.toks.module,
@@ -285,16 +286,23 @@ impl<'a> Parser<'a> {
                                     members.push((member_name.to_owned(), member_type, ident.start, end));
                                 },
                                 TokenType::Keyword(Keyword::Fn) => {
-                                    methods.push(p.parse_function_def(ident_or_fn)?);
+                                    let (name, name_span, method) = p.parse_function_def(ident_or_fn)?;
+                                    if let Some(_existing) = methods.insert(name, method) {
+                                        return Err(CompileError::new(
+                                            Error::DuplicateDefinition,
+                                            name_span.in_mod(p.toks.module)
+                                        ))
+                                    }
                                 }
                             }
                             
                             Ok(())
                         })?;
-                        Item::Definition(
-                            name.to_owned(),
-                            Definition::Struct(StructDefinition { generics, members, methods })
-                        )
+                        Item::Definition {
+                            name: name.to_owned(),
+                            name_span: ident_span,
+                            def: Definition::Struct(StructDefinition { generics, members, methods })
+                        }
                     }
                     // Variable declaration with explicit type
                     Some(TokenType::Colon) => {
@@ -337,10 +345,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_def(&mut self, fn_tok: Token) -> EyeResult<(String, Function)> {
+    fn parse_function_def(&mut self, fn_tok: Token) -> EyeResult<(String, TSpan, Function)> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let name_tok = self.toks.step_expect(TokenType::Ident)?;
         let name = name_tok.get_val(self.src).to_owned();
+        let name_span = name_tok.span();
         
         let generics = self.parse_optional_generics()?;
         
@@ -400,7 +409,7 @@ impl<'a> Parser<'a> {
                 (return_type, body)
             }
         };
-        Ok((name, Function {
+        Ok((name, name_span, Function {
             params,
             generics,
             varargs,

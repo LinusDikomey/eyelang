@@ -70,15 +70,10 @@ fn gen_func_bodies(
     scope: &mut Scope,
     defs: &HashMap<String, ast::Definition>,
     errors: &mut Errors,
-    get_func: impl for<'a> Fn(&'a mut Scope, &str) -> Option<&'a Symbol>,
+    get_symbol: impl for<'a> Fn(&'a mut Scope, &str) -> Option<&'a Symbol>,
 ) {
-    for (name, def) in defs {
-        let ast::Definition::Function(def) = def else { continue };
-        let Symbol::Func(func) = get_func(scope, name)
-            .expect("Missing function after definition phase")
-            else { panic!("Function expected") };
-        
-        let func_idx = func.idx();
+    let mut gen = |name: &String, def: &ast::Function, key: SymbolKey, scope: &mut Scope| {
+        let func_idx = key.idx();
         let header = match &scope.ctx.funcs[func_idx] {
             FunctionOrHeader::Func(_) => {
                 unreachable!("Function shouldn't already be defined here")
@@ -126,6 +121,30 @@ fn gen_func_bodies(
             header,
             ir,
         });
+    };
+    for (name, def) in defs {
+        match def {
+            ast::Definition::Function(func) => {
+                let Symbol::Func(key) = get_symbol(scope, name)
+                    .expect("Missing function after definition phase")
+                    else { panic!("Function expected") };
+                gen(name, func, *key, scope);
+            }
+            ast::Definition::Struct(struct_) => {
+                let &Symbol::Type(ty) = get_symbol(scope, name)
+                    .expect("Missing struct after definition phase")
+                    else { panic!("Struct expected") };
+                let TypeDef::Struct(def) = scope.ctx.get_type(ty);
+                // this is a bit ugly for borrowing reasons, maybe the allocation can be removed
+                let methods = def.methods.clone();
+
+                for (name, method) in &struct_.methods {
+                    let key = methods.get(name).unwrap();
+                    gen(name, method, *key, scope);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -201,10 +220,10 @@ impl TypingCtx {
         self.types.push(ty);
         SymbolKey((self.types.len() - 1) as u64)
     }
+    pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()] }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()] }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
-    //pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()] }
 }
 
 enum Resolved {
@@ -230,6 +249,8 @@ enum ExprResult {
     VarRef(Ref),
     Val(Ref),
     Func(SymbolKey),
+    /// method call on a variable: x.method
+    Method(Ref, SymbolKey),
     Type(SymbolKey),
     LocalType(TypeTableIndex),
     Module(ModuleId),
@@ -468,6 +489,7 @@ impl<'s> Scope<'s> {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
             ExprResult::Val(_)
             | ExprResult::Func(_)
+            | ExprResult::Method(_, _)
             | ExprResult::Type(_)
             | ExprResult::LocalType(_)
             | ExprResult::Module(_)
@@ -725,6 +747,7 @@ impl<'s> Scope<'s> {
                     ExprResult::Func(key) => {
                         let header = self.ctx.funcs[key.idx()].header();
                         let info = header.return_type.as_info(&mut ir.types);
+
                         ir.specify(expected, info, errors, expr.span(self.ast));
                         let invalid_arg_count = if header.varargs {
                             args.len() < header.params.len()
@@ -763,6 +786,9 @@ impl<'s> Scope<'s> {
                                 expected,
                             )
                         }
+                    }
+                    ExprResult::Method(_self_var, _key) => {
+                        todo!("Member methods aren't implemented right now")
                     }
                     ExprResult::Type(ty) => {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
@@ -991,6 +1017,7 @@ impl<'s> Scope<'s> {
                 enum MemberAccessType {
                     Var(Ref),
                     Module(ModuleId),
+                    AssociatedFunction(SymbolKey),
                     Invalid
                 }
                 let left = &self.ast[*left];
@@ -1001,7 +1028,8 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         MemberAccessType::Var(var)
                     }
-                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::LocalType(_) => {
+                    ExprResult::Type(ty) => MemberAccessType::AssociatedFunction(ty),
+                    ExprResult::Func(_) | ExprResult::Method(_, _) | ExprResult::LocalType(_) => {
                         errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
                         MemberAccessType::Invalid
                     }
@@ -1013,7 +1041,9 @@ impl<'s> Scope<'s> {
                         let (ty, idx) = match ir.types.get_type(left_ty) {
                             TypeInfo::Resolved(key) => {
                                 let TypeDef::Struct(struct_) = &self.ctx.types[key.idx()];
-                                if let Some((i, (_, ty))) = struct_
+                                if let Some(method) = struct_.methods.get(member) {
+                                    return ExprResult::Method(var, *method);
+                                } else if let Some((i, (_, ty))) = struct_
                                     .members
                                     .iter()
                                     .enumerate()
@@ -1067,6 +1097,16 @@ impl<'s> Scope<'s> {
                             Ref::UNDEF
                         }
                     }
+                    MemberAccessType::AssociatedFunction(key) => {
+                        let TypeDef::Struct(ty) = self.ctx.get_type(key);
+                        if let Some(method) = ty.methods.get(member) {
+                            return ExprResult::Func(*method);
+                        } else {
+                            errors.emit_span(Error::UnknownFunction, name.in_mod(self.module));
+                            ir.invalidate(expected);
+                            Ref::UNDEF
+                        }
+                    }
                     MemberAccessType::Invalid => {
                         ir.invalidate(expected);
                         Ref::UNDEF
@@ -1082,7 +1122,8 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         var
                     }
-                    ExprResult::Func(_) | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::Module(_) => {
+                    ExprResult::Func(_) | ExprResult::Method(_, _) 
+                    | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::Module(_) => {
                         errors.emit_span(Error::TupleIndexingOnNonValue, expr.span_in(self.ast, self.module));
                         ir.invalidate(expected);
                         return ExprResult::Val(Ref::UNDEF)
