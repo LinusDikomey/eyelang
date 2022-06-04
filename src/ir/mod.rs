@@ -348,9 +348,8 @@ impl Tag {
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
-            Tag::EnumLit => String,
+            Tag::EnumLit | Tag::String => String,
             Tag::Decl => Type,
-            Tag::String => String,
             Tag::Call => Call,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    

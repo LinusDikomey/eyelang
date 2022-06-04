@@ -136,6 +136,9 @@ pub struct Args {
     #[clap(long)]
     debug_infer: bool,
 
+    #[clap(long)]
+    show_ir: bool,
+    
     #[cfg_attr(feature = "llvm-backend", clap(short, long, arg_enum, default_value_t = Backend::LLVM))]
     #[cfg_attr(not(feature = "llvm-backend"), clap(short, long, arg_enum, default_value_t = Backend::X86))]
     backend: Backend
@@ -249,7 +252,9 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let mut stats = Stats::default();
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats)?;
 
-    log!("\n\n{ir}\n");
+    if args.show_ir {
+        eprintln!("\n\n{ir}\n");
+    }
 
     if args.timings {
         println!("{stats}");

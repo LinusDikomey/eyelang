@@ -21,7 +21,7 @@ enum Inst<'a> {
 }
 use Inst::*;
 
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Val {
     NoVal,
@@ -419,7 +419,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                     // align the stack to the required alignment before calling
                     let missing_alignment = (
                         (CALL_STACK_ALIGNMENT - (stack_pos % CALL_STACK_ALIGNMENT)) % CALL_STACK_ALIGNMENT
-                    ) as u64;
+                    ).into();
                     dbg!(stack_pos, missing_alignment);
                     w.inst(sub(rsp, Int(Type::qword, missing_alignment)));
                     w.inst(call(&name_modifier(call_name)));

@@ -660,7 +660,7 @@ impl<'a> Parser<'a> {
 
     fn parse_optional_generics(&mut self) -> Result<Vec<TSpan>, CompileError> {
         let mut generics = Vec::new();
-        if let Some(_) = self.toks.step_if(TokenType::LBracket) {
+        if self.toks.step_if(TokenType::LBracket).is_some() {
             self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
                 generics.push(p.toks.step_expect(TokenType::Ident)?.span());
                 Ok(())

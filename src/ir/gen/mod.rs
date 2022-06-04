@@ -167,7 +167,7 @@ impl<'a> ScopeInfo<'a> {
             .as_ref()
             .map(|parent| unsafe { parent.as_ref() })
     }
-    fn reborrow<'me>(&'me self) -> ScopeInfo<'me> {
+    fn reborrow(&self) -> ScopeInfo {
         ScopeInfo { parent: self.parent, symbols: Cow::Borrowed(self.symbols.borrow()) }
     }
 
@@ -308,7 +308,7 @@ impl<'s> Scope<'s> {
             },
         }
     }
-    pub fn reborrow<'me>(&'me mut self) -> Scope<'me> {
+    pub fn reborrow(&mut self) -> Scope {
         Scope {
             ctx: &mut *self.ctx,
             globals: self.globals,
@@ -743,52 +743,79 @@ impl<'s> Scope<'s> {
             ast::Expr::FunctionCall { func, args, end: _ } => {
                 let args = &self.ast.expr_builder[*args];
                 let called_ty = ir.types.add(TypeInfo::Unknown);
-                match self.reduce_expr(errors, ir, &self.ast[*func], called_ty, ret) {
-                    ExprResult::Func(key) => {
-                        let header = self.ctx.funcs[key.idx()].header();
-                        let info = header.return_type.as_info(&mut ir.types);
+                fn gen_call(
+                    scope: &mut Scope,
+                    expr: &Expr,
+                    func: SymbolKey,
+                    this_arg: Option<(Ref, TypeTableIndex, TSpan)>,
+                    args: impl ExactSizeIterator<Item = ExprRef>,
+                    ir: &mut IrBuilder,
+                    expected: TypeTableIndex,
+                    ret: TypeTableIndex,
+                    errors: &mut Errors
+                ) -> Ref {
+                    let arg_count = args.len() + if this_arg.is_some() { 1 } else { 0 };
+                    
+                    let header = scope.ctx.funcs[func.idx()].header();
+                    let info = header.return_type.as_info(&mut ir.types);
 
-                        ir.specify(expected, info, errors, expr.span(self.ast));
-                        let invalid_arg_count = if header.varargs {
-                            args.len() < header.params.len()
+                    ir.specify(expected, info, errors, expr.span(scope.ast));
+                    let invalid_arg_count = if header.varargs {
+                        arg_count < header.params.len()
+                    } else {
+                        arg_count != header.params.len()
+                    };
+                    if invalid_arg_count {
+                        errors.emit_span(Error::InvalidArgCount, expr.span(scope.ast).in_mod(scope.module));
+                        Ref::val(RefVal::Undef)
+                    } else {
+                        let params = header.params.iter().map(|(_, ty)| Some(ty.clone()));
+                        let params = if header.varargs {
+                            params
+                                .chain(std::iter::repeat(None))
+                                .take(arg_count)
+                                .collect::<Vec<_>>()
                         } else {
-                            args.len() != header.params.len()
+                            params.collect::<Vec<_>>()
                         };
-                        if invalid_arg_count {
-                            errors.emit_span(Error::InvalidArgCount, expr.span(self.ast).in_mod(self.module));
-                            Ref::val(RefVal::Undef)
-                        } else {
-                            let params = header.params.iter().map(|(_, ty)| Some(ty.clone()));
-                            let params = if header.varargs {
-                                params
-                                    .chain(std::iter::repeat(None))
-                                    .take(args.len())
-                                    .collect::<Vec<_>>()
-                            } else {
-                                params.collect::<Vec<_>>()
-                            };
-                            let mut bytes = Vec::with_capacity(8 + 4 * args.len());
-                            bytes.extend(&key.bytes());
-                            for (arg, ty) in args.iter().zip(params) {
-                                let info = ty.map_or(TypeInfo::Unknown, |ty| ty.as_info(&mut ir.types));
-                                let ty = ir
-                                    .types
-                                    .add(info);
-                                let expr = self.reduce_expr_idx_val(errors, ir, *arg, ty, ret);
-                                bytes.extend(&expr.to_bytes());
+                        let mut bytes = Vec::with_capacity(8 + 4 * arg_count);
+                        bytes.extend(&func.bytes());
+                        let mut param_iter = params.iter();
+                        if let Some((this, this_ty, this_span)) = this_arg {
+                            let ty = param_iter.next().unwrap(); // argument count was checked above, this can't fail
+                            match ty {
+                                Some(ty) => {
+                                    let info = ty.as_info(&mut ir.types);
+                                    ir.types.specify(this_ty, info, errors,
+                                        this_span.in_mod(scope.module)
+                                    );
+                                    bytes.extend(this.to_bytes());
+                                }
+                                None => {
+                                    errors.emit_span(Error::NotAnInstanceMethod, this_span.in_mod(scope.module))
+                                }
                             }
-                            let extra = ir.extra_data(&bytes);
-                            ir.add(
-                                Data {
-                                    extra_len: (extra, args.len() as u32),
-                                },
-                                Tag::Call,
-                                expected,
-                            )
                         }
+                        for (arg, ty) in args.zip(param_iter) {
+                            let info = ty.as_ref().map_or(TypeInfo::Unknown, |ty| ty.as_info(&mut ir.types));
+                            let ty = ir
+                                .types
+                                .add(info);
+                            let expr = scope.reduce_expr_idx_val(errors, ir, arg, ty, ret);
+                            bytes.extend(&expr.to_bytes());
+                        }
+                        let extra = ir.extra_data(&bytes);
+                        ir.add(Data { extra_len: (extra, arg_count as u32) }, Tag::Call, expected)
                     }
-                    ExprResult::Method(_self_var, _key) => {
-                        todo!("Member methods aren't implemented right now")
+                }
+                let called = &self.ast[*func];
+                match self.reduce_expr(errors, ir, called, called_ty, ret) {
+                    ExprResult::Func(key) => {
+                        gen_call(self, expr, key, None, args.iter().copied(), ir, expected, ret, errors)
+                    }
+                    ExprResult::Method(self_var, key) => {
+                        let called_span = called.span(self.ast);
+                        gen_call(self, expr, key, Some((self_var, called_ty, called_span)), args.iter().copied(), ir, expected, ret, errors)
                     }
                     ExprResult::Type(ty) => {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
