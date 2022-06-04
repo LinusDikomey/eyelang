@@ -6,7 +6,8 @@
     bool_to_option,
     nonzero_ops,
     is_some_with,
-    int_log
+    int_log,
+    generic_associated_types,
 )]
 #![warn(unused_qualifications)]
 
@@ -258,12 +259,12 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let exe_file = format!("eyebuild/{output_name}");
     let exec = || {
         println!("{}", format!("Running {output_name}...").green());
-        let status = std::process::Command::new(&exe_file)
+        let _status = std::process::Command::new(&exe_file)
             .spawn()
             .expect("Failed to run the executable command")
             .wait()
             .expect("Running process failed");
-        println!("{}", format!("\nThe program {output_name} exited with status: {status}").green());
+        //println!("{}", format!("\nThe program {output_name} exited with status: {status}").green());
     };
 
     if args.cmd.is_compiled() {

@@ -3,5 +3,3 @@ Running pointers...
 x is 4, y^ is: 4
 x is 9, y^ is: 9
 x is 12, y^ is: 12
-
-The program pointers exited with status: exit status: 0
