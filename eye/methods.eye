@@ -12,10 +12,12 @@ fn main {
 Vec2 :: {
     x i32,
     y i32,
-    fn zero() Vec2: Vec2(0, 0),  # this comma shouldn't be needed in the future
+
+    fn zero() Vec2: Vec2(0, 0)
     fn add(a *Vec2, b Vec2) {
         a^.x += b.x
         a^.y += b.y
-    },
+    }
     fn print(v *Vec2) { std.c.printf("[%d, %d]\n", v^.x, v^.y) }
+    
 }

@@ -126,6 +126,21 @@ impl<const N: usize> From<[TokenType; N]> for TokenTypes<N> {
     }
 }
 
+
+/// Represents the necessity of delimiters in delimited lists
+enum Delimit {
+    /// Require a delimiter between elements
+    Yes,
+    /// Don't expect a delimiter
+    No,
+    /// The delimiter may be omitted
+    #[allow(unused)]
+    Optional
+}
+impl From<()> for Delimit {
+    fn from((): ()) -> Self { Self::Yes }
+}
+
 impl<'a> Parser<'a> {
     pub fn new(tokens: Vec<Token>, src: &'a str, ast: &'a mut Ast, module: ModuleId) -> Self {
         let len = tokens.len();
@@ -139,25 +154,28 @@ impl<'a> Parser<'a> {
     /// Parses a delimited list. The `item` function parses an item and is supposed to handle the result itself.
     /// `delim` is a delimiter. Trailing delimiters are allowed, but optional here.
     /// `end` is the ending token. It will be returned from this function once parsed.
-    fn parse_delimited<F>(&mut self, delim: TokenType, end: TokenType, mut item: F) -> Result<Token, CompileError>
-    where F: FnMut(&mut Parser) -> Result<(), CompileError> {
-        if let Some(end_tok) = self.toks.step_if(end) { return Ok(end_tok) }
+    fn parse_delimited<F, D>(&mut self, delim: TokenType, end: TokenType, mut item: F) -> Result<Token, CompileError>
+    where
+        F: FnMut(&mut Parser) -> Result<D, CompileError>,
+        D: Into<Delimit>,
+    {
         loop {
-            item(self)?;
-            let delim_or_end = self.toks.step()?;
-            match delim_or_end.ty {
-                x if x == delim => {
-                    if let Some(end_tok) = self.toks.step_if(end) { return Ok(end_tok) }
-                }
-                x if x == end => {
-                    return Ok(delim_or_end)
-                }
-                _ => {
+            if let Some(end_tok) = self.toks.step_if(end) { return Ok(end_tok) }
+            let delimit = item(self)?.into();
+            match delimit {
+                Delimit::Yes => {
+                    let delim_or_end = self.toks.step()?;
+                    if delim_or_end.ty == delim { continue }
+                    if delim_or_end.ty == end {
+                        return Ok(delim_or_end)
+                    }
                     return Err(CompileError::new(
                         Error::UnexpectedToken,
                         delim_or_end.span().in_mod(self.toks.module)
                     ))
                 }
+                Delimit::No => {}
+                Delimit::Optional => { self.toks.step_if(delim); }
             }
         }
     }
@@ -278,12 +296,13 @@ impl<'a> Parser<'a> {
                         let mut methods = HashMap::new();
                         self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
                             let ident_or_fn = p.toks.step()?;
-                            match_or_unexpected!{ident_or_fn, p.toks.module,
+                            Ok(match_or_unexpected!{ident_or_fn, p.toks.module,
                                 TokenType::Ident => {
                                     let member_name = ident_or_fn.get_val(p.src);
                                     let member_type = p.parse_type()?;
                                     let end = member_type.span(&p.ast.expr_builder).end;
                                     members.push((member_name.to_owned(), member_type, ident.start, end));
+                                    Delimit::Yes
                                 },
                                 TokenType::Keyword(Keyword::Fn) => {
                                     let (name, name_span, method) = p.parse_function_def(ident_or_fn)?;
@@ -293,10 +312,9 @@ impl<'a> Parser<'a> {
                                             name_span.in_mod(p.toks.module)
                                         ))
                                     }
+                                    Delimit::No
                                 }
-                            }
-                            
-                            Ok(())
+                            })
                         })?;
                         Item::Definition {
                             name: name.to_owned(),
