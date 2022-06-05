@@ -153,6 +153,8 @@ pub enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
     LocalType(TypeTableIndex),
+    TypeProto(SymbolKey),
+    Generic(u8),
     Module(ModuleId),
     Var { ty: TypeTableIndex, var: Ref }
 }
@@ -182,6 +184,8 @@ impl<'a> ScopeInfo<'a> {
                 Symbol::Func(f) => Resolved::Func(*f),
                 Symbol::Type(t) => Resolved::Type(*t),
                 Symbol::LocalType(t) => Resolved::LocalType(*t),
+                Symbol::TypeProto(t) => Resolved::TypeProto(*t),
+                Symbol::Generic(_) => todo!(),
                 Symbol::Module(m) => Resolved::Module(*m),
                 Symbol::Var { ty, var } => Resolved::Var(*ty, *var),
             })
@@ -220,6 +224,14 @@ impl TypingCtx {
         self.types.push(ty);
         SymbolKey((self.types.len() - 1) as u64)
     }
+    pub fn add_proto_ty(&mut self) -> SymbolKey {
+        self.add_type(TypeDef::Struct(Struct {
+            members: Vec::new(),
+            methods: HashMap::new(),
+            generic_count: 0,
+            name: String::new()
+        }))
+    }
     pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()] }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()] }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
@@ -231,6 +243,7 @@ enum Resolved {
     Func(SymbolKey),
     Type(SymbolKey),
     LocalType(TypeTableIndex),
+    TypeProto(SymbolKey),
     Module(ModuleId),
 }
 impl Resolved {
@@ -239,6 +252,7 @@ impl Resolved {
             Resolved::Var(_, _) | Resolved::LocalType(_) => None,
             Resolved::Func(id) => Some(Symbol::Func(id)),
             Resolved::Type(id) => Some(Symbol::Type(id)),
+            Resolved::TypeProto(id) => Some(Symbol::TypeProto(id)),
             Resolved::Module(id) => Some(Symbol::Module(id)),
         }
     }
@@ -253,6 +267,7 @@ enum ExprResult {
     Method(Ref, SymbolKey),
     Type(SymbolKey),
     LocalType(TypeTableIndex),
+    TypeProto(SymbolKey),
     Module(ModuleId),
     Stored(Ref),
 }
@@ -377,13 +392,27 @@ impl<'s> Scope<'s> {
                     ModuleOrLocal::Module(m) => match self.globals[m]
                         .get(last.0)
                         .ok_or(Error::UnknownIdent)? {
-                            Symbol::Type(ty) => Ok(TypeInfo::Resolved(*ty)),
+                            Symbol::Type(ty) => {
+                                let TypeDef::Struct(struct_) = self.ctx.get_type(*ty);
+                                let generics = types.add_multiple(
+                                    (0..struct_.generic_count)
+                                        .map(|_| TypeInfo::Unknown)
+                                );
+                                Ok(TypeInfo::Resolved(*ty, generics))
+                            }
                             // TODO: might require a new solution to allow inference of local types
                             Symbol::LocalType(ty) => Ok(types.get_type(*ty)),
                             _ => Err(Error::TypeExpected)
                         },
                     ModuleOrLocal::Local => match self.info.resolve_local(last.0)? {
-                        Resolved::Type(ty) => Ok(TypeInfo::Resolved(ty)),
+                        Resolved::Type(ty) => {
+                            let TypeDef::Struct(struct_) = self.ctx.get_type(ty);
+                            let generics = types.add_multiple(
+                                (0..struct_.generic_count)
+                                    .map(|_| TypeInfo::Unknown)
+                            );
+                            Ok(TypeInfo::Resolved(ty, generics))
+                        }
                         Resolved::LocalType(ty) => Ok(types.get_type(ty)),
                         _ => Err(Error::TypeExpected)
                     }
@@ -492,6 +521,7 @@ impl<'s> Scope<'s> {
             | ExprResult::Method(_, _)
             | ExprResult::Type(_)
             | ExprResult::LocalType(_)
+            | ExprResult::TypeProto(_)
             | ExprResult::Module(_)
             => {
                 if !ir.types.get_type(expected).is_invalid() {
@@ -648,6 +678,7 @@ impl<'s> Scope<'s> {
                         Resolved::Func(f) => return ExprResult::Func(f),
                         Resolved::Type(t) => return ExprResult::Type(t),
                         Resolved::LocalType(t) => return ExprResult::LocalType(t),
+                        Resolved::TypeProto(t) => return ExprResult::TypeProto(t),
                         Resolved::Module(m) => return ExprResult::Module(m),
                     },
                     Err(err) => {
@@ -815,21 +846,25 @@ impl<'s> Scope<'s> {
                     }
                     ExprResult::Method(self_var, key) => {
                         let called_span = called.span(self.ast);
-                        gen_call(self, expr, key, Some((self_var, called_ty, called_span)), args.iter().copied(), ir, expected, ret, errors)
+                        let this = Some((self_var, called_ty, called_span));
+                        gen_call(self, expr, key, this, args.iter().copied(), ir, expected, ret, errors)
                     }
                     ExprResult::Type(ty) => {
                         let TypeDef::Struct(struct_) = &self.ctx.types[ty.idx()];
-                        ir.specify(expected, TypeInfo::Resolved(ty), errors, expr.span(self.ast));
+                        let generics = ir.types.add_multiple((0..struct_.generic_count).map(|_| TypeInfo::Unknown));
+                        ir.specify(expected, TypeInfo::Resolved(ty, generics), errors, expr.span(self.ast));
 
                         if args.len() == struct_.members.len() {
                             let var = get_var(ir);
-                            let member_types: Vec<TypeInfo> =
-                                struct_.members.iter().map(|(_, ty)| ty.as_info(&mut ir.types)).collect();
+                            let member_types: Vec<_> =
+                                struct_.members.iter()
+                                    .map(|(_, ty)| ty.as_info_generic(&mut ir.types, generics))
+                                    .collect();
                             let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                             for (i, (member_val, member_ty)) in
                                 args.iter().zip(member_types).enumerate()
                             {
-                                let member_ty = ir.types.add(member_ty);
+                                let member_ty = ir.types.add_info_or_idx(member_ty);
                                 let member_val =
                                     self.reduce_expr_idx_val(errors, ir, *member_val, member_ty, ret);
                                 let idx = ir.add(Data { int: i as u64 }, Tag::Int, i32_ty);
@@ -1056,7 +1091,8 @@ impl<'s> Scope<'s> {
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Type(ty) => MemberAccessType::AssociatedFunction(ty),
-                    ExprResult::Func(_) | ExprResult::Method(_, _) | ExprResult::LocalType(_) => {
+                    ExprResult::Func(_) | ExprResult::Method(_, _)
+                    | ExprResult::LocalType(_) | ExprResult::TypeProto(_) => {
                         errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
                         MemberAccessType::Invalid
                     }
@@ -1066,7 +1102,7 @@ impl<'s> Scope<'s> {
                 match left_val {
                     MemberAccessType::Var(var) => {
                         let (ty, idx) = match ir.types.get_type(left_ty) {
-                            TypeInfo::Resolved(key) => {
+                            TypeInfo::Resolved(key, generics) => {
                                 let TypeDef::Struct(struct_) = &self.ctx.types[key.idx()];
                                 if let Some(method) = struct_.methods.get(member) {
                                     return ExprResult::Method(var, *method);
@@ -1076,23 +1112,23 @@ impl<'s> Scope<'s> {
                                     .enumerate()
                                     .find(|(_, (name, _))| name == member)
                                 {
-                                    (ty.as_info(&mut ir.types), i)
+                                    (ty.as_info_generic(&mut ir.types, generics), i)
                                 } else {
                                     errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
-                                    (TypeInfo::Invalid, 0)
+                                    (TypeInfo::Invalid.into(), 0)
                                 }
                             }
-                            TypeInfo::Invalid => (TypeInfo::Invalid, 0),
+                            TypeInfo::Invalid => (TypeInfo::Invalid.into(), 0),
                             TypeInfo::Unknown => {
                                 errors.emit_span(Error::TypeMustBeKnownHere, left.span_in(self.ast, self.module));
-                                (TypeInfo::Invalid, 0)
+                                (TypeInfo::Invalid.into(), 0)
                             }
                             _ => {
                                 errors.emit_span(Error::NonexistantMember, left.span_in(self.ast, self.module));
-                                (TypeInfo::Invalid, 0)
+                                (TypeInfo::Invalid.into(), 0)
                             }
                         };
-                        ir.specify(expected, ty, errors, expr.span(self.ast));
+                        ir.specify_or_merge(expected, ty, errors, self.module, expr.span(self.ast));
                         let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                         let idx = ir.add(
                             Data { int: idx as u64 },
@@ -1115,6 +1151,8 @@ impl<'s> Scope<'s> {
                                 Symbol::Func(f) => ExprResult::Func(f),
                                 Symbol::Type(t) => ExprResult::Type(t),
                                 Symbol::LocalType(t) => ExprResult::LocalType(t),
+                                Symbol::TypeProto(t) => ExprResult::TypeProto(t),
+                                Symbol::Generic(_) => todo!(), // is this a possibility
                                 Symbol::Module(m) => ExprResult::Module(m),
                                 Symbol::Var { ty: _, var } => ExprResult::VarRef(var),
                             };
@@ -1150,7 +1188,8 @@ impl<'s> Scope<'s> {
                         var
                     }
                     ExprResult::Func(_) | ExprResult::Method(_, _) 
-                    | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::Module(_) => {
+                    | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::TypeProto(_)
+                    | ExprResult::Module(_) => {
                         errors.emit_span(Error::TupleIndexingOnNonValue, expr.span_in(self.ast, self.module));
                         ir.invalidate(expected);
                         return ExprResult::Val(Ref::UNDEF)

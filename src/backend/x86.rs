@@ -363,9 +363,10 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                 Tag::Decl => {
                     let size = match ir.types[inst.ty] {
                         ir::Type::Prim(p) => p.size(),
-                        ir::Type::Id(_) | ir::Type::Array(_) | ir::Type::Enum(_) | ir::Type::Tuple(_)
+                        ir::Type::Id(_, _) | ir::Type::Array(_) | ir::Type::Enum(_) | ir::Type::Tuple(_)
                             => todo!("Non-primitives not supported in x86 backend"),
-                        ir::Type::Pointer {.. } => 8,
+                        ir::Type::Pointer { .. } => 8,
+                        ir::Type::Generic(_) => todo!("Generics not supported in x86 backend"),
                         ir::Type::Invalid => panic!("Invalid type reached codegen")
                     };
                     stack_pos += size;

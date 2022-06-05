@@ -50,6 +50,13 @@ impl TypeTable {
         table_idx
     }
 
+    pub fn add_info_or_idx(&mut self, ty: TypeInfoOrIndex) -> TypeTableIndex {
+        match ty {
+            TypeInfoOrIndex::Info(info) => self.add(info),
+            TypeInfoOrIndex::Index(idx) => idx
+        }
+    }
+
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> TypeTableIndices {
         let infos = infos.into_iter();
         let start_ty_idx = self.types.len() as u32;
@@ -57,6 +64,27 @@ impl TypeTable {
         let count = (self.types.len() - start_ty_idx as usize) as u32;
         let idx = self.indices.len() as u32;
         self.indices.extend((start_ty_idx .. start_ty_idx+count).map(TypeIdx));
+        TypeTableIndices { idx, count }
+    }
+    pub fn add_multiple_info_or_index(&mut self, types: impl IntoIterator<Item = TypeInfoOrIndex>)
+    -> TypeTableIndices {
+        let types = types.into_iter();
+        let idx = self.indices.len() as u32;
+        let mut count = 0;
+        for ty in types {
+            count += 1;
+            let idx = match ty {
+                TypeInfoOrIndex::Info(info) => {
+                    let idx = TypeIdx(self.types.len() as u32);
+                    self.types.push(info);
+                    idx
+                }
+                TypeInfoOrIndex::Index(idx) => {
+                    self.indices[idx.idx()]
+                }
+            };
+            self.indices.push(idx);
+        }
         TypeTableIndices { idx, count }
     }
 
@@ -121,6 +149,13 @@ impl TypeTable {
         FinalTypeTable { types }
     }
 }
+impl Index<TypeTableIndex> for TypeTable {
+    type Output = TypeInfo;
+
+    fn index(&self, index: TypeTableIndex) -> &Self::Output {
+        &self.types[self.indices[index.idx()].0 as usize]
+    }
+}
 impl Drop for TypeTable {
     fn drop(&mut self) {
         ty_dbg("Dropping Type Table: ", self);
@@ -141,11 +176,17 @@ pub struct TypeTableIndices {
     idx: u32,
     count: u32
 }
-
 impl TypeTableIndices {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+
     pub fn iter(self) -> impl Iterator<Item = TypeTableIndex> {
         (self.idx .. self.idx + self.count).map(TypeTableIndex)
     }
+    pub fn nth(self, index: usize) -> TypeTableIndex {
+        assert!(index < self.count as usize);
+        TypeTableIndex(self.idx + index as u32)
+    }
+    pub fn len(self) -> usize { self.count as usize }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -190,7 +231,7 @@ pub enum TypeInfo {
     Int,
     Float,
     Primitive(Primitive),
-    Resolved(SymbolKey),
+    Resolved(SymbolKey, TypeTableIndices),
     Pointer(TypeTableIndex),
     Array(Option<u32>, TypeTableIndex),
     Enum(TypeTableNames),
@@ -207,7 +248,12 @@ impl TypeInfo {
             Self::Int => Type::Prim(Primitive::I32),
             Self::Float => Type::Prim(Primitive::F32),
             Self::Primitive(p) => Type::Prim(p),
-            Self::Resolved(id) => Type::Id(id),
+            Self::Resolved(id, generics) => {
+                let generic_types = generics.iter()
+                    .map(|ty| types.get_type(ty).finalize(types))
+                    .collect();
+                Type::Id(id, generic_types)
+            }
             Self::Pointer(inner) => Type::Pointer(Box::new(types.get_type(inner).finalize(types))),
             Self::Array(size, inner) => {
                 let inner = types.get_type(inner).finalize(types);
@@ -261,9 +307,22 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                 .then(|| ty)
                 .ok_or(Error::MismatchedType)
         }
-        Resolved(id) => {
-            if let Resolved(other) = other {
-                id == other
+        Resolved(id, generics) => {
+            if let Resolved(other, other_generics) = other {
+                (id == other).then(|| {
+                    debug_assert_eq!(generics.count, other_generics.count);
+                    generics.iter()
+                        .zip(other_generics.iter())
+                        .map(|(a, b)| {
+                            let new = merge_onesided(types[a], types[b], types)?;
+                            types.update_type(a, new);
+                            types.point_to(b, a);
+                            Ok(())
+                        })
+                        .collect::<Result<Vec<()>, _>>()
+                        .and(Ok(()))
+                }).transpose()?
+                .is_some()
             } else { false }
                 .then(|| ty)
                 .ok_or(Error::MismatchedType)

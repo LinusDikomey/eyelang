@@ -64,9 +64,16 @@ trait ResolveState {
     type Reborrowed<'me> : ResolveState where Self: 'me;
     fn reborrow(&mut self) -> Self::Reborrowed<'_>;
     fn ctx(&mut self) -> &mut TypingCtx;
-    fn resolve_ty(&mut self, unresolved: &UnresolvedType, module: ModuleId, errors: &mut Errors) -> Type;
+    fn src(&self, module: ModuleId) -> &str;
+    fn resolve_ty(&mut self, unresolved: &UnresolvedType, module: ModuleId, errors: &mut Errors) -> Type {
+        resolve_ty(unresolved, module, errors, self.reborrow())
+    }
     fn resolve_path(&mut self, path: &IdentPath, module: ModuleId, errors: &mut Errors) -> Option<Symbol>;
-    fn insert_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol);
+    fn insert_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) {
+        let previous = self.replace_symbol(module, name.clone(), symbol);
+        debug_assert!(previous.is_none(), "Duplicate symbol insertion '{name}' {previous:?}");
+    }
+    fn replace_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) -> Option<Symbol>;
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader;
 }
 struct GlobalResolveState<'a> {
@@ -80,15 +87,12 @@ impl<'a> ResolveState for GlobalResolveState<'a> {
         GlobalResolveState { symbols: &mut self.symbols, ctx: &mut self.ctx, ast: self.ast }
     }
     fn ctx(&mut self) -> &mut TypingCtx { self.ctx }
-    fn resolve_ty(&mut self, unresolved: &UnresolvedType, module: ModuleId, errors: &mut Errors) -> Type {
-        resolve_ty(unresolved, module, errors, self.reborrow())
-    }
+    fn src(&self, module: ModuleId) -> &str { &self.ast.sources()[module.idx()].0 }
     fn resolve_path(&mut self, path: &IdentPath, module: ModuleId, errors: &mut Errors) -> Option<Symbol> {
         resolve_global_path(path, self.ast, self.ctx, self.symbols, module, errors)
     }
-    fn insert_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) {
-        let previous = self.symbols[module.idx()].insert(name.clone(), symbol);
-        debug_assert!(previous.is_none(), "Duplicate symbol insertion '{name}' {previous:?}");
+    fn replace_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) -> Option<Symbol> {
+        self.symbols[module.idx()].insert(name, symbol)
     }
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
         gen_func(func, self.reborrow(), module, errors)
@@ -106,21 +110,58 @@ impl<'a, 's> ResolveState for LocalResolveState<'a, 's> {
         LocalResolveState { symbols: &mut *self.symbols, scope: self.scope.reborrow(), defs: &*self.defs }
     }
     fn ctx(&mut self) -> &mut TypingCtx { self.scope.ctx }
-    fn resolve_ty(&mut self, unresolved: &UnresolvedType, module: ModuleId, errors: &mut Errors) -> Type {
-        resolve_ty(unresolved, module, errors, self.reborrow())
-    }
+    fn src(&self, module: ModuleId) -> &str { &self.scope.ast.sources()[module.idx()].0 }
     fn resolve_path(&mut self, path: &IdentPath, _module: ModuleId, errors: &mut Errors) -> Option<Symbol> {
         resolve_local_path(path, &mut self.scope, self.symbols, self.defs, errors)
     }
-    fn insert_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) {
+    fn replace_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) -> Option<Symbol> {
         debug_assert_eq!(self.scope.module, module);
-        let previous = self.symbols.insert(name.clone(), symbol);
-        debug_assert!(previous.is_none(), "Duplicate symbol insertion '{name}' {previous:?}");
+        self.symbols.insert(name, symbol)
     }
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
         debug_assert_eq!(self.scope.module, module);
         gen_func(func, self.reborrow(), module, errors)
     }
+}
+/// Resolve state inside a struct or function definition containing a prototype of the definition itself
+/// and generic type parameters.
+struct DefinitionResolveState<'a, R: ResolveState> {
+    parent: R,
+    generics: &'a HashMap<String, u8>,
+    module: ModuleId,
+}
+impl<'a, R: ResolveState> ResolveState for DefinitionResolveState<'a, R> {
+    type Reborrowed<'r> = DefinitionResolveState<'r, R::Reborrowed<'r>> where Self: 'r;
+
+    fn reborrow(&mut self) -> Self::Reborrowed<'_> {
+        DefinitionResolveState {
+            parent: self.parent.reborrow(),
+            generics: self.generics,
+            module: self.module,
+        }
+    }
+
+    fn ctx(&mut self) -> &mut TypingCtx { self.parent.ctx() }
+    fn src(&self, module: ModuleId) -> &str { self.parent.src(module) }
+    fn resolve_path(&mut self, path: &IdentPath, module: ModuleId, errors: &mut Errors) -> Option<Symbol> {
+        if let (None, mut segments, Some((last, _))) = path.segments(self.src(module)) {
+            if segments.next().is_none() {
+                if let Some(generic) = self.generics.get(last) {
+                    return Some(Symbol::Generic(*generic));
+                }
+            }
+        }
+        self.parent.resolve_path(path, module, errors)
+    }
+
+    fn replace_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) -> Option<Symbol> {
+        self.parent.replace_symbol(module, name, symbol)
+    }
+
+    fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
+        self.parent.gen_func(module, func, errors)
+    }
+    
 }
 
 fn gen_ty(
@@ -167,7 +208,8 @@ fn resolve_ty(
         UnresolvedType::Primitive(p, _) => Type::Prim(*p),
         UnresolvedType::Unresolved(path) => {
             match state.resolve_path(path, module, errors) {
-                Some(Symbol::Type(ty)) => Type::Id(ty),
+                Some(Symbol::Type(ty)) => Type::Id(ty, Vec::new()), //TODO: generics?
+                Some(Symbol::Generic(idx)) => Type::Generic(idx),
                 Some(_) => {
                     errors.emit_span(Error::TypeExpected, path.span().in_mod(module));
                     Type::Invalid
@@ -226,19 +268,33 @@ fn gen_struct(
     errors: &mut Errors,
     mut state: impl ResolveState,
 ) -> SymbolKey {
+    let key = state.ctx().add_proto_ty();
+    let generics = def.generics.iter()
+        .enumerate()
+        .map(|(i, span)| (state.src(module)[span.range()].to_owned(), i as u8))
+        .collect();
+
+    let mut state = DefinitionResolveState {
+        parent: state,
+        generics: &generics,
+        module
+    };
     let members = def.members.iter().map(|(name, unresolved, _start, _end)| {(
         name.clone(),
         state.resolve_ty(unresolved, module, errors),
     )}).collect::<Vec<_>>();
-    let key = state.ctx().add_type(TypeDef::Struct(super::Struct {
+    *state.ctx().get_type_mut(key) = TypeDef::Struct(super::Struct {
         members,
         methods: HashMap::with_capacity(def.members.len()),
+        generic_count: def.generics.len() as u8,
         name: name.to_owned(),
-    }));
+    });
     state.insert_symbol(module, name.to_owned(), Symbol::Type(key));
     for (method_name, method) in &def.methods {
         let header = gen_func(method, state.reborrow(), module, errors);
         let method_key = state.ctx().add_func(super::gen::FunctionOrHeader::Header(header));
+
+        // type is set to Struct above
         let TypeDef::Struct(struct_) = state.ctx().get_type_mut(key);
         struct_.methods.insert(method_name.clone(), method_key);
     }
@@ -287,7 +343,7 @@ fn resolve_path(
     mut state: PathResolveState,
     path_module: ModuleId,
     src: &str,
-    errors: &mut Errors
+    errors: &mut Errors,
 ) -> Option<Symbol> {
     let (root, segments, last) = path.segments(src);
     if root.is_some() {
@@ -355,7 +411,7 @@ fn resolve_global_path(
         PathResolveState::Module(module),
         module,
         ast.src(module).0,
-        errors
+        errors,
     )
 }
 
@@ -375,7 +431,7 @@ fn resolve_local_path(
         PathResolveState::Local(scope, symbols, defs),
         module,
         src,
-        errors
+        errors,
     )
 }
 

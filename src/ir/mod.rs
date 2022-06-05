@@ -11,48 +11,92 @@ mod typing;
 pub use gen::Symbol;
 pub use gen::reduce;
 pub use self::typing::TypeTableIndex;
+use self::typing::TypeTableIndices;
 
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Prim(Primitive),
-    Id(SymbolKey),
+    Id(SymbolKey, Vec<Type>),
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
     //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
     Enum(Vec<String>),
     Tuple(Vec<Type>),
+    /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
+    Generic(u8),
     Invalid
+}
+pub enum TypeInfoOrIndex {
+    Info(TypeInfo),
+    Index(TypeTableIndex)
+}
+impl From<TypeInfo> for TypeInfoOrIndex {
+    fn from(info: TypeInfo) -> Self {
+        Self::Info(info)
+    }
+}
+impl TypeInfoOrIndex {
+    pub fn as_info(self, types: &TypeTable) -> TypeInfo {
+        match self {
+            TypeInfoOrIndex::Info(info) => info,
+            TypeInfoOrIndex::Index(idx) => types.get_type(idx),
+        }
+    }
 }
 impl Type {
     pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
-        match self {
+        self.as_info_generic(types, TypeTableIndices::EMPTY).as_info(types)
+    }
+
+    pub fn as_info_generic(&self, types: &mut TypeTable, generics: TypeTableIndices) -> TypeInfoOrIndex {
+        TypeInfoOrIndex::Info(match self {
             Self::Prim(p) => TypeInfo::Primitive(*p),
-            Self::Id(id) => TypeInfo::Resolved(*id),
+            Self::Id(id, ty_generics) => {
+                // unfortunately this has to be allocated for borrowing reasons
+                let generics = ty_generics.iter()
+                    .map(|ty| ty.as_info_generic(types, generics))
+                    .collect::<Vec<_>>();
+                TypeInfo::Resolved(*id, types.add_multiple_info_or_index(generics))
+            }
             Self::Pointer(inner) => {
-                let inner = inner.as_info(types);
-                TypeInfo::Pointer(types.add(inner))
+                let inner = inner.as_info_generic(types, generics);
+                TypeInfo::Pointer(types.add_info_or_idx(inner))
             }
             Self::Array(box (ty, count)) => {
-                let inner = ty.as_info(types);
-                TypeInfo::Array(Some(*count), types.add(inner))
+                let inner = ty.as_info_generic(types, generics);
+                TypeInfo::Array(Some(*count), types.add_info_or_idx(inner))
             }
             Self::Enum(variants) =>
                 TypeInfo::Enum(types.add_names(variants.as_slice().iter().cloned())),
             Self::Tuple(elems) => {
-                let infos = elems.iter().map(|ty| ty.as_info(types)).collect::<Vec<_>>();
-                TypeInfo::Tuple(types.add_multiple(infos))
-
+                let infos = elems.iter().map(|ty| ty.as_info_generic(types, generics)).collect::<Vec<_>>();
+                TypeInfo::Tuple(types.add_multiple_info_or_index(infos))
+            }
+            Self::Generic(idx) => {
+                assert!(
+                    *idx < generics.len() as u8,
+                    "Not enough generics provided: index {} >= provided {}", idx, generics.len()
+                );
+                return TypeInfoOrIndex::Index(generics.nth(*idx as usize));
             }
             Self::Invalid => unreachable!()
-        }
+        })
     }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Prim(p) => write!(f, "{p}"),
-            Self::Id(id) => write!(f, "t{}", id.idx()),
+            Self::Id(id, generics) => {
+                write!(f, "t{}", id.idx())?;
+                if !generics.is_empty() {
+                    write!(f, "[")?;
+                    write_delimited(f, generics, ", ")?;
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
             Self::Pointer(inner) => write!(f, "*{inner}"),
             Self::Array(box (ty, count)) => write!(f, "[{}; {}]", ty, count),
             Self::Enum(variants) => {
@@ -64,6 +108,7 @@ impl fmt::Display for Type {
                 write_delimited(f, elems, ", ")?;
                 write!(f, ")")
             }
+            Self::Generic(idx) => write!(f, "Generic #{idx}"),
             Self::Invalid => write!(f, "[invalid]"),
         }
     }
@@ -143,14 +188,16 @@ pub enum TypeDef {
 }
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let TypeDef::Struct(struct_) = self;
-        write!(f, "{struct_}")
+        match self {
+            TypeDef::Struct(struct_) => write!(f, "{struct_}"),
+        }
     }
 }
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub members: Vec<(String, Type)>,
     pub methods: HashMap<String, SymbolKey>,
+    pub generic_count: u8,
     pub name: String
 }
 impl fmt::Display for Struct {

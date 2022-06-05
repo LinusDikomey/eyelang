@@ -75,7 +75,6 @@ impl Tokens {
         let module = self.module;
         let tok = self.step()?;
         if !expected.iter().any(|expected_tok| *expected_tok == tok.ty) {
-            dbg!(expected, tok);
             return Err(CompileError {
                 err: Error::UnexpectedToken,
                 span: Span::new(tok.start, tok.end, module)
