@@ -81,7 +81,7 @@ pub enum Backend {
     // Run with the llvm backend
     #[cfg(feature = "llvm-backend")]
     LLVM,
-    /// W.I.P! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
+    /// W.I.P.! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
     /// This backend is primarily used for fast compilations. It is mostly unfinished right now.
     X86
 }

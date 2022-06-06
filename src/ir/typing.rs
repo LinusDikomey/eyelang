@@ -37,7 +37,7 @@ impl TypeTable {
     }
 
     // Points a to the index that b is pointing to
-    fn point_to(&mut self, a: TypeTableIndex, b: TypeTableIndex) {
+    pub fn point_to(&mut self, a: TypeTableIndex, b: TypeTableIndex) {
         self.indices[a.idx()] = self.indices[b.idx()];
     }
 
@@ -100,6 +100,19 @@ impl TypeTable {
             TypeInfo::Invalid
         });
         self.update_type(idx, ty);
+    }
+    pub fn specify_or_merge(
+        &mut self,
+        idx: TypeTableIndex,
+        other: TypeInfoOrIndex,
+        errors: &mut Errors,
+        module: ModuleId,
+        span: TSpan,
+    ) {
+        match other {
+            TypeInfoOrIndex::Info(info) => self.specify(idx, info, errors, span.in_mod(module)),
+            TypeInfoOrIndex::Index(other_idx) => self.merge(idx, other_idx, errors, module, span),
+        }
     }
 
     pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId, span: TSpan) {

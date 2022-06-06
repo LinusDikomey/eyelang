@@ -38,7 +38,7 @@ pub fn gen_globals(ast: &Ast, ctx: &mut TypingCtx, errors: &mut Errors) -> Globa
         let module_id = ModuleId::new(module_id as u32);
         for (name, def) in &module.definitions {
             if symbols[module_id.idx()].contains_key(name) { continue }
-            gen_ty(def, module_id, name, errors,
+            gen_def(def, module_id, name, errors,
                 GlobalResolveState { symbols: &mut symbols, ctx, ast }
             );
         }
@@ -53,7 +53,7 @@ pub fn gen_locals(
     let mut symbols = HashMap::with_capacity(defs.len());
     for (name, def) in defs {
         if symbols.contains_key(name) { continue }
-        gen_ty(def, scope.module, name, errors,
+        gen_def(def, scope.module, name, errors,
             LocalResolveState { symbols: &mut symbols, scope: scope.reborrow(), defs }
         );
     }
@@ -164,7 +164,7 @@ impl<'a, R: ResolveState> ResolveState for DefinitionResolveState<'a, R> {
     
 }
 
-fn gen_ty(
+fn gen_def(
     def: &ast::Definition,
     //ast: &Ast,
     module: ModuleId,
@@ -206,9 +206,28 @@ fn resolve_ty(
 ) -> Type {
     match unresolved {
         UnresolvedType::Primitive(p, _) => Type::Prim(*p),
-        UnresolvedType::Unresolved(path) => {
+        UnresolvedType::Unresolved(path, generics) => {
             match state.resolve_path(path, module, errors) {
-                Some(Symbol::Type(ty)) => Type::Id(ty, Vec::new()), //TODO: generics?
+                Some(Symbol::Type(ty)) => {
+                    let generic_count = state.ctx().get_type(ty).generic_count();
+                    let resolved_generics = generics.as_ref()
+                        .map_or_else(|| Vec::new(), |(generics, _)| {
+                            generics.iter().map(|ty| resolve_ty(ty, module, errors, state.reborrow())).collect()
+                        });
+                    if generic_count as usize != resolved_generics.len() {
+                        let span = generics.as_ref().map_or_else(|| path.span(), |(_, span)| *span);
+                        errors.emit_span(
+                            Error::InvalidGenericCount {
+                                expected: generic_count,
+                                found: resolved_generics.len() as u8
+                            },
+                            span.in_mod(module)
+                        );
+                        Type::Invalid
+                    } else {
+                        Type::Id(ty, resolved_generics)
+                    }
+                }
                 Some(Symbol::Generic(idx)) => Type::Generic(idx),
                 Some(_) => {
                     errors.emit_span(Error::TypeExpected, path.span().in_mod(module));
@@ -216,7 +235,6 @@ fn resolve_ty(
                 }
                 None => Type::Invalid // an error was already emitted in this case
             }
-
         }
         UnresolvedType::Pointer(box (inner, _)) => {
             let pointer_ty = resolve_ty(inner, module, errors, state);
@@ -316,7 +334,7 @@ impl<'a> PathResolveSymbols<'a> {
                 if let Some(symbol) = symbols[module.idx()].get(name) {
                     Some(*symbol)
                 } else  if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
-                    gen_ty(def, module, name, errors,
+                    gen_def(def, module, name, errors,
                         GlobalResolveState { symbols, ctx, ast }
                     )
                 } else {
@@ -371,6 +389,7 @@ fn resolve_path(
                         return None;
                     }
                 } else {
+                    errors.emit_span(Error::UnknownModule, span.in_mod(path_module));
                     return None;
                 }
             }
@@ -446,7 +465,7 @@ fn resolve_in_scope(
     if let Some(symbol) = symbols.get(name) {
         Some(*symbol)
     } else if let Some(def) = defs.get(name) {
-        gen_ty(def, scope.module, name, errors,
+        gen_def(def, scope.module, name, errors,
             LocalResolveState { symbols, scope: scope.reborrow(), defs }
         )
     } else {

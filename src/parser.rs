@@ -299,7 +299,7 @@ impl<'a> Parser<'a> {
                                 TokenType::Ident => {
                                     let member_name = ident_or_fn.get_val(p.src);
                                     let member_type = p.parse_type()?;
-                                    let end = member_type.span(&p.ast.expr_builder).end;
+                                    let end = member_type.span().end;
                                     members.push((member_name.to_owned(), member_type, ident.start, end));
                                     Delimit::Yes
                                 },
@@ -624,12 +624,16 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::Root) => {
                 let (s, e) = (type_tok.start, type_tok.end);
                 Ok(UnresolvedType::Unresolved(
-                    self.parse_rest_of_path(s, e)?
+                    self.parse_rest_of_path(s, e)?,
+                    self.parse_optional_generic_instance()?
                 ))
             },
             TokenType::Ident => {
                 let (s, e) = (type_tok.start, type_tok.end);
-                Ok(UnresolvedType::Unresolved(self.parse_rest_of_path(s, e)?))
+                Ok(UnresolvedType::Unresolved(
+                    self.parse_rest_of_path(s, e)?,
+                    self.parse_optional_generic_instance()?
+                ))
             },
             TokenType::Keyword(Keyword::Primitive(primitive)) => {
                 Ok(UnresolvedType::Primitive(primitive, type_tok.span()))
@@ -684,5 +688,16 @@ impl<'a> Parser<'a> {
             })?;
         }
         Ok(generics)
+    }
+
+    fn parse_optional_generic_instance(&mut self) -> EyeResult<Option<(Vec<UnresolvedType>, TSpan)>> {
+        self.toks.step_if(TokenType::LBracket).map(|l_bracket| {
+            let mut types = Vec::new();
+            let r_bracket = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+                types.push(p.parse_type()?);
+                Ok(())
+            })?;
+            Ok((types, TSpan::new(l_bracket.start, r_bracket.end)))
+        }).transpose()
     }
 }

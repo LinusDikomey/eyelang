@@ -361,7 +361,7 @@ impl<'s> Scope<'s> {
     fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, types: &mut TypeTable) -> Result<TypeInfo, Error> {
         match unresolved {
             ast::UnresolvedType::Primitive(p, _) => Ok(TypeInfo::Primitive(*p)),
-            ast::UnresolvedType::Unresolved(path) => {
+            ast::UnresolvedType::Unresolved(path, generics) => {
                 let (root, iter, last) = path.segments(self.ast.src(self.module).0);
                 // no last segment means it must point to the root module
                 let Some(last) = last else { return Err(Error::TypeExpected) };
@@ -388,17 +388,35 @@ impl<'s> Scope<'s> {
                         None => return Err(Error::UnknownModule)
                     }
                 }
+                let mut resolve_generics = |s: &mut Scope, key: SymbolKey| {
+                    let TypeDef::Struct(struct_) = s.ctx.get_type(key);
+                    Ok(if let Some((generics, _)) = generics {
+                        if generics.len() != struct_.generic_count as usize {
+                            return Err(Error::InvalidGenericCount {
+                                expected: struct_.generic_count,
+                                found: generics.len() as u8
+                            })
+                        }
+                        let generics = generics.iter()
+                            .map(|ty| s.resolve_type(ty, types))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        types.add_multiple(
+                            generics
+                        )
+                    } else {
+                        types.add_multiple(
+                            (0..struct_.generic_count)
+                                .map(|_| TypeInfo::Unknown)
+                        )
+                    })
+                };
                 match current_module {
                     ModuleOrLocal::Module(m) => match self.globals[m]
                         .get(last.0)
                         .ok_or(Error::UnknownIdent)? {
-                            Symbol::Type(ty) => {
-                                let TypeDef::Struct(struct_) = self.ctx.get_type(*ty);
-                                let generics = types.add_multiple(
-                                    (0..struct_.generic_count)
-                                        .map(|_| TypeInfo::Unknown)
-                                );
-                                Ok(TypeInfo::Resolved(*ty, generics))
+                            &Symbol::Type(ty) => {
+                                let generics = resolve_generics(self, ty)?;
+                                Ok(TypeInfo::Resolved(ty, generics))
                             }
                             // TODO: might require a new solution to allow inference of local types
                             Symbol::LocalType(ty) => Ok(types.get_type(*ty)),
@@ -406,13 +424,10 @@ impl<'s> Scope<'s> {
                         },
                     ModuleOrLocal::Local => match self.info.resolve_local(last.0)? {
                         Resolved::Type(ty) => {
-                            let TypeDef::Struct(struct_) = self.ctx.get_type(ty);
-                            let generics = types.add_multiple(
-                                (0..struct_.generic_count)
-                                    .map(|_| TypeInfo::Unknown)
-                            );
+                            let generics = resolve_generics(self, ty)?;
                             Ok(TypeInfo::Resolved(ty, generics))
                         }
+                        //TODO: local generics?
                         Resolved::LocalType(ty) => Ok(types.get_type(ty)),
                         _ => Err(Error::TypeExpected)
                     }
@@ -436,7 +451,7 @@ impl<'s> Scope<'s> {
     }
 
     fn declare_var(&mut self, ir: &mut IrBuilder, name: String, ty: TypeTableIndex) -> Ref {
-        let var = ir.add(Data { ty }, Tag::Decl, ty);
+        let var = ir.add(Data { none: () }, Tag::Decl, ty);
         self.info
             .symbols
             .to_mut()
@@ -478,7 +493,7 @@ impl<'s> Scope<'s> {
     ) -> ExprResult {
         self.reduce_expr_any(
             errors, ir, expr, expected, ret,
-            |ir| ir.add(Data { ty: expected }, Tag::Decl, expected), // declare new var
+            |ir| ir.add(Data { none: () }, Tag::Decl, expected), // declare new var
         )
     }
 
@@ -513,7 +528,7 @@ impl<'s> Scope<'s> {
     ) -> Ref {
         match self.reduce_expr_any(
             errors, ir, expr, expected, ret,
-            |ir| ir.add(Data { ty: expected }, Tag::Decl, expected)
+            |ir| ir.add(Data { none: () }, Tag::Decl, expected)
         ) {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
             ExprResult::Val(_)
@@ -561,7 +576,7 @@ impl<'s> Scope<'s> {
                 let ty = match self.resolve_type(annotated_ty, &mut ir.types) {
                     Ok(t) => t,
                     Err(err) => {
-                        errors.emit_span(err, annotated_ty.span(&self.ast.expr_builder).in_mod(self.module));
+                        errors.emit_span(err, annotated_ty.span().in_mod(self.module));
                         TypeInfo::Invalid
                     }
                 };
@@ -575,7 +590,7 @@ impl<'s> Scope<'s> {
                 let ty = match self.resolve_type(annotated_ty, &mut ir.types) {
                     Ok(t) => t,
                     Err(err) => {
-                        errors.emit_span(err, annotated_ty.span(&self.ast.expr_builder).in_mod(self.module));
+                        errors.emit_span(err, annotated_ty.span().in_mod(self.module));
                         TypeInfo::Invalid
                     }
                 };
@@ -693,7 +708,7 @@ impl<'s> Scope<'s> {
                 let elem_ty = ir.types.add(TypeInfo::Unknown);
                 let arr_ty = TypeInfo::Array(Some(elems.len() as u32), elem_ty);
                 ir.types.specify(expected, arr_ty, errors, span.in_mod(self.module));
-                //let arr = ir.add(Data { ty: expected }, Tag::Decl, expected);
+                //let arr = ir.add(Data { none: () }, Tag::Decl, expected);
                 let arr = get_var(ir);
                 let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 for (i, elem) in elems.iter().enumerate() {
@@ -962,7 +977,7 @@ impl<'s> Scope<'s> {
                                     TypeInfo::Pointer(inner) => inner,
                                     _ => ir.types.add(TypeInfo::Invalid)
                                 };
-                                let var = ir.add(Data { ty: val_expected }, Tag::Decl, val_expected);
+                                let var = ir.add(Data { none: () }, Tag::Decl, val_expected);
                                 ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                                 ir.add(Data { un_op: var }, Tag::AsPointer, expected)
                             }
@@ -1086,7 +1101,7 @@ impl<'s> Scope<'s> {
                 let left_val = match self.reduce_expr(errors, ir, left, left_ty, ret) {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                     ExprResult::Val(val) => {
-                        let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
+                        let var = ir.add(Data { none: () }, Tag::Decl, expected);
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         MemberAccessType::Var(var)
                     }
@@ -1128,7 +1143,7 @@ impl<'s> Scope<'s> {
                                 (TypeInfo::Invalid.into(), 0)
                             }
                         };
-                        ir.specify_or_merge(expected, ty, errors, self.module, expr.span(self.ast));
+                        ir.types.specify_or_merge(expected, ty, errors, self.module, expr.span(self.ast));
                         let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                         let idx = ir.add(
                             Data { int: idx as u64 },
@@ -1183,7 +1198,7 @@ impl<'s> Scope<'s> {
                 let expr_var = match self.reduce_expr(errors, ir, &self.ast[*indexed], indexed_ty, ret) {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => r,
                     ExprResult::Val(val) => {
-                        let var = ir.add(Data { ty: expected }, Tag::Decl, expected);
+                        let var = ir.add(Data { none: () }, Tag::Decl, expected);
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         var
                     }

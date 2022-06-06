@@ -25,8 +25,8 @@ where
     let mut i =i.into_iter();
     i.next().map(|t| write_func(f, t)).transpose()?;
     for elem in i {
-        write_func(f, elem)?;
         write!(f, "{delim}")?;
+        write_func(f, elem)?;
     }
     Ok(())
 }

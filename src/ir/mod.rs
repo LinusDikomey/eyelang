@@ -54,6 +54,13 @@ impl Type {
             Self::Prim(p) => TypeInfo::Primitive(*p),
             Self::Id(id, ty_generics) => {
                 // unfortunately this has to be allocated for borrowing reasons
+                let generics = types.add_multiple(ty_generics.iter().map(|_| TypeInfo::Unknown));
+                for (generic, ty) in generics.iter().zip(ty_generics) {
+                    match ty.as_info_generic(types, generics) {
+                        TypeInfoOrIndex::Info(info) => types.update_type(generic, info), //TODO: this might need a proper merge?
+                        TypeInfoOrIndex::Index(idx) => types.point_to(generic, idx),
+                    }
+                }
                 let generics = ty_generics.iter()
                     .map(|ty| ty.as_info_generic(types, generics))
                     .collect::<Vec<_>>();
@@ -80,7 +87,7 @@ impl Type {
                 );
                 return TypeInfoOrIndex::Index(generics.nth(*idx as usize));
             }
-            Self::Invalid => unreachable!()
+            Self::Invalid => TypeInfo::Invalid
         })
     }
 }
@@ -140,16 +147,11 @@ impl fmt::Display for Function {
                     writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
                     continue;
                 }
-                write!(f, "    {:>4}{}= {}",
+                writeln!(f, "    {:>4}{}= {}",
                     format!("%{i}").cyan(),
                     if inst.used {' '} else {'!'},
                     inst.display(&ir.extra, &ir.types)
                 )?;
-                if inst.ty.is_present() {
-                    writeln!(f, " :: {}", format!("{}", ir.types.get(inst.ty)).magenta())?;
-                } else {
-                    writeln!(f)?;
-                }
             }   
         }
         Ok(())
@@ -185,6 +187,13 @@ pub struct FunctionHeader {
 #[derive(Debug)]
 pub enum TypeDef {
     Struct(Struct)
+}
+impl TypeDef {
+    pub fn generic_count(&self) -> u8 {
+        match self {
+            TypeDef::Struct(struct_) => struct_.generic_count,
+        }
+    }
 }
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -246,10 +255,19 @@ pub struct Instruction {
 }
 impl Instruction {
     pub fn display(&self, extra: &[u8], types: &FinalTypeTable) -> String {
-        format!("{} {}", self.tag, self.display_data(extra, types))
+        format!("{} {}{}", self.tag, self.display_data(extra),
+            if self.ty.is_present() {
+                let prefix = match self.tag {
+                    Tag::Decl => "".normal(),
+                    Tag::Cast => " as ".bright_magenta(),
+                    _ => " :: ".normal()
+                };
+                format!("{prefix}{}", format!("{}", types.get(self.ty)).magenta())
+            } else { String::new() }
+        )
     }
 
-    fn display_data(&self, extra: &[u8], types: &FinalTypeTable) -> ColoredString {
+    fn display_data(&self, extra: &[u8]) -> ColoredString {
         let write_ref = |r: Ref| {
             if let Some(val) = r.into_val() {
                 format!("{val}").yellow()
@@ -323,10 +341,7 @@ impl Instruction {
             DataVariant::BinOp => {
                 format!("{}, {}", write_ref(self.data.bin_op.0), write_ref(self.data.bin_op.1)).normal()
             }
-            DataVariant::Type => types.get(self.data.ty).to_string().purple(),
-            DataVariant::Cast => {
-                format!("{} as {}", write_ref(self.data.un_op), types.get(self.ty)).normal()
-            }
+            DataVariant::Cast => write_ref(self.data.un_op),
             DataVariant::Branch => {
                 let i = self.data.branch.1 as usize;
                 let mut bytes = [0; 4];
@@ -340,6 +355,7 @@ impl Instruction {
                     b = format!("b{b}").bright_blue()
                 ).normal()
             }
+            DataVariant::None => "".normal(),
         }}
     }
 }
@@ -396,7 +412,7 @@ impl Tag {
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
             Tag::EnumLit | Tag::String => String,
-            Tag::Decl => Type,
+            Tag::Decl => None,
             Tag::Call => Call,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
@@ -493,7 +509,6 @@ pub union Data {
     pub float: f64,
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),
-    pub ty: TypeTableIndex,
     pub branch: (Ref, u32),
     pub none: (),
     pub block: BlockIndex
@@ -531,6 +546,6 @@ enum DataVariant {
     Float,
     UnOp,
     BinOp,
-    Type,
-    Cast
+    Cast,
+    None,
 }

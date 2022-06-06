@@ -340,7 +340,19 @@ impl<R: Representer> Repr<R> for UnresolvedType {
     fn repr(&self, c: &R) {
         match self {
             Self::Primitive(p, _) => p.repr(c),
-            Self::Unresolved(path) => path.repr(c),
+            Self::Unresolved(path, generics) => {
+                path.repr(c);
+                if let Some((generics, _)) = generics {
+                    c.write_add("[");
+                    for (i, ty) in generics.iter().enumerate() {
+                        if i != 0 {
+                            c.write_add(", ");
+                        }
+                        ty.repr(c);
+                    }
+                    c.write_add("]");
+                }
+            }
             Self::Pointer(box (inner, _)) => {
                 c.char('*');
                 inner.repr(c);

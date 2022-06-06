@@ -1,6 +1,6 @@
 use crate::{
     ast::{ModuleId, TSpan},
-    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex, TypeInfoOrIndex},
+    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
     error::Errors
 };
 
@@ -127,19 +127,6 @@ impl IrBuilder {
 
     pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan) {
         self.types.specify(idx, info, errors, span.in_mod(self.module));
-    }
-    pub fn specify_or_merge(
-        &mut self,
-        idx: TypeTableIndex,
-        other: TypeInfoOrIndex,
-        errors: &mut Errors,
-        module: ModuleId,
-        span: TSpan,
-    ) {
-        match other {
-            TypeInfoOrIndex::Info(info) => self.specify(idx, info, errors, span),
-            TypeInfoOrIndex::Index(other_idx) => self.types.merge(idx, other_idx, errors, module, span),
-        }
     }
 
     pub fn invalidate(&mut self, idx: TypeTableIndex) {

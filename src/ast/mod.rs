@@ -352,20 +352,23 @@ impl IdentPath {
 #[derive(eye_derive::EnumSizeDebug)]
 pub enum UnresolvedType {
     Primitive(Primitive, TSpan),
-    Unresolved(IdentPath),
+    Unresolved(IdentPath, Option<(Vec<UnresolvedType>, TSpan)>),
     Pointer(Box<(UnresolvedType, u32)>),
     Array(Box<(UnresolvedType, TSpan, Option<u32>)>),
     Tuple(Vec<UnresolvedType>, TSpan),
     Infer(u32),
 }
 impl UnresolvedType {
-    pub fn span(&self, expr_builder: &ExprBuilder) -> TSpan {
+    pub fn span(&self) -> TSpan {
         match self {
             UnresolvedType::Primitive(_, span) 
             | UnresolvedType::Array(box (_, span, _))
             | UnresolvedType::Tuple(_, span) => *span,
-            UnresolvedType::Unresolved(path) => path.span(),
-            UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span(expr_builder).end),
+            UnresolvedType::Unresolved(path, generics) => generics.as_ref().map_or_else(
+                || path.span(),
+                |generics| TSpan::new(path.span().start, generics.1.end)
+            ),
+            UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span().end),
             UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }

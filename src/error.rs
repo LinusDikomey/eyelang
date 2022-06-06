@@ -205,7 +205,8 @@ pub enum Error {
     InvalidArgumentCountForArrayIndex,
     TupleIndexingOnNonValue,
     TupleIndexOutOfRange,
-    NotAnInstanceMethod
+    NotAnInstanceMethod,
+    InvalidGenericCount { expected: u8, found: u8 }
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
