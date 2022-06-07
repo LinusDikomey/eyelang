@@ -4,9 +4,11 @@ use crate::{
     error::Errors
 };
 
+#[derive(Clone)]
 pub struct IrBuilder {
     module: ModuleId,
     ir: Vec<Instruction>,
+    pub emit: bool,
     current_block: u32,
     next_block: u32,
     pub types: TypeTable,
@@ -22,6 +24,7 @@ impl IrBuilder {
                 ty: TypeTableIndex::NONE,
                 used: false
             }],
+            emit: true,
             current_block: 0,
             next_block: 1,
             types: TypeTable::new(),
@@ -29,22 +32,36 @@ impl IrBuilder {
         }
     }
 
+    /// Internal function to add an instruction. This will not add anything if `emit` is set to false.
+    fn add_inst(&mut self, inst: Instruction) -> Ref {
+        let idx = Ref::index(self.ir.len() as u32);
+        if self.emit {
+            if inst.tag == Tag::BlockBegin {
+                debug_assert!(self.ir.last().map(|last| last.tag.is_terminator()).unwrap_or(true),
+                    "New block started without preceding terminator: \n{}", self.clone().finish());
+            } else {
+                debug_assert!(self.ir.last().map(|last| !last.tag.is_terminator()).unwrap_or(true),
+                    "Instruction added after a terminator: \n{}", self.clone().finish());
+            }
+            self.ir.push(inst);
+        }
+        idx
+    }
+
     #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     pub fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
         debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
-        let idx = self.ir.len() as u32;
-        self.ir.push(Instruction {
+        self.add_inst(Instruction {
             data,
             tag,
             ty,
             used: true
-        });
-        Ref::index(idx)
+        })
     }
 
     pub fn add_untyped(&mut self, tag: Tag, data: Data) {
         debug_assert!(tag.is_untyped(), "The IR instruction {tag:?} needs a type");
-        self.ir.push(Instruction {
+        self.add_inst(Instruction {
             data,
             tag,
             ty: TypeTableIndex::NONE,
@@ -54,7 +71,7 @@ impl IrBuilder {
 
     pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
         debug_assert!(!tag.is_untyped(), "The unused IR instruction {tag:?} doesn't need a type");
-        self.ir.push(Instruction {
+        self.add_inst(Instruction {
             data,
             tag,
             ty,
@@ -64,7 +81,7 @@ impl IrBuilder {
 
     pub fn add_unused_untyped(&mut self, tag: Tag, data: Data) {
         debug_assert!(tag.is_untyped(), "The unused IR instruction {tag:?} needs a type");
-        self.ir.push(Instruction {
+        self.add_inst(Instruction {
             data,
             tag,
             ty: TypeTableIndex::NONE,
@@ -84,21 +101,25 @@ impl IrBuilder {
 
     pub fn create_block(&mut self) -> BlockIndex {
         let idx = BlockIndex(self.next_block);
-        self.next_block += 1;
+        if self.emit {
+            self.next_block += 1;
+        }
         idx
     }
 
     pub fn begin_block(&mut self, idx: BlockIndex) {
-        debug_assert!(
-            matches!(
-                self.ir[self.ir.len() - 1].tag,
-                Tag::Branch | Tag::Goto | Tag::Ret
-            ),
-            "Can't begin next block without exiting previous one (Branch/Goto/Ret)"
-        );
+        if self.emit {
+            debug_assert!(
+                matches!(
+                    self.ir[self.ir.len() - 1].tag,
+                    Tag::Branch | Tag::Goto | Tag::Ret
+                ),
+                "Can't begin next block without exiting previous one (Branch/Goto/Ret)"
+            );
+            self.current_block = idx.0;
+        }
 
-        self.current_block = idx.0;
-        self.ir.push(Instruction {
+        self.add_inst(Instruction {
             data: Data { block: idx },
             tag: Tag::BlockBegin,
             ty: TypeTableIndex::NONE,
@@ -131,9 +152,5 @@ impl IrBuilder {
 
     pub fn invalidate(&mut self, idx: TypeTableIndex) {
         self.types.update_type(idx, TypeInfo::Invalid);
-    }
-
-    pub fn ir(&self) -> &[Instruction] {
-        &self.ir
     }
 }

@@ -1,3 +1,5 @@
+use std.c.printf
+
 fn main {
     x := (1, 2.5)
     ptr := &x.1
@@ -6,5 +8,5 @@ fn main {
 
     other_pointer = ptr
 
-    std.c.printf("Values are: %d, %f\n", x.0, x.1)
+    printf("Values are: %d, %f\n", x.0, x.1)
 }

@@ -142,17 +142,7 @@ impl fmt::Display for Function {
         writeln!(f, ") -> {}", self.header.return_type)?;
 
         if let Some(ir) = &self.ir {
-            for (i, inst) in ir.inst.iter().enumerate() {
-                if inst.tag == Tag::BlockBegin {
-                    writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
-                    continue;
-                }
-                writeln!(f, "    {:>4}{}= {}",
-                    format!("%{i}").cyan(),
-                    if inst.used {' '} else {'!'},
-                    inst.display(&ir.extra, &ir.types)
-                )?;
-            }   
+            write!(f, "{ir}")?;
         }
         Ok(())
     }
@@ -175,6 +165,22 @@ pub struct FunctionIr {
     pub extra: Vec<u8>,
     pub types: FinalTypeTable,
     pub block_count: u32
+}
+impl fmt::Display for FunctionIr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, inst) in self.inst.iter().enumerate() {
+            if inst.tag == Tag::BlockBegin {
+                writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
+                continue;
+            }
+            writeln!(f, "    {:>4}{}= {}",
+                format!("%{i}").cyan(),
+                if inst.used {' '} else {'!'},
+                inst.display(&self.extra, &self.types)
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -431,6 +437,9 @@ impl Tag {
 
     pub fn is_untyped(self) -> bool {
         matches!(self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
+    }
+    pub fn is_terminator(self) -> bool {
+        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret)
     }
 }
 impl fmt::Display for Tag {
