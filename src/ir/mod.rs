@@ -218,6 +218,11 @@ impl fmt::Display for Struct {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TraitDef {
+    pub functions: HashMap<String, (u32, FunctionHeader)>
+}
+
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,

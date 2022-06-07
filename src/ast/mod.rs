@@ -155,8 +155,9 @@ pub enum Item {
 pub enum Definition {
     Function(Function),
     Struct(StructDefinition),
+    Trait(TraitDefinition),
     Module(ModuleId),
-    Use(IdentPath)
+    Use(IdentPath),
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +165,12 @@ pub struct StructDefinition {
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
     pub methods: HashMap<String, Function>
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitDefinition {
+    pub generics: Vec<TSpan>,
+    pub functions: HashMap<String, (TSpan, Function)>,
 }
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::{
-    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, TSpan, IdentPath},
+    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, TSpan, IdentPath, TraitDefinition},
     error::{Errors, Error},
     ir::{gen::FunctionOrHeader, Type}, lexer::Span
 };
@@ -183,6 +183,10 @@ fn gen_def(
             let key = gen_struct(struct_, name, module, errors, state.reborrow());
             Symbol::Type(key)
         }
+        ast::Definition::Trait(trait_) => {
+            let key = gen_trait(trait_, name, module, errors, state.reborrow());
+            Symbol::Trait(key)
+        }
         ast::Definition::Module(inner_module) => {
             state.insert_symbol(module, name.to_owned(), Symbol::Module(*inner_module));
             Symbol::Module(*inner_module)
@@ -319,6 +323,27 @@ fn gen_struct(
     key
 }
 
+fn gen_trait(
+    def: &TraitDefinition,
+    name: &str,
+    module: ModuleId,
+    errors: &mut Errors,
+    state: impl ResolveState,
+) -> SymbolKey {
+    let mut state = DefinitionResolveState {
+        parent: state,
+        generics: &HashMap::new(),
+        module,
+    };
+    let functions = def.functions.iter()
+        .enumerate()
+        .map(|(i, (name, (_span, func)))| (name.clone(), (i as u32, state.gen_func(module, func, errors))))
+        .collect();
+    let key = state.ctx().add_trait(crate::ir::TraitDef { functions });
+    state.insert_symbol(module, name.to_owned(), Symbol::Trait(key));
+    key
+}
+
 enum PathResolveState<'a, 's, 'd> {
     Local(&'a mut Scope<'s>, &'a mut HashMap<String, Symbol>, &'d HashMap<String, ast::Definition>),
     Module(ModuleId)
@@ -333,7 +358,7 @@ impl<'a> PathResolveSymbols<'a> {
             PathResolveSymbols::Mutable(ast, symbols, ctx) => {
                 if let Some(symbol) = symbols[module.idx()].get(name) {
                     Some(*symbol)
-                } else  if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
+                } else if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
                     gen_def(def, module, name, errors,
                         GlobalResolveState { symbols, ctx, ast }
                     )
@@ -389,7 +414,7 @@ fn resolve_path(
                         return None;
                     }
                 } else {
-                    errors.emit_span(Error::UnknownModule, span.in_mod(path_module));
+                    // an error was already emitted here
                     return None;
                 }
             }
@@ -402,9 +427,7 @@ fn resolve_path(
                 => resolve_in_scope(name, span, scope, symbols, defs, errors),
             PathResolveState::Module(id) => {
                 let symbol = symbols.get(id, name, span.in_mod(path_module), errors);
-                if symbol.is_none() {
-                    errors.emit_span(Error::UnknownIdent, span.in_mod(path_module));
-                }
+                // an error was already emitted here if the symbol was None
                 symbol
             }
         }

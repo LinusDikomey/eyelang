@@ -86,8 +86,9 @@ impl<C: Representer> Repr<C> for Module {
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         match self {
-            Self::Function(func) => func.repr(c, name),
+            Self::Function(func) => func.repr(c, name, false),
             Self::Struct(struc) => struc.repr(c, name),
+            Self::Trait(t) => t.repr(c, name),
             Self::Module(_) => {}
             Self::Use(path) => {
                 c.write_add("use ");
@@ -98,7 +99,7 @@ impl Definition {
 }
 
 impl Function {
-    fn repr<C: Representer>(&self, c: &C, name: &str) {
+    fn repr<C: Representer>(&self, c: &C, name: &str, in_trait: bool) {
         c.write_start("fn ");
         c.write_add(name);
         if !self.params.is_empty() {
@@ -124,7 +125,7 @@ impl Function {
                 c.write_add(": ");
                 expr.repr(c);
             }
-            None => c.write_add(" extern")
+            None => if !in_trait { c.write_add(" extern") }
         }
     }
 }
@@ -139,6 +140,19 @@ impl StructDefinition {
             child.space();
             ty.repr(&child);
             child.write_add(if i == (self.members.len() - 1) { "\n" } else { ",\n" });
+        }
+        c.write_start("}");
+    }
+}
+
+impl TraitDefinition {
+    fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.write_start("trait ");
+        c.write_add(name);
+        c.write_add(" {\n");
+        let child = c.child();
+        for (name, (_, func)) in &self.functions {
+            func.repr(&child, name, true);
         }
         c.write_start("}");
     }

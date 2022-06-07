@@ -18,6 +18,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
     let mut ctx = TypingCtx {
         funcs: Vec::new(),
         types: Vec::new(),
+        traits: Vec::new(),
     };
     let globals = types::gen_globals(ast, &mut ctx, &mut errors);
 
@@ -152,6 +153,7 @@ fn gen_func_bodies(
 pub enum Symbol {
     Func(SymbolKey),
     Type(SymbolKey),
+    Trait(SymbolKey),
     LocalType(TypeTableIndex),
     TypeProto(SymbolKey),
     Generic(u8),
@@ -183,6 +185,7 @@ impl<'a> ScopeInfo<'a> {
             Ok(match symbol {
                 Symbol::Func(f) => Resolved::Func(*f),
                 Symbol::Type(t) => Resolved::Type(*t),
+                Symbol::Trait(t) => Resolved::Trait(*t),
                 Symbol::LocalType(t) => Resolved::LocalType(*t),
                 Symbol::TypeProto(t) => Resolved::TypeProto(*t),
                 Symbol::Generic(_) => todo!(),
@@ -214,15 +217,23 @@ impl FunctionOrHeader {
 pub struct TypingCtx {
     funcs: Vec<FunctionOrHeader>,
     types: Vec<TypeDef>,
+    traits: Vec<TraitDef>,
 }
 impl TypingCtx {
     pub fn add_func(&mut self, func: FunctionOrHeader) -> SymbolKey {
+        let key = SymbolKey(self.funcs.len() as u64);
         self.funcs.push(func);
-        SymbolKey((self.funcs.len() - 1) as u64)
+        key
     }
     pub fn add_type(&mut self, ty: TypeDef) -> SymbolKey {
+        let key = SymbolKey(self.types.len() as u64);
         self.types.push(ty);
-        SymbolKey((self.types.len() - 1) as u64)
+        key
+    }
+    pub fn add_trait(&mut self, t: TraitDef) -> SymbolKey {
+        let key = SymbolKey(self.traits.len() as u64);
+        self.traits.push(t);
+        key
     }
     pub fn add_proto_ty(&mut self) -> SymbolKey {
         self.add_type(TypeDef::Struct(Struct {
@@ -236,12 +247,14 @@ impl TypingCtx {
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()] }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
+    pub fn get_trait(&self, key: SymbolKey) -> &TraitDef { &self.traits[key.idx()] }
 }
 
 enum Resolved {
     Var(TypeTableIndex, Ref),
     Func(SymbolKey),
     Type(SymbolKey),
+    Trait(SymbolKey),
     LocalType(TypeTableIndex),
     TypeProto(SymbolKey),
     Module(ModuleId),
@@ -252,6 +265,7 @@ impl Resolved {
             Resolved::Var(_, _) | Resolved::LocalType(_) => None,
             Resolved::Func(id) => Some(Symbol::Func(id)),
             Resolved::Type(id) => Some(Symbol::Type(id)),
+            Resolved::Trait(t) => Some(Symbol::Trait(t)),
             Resolved::TypeProto(id) => Some(Symbol::TypeProto(id)),
             Resolved::Module(id) => Some(Symbol::Module(id)),
         }
@@ -263,9 +277,11 @@ enum ExprResult {
     VarRef(Ref),
     Val(Ref),
     Func(SymbolKey),
+    TraitFunc(SymbolKey, u32),
     /// method call on a variable: x.method
     Method(Ref, SymbolKey),
     Type(SymbolKey),
+    Trait(SymbolKey),
     LocalType(TypeTableIndex),
     TypeProto(SymbolKey),
     Module(ModuleId),
@@ -533,8 +549,10 @@ impl<'s> Scope<'s> {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
             ExprResult::Val(_)
             | ExprResult::Func(_)
+            | ExprResult::TraitFunc(_, _)
             | ExprResult::Method(_, _)
             | ExprResult::Type(_)
+            | ExprResult::Trait(_)
             | ExprResult::LocalType(_)
             | ExprResult::TypeProto(_)
             | ExprResult::Module(_)
@@ -692,6 +710,7 @@ impl<'s> Scope<'s> {
                         }
                         Resolved::Func(f) => return ExprResult::Func(f),
                         Resolved::Type(t) => return ExprResult::Type(t),
+                        Resolved::Trait(t) => return ExprResult::Trait(t),
                         Resolved::LocalType(t) => return ExprResult::LocalType(t),
                         Resolved::TypeProto(t) => return ExprResult::TypeProto(t),
                         Resolved::Module(m) => return ExprResult::Module(m),
@@ -859,6 +878,7 @@ impl<'s> Scope<'s> {
                     ExprResult::Func(key) => {
                         gen_call(self, expr, key, None, args.iter().copied(), ir, expected, ret, errors)
                     }
+                    //TODO: Trait function calls
                     ExprResult::Method(self_var, key) => {
                         let called_span = called.span(self.ast);
                         let this = Some((self_var, called_ty, called_span));
@@ -939,7 +959,7 @@ impl<'s> Scope<'s> {
                     }
                     _ => {
                         if !ir.types.get_type(called_ty).is_invalid() {
-                            errors.emit_span(Error::FunctionOrTypeExpected, expr.span(self.ast).in_mod(self.module));
+                            errors.emit_span(Error::FunctionOrTypeExpected, called.span(self.ast).in_mod(self.module));
                         }
                         ir.invalidate(expected);
                         Ref::val(RefVal::Undef)
@@ -1095,6 +1115,7 @@ impl<'s> Scope<'s> {
                     Var(Ref),
                     Module(ModuleId),
                     AssociatedFunction(SymbolKey),
+                    TraitFunction(SymbolKey),
                     Invalid
                 }
                 let left = &self.ast[*left];
@@ -1106,7 +1127,8 @@ impl<'s> Scope<'s> {
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Type(ty) => MemberAccessType::AssociatedFunction(ty),
-                    ExprResult::Func(_) | ExprResult::Method(_, _)
+                    ExprResult::Trait(t) => MemberAccessType::TraitFunction(t),
+                    ExprResult::Func(_) | ExprResult::TraitFunc(_, _) | ExprResult::Method(_, _)
                     | ExprResult::LocalType(_) | ExprResult::TypeProto(_) => {
                         errors.emit_span(Error::NonexistantMember, name.in_mod(self.module));
                         MemberAccessType::Invalid
@@ -1165,6 +1187,7 @@ impl<'s> Scope<'s> {
                             return match *symbol {
                                 Symbol::Func(f) => ExprResult::Func(f),
                                 Symbol::Type(t) => ExprResult::Type(t),
+                                Symbol::Trait(t) => ExprResult::Trait(t),
                                 Symbol::LocalType(t) => ExprResult::LocalType(t),
                                 Symbol::TypeProto(t) => ExprResult::TypeProto(t),
                                 Symbol::Generic(_) => todo!(), // is this a possibility
@@ -1187,6 +1210,15 @@ impl<'s> Scope<'s> {
                             Ref::UNDEF
                         }
                     }
+                    MemberAccessType::TraitFunction(t) => {
+                        if let Some((idx, _)) = self.ctx.get_trait(t).functions.get(member) {
+                            return ExprResult::TraitFunc(t, *idx);
+                        } else {
+                            errors.emit_span(Error::UnknownFunction, name.in_mod(self.module));
+                            ir.invalidate(expected);
+                            Ref::UNDEF
+                        }
+                    }
                     MemberAccessType::Invalid => {
                         ir.invalidate(expected);
                         Ref::UNDEF
@@ -1202,8 +1234,10 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         var
                     }
-                    ExprResult::Func(_) | ExprResult::Method(_, _) 
-                    | ExprResult::Type(_) | ExprResult::LocalType(_) | ExprResult::TypeProto(_)
+                    ExprResult::Func(_) | ExprResult::TraitFunc(_, _) | ExprResult::Method(_, _) 
+                    | ExprResult::Type(_)
+                    | ExprResult::Trait(_)
+                    | ExprResult::LocalType(_) | ExprResult::TypeProto(_)
                     | ExprResult::Module(_) => {
                         errors.emit_span(Error::TupleIndexingOnNonValue, expr.span_in(self.ast, self.module));
                         ir.invalidate(expected);
