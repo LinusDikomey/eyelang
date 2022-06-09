@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use crate::{
-    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, TSpan, IdentPath, TraitDefinition},
+    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, IdentPath, TraitDefinition},
     error::{Errors, Error},
-    ir::{gen::FunctionOrHeader, Type}, lexer::Span
+    ir::{gen::FunctionOrHeader, Type}, span::{Span, TSpan},
 };
 use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, FunctionHeader, Scope};
 
@@ -75,6 +75,7 @@ trait ResolveState {
     }
     fn replace_symbol(&mut self, module: ModuleId, name: String, symbol: Symbol) -> Option<Symbol>;
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader;
+    fn scope(&mut self, module: ModuleId) -> Scope;
 }
 struct GlobalResolveState<'a> {
     symbols: &'a mut [HashMap<String, Symbol>],
@@ -95,8 +96,10 @@ impl<'a> ResolveState for GlobalResolveState<'a> {
         self.symbols[module.idx()].insert(name, symbol)
     }
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
-        gen_func(func, self.reborrow(), module, errors)
-        
+        gen_func(func, self.reborrow(), module, errors)   
+    }
+    fn scope(&mut self, module: ModuleId) -> Scope {
+        Scope::new(self.ctx, &self.symbols[module.idx()], GlobalsRef(self.symbols), self.ast, module)
     }
 }
 struct LocalResolveState<'a, 's> {
@@ -121,6 +124,10 @@ impl<'a, 's> ResolveState for LocalResolveState<'a, 's> {
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
         debug_assert_eq!(self.scope.module, module);
         gen_func(func, self.reborrow(), module, errors)
+    }
+    fn scope(&mut self, module: ModuleId) -> Scope {
+        assert_eq!(self.scope.module, module);
+        self.scope.reborrow()
     }
 }
 /// Resolve state inside a struct or function definition containing a prototype of the definition itself
@@ -161,12 +168,13 @@ impl<'a, R: ResolveState> ResolveState for DefinitionResolveState<'a, R> {
     fn gen_func(&mut self, module: ModuleId, func: &ast::Function, errors: &mut Errors) -> FunctionHeader {
         self.parent.gen_func(module, func, errors)
     }
-    
+    fn scope(&mut self, module: ModuleId) -> Scope {
+        self.parent.scope(module)
+    }
 }
 
 fn gen_def(
     def: &ast::Definition,
-    //ast: &Ast,
     module: ModuleId,
     name: &str,
     errors: &mut Errors,
@@ -215,7 +223,7 @@ fn resolve_ty(
                 Some(Symbol::Type(ty)) => {
                     let generic_count = state.ctx().get_type(ty).generic_count();
                     let resolved_generics = generics.as_ref()
-                        .map_or_else(|| Vec::new(), |(generics, _)| {
+                        .map_or(Vec::new(), |(generics, _)| {
                             generics.iter().map(|ty| resolve_ty(ty, module, errors, state.reborrow())).collect()
                         });
                     if generic_count as usize != resolved_generics.len() {
@@ -290,7 +298,8 @@ fn gen_struct(
     errors: &mut Errors,
     mut state: impl ResolveState,
 ) -> SymbolKey {
-    let key = state.ctx().add_proto_ty();
+    let key = state.ctx().add_proto_ty(def.generics.len() as u8);
+    state.insert_symbol(module, name.to_owned(), Symbol::Type(key));
     let generics = def.generics.iter()
         .enumerate()
         .map(|(i, span)| (state.src(module)[span.range()].to_owned(), i as u8))
@@ -311,7 +320,6 @@ fn gen_struct(
         generic_count: def.generics.len() as u8,
         name: name.to_owned(),
     });
-    state.insert_symbol(module, name.to_owned(), Symbol::Type(key));
     for (method_name, method) in &def.methods {
         let header = gen_func(method, state.reborrow(), module, errors);
         let method_key = state.ctx().add_func(super::gen::FunctionOrHeader::Header(header));
@@ -426,9 +434,8 @@ fn resolve_path(
             PathResolveState::Local(scope, symbols, defs)
                 => resolve_in_scope(name, span, scope, symbols, defs, errors),
             PathResolveState::Module(id) => {
-                let symbol = symbols.get(id, name, span.in_mod(path_module), errors);
-                // an error was already emitted here if the symbol was None
-                symbol
+                // an error was already emitted here if the symbol is None
+                symbols.get(id, name, span.in_mod(path_module), errors)
             }
         }
     } else {

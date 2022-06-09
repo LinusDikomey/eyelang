@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use colored::{Colorize, ColoredString};
+use color_format::*;
 use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
 use typing::{TypeTable, TypeInfo, FinalTypeTable};
@@ -37,7 +37,7 @@ impl From<TypeInfo> for TypeInfoOrIndex {
     }
 }
 impl TypeInfoOrIndex {
-    pub fn as_info(self, types: &TypeTable) -> TypeInfo {
+    pub fn into_info(self, types: &TypeTable) -> TypeInfo {
         match self {
             TypeInfoOrIndex::Info(info) => info,
             TypeInfoOrIndex::Index(idx) => types.get_type(idx),
@@ -46,7 +46,7 @@ impl TypeInfoOrIndex {
 }
 impl Type {
     pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
-        self.as_info_generic(types, TypeTableIndices::EMPTY).as_info(types)
+        self.as_info_generic(types, TypeTableIndices::EMPTY).into_info(types)
     }
 
     pub fn as_info_generic(&self, types: &mut TypeTable, generics: TypeTableIndices) -> TypeInfoOrIndex {
@@ -138,8 +138,9 @@ pub struct Function {
 impl fmt::Display for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(")?;
-        write_delimited_with(f, &self.header.params, |f, (name, param)| write!(f, "{name} {param}"), ", ")?;
-        writeln!(f, ") -> {}", self.header.return_type)?;
+        write_delimited_with(f, &self.header.params,
+            |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param), ", ")?;
+        cwriteln!(f, ") -#> #m<{}>", self.header.return_type)?;
 
         if let Some(ir) = &self.ir {
             write!(f, "{ir}")?;
@@ -147,17 +148,6 @@ impl fmt::Display for Function {
         Ok(())
     }
 }
-
-/*
-#[derive(Debug)]
-pub struct FinalFunction {
-    pub name: String,
-    pub params: Vec<(String, Type)>,
-    pub varargs: bool,
-    pub return_type: Type,
-    pub ir: Option<FunctionIr>
-}
-*/
 
 #[derive(Debug)]
 pub struct FunctionIr {
@@ -170,11 +160,12 @@ impl fmt::Display for FunctionIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, inst) in self.inst.iter().enumerate() {
             if inst.tag == Tag::BlockBegin {
-                writeln!(f, "  {} {}:", "block".purple(), format!("b{}", unsafe { inst.data.int32 }).bright_blue())?;
+                //TODO: make this purple
+                cwriteln!(f, "  #m<block> #b!<b{}>:", unsafe { inst.data.int32 })?;
                 continue;
             }
-            writeln!(f, "    {:>4}{}= {}",
-                format!("%{i}").cyan(),
+            cwriteln!(f, "    #c<{:>4}>{}= {}",
+                format!("%{i}"),
                 if inst.used {' '} else {'!'},
                 inst.display(&self.extra, &self.types)
             )?;
@@ -218,7 +209,7 @@ pub struct Struct {
 impl fmt::Display for Struct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (name, member) in &self.members {
-            writeln!(f, "  {name} {member}")?;
+            cwriteln!(f, "  #g<{}> #m<{}>", name, member)?;
         }
         Ok(())
     }
@@ -238,19 +229,15 @@ pub struct Module {
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for TypeDef::Struct(struct_) in &self.types {
-            let name = &struct_.name;
-            writeln!(f, "{begin} {name}\n{}{end} {name}\n",
+            cwriteln!(f, "#b<begin> #r<{name}>\n{}#b<end> #r<{name}>\n",
                 struct_,
-                begin = "begin type".blue(),
-                end  = "end type".blue()
+                name = struct_.name
             )?;
         }
         for func in &self.funcs {
-            let name = func.name.red();
-            writeln!(f, "{begin} {name}{}{end} {name}\n",
+            cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
                 func,
-                begin = "begin func".blue(),
-                end = "end func".blue(),
+                name = func.name
             )?;
         }
         Ok(())
@@ -264,32 +251,28 @@ pub struct Instruction {
     pub ty: TypeTableIndex,
     pub used: bool
 }
+pub struct InstructionDisplay<'a> {
+    inst: &'a Instruction,
+    extra: &'a [u8],
+    types: &'a FinalTypeTable,
+}
 impl Instruction {
-    pub fn display(&self, extra: &[u8], types: &FinalTypeTable) -> String {
-        format!("{} {}{}", self.tag, self.display_data(extra),
-            if self.ty.is_present() {
-                let prefix = match self.tag {
-                    Tag::Decl => "".normal(),
-                    Tag::Cast => " as ".bright_magenta(),
-                    _ => " :: ".normal()
-                };
-                format!("{prefix}{}", format!("{}", types.get(self.ty)).magenta())
-            } else { String::new() }
-        )
+    pub fn display<'a>(&'a self, extra: &'a [u8], types: &'a FinalTypeTable) -> InstructionDisplay<'a> {
+        InstructionDisplay { inst: self, extra, types }
     }
 
-    fn display_data(&self, extra: &[u8]) -> ColoredString {
-        let write_ref = |r: Ref| {
+    fn display_data(&self, f: &mut fmt::Formatter<'_>, extra: &[u8]) -> fmt::Result {
+        let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
             if let Some(val) = r.into_val() {
-                format!("{val}").yellow()
+                cwrite!(f, "#y<{}>", val)
             } else {
-                format!("%{}", r.into_ref().unwrap()).cyan()
+                cwrite!(f, "#c<%{}>", r.into_ref().unwrap())
             }
         };
         unsafe { match self.tag.union_data_type() {
-            DataVariant::Int => self.data.int.to_string().yellow(),
-            DataVariant::Int32 => self.data.int32.to_string().yellow(),
-            DataVariant::Block => format!("b{}", self.data.int32).bright_blue(),
+            DataVariant::Int => cwrite!(f, "#y<{}>", self.data.int),
+            DataVariant::Int32 => cwrite!(f, "#y<{}>", self.data.int32),
+            DataVariant::Block => cwrite!(f, "#b!<b{}>", self.data.int32),
             DataVariant::LargeInt => {
                 let bytes = &extra[
                     self.data.extra as usize
@@ -297,14 +280,14 @@ impl Instruction {
                 ];
                 let mut bytes_arr = [0; 16];
                 bytes_arr.copy_from_slice(bytes);
-                u128::from_le_bytes(bytes_arr).to_string().yellow()
+                cwrite!(f, "#y<{}>", u128::from_le_bytes(bytes_arr))
             }
             DataVariant::String => {
                 let string = String::from_utf8_lossy(&extra[
                     self.data.extra_len.0 as usize
                     .. (self.data.extra_len.0 + self.data.extra_len.1) as usize
                 ]);
-                format!("{string:?}").yellow()
+                cwrite!(f, "#y<{:?}>", string)
             }
             DataVariant::Call => {
                 let start = self.data.extra_len.0 as usize;
@@ -317,21 +300,14 @@ impl Instruction {
                     ref_bytes.copy_from_slice(&extra[begin..begin+4]);
                     Ref::from_bytes(ref_bytes)
                 });
-                let mut s = format!("{}{}(", "f".red(), func.0.to_string().red());
-                for (i, r) in refs.enumerate() {
-                    if i != 0 {
-                        s.push_str(", ");
-                    }
-                    s.push_str(&write_ref(r).to_string());
-                }
-                s.push(')');
-                s.normal()
+                cwrite!(f, "#r<f{}>(", func.0)?;
+                write_delimited_with(f, refs, |f, r| write_ref(f, r), ", ")?;
+                cwrite!(f, ")")
             }
             DataVariant::ExtraBranchRefs => {
-                let mut s = String::new();
                 for i in 0..self.data.extra_len.1 {
                     if i != 0 {
-                        s.push_str(", ");
+                        cwrite!(f, ", ")?;
                     }
                     let mut current_bytes = [0; 4];
                     let begin = (self.data.extra_len.0 + i * 8) as usize;
@@ -340,19 +316,20 @@ impl Instruction {
                     current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
                     current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
                     let r = Ref::from_bytes(current_bytes);
-                    s.push('[');
-                    s.push_str(&format!("b{block}: ").bright_blue().to_string());
-                    s.push_str(&write_ref(r).to_string());
-                    s.push(']');
+                    cwrite!(f, "[")?;
+                    cwrite!(f, "#b!<b{}>", block)?;
+                    write_ref(f, r)?;
+                    cwrite!(f, "]")?;
                 }
-                s.normal()
+                Ok(())
             }
-            DataVariant::Float => self.data.float.to_string().yellow(),
-            DataVariant::UnOp => write_ref(self.data.un_op),
+            DataVariant::Float => cwrite!(f, "#y<{}>", self.data.float),
+            DataVariant::UnOp => write_ref(f, self.data.un_op),
             DataVariant::BinOp => {
-                format!("{}, {}", write_ref(self.data.bin_op.0), write_ref(self.data.bin_op.1)).normal()
+                write_ref(f, self.data.bin_op.0)?;
+                write_ref(f, self.data.bin_op.1)
             }
-            DataVariant::Cast => write_ref(self.data.un_op),
+            DataVariant::Cast => write_ref(f, self.data.un_op),
             DataVariant::Branch => {
                 let i = self.data.branch.1 as usize;
                 let mut bytes = [0; 4];
@@ -360,14 +337,27 @@ impl Instruction {
                 let a = u32::from_le_bytes(bytes);
                 bytes.copy_from_slice(&extra[i+4..i+8]);
                 let b = u32::from_le_bytes(bytes);
-                format!("{} {a} or {b}",
-                    write_ref(self.data.branch.0),
-                    a = format!("b{a}").bright_blue(),
-                    b = format!("b{b}").bright_blue()
-                ).normal()
+                write_ref(f, self.data.branch.0)?;
+                cwrite!(f, "#b!<b{}> #m<or> #b!<b{}>", a, b)
             }
-            DataVariant::None => "".normal(),
+            DataVariant::None => Ok(())
         }}
+    }
+}
+impl<'a> fmt::Display for InstructionDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let InstructionDisplay { inst, extra, types } = self;
+        write!(f, "{} ", inst.tag)?;
+        inst.display_data(f, extra)?;
+        if inst.ty.is_present() {
+            match inst.tag {
+                Tag::Decl => (),
+                Tag::Cast => cwrite!(f, "#m!< as >")?,
+                _ => cwrite!(f, " :: ")?
+            };
+            cwrite!(f, "#m!<{}>", types.get(inst.ty))?;
+        }
+        Ok(())
     }
 }
 
@@ -444,7 +434,7 @@ impl Tag {
 }
 impl fmt::Display for Tag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", format!("{self:?}").bright_blue())
+        cwrite!(f, "#b!<{:?}>", self)
     }
 }
 
@@ -543,7 +533,7 @@ impl BlockIndex {
 }
 impl fmt::Display for BlockIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "b{}", self.0)
+        cwrite!(f, "#b<b{}>", self.0)
     }
 }
 

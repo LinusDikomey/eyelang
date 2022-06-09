@@ -1,5 +1,5 @@
 use std::{collections::HashMap, ops::{Index, IndexMut}, path::{PathBuf, Path}};
-use crate::{lexer::tokens::Operator, types::Primitive};
+use crate::{lexer::tokens::Operator, types::Primitive, span::{TSpan, Span}};
 
 pub mod repr;
 
@@ -274,7 +274,7 @@ impl Expr {
             Expr::Root(start) => TSpan::new(*start, *start + 3),
         }
     }
-    pub fn span_in(&self, ast: &Ast, module: ModuleId) -> crate::lexer::Span {
+    pub fn span_in(&self, ast: &Ast, module: ModuleId) -> Span {
         self.span(ast).in_mod(module)
     }
     pub fn start(&self, ast: &Ast) -> u32 {
@@ -284,24 +284,6 @@ impl Expr {
     pub fn end(&self, ast: &Ast) -> u32 {
         //TODO: more efficient implementation
         self.span(ast).end
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct TSpan {
-    pub start: u32,
-    pub end: u32
-}
-impl TSpan {
-    pub fn new(start: u32, end: u32) -> Self {
-        debug_assert!(start <= end+1, "Invalid span constructed");
-        Self { start, end }
-    }
-    pub fn in_mod(self, module: ModuleId) -> crate::lexer::Span {
-        crate::lexer::Span::new(self.start, self.end, module)
-    }
-    pub fn range(self) -> std::ops::RangeInclusive<usize> {
-        self.start as usize ..= self.end as usize
     }
 }
 

@@ -323,18 +323,3 @@ impl<'a> Lexer<'a> {
         self.index -= 1;
     }
 }
-
-#[derive(Clone, Copy, Debug)]
-pub struct Span {
-    pub start: u32,
-    pub end: u32,
-    pub module: ModuleId
-}
-impl Span {
-    pub fn new(start: u32, end: u32, module: ModuleId) -> Self {
-        Self { start, end, module }
-    }
-    pub fn _todo(module: ModuleId) -> Self {
-        Self { start: 0, end: 0, module }
-    }
-}

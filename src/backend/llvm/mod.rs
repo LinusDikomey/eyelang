@@ -103,7 +103,7 @@ unsafe fn llvm_ty_recursive(
                 map.insert(generics.clone(), llvm_struct);
                 let ir::TypeDef::Struct(def) = &module.types[id.idx()];
                 let mut members = def.members.iter()
-                    .map(|(_, ty)| llvm_ty_recursive(ctx, module, types, ty, false, &generics))
+                    .map(|(_, ty)| llvm_ty_recursive(ctx, module, types, ty, false, generics))
                     .collect::<Vec<_>>();
                 LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
                 llvm_struct
@@ -138,7 +138,7 @@ enum TypeInstance {
     Generic(HashMap<Vec<Type>, LLVMTypeRef>),
 }
 
-pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> (Module, BackendStats) {
+pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -> (Module, BackendStats) {
     let start_time = Instant::now();
     // Set up the module
     let module_name = ffi::CString::new(module.name.as_bytes()).unwrap();
@@ -202,10 +202,10 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module) -> (Module, Backe
     }
     let emit_time = start_time.elapsed();
 
-    if crate::LOG.load(std::sync::atomic::Ordering::Relaxed) {
-        println!("\n ---------- LLVM IR BEGIN ----------\n");
+    if print_ir {
+        eprintln!("\n ---------- LLVM IR BEGIN ----------\n");
         LLVMDumpModule(llvm_module);
-        println!("\n ---------- LLVM IR END ------------\n");
+        eprintln!("\n ---------- LLVM IR END ------------\n");
         
     }
     #[cfg(debug_assertions)]

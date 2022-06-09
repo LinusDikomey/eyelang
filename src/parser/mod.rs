@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use crate::{
     ast::*,
     error::{CompileError, EyeResult, Error},
-    lexer::{tokens::{Keyword, Token, TokenType, Operator}, Span},
-    types::Primitive
+    lexer::tokens::{Keyword, Token, TokenType, Operator},
+    types::Primitive, span::{TSpan, Span}
 };
 
 mod tokens;

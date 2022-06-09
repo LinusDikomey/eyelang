@@ -1,4 +1,4 @@
-use crate::{lexer::{tokens::{TokenType, Token}, Span}, ast::ModuleId, error::{CompileError, Error}};
+use crate::{lexer::tokens::{TokenType, Token}, ast::ModuleId, error::{CompileError, Error}, span::Span};
 
 
 pub struct Tokens {

@@ -1,7 +1,7 @@
 use crate::{
-    ast::{ModuleId, TSpan},
+    ast::ModuleId,
     ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex},
-    error::Errors
+    error::Errors, span::TSpan
 };
 
 #[derive(Clone)]

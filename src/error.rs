@@ -2,9 +2,8 @@
 
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
-use colored::Colorize;
-
-use crate::{lexer::Span, ast::{Ast, ModuleId}};
+use color_format::*;
+use crate::{ast::{Ast, ModuleId}, span::Span};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -90,10 +89,10 @@ impl Errors {
             };
             
 
-            println!("{}: {}", "error".bright_red(), format!("{:?}", error.err).bright_red());
-            println!("{} {}", "at:".cyan(), format!("{}:{line}:{col}", file.to_string_lossy()).underline());
+            cprintln!("#r!<error>: #r!<{:?}>", error.err);
+            cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
             let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
-            let p = format!("{} | ", " ".repeat(spaces)).cyan();
+            let p = cformat!("{} #c<|> ", " ".repeat(spaces));
 
             println!("{p}");
 
@@ -109,18 +108,18 @@ impl Errors {
                 }
             };
 
-            print!("{}{}{}", format!("{line:#4} | ").cyan(), pre, first.1);
+            cprint!("#c<{:#4} | >{}{}", line, pre, first.1);
             post_if_last(&mut lines);
 
-            println!("{p}{}{}", " ".repeat(pre.chars().count()), "^".repeat(first.1.chars().count()).bright_red());
+            cprintln!("{}{}#r!<{}>", p, " ".repeat(pre.chars().count()), "^".repeat(first.1.chars().count()));
 
             while let Some((i, line_str)) = lines.next() {
                 let line = line + i;
                 
-                print!("{}{}", format!("{line:#4} | ").cyan(), line_str);
+                cprint!("#c<{:#4} | >{}", line, line_str);
                 post_if_last(&mut lines);
 
-                println!("{p}{}", "^".repeat(line_str.chars().count()).bright_red());
+                cprintln!("{}#r!<{}>", p, "^".repeat(line_str.chars().count()));
             }
             println!();
         }

@@ -1,6 +1,6 @@
 use std::{u128, fmt, str::FromStr};
 
-use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, ast::TSpan};
+use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, span::TSpan};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {

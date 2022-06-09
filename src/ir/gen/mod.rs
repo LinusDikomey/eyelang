@@ -1,8 +1,8 @@
 use crate::{
-    ast::{self, Expr, ModuleId, UnOp, TSpan, ExprRef},
+    ast::{self, Expr, ModuleId, UnOp, ExprRef},
     error::{Error, Errors},
-    lexer::{tokens::{Operator, AssignType, IntLiteral, FloatLiteral}, Span},
-    types::Primitive,
+    lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
+    types::Primitive, span::{Span, TSpan},
 };
 use std::{borrow::{Cow, Borrow}, collections::HashMap, ptr::NonNull};
 use builder::IrBuilder;
@@ -21,9 +21,6 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         traits: Vec::new(),
     };
     let globals = types::gen_globals(ast, &mut ctx, &mut errors);
-
-    // scope accessible from all modules containing dependencies etc.
-    // let global_scope = Scope::new(&mut ctx, deps, &glo, module);
 
     for (id, module) in ast.modules.iter().enumerate() {
         let id = ModuleId::new(id as u32);
@@ -234,11 +231,11 @@ impl TypingCtx {
         self.traits.push(t);
         key
     }
-    pub fn add_proto_ty(&mut self) -> SymbolKey {
+    pub fn add_proto_ty(&mut self, generic_count: u8) -> SymbolKey {
         self.add_type(TypeDef::Struct(Struct {
             members: Vec::new(),
             methods: HashMap::new(),
-            generic_count: 0,
+            generic_count,
             name: String::new()
         }))
     }
@@ -293,7 +290,7 @@ impl ExprResult {
         ir: &mut IrBuilder,
         ty: TypeTableIndex,
         errors: &mut Errors,
-        span: Span
+        span: Span,
     ) -> Ref {
         self.try_get_or_load(ir, ty).unwrap_or_else(|| {
             errors.emit_span(Error::ExpectedValueFoundDefinition, span);
@@ -321,7 +318,7 @@ impl<'a> ExprInfo<'a> {
     pub fn mark_noreturn(&mut self) {
         *self.noreturn = true;
     }
-    pub fn with_expected<'b>(&'b mut self, expected: TypeTableIndex) -> ExprInfo<'b> {
+    pub fn with_expected(&mut self, expected: TypeTableIndex) -> ExprInfo {
         ExprInfo { expected, ret: self.ret, noreturn: self.noreturn }
     }
     pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
@@ -794,7 +791,7 @@ impl<'s> Scope<'s> {
                 Ref::UNIT
             }
             ast::Expr::IfElse { start: _, cond, then, else_ } => {
-                let else_block = self.gen_if_then(ir, errors, *cond, info.ret, &mut info.noreturn);
+                let else_block = self.gen_if_then(ir, errors, *cond, info.ret, info.noreturn);
                 let mut then_noreturn = false;
                 let then_val = self.reduce_expr_idx_val(errors, ir, *then, info.with_noreturn(&mut then_noreturn));
                 let then_exit = ir.current_block();

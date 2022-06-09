@@ -21,7 +21,7 @@ fn gen_enum_size(ident: syn::Ident, input: syn::DataEnum) -> quote::__private::T
                 quote! {
                     #[allow(dead_code)]
                     struct A{#fields}
-                    println!(#msg, ::core::mem::size_of::<A>());
+                    eprintln!(#msg, ::core::mem::size_of::<A>());
                 }
             }
             syn::Fields::Unnamed(unnamed) => {
@@ -29,7 +29,7 @@ fn gen_enum_size(ident: syn::Ident, input: syn::DataEnum) -> quote::__private::T
                 quote! {
                     #[allow(dead_code)]
                     struct A(#fields);
-                    println!(#msg, ::core::mem::size_of::<A>());
+                    eprintln!(#msg, ::core::mem::size_of::<A>());
                 }
             }
             syn::Fields::Unit => quote! { println!(#msg, 0); },

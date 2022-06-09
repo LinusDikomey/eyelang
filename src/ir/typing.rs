@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{error::*, ast::{ModuleId, TSpan}, lexer::Span};
+use crate::{error::*, ast::ModuleId, span::{TSpan, Span}};
 use super::*;
 
 /// Type inference debugging

@@ -22,6 +22,7 @@ mod link;
 mod lsp;
 mod parser;
 mod types;
+mod span;
 mod help;
 
 #[cfg(feature = "llvm-backend")]
@@ -29,7 +30,7 @@ extern crate llvm_sys as llvm;
 
 use crate::error::Errors;
 use clap::StructOpt;
-use colored::Colorize;
+use color_format::*;
 use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool, time::Duration, fmt,
@@ -136,8 +137,15 @@ pub struct Args {
     #[clap(long)]
     debug_infer: bool,
 
+    /// Print the internal IR (intermediate representation) to stderr.
+    /// This will still normally execute the subcommand.
     #[clap(long)]
-    show_ir: bool,
+    ir: bool,
+
+    /// Print the llvm IR to stderr.
+    /// This will still normally execute the subcommand.
+    #[clap(long)]
+    llvm_ir: bool,
     
     #[cfg_attr(feature = "llvm-backend", clap(short, long, arg_enum, default_value_t = Backend::LLVM))]
     #[cfg_attr(not(feature = "llvm-backend"), clap(short, long, arg_enum, default_value_t = Backend::X86))]
@@ -177,21 +185,12 @@ fn run(args: &Args) {
         .to_str()
         .expect("Invalid filename");
 
-    println!(
-        "{} {} ...",
-        "Compiling".green(),
-        name.underline().bright_blue()
-    );
+    cprintln!("#g<Compiling> #u;b!<{}> ...", name);
 
     match run_path(path, args, name) {
         Ok(()) => {}
         Err((modules, errors)) => {
-            println!(
-                "{} {} {}",
-                "Finished with".red(),
-                errors.error_count().to_string().underline().bright_red(),
-                "errors".red()
-            );
+            cprintln!("#r<Finished with #u;r!<{}> errors>", errors.error_count());
             errors.print(&modules);
         }
     }
@@ -252,7 +251,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let mut stats = Stats::default();
     let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats)?;
 
-    if args.show_ir {
+    if args.ir {
         eprintln!("\n\n{ir}\n");
     }
 
@@ -263,7 +262,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     let obj_file = format!("eyebuild/{output_name}.o");
     let exe_file = format!("eyebuild/{output_name}");
     let exec = || {
-        println!("{}", format!("Running {output_name}...").green());
+        cprintln!("#g<Running {}>...", output_name);
         let _status = std::process::Command::new(&exe_file)
             .spawn()
             .expect("Failed to run the executable command")
@@ -287,17 +286,17 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     match (args.cmd, args.backend) {
         (Cmd::Check, _) => {
             let _ = output_name;
-            println!("{}", "Check successful ✅".green());
+            cprintln!("#g<Check successful ✅>");
         }
         #[cfg(feature = "llvm-backend")]
         (Cmd::Run | Cmd::Build | Cmd::Jit, Backend::LLVM) => unsafe {
             let context = llvm::core::LLVMContextCreate();
-            let (llvm_module, stats) = backend::llvm::module(context, &ir);
+            let (llvm_module, stats) = backend::llvm::module(context, &ir, args.llvm_ir);
             if args.timings {
                 println!("{stats}");
             }
             if args.cmd == Cmd::Jit {
-                println!("{}", "JIT running...\n".green());
+                cprintln!("#g<JIT running>...\n");
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
@@ -319,17 +318,17 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
                 llvm::core::LLVMContextDispose(context);
 
                 if args.emit_obj {
-                    println!("{}", "Object successfully emitted!".green());
+                    cprintln!("#g<Object successfully emitted!>");
                     return Ok(());
                 }
                 if !link::link(&obj_file, &exe_file, args) {
-                    eprintln!("{}", "Aborting because linking failed".red());
+                    cprintln!("#r<Aborting because linking failed>");
                     return Ok(());
                 }
                 if args.cmd == Cmd::Run {
                     exec();
                 } else {
-                    println!("{}", format!("Built {}", output_name).green());
+                    cprintln!("#g<Built #u<{}>>", output_name);
                 }
             }
         }
@@ -344,13 +343,13 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
                 return Ok(());
             }
             if !link::link(&obj_file, &exe_file, args) {
-                eprintln!("{}", "Aborting because linking failed".red());
+                ceprintln!("#r<Aborting because linking failed>");
                 return Ok(());
             }
             if args.cmd == Cmd::Run {
                 exec();
             } else {
-                println!("{}", format!("Built {}", output_name).green());
+                cprintln!("#g<Built #u<{}>>", output_name);
             }
         }
         #[cfg(feature = "lsp")]
