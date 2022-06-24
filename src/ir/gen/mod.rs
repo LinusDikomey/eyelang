@@ -19,6 +19,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         funcs: Vec::new(),
         types: Vec::new(),
         traits: Vec::new(),
+        consts: Vec::new(),
     };
     let globals = types::gen_globals(ast, &mut ctx, &mut errors);
 
@@ -154,7 +155,8 @@ pub enum Symbol {
     TypeProto(SymbolKey),
     Generic(u8),
     Module(ModuleId),
-    Var { ty: TypeTableIndex, var: Ref }
+    Var { ty: TypeTableIndex, var: Ref },
+    Const(SymbolKey),
 }
 
 struct ScopeInfo<'a> {
@@ -187,6 +189,7 @@ impl<'a> ScopeInfo<'a> {
                 Symbol::Generic(_) => todo!(),
                 Symbol::Module(m) => Resolved::Module(*m),
                 Symbol::Var { ty, var } => Resolved::Var(*ty, *var),
+                Symbol::Const(c) => Resolved::Const(*c),
             })
         } else {
             self.parent()
@@ -214,6 +217,7 @@ pub struct TypingCtx {
     funcs: Vec<FunctionOrHeader>,
     types: Vec<TypeDef>,
     traits: Vec<TraitDef>,
+    consts: Vec<ConstVal>,
 }
 impl TypingCtx {
     pub fn add_func(&mut self, func: FunctionOrHeader) -> SymbolKey {
@@ -239,11 +243,17 @@ impl TypingCtx {
             name: String::new()
         }))
     }
+    pub fn add_const(&mut self, c: ConstVal) -> SymbolKey {
+        let key = SymbolKey(self.consts.len() as u64);
+        self.consts.push(c);
+        key
+    }
     pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()] }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()] }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
     pub fn get_trait(&self, key: SymbolKey) -> &TraitDef { &self.traits[key.idx()] }
+    pub fn get_const(&self, key: SymbolKey) -> &ConstVal { &self.consts[key.idx()] }
 }
 
 enum Resolved {
@@ -254,6 +264,7 @@ enum Resolved {
     LocalType(TypeTableIndex),
     TypeProto(SymbolKey),
     Module(ModuleId),
+    Const(SymbolKey),
 }
 impl Resolved {
     pub fn into_symbol(self) -> Option<Symbol> {
@@ -264,6 +275,7 @@ impl Resolved {
             Resolved::Trait(t) => Some(Symbol::Trait(t)),
             Resolved::TypeProto(id) => Some(Symbol::TypeProto(id)),
             Resolved::Module(id) => Some(Symbol::Module(id)),
+            Resolved::Const(id) => Some(Symbol::Const(id)),
         }
     }
 }
@@ -590,7 +602,7 @@ impl<'s> Scope<'s> {
         let r = match &expr {
             ast::Expr::Block { span, items, defs } => {
                 let defs = &self.ast.expr_builder[*defs];
-                let locals = types::gen_locals(self, defs,  errors);
+                let locals = types::gen_locals(self, defs, errors);
                 let mut block_scope = self.child(locals);
                 gen_func_bodies(&mut block_scope, defs, errors,
                     |scope, name| scope.info.symbols.get(name)
@@ -676,19 +688,8 @@ impl<'s> Scope<'s> {
                 ir.add(Data { float: lit.val }, Tag::Float, info.expected)
             }
             ast::Expr::StringLiteral(span) => {
-                let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
-                ir.specify(info.expected, TypeInfo::Pointer(i8_ty), errors, *span);
+                gen_string(string_literal(*span, self.ast.src(self.module).0), ir, info.expected, *span, errors)
                 
-                let string = self.src(TSpan::new(span.start + 1, span.end - 1))
-                    .replace("\\n", "\n")
-                    .replace("\\t", "\t")
-                    .replace("\\r", "\r")
-                    .replace("\\0", "\0")
-                    .replace("\\\"", "\"");
-                let extra_len = ir._extra_len(string.as_bytes());
-                // add zero byte
-                ir.extra_data(&[b'\0']);
-                ir.add(Data { extra_len }, Tag::String, info.expected)
             }
             ast::Expr::BoolLiteral { val, start } => {
                 let span = TSpan::new(*start, start + if *val {4} else {5});
@@ -736,6 +737,11 @@ impl<'s> Scope<'s> {
                         Resolved::LocalType(t) => return ExprResult::LocalType(t),
                         Resolved::TypeProto(t) => return ExprResult::TypeProto(t),
                         Resolved::Module(m) => return ExprResult::Module(m),
+                        Resolved::Const(c) => {
+                            let const_ty = self.ctx.get_const(c).type_info(&mut ir.types);
+                            ir.specify(info.expected, const_ty, errors, *span);
+                            return ExprResult::Val(gen_const(self.ctx.get_const(c), ir, info.expected))
+                        }
                     },
                     Err(err) => {
                         errors.emit_span(err, span.in_mod(self.module));
@@ -1102,20 +1108,12 @@ impl<'s> Scope<'s> {
                     ir.add_untyped(Tag::Store, Data { bin_op: (lval, val) });
                     Ref::UNDEF
                 } else {
-                    let is_boolean = matches!(
-                        op,
-                        Operator::Or | Operator::And
-                    );
-                    let is_logical = matches!(
-                        op,
-                        Operator::Equals |Operator::NotEquals 
-                        | Operator::LT | Operator::GT | Operator::LE | Operator::GE
-                    );
+                    
     
                     // binary operations always require the same type on both sides right now
-                    let inner_ty = if is_boolean {
+                    let inner_ty = if op.is_boolean() {
                         ir.types.add(TypeInfo::Primitive(Primitive::Bool))
-                    } else if is_logical {
+                    } else if op.is_logical() {
                         ir.types.add(TypeInfo::Unknown)
                     } else {
                         info.expected
@@ -1224,6 +1222,12 @@ impl<'s> Scope<'s> {
                                 Symbol::Generic(_) => todo!(), // is this a possibility
                                 Symbol::Module(m) => ExprResult::Module(m),
                                 Symbol::Var { ty: _, var } => ExprResult::VarRef(var),
+                                Symbol::Const(c) => {
+                                    let c = self.ctx.get_const(c);
+                                    let const_ty = c.type_info(&mut ir.types);
+                                    ir.types.specify(info.expected, const_ty, errors, self.span(expr));
+                                    ExprResult::Val(gen_const(c, ir, info.expected))
+                                }
                             };
                         } else {
                             errors.emit_span(Error::UnknownIdent, name.in_mod(self.module));
@@ -1326,5 +1330,53 @@ impl<'s> Scope<'s> {
         ir.add_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
         ir.begin_block(then_block);
         other_block
+    }
+}
+
+pub fn string_literal(span: TSpan, src: &str) -> String {
+    src[span.start as usize + 1 ..= span.end as usize - 1]
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace("\\0", "\0")
+        .replace("\\\"", "\"")
+}
+
+fn gen_string(string: String, ir: &mut IrBuilder, expected: TypeTableIndex, span: TSpan, errors: &mut Errors) -> Ref {
+    let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
+    ir.specify(expected, TypeInfo::Pointer(i8_ty), errors, span);
+        
+    let extra_len = ir._extra_len(string.as_bytes());
+    // add zero byte
+    ir.extra_data(&[b'\0']);
+    ir.add(Data { extra_len }, Tag::String, expected)
+}
+
+fn gen_const(val: &ConstVal, ir: &mut IrBuilder, expected: TypeTableIndex) -> Ref {
+    match val {
+        ConstVal::Invalid => Ref::UNDEF,
+        ConstVal::Unit => Ref::UNIT,
+        ConstVal::Int(val) => {
+            if *val > u64::MAX as i128 || *val < -(u64::MAX as i128) {
+                todo!("Large ints aren't implemented");
+            }
+            if *val < 0 {
+                let positive_val = ir.add(Data { int: (-*val) as u64 }, Tag::Int, expected);
+                ir.add(Data { un_op: positive_val }, Tag::Neg, expected)
+            } else {
+                ir.add(Data { int: *val as u64 }, Tag::Int, expected)
+            }
+        }
+        ConstVal::Float(val) => ir.add(Data { float: *val }, Tag::Float, expected),
+        ConstVal::String(val) => {
+            let extra = ir.extra_data(val.as_bytes());
+            ir.add(Data { extra_len: (extra, val.len() as u32) }, Tag::String, expected)
+        }
+        ConstVal::EnumVariant(variant) => {
+            let extra = ir.extra_data(variant.as_bytes());
+            ir.add(Data { extra_len: (extra, variant.len() as u32) }, Tag::EnumLit, expected)
+        }
+        ConstVal::Bool(false) => Ref::val(RefVal::False),
+        ConstVal::Bool(true) => Ref::val(RefVal::True),
     }
 }

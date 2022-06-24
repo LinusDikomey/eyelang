@@ -10,7 +10,7 @@ fn main {
     std.c.printf("[[%f, %f], [%f, %f]]", v.x.x, v.x.y, v.y.x, v.y.y)
 }
 
-Vec2 :: [T] {
+Vec2[T] :: {
     x T,
     y T,
 }

@@ -94,6 +94,17 @@ impl Definition {
                 c.write_add("use ");
                 path.repr(c);
             }
+            Self::Const(ty, expr) => {
+                c.write_add(name);
+                if let UnresolvedType::Infer(_) = ty {
+                    c.write_add(" :: ");
+                }  else {
+                    c.write_add(": ");
+                    ty.repr(c);
+                    c.write_add(" : ");
+                }
+                c.ast()[*expr].repr(c);
+            }
         }
     }
 }

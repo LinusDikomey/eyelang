@@ -2,8 +2,7 @@
     let_else,
     box_patterns,
     variant_count,
-    path_try_exists,
-    bool_to_option,
+    fs_try_exists,
     nonzero_ops,
     is_some_with,
     int_log,
@@ -147,8 +146,14 @@ pub struct Args {
     #[clap(long)]
     llvm_ir: bool,
     
-    #[cfg_attr(feature = "llvm-backend", clap(short, long, arg_enum, default_value_t = Backend::LLVM))]
-    #[cfg_attr(not(feature = "llvm-backend"), clap(short, long, arg_enum, default_value_t = Backend::X86))]
+    #[cfg_attr(
+        feature = "llvm-backend",
+        clap(short, long, arg_enum, default_value_t = Backend::LLVM)
+    )]
+    #[cfg_attr(
+        not(feature = "llvm-backend"),
+        clap(short, long, arg_enum, default_value_t = Backend::X86)
+    )]
     backend: Backend
 }
 
@@ -203,7 +208,9 @@ pub struct Stats {
 }
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "----------------------------------------\nTimings of {} files:", self.file_times.len())?;
+        writeln!(f, 
+            "----------------------------------------\n\
+            Timings of {} files:", self.file_times.len())?;
         let mut overall_lex = Duration::ZERO;
         let mut overall_parse = Duration::ZERO;
 
@@ -214,7 +221,8 @@ impl fmt::Display for Stats {
             overall_lex += file.lex;
             overall_parse += file.parse;
         }
-        writeln!(f, "Overall: {:?} (lex: {:?}, parse: {:?}, irgen: {:?})\n----------------------------------------",
+        writeln!(f, "Overall: {:?} (lex: {:?}, parse: {:?}, irgen: {:?})\n\
+            ----------------------------------------",
             overall_lex + overall_parse + self.irgen,
             overall_lex, overall_parse, self.irgen,
         )
@@ -272,6 +280,14 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
     };
 
     if args.cmd.is_compiled() {
+        // create eyebuild directory
+        if !std::fs::try_exists("eyebuild").expect("Failed to check availability of eyebuild directory") {
+            match std::fs::create_dir("eyebuild") {
+                Ok(()) => (),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(err) => panic!("Failed to create eyebuild directory: {}", err)
+            }
+        }
         // compile help.c for some helper methods implemented in c
         let res = std::process::Command::new("clang")
             .args(["-c", "help/help.c", "-o", "eyebuild/help.o"])
@@ -302,14 +318,6 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
 
                 println!("\nResult of JIT execution: {ret_val}");
             } else {
-                match std::fs::create_dir("eyebuild") {
-                    Ok(()) => {}
-                    Err(err) => {
-                        if err.kind() != std::io::ErrorKind::AlreadyExists {
-                            panic!("Failed to create build directory: {err}")
-                        }
-                    }
-                }
                 let bitcode_emit_start_time = std::time::Instant::now();
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 if args.timings {

@@ -7,6 +7,7 @@ use lsp_types::{Diagnostic, DiagnosticSeverity, notification::PublishDiagnostics
 use lsp_types::notification::Notification as _;
 
 use super::{LspError, debug};
+use crate::span::Span;
 
 pub fn start_checking(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
     std::thread::spawn(|| {
@@ -24,7 +25,7 @@ pub fn start_checking(uri: lsp_types::Url, sender: Sender<Message>) -> Result<()
     Ok(())
 }
 
-fn calc_range(span: crate::lexer::Span, ast: &crate::ast::Ast) -> lsp_types::Range {
+fn calc_range(span: Span, ast: &crate::ast::Ast) -> lsp_types::Range {
     let (src, _) = ast.src(span.module);
     let mut line = 0;
     let mut line_char = 0;

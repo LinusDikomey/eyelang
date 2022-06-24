@@ -220,6 +220,30 @@ pub struct TraitDef {
     pub functions: HashMap<String, (u32, FunctionHeader)>
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstVal {
+    Invalid,
+    Unit,
+    Int(i128),
+    Float(f64),
+    String(String),
+    EnumVariant(String),
+    Bool(bool),
+}
+impl ConstVal {
+    pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
+        match self {
+            ConstVal::Invalid => TypeInfo::Invalid,
+            ConstVal::Unit => TypeInfo::Primitive(Primitive::Unit),
+            ConstVal::Int(_) => TypeInfo::Int,
+            ConstVal::Float(_) => TypeInfo::Float,
+            ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
+            ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
+            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool)
+        }
+    }
+}
+
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,

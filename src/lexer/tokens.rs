@@ -254,6 +254,19 @@ impl Operator {
             Mul | Div | Mod => 70,
         }
     }
+    pub fn is_boolean(self) -> bool {
+        matches!(
+            self,
+            Operator::Or | Operator::And
+        )
+    }
+    pub fn is_logical(self) -> bool {
+        matches!(
+            self,
+            Operator::Equals |Operator::NotEquals 
+            | Operator::LT | Operator::GT | Operator::LE | Operator::GE
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

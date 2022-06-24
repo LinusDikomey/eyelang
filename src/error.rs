@@ -205,7 +205,9 @@ pub enum Error {
     TupleIndexingOnNonValue,
     TupleIndexOutOfRange,
     NotAnInstanceMethod,
-    InvalidGenericCount { expected: u8, found: u8 }
+    InvalidGenericCount { expected: u8, found: u8 },
+    UnexpectedGenerics,
+    NotConst,
 }
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

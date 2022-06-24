@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use crate::{
-    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, IdentPath, TraitDefinition},
-    error::{Errors, Error},
-    ir::{gen::FunctionOrHeader, Type}, span::{Span, TSpan},
+    ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, IdentPath, TraitDefinition, ExprRef},
+    error::{Errors, Error, EyeResult, CompileError},
+    ir::{gen::FunctionOrHeader, Type, ConstVal}, span::{Span, TSpan}, lexer::tokens::Operator,
 };
-use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, FunctionHeader, Scope};
+use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, FunctionHeader, Scope, string_literal};
 
 #[derive(Clone, Debug)]
 pub struct Globals(Vec<HashMap<String, Symbol>>);
@@ -38,7 +38,7 @@ pub fn gen_globals(ast: &Ast, ctx: &mut TypingCtx, errors: &mut Errors) -> Globa
         let module_id = ModuleId::new(module_id as u32);
         for (name, def) in &module.definitions {
             if symbols[module_id.idx()].contains_key(name) { continue }
-            gen_def(def, module_id, name, errors,
+            gen_def(def, module_id, name, errors, ast,
                 GlobalResolveState { symbols: &mut symbols, ctx, ast }
             );
         }
@@ -53,7 +53,7 @@ pub fn gen_locals(
     let mut symbols = HashMap::with_capacity(defs.len());
     for (name, def) in defs {
         if symbols.contains_key(name) { continue }
-        gen_def(def, scope.module, name, errors,
+        gen_def(def, scope.module, name, errors, scope.ast,
             LocalResolveState { symbols: &mut symbols, scope: scope.reborrow(), defs }
         );
     }
@@ -178,6 +178,7 @@ fn gen_def(
     module: ModuleId,
     name: &str,
     errors: &mut Errors,
+    ast: &Ast,
     mut state: impl ResolveState,
 ) -> Option<Symbol> {
     Some(match def {
@@ -207,6 +208,148 @@ fn gen_def(
                 return None;
             }
         }
+        ast::Definition::Const(ty, expr) => {
+            let val = match const_resolve(Some(ty), *expr, module, ast, state.reborrow()) {
+                Ok(val) => val,
+                Err(err) => {
+                    errors.emit_err(err);
+                    ConstVal::Invalid
+                }
+            };
+            let symbol = Symbol::Const(state.ctx().add_const(val));
+            state.insert_symbol(module, name.to_owned(), symbol);
+            symbol
+        }
+    })
+}
+
+fn const_resolve(ty: Option<&UnresolvedType>, val: ExprRef, module: ModuleId, ast: &Ast, mut state: impl ResolveState)
+-> EyeResult<ConstVal> {
+    #![allow(unused)]
+    let expr = &ast[val];
+    Ok(match expr {
+        // ast::Expr::Block { span, items, defs } => todo!(),
+        // ast::Expr::Declare { name, annotated_ty, end } => todo!(),
+        // ast::Expr::DeclareWithVal { name, annotated_ty, val } => todo!(),
+        // ast::Expr::Return { start, val } => todo!(),
+        ast::Expr::IntLiteral(span) => ConstVal::Int(state.src(module)[span.range()].parse().unwrap()),
+        ast::Expr::FloatLiteral(span) => ConstVal::Float(state.src(module)[span.range()].parse().unwrap()),
+        ast::Expr::StringLiteral(span) => ConstVal::String(string_literal(*span, state.src(module))),
+        ast::Expr::BoolLiteral { start, val } => ConstVal::Bool(*val),
+        ast::Expr::EnumLiteral { dot, ident } => ConstVal::EnumVariant(state.src(module)[ident.range()].to_owned()),
+        ast::Expr::Nested(_, inner) => const_resolve(ty, *inner, module, ast, state)?,
+        ast::Expr::Unit(_) => ConstVal::Unit,
+        // ast::Expr::Variable(span) => todo!(),
+        // ast::Expr::Array(_, _) => todo!(),
+        // ast::Expr::Tuple(_, _) => todo!(),
+        ast::Expr::If { .. }
+        | ast::Expr::IfElse { .. }
+        | ast::Expr::While { .. }
+        | ast::Expr::FunctionCall { .. }
+        => return Err(CompileError::new(Error::NotConst, expr.span_in(ast, module))),
+        ast::Expr::UnOp(_, op, inner) => {
+            let val = const_resolve(ty, *inner, module, ast, state)?;
+            match op {
+                ast::UnOp::Neg => {
+                    let ConstVal::Int(int_val) = val else {
+                        return Err(CompileError::new(Error::CantNegateType, ast[*inner].span_in(ast, module)));
+                    };
+                    ConstVal::Int(-int_val)
+                }
+                ast::UnOp::Not => {
+                    let ConstVal::Bool(bool_val) = val else {
+                        return Err(CompileError::new(Error::UnexpectedType, ast[*inner].span_in(ast, module)));
+                    };
+                    ConstVal::Bool(!bool_val)
+                }
+                ast::UnOp::Ref | ast::UnOp::Deref => return Err(CompileError::new(
+                    Error::UnexpectedType, expr.span_in(ast, module))),
+            }
+        }
+        ast::Expr::BinOp(op, l, r) => {
+            let l_val = const_resolve(None, *l, module, ast, state.reborrow())?;
+            let r_val = const_resolve(None, *r, module, ast, state)?;
+
+            match op {
+                Operator::Assignment(_) => {
+                    return Err(CompileError::new(
+                        Error::NotConst, expr.span_in(ast, module)
+                    ));
+                }
+                Operator::Add | Operator::Sub | Operator::Mul | Operator::Div | Operator::Mod => {
+                    macro_rules! math_op {
+                        ($($tok: ident $t: tt),*) => {
+                            match op {
+                                $(
+                                    Operator::$tok => {
+                                        match (l_val, r_val) {
+                                            (ConstVal::Invalid, ConstVal::Invalid) => ConstVal::Invalid,
+                                            (ConstVal::Int(l), ConstVal::Int(r)) => ConstVal::Int(l $t r),
+                                            (ConstVal::Float(l), ConstVal::Float(r)) => ConstVal::Float(l $t r),
+                                            _ => {
+                                                return Err(CompileError::new(
+                                                    Error::MismatchedType, expr.span_in(ast, module)
+                                                ));
+                                            }
+                                        }
+                                    }
+                                )*
+                                _ => unreachable!()
+                            }
+                        };
+                    }
+                    math_op!(Add +, Sub -, Mul *, Div /, Mod %)
+                }
+                Operator::And | Operator::Or => {
+                    let ConstVal::Bool(l) = l_val else { return Err(CompileError::new(
+                        Error::UnexpectedType, ast[*l].span_in(ast, module))) };
+                    let ConstVal::Bool(r) = r_val else { return Err(CompileError::new(
+                        Error::UnexpectedType, ast[*r].span_in(ast, module))) };
+                    ConstVal::Bool(match op {
+                        Operator::Or => l | r,
+                        Operator::And => l | r,
+                        op => unreachable!()
+                    })
+                }
+                Operator::Equals => ConstVal::Bool(l_val == r_val),
+                Operator::NotEquals => ConstVal::Bool(l_val != r_val),
+                Operator::LT | Operator::GT | Operator::LE | Operator::GE | Operator::Equals => {
+                    macro_rules! cmp_ops {
+                        ($($op: ident $t: tt $eq: expr),*) => {
+                            match op {
+                                $(
+                                    Operator::$op => ConstVal::Bool(match (l_val, r_val) {
+                                        (ConstVal::Invalid, ConstVal::Invalid) => return Ok(ConstVal::Invalid),
+                                        (ConstVal::Unit, ConstVal::Unit) => $eq,
+                                        (ConstVal::Int(l), ConstVal::Int(r)) => l $t r,
+                                        (ConstVal::Float(l), ConstVal::Float(r)) => l $t r,
+                                        (ConstVal::Bool(l), ConstVal::Bool(r)) => l $t r,
+                                        _ => {
+                                            return Err(CompileError::new(
+                                                Error::MismatchedType, expr.span_in(ast, module)
+                                            ));
+                                        }
+                                    }),
+                                )*
+                                _ => unreachable!()
+                            }
+                        };
+                    }
+                    cmp_ops!{
+                        LT < false,
+                        GT > false,
+                        LE <= true,
+                        GE >= true,
+                        Equals == true
+                    }
+                }
+            }
+        }
+        // ast::Expr::MemberAccess { left, name } => todo!(),
+        // ast::Expr::TupleIdx { expr, idx, end } => todo!(),
+        // ast::Expr::Cast(_, _, _) => todo!(),
+        // ast::Expr::Root(_) => todo!(),
+        _ => return Err(CompileError::new(Error::NotConst, expr.span_in(ast, module)))
     })
 }
 
@@ -354,20 +497,29 @@ fn gen_trait(
 
 enum PathResolveState<'a, 's, 'd> {
     Local(&'a mut Scope<'s>, &'a mut HashMap<String, Symbol>, &'d HashMap<String, ast::Definition>),
-    Module(ModuleId)
+    Module(ModuleId, &'a Ast)
+}
+impl<'a> PathResolveState<'a, '_, '_> {
+    fn into_ast(self) -> &'a Ast {
+        match self {
+            Self::Local(scope, _, _) => scope.ast,
+            Self::Module(_, ast) => ast,
+        }
+    }
 }
 enum PathResolveSymbols<'a> {
     Mutable(&'a Ast, &'a mut [HashMap<String, Symbol>], &'a mut TypingCtx),
     Finished(GlobalsRef<'a>)
 }
 impl<'a> PathResolveSymbols<'a> {
-    fn get<'b>(&'b mut self, module: ModuleId, name: &str, span: Span, errors: &mut Errors) -> Option<Symbol> {
+    fn get<'b>(&'b mut self, module: ModuleId, name: &str, span: Span, errors: &mut Errors)
+    -> Option<Symbol> {
         match self {
             PathResolveSymbols::Mutable(ast, symbols, ctx) => {
                 if let Some(symbol) = symbols[module.idx()].get(name) {
                     Some(*symbol)
                 } else if let Some(def) = ast.modules[module.idx()].definitions.get(name) {
-                    gen_def(def, module, name, errors,
+                    gen_def(def, module, name, errors, ast,
                         GlobalResolveState { symbols, ctx, ast }
                     )
                 } else {
@@ -398,14 +550,14 @@ fn resolve_path(
 ) -> Option<Symbol> {
     let (root, segments, last) = path.segments(src);
     if root.is_some() {
-        state = PathResolveState::Module(ModuleId::ROOT);
+        state = PathResolveState::Module(ModuleId::ROOT, state.into_ast());
     }
 
     for (name, span) in segments {
         match state {
             PathResolveState::Local(scope, symbols, defs) => {
-                match resolve_in_scope(name, span, scope, symbols, defs, errors) {
-                    Some(Symbol::Module(new_module)) => state = PathResolveState::Module(new_module),
+                match resolve_in_scope(name, span, scope, symbols, defs, errors, scope.ast) {
+                    Some(Symbol::Module(new_module)) => state = PathResolveState::Module(new_module, scope.ast),
                     Some(_) => {
                         errors.emit_span(Error::ModuleExpected, span.in_mod(path_module));
                         return None;
@@ -413,10 +565,10 @@ fn resolve_path(
                     None => return None
                 }
             },
-            PathResolveState::Module(id) => {
+            PathResolveState::Module(id, ast) => {
                 if let Some(def) = symbols.get(id, name, span.in_mod(path_module), errors) {
                     if let Symbol::Module(new_module) = def {
-                        state = PathResolveState::Module(new_module);
+                        state = PathResolveState::Module(new_module, ast);
                     } else {
                         errors.emit_span(Error::ModuleExpected, span.in_mod(path_module));
                         return None;
@@ -432,8 +584,8 @@ fn resolve_path(
     if let Some((name, span)) = last {
         match state {
             PathResolveState::Local(scope, symbols, defs)
-                => resolve_in_scope(name, span, scope, symbols, defs, errors),
-            PathResolveState::Module(id) => {
+                => resolve_in_scope(name, span, scope, symbols, defs, errors, scope.ast),
+            PathResolveState::Module(id, _) => {
                 // an error was already emitted here if the symbol is None
                 symbols.get(id, name, span.in_mod(path_module), errors)
             }
@@ -441,7 +593,7 @@ fn resolve_path(
     } else {
         match state {
             PathResolveState::Local(_, _, _) => unreachable!(),
-            PathResolveState::Module(id) => Some(Symbol::Module(id))
+            PathResolveState::Module(id, _ast) => Some(Symbol::Module(id))
         }
     }
 }
@@ -457,7 +609,7 @@ fn resolve_global_path(
     resolve_path(
         path,
         PathResolveSymbols::Mutable(ast, symbols, ctx),
-        PathResolveState::Module(module),
+        PathResolveState::Module(module, ast),
         module,
         ast.src(module).0,
         errors,
@@ -469,7 +621,7 @@ fn resolve_local_path(
     scope: &mut Scope,
     symbols: &mut HashMap<String, Symbol>,
     defs: &HashMap<String, ast::Definition>,
-    errors: &mut Errors
+    errors: &mut Errors,
 ) -> Option<Symbol> {
     let module = scope.module;
     let src = scope.ast.src(module).0;
@@ -490,12 +642,13 @@ fn resolve_in_scope(
     scope: &mut Scope,
     symbols: &mut HashMap<String, Symbol>,
     defs: &HashMap<String, ast::Definition>,
-    errors: &mut Errors
+    errors: &mut Errors,
+    ast: &Ast,
 ) -> Option<Symbol> {
     if let Some(symbol) = symbols.get(name) {
         Some(*symbol)
     } else if let Some(def) = defs.get(name) {
-        gen_def(def, scope.module, name, errors,
+        gen_def(def, scope.module, name, errors, ast,
             LocalResolveState { symbols, scope: scope.reborrow(), defs }
         )
     } else {

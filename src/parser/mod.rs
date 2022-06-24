@@ -166,45 +166,58 @@ impl<'a> Parser<'a> {
                 let ident = self.toks.step_expect(TokenType::Ident)?;
                 let ident_span = ident.span();
                 let name = ident.get_val(self.src);
+                let generics = self.parse_optional_generics()?;
                 match self.toks.peek().map(|t| t.ty) {
-                    // Struct definition
+                    // Struct definition or constant
                     Some(TokenType::DoubleColon) => {
                         self.toks.step_assert(TokenType::DoubleColon);
-                        let generics = self.parse_optional_generics()?;
-
-                        self.toks.step_expect(TokenType::LBrace)?;
-                        let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
-                        let mut methods = HashMap::new();
-                        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
-                            let ident_or_fn = p.toks.step()?;
-                            Ok(match_or_unexpected!{ident_or_fn, p.toks.module,
-                                TokenType::Ident => {
-                                    let member_name = ident_or_fn.get_val(p.src);
-                                    let member_type = p.parse_type()?;
-                                    let end = member_type.span().end;
-                                    members.push((member_name.to_owned(), member_type, ident.start, end));
-                                    Delimit::Yes
-                                },
-                                TokenType::Keyword(Keyword::Fn) => {
-                                    let (name, name_span, method) = p.parse_function_def(ident_or_fn)?;
-                                    if let Some(_existing) = methods.insert(name, method) {
-                                        return Err(CompileError::new(
-                                            Error::DuplicateDefinition,
-                                            name_span.in_mod(p.toks.module)
-                                        ))
+                        if self.toks.step_if(TokenType::LBrace).is_some() {
+                            let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
+                            let mut methods = HashMap::new();
+                            self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+                                let ident_or_fn = p.toks.step()?;
+                                Ok(match_or_unexpected!{ident_or_fn, p.toks.module,
+                                    TokenType::Ident => {
+                                        let member_name = ident_or_fn.get_val(p.src);
+                                        let member_type = p.parse_type()?;
+                                        let end = member_type.span().end;
+                                        members.push((member_name.to_owned(), member_type, ident.start, end));
+                                        Delimit::Yes
+                                    },
+                                    TokenType::Keyword(Keyword::Fn) => {
+                                        let (name, name_span, method) = p.parse_function_def(ident_or_fn)?;
+                                        if let Some(_existing) = methods.insert(name, method) {
+                                            return Err(CompileError::new(
+                                                Error::DuplicateDefinition,
+                                                name_span.in_mod(p.toks.module)
+                                            ))
+                                        }
+                                        Delimit::No
                                     }
-                                    Delimit::No
-                                }
-                            })
-                        })?;
-                        Item::Definition {
-                            name: name.to_owned(),
-                            name_span: ident_span,
-                            def: Definition::Struct(StructDefinition { generics, members, methods })
+                                })
+                            })?;
+                            Item::Definition {
+                                name: name.to_owned(),
+                                name_span: ident_span,
+                                def: Definition::Struct(StructDefinition {
+                                    generics: generics.map_or(Vec::new(), |g| g.1),
+                                    members,
+                                    methods
+                                })
+                            }
+                        } else {
+                            Item::Definition {
+                                name: name.to_owned(),
+                                name_span: ident_span,
+                                def: Definition::Const(UnresolvedType::Infer(0), self.parse_expr()?),
+                            }
                         }
                     }
                     // Variable declaration with explicit type
                     Some(TokenType::Colon) => {
+                        if let Some((span, _)) = generics {
+                            return Err(CompileError::new(Error::UnexpectedGenerics, span.in_mod(self.toks.module)))
+                        }
                         self.toks.step_assert(TokenType::Colon);
                         let ty = self.parse_type()?;
                         Item::Expr(if self.toks.step_if(TokenType::Equals).is_some() {
@@ -224,6 +237,9 @@ impl<'a> Parser<'a> {
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
+                        if let Some((span, _)) = generics {
+                            return Err(CompileError::new(Error::UnexpectedGenerics, span.in_mod(self.toks.module)))
+                        }
                         let decl_start = self.toks.step_assert(TokenType::Declare).start;
                         let val = self.parse_expr()?;
                         
@@ -234,6 +250,9 @@ impl<'a> Parser<'a> {
                         }))
                     }
                     _ => {
+                        if let Some((span, _)) = generics {
+                            return Err(CompileError::new(Error::UnexpectedGenerics, span.in_mod(self.toks.module)))
+                        }
                         let var = self.ast.add_expr(Expr::Variable(ident_span));
                         let expr = self.parse_expr_starting_with(var)?;
                         Item::Expr(expr)
@@ -258,7 +277,7 @@ impl<'a> Parser<'a> {
         let name = name_tok.get_val(self.src).to_owned();
         let name_span = name_tok.span();
         
-        let generics = self.parse_optional_generics()?;
+        let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
         
         let mut params = Vec::new();
         let mut varargs = false;
@@ -322,7 +341,7 @@ impl<'a> Parser<'a> {
         let name = name_tok.get_val(self.src).to_owned();
         let name_span = name_tok.span();
         
-        let generics = self.parse_optional_generics()?;
+        let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
         self.toks.step_expect(TokenType::LBrace)?;
         let mut functions = HashMap::new();
         loop {
@@ -498,9 +517,9 @@ impl<'a> Parser<'a> {
 
     fn parse_bin_op_rhs(&mut self, expr_prec: u8, mut lhs: ExprRef) -> EyeResult<ExprRef> {
         while let Some(op) = self.toks.peek().and_then(|t| Option::<Operator>::from(t.ty)) {
-            self.toks.step().unwrap(); // op
             let op_prec = op.precedence();
             if op_prec < expr_prec { break; }
+            self.toks.step().unwrap(); // op
             let mut rhs = self.parse_factor(true)?;
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
@@ -598,15 +617,15 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_optional_generics(&mut self) -> Result<Vec<TSpan>, CompileError> {
-        let mut generics = Vec::new();
-        if self.toks.step_if(TokenType::LBracket).is_some() {
-            self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+    fn parse_optional_generics(&mut self) -> Result<Option<(TSpan, Vec<TSpan>)>, CompileError> {
+        self.toks.step_if(TokenType::LBracket).map(|l| {
+            let mut generics = Vec::new();
+            let r = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
                 generics.push(p.toks.step_expect(TokenType::Ident)?.span());
                 Ok(())
             })?;
-        }
-        Ok(generics)
+            Ok((TSpan::new(l.start, r.end), generics))
+        }).transpose()
     }
 
     fn parse_optional_generic_instance(&mut self) -> EyeResult<Option<(Vec<UnresolvedType>, TSpan)>> {

@@ -158,6 +158,7 @@ pub enum Definition {
     Trait(TraitDefinition),
     Module(ModuleId),
     Use(IdentPath),
+    Const(UnresolvedType, ExprRef),
 }
 
 #[derive(Debug, Clone)]
