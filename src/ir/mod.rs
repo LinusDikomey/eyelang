@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use color_format::*;
+use crate::ast::Defs;
 use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
 use typing::{TypeTable, TypeInfo, FinalTypeTable};
@@ -27,6 +28,8 @@ pub enum Type {
     Generic(u8),
     Invalid
 }
+
+#[derive(Clone, Copy)]
 pub enum TypeInfoOrIndex {
     Info(TypeInfo),
     Index(TypeTableIndex)
@@ -183,19 +186,22 @@ pub struct FunctionHeader {
 
 #[derive(Debug)]
 pub enum TypeDef {
-    Struct(Struct)
+    Struct(Struct),
+    Enum(Enum),
 }
 impl TypeDef {
     pub fn generic_count(&self) -> u8 {
         match self {
             TypeDef::Struct(struct_) => struct_.generic_count,
+            TypeDef::Enum(enum_) => enum_.generic_count,
         }
     }
 }
 impl fmt::Display for TypeDef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TypeDef::Struct(struct_) => write!(f, "{struct_}"),
+            TypeDef::Struct(s) => write!(f, "{s}"),
+            TypeDef::Enum(e) => write!(f, "{e}"),
         }
     }
 }
@@ -216,11 +222,25 @@ impl fmt::Display for Struct {
 }
 
 #[derive(Debug, Clone)]
+pub struct Enum {
+    pub variants: HashMap<String, u32>,
+    pub generic_count: u8,
+}
+impl fmt::Display for Enum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (variant, variant_val) in &self.variants {
+            cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TraitDef {
     pub functions: HashMap<String, (u32, FunctionHeader)>
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ConstVal {
     Invalid,
     Unit,
@@ -229,8 +249,13 @@ pub enum ConstVal {
     String(String),
     EnumVariant(String),
     Bool(bool),
+    NotGenerated { defs: Defs, generating: bool },
 }
 impl ConstVal {
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, Self::Invalid)
+    }
+    
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
         match self {
             ConstVal::Invalid => TypeInfo::Invalid,
@@ -239,7 +264,21 @@ impl ConstVal {
             ConstVal::Float(_) => TypeInfo::Float,
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
-            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool)
+            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
+            ConstVal::NotGenerated { .. } => panic!()
+        }
+    }
+}
+impl PartialEq for ConstVal {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
+            (Self::Float(l0), Self::Float(r0)) => l0 == r0,
+            (Self::String(l0), Self::String(r0)) => l0 == r0,
+            (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
+            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
+            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
+            _ => false
         }
     }
 }
@@ -247,15 +286,15 @@ impl ConstVal {
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
-    pub types: Vec<TypeDef>,
+    pub types: Vec<(String, TypeDef)>,
     pub main: Option<SymbolKey>
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for TypeDef::Struct(struct_) in &self.types {
+        for (name, ty) in &self.types {
             cwriteln!(f, "#b<begin> #r<{name}>\n{}#b<end> #r<{name}>\n",
-                struct_,
-                name = struct_.name
+                ty,
+                name = name,
             )?;
         }
         for func in &self.funcs {
@@ -351,9 +390,9 @@ impl Instruction {
             DataVariant::UnOp => write_ref(f, self.data.un_op),
             DataVariant::BinOp => {
                 write_ref(f, self.data.bin_op.0)?;
+                write!(f, ", ")?;
                 write_ref(f, self.data.bin_op.1)
             }
-            DataVariant::Cast => write_ref(f, self.data.un_op),
             DataVariant::Branch => {
                 let i = self.data.branch.1 as usize;
                 let mut bytes = [0; 4];
@@ -432,7 +471,7 @@ impl Tag {
         use DataVariant::*;
         match self {
             Tag::BlockBegin | Tag::Param => Int32,
-            Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not => UnOp,
+            Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => UnOp,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
@@ -442,7 +481,6 @@ impl Tag {
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
-            Tag::Cast => Cast,
             Tag::Goto => Block,
             Tag::Branch => Branch,
             Tag::Phi => ExtraBranchRefs
@@ -574,6 +612,5 @@ enum DataVariant {
     Float,
     UnOp,
     BinOp,
-    Cast,
     None,
 }

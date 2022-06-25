@@ -77,9 +77,8 @@ impl<'a> Parser<'a> {
                 )
             }
         }
-        definitions.shrink_to_fit();
         uses.shrink_to_fit();
-        Ok(Module { definitions, uses })
+        Ok(Module { definitions: self.ast.expr_builder.defs(definitions), uses })
     }
 
     fn parse_block_or_expr(&mut self) -> EyeResult<ExprRef> {
@@ -161,17 +160,17 @@ impl<'a> Parser<'a> {
                 let (name, name_span, trait_) = self.parse_trait_def(trait_tok)?;
                 Item::Definition { name, name_span, def: Definition::Trait(trait_) }
             }
-            // either a struct or a variable
+            // either a struct, constant or a variable
             TokenType::Ident => {
                 let ident = self.toks.step_expect(TokenType::Ident)?;
                 let ident_span = ident.span();
                 let name = ident.get_val(self.src);
                 let generics = self.parse_optional_generics()?;
                 match self.toks.peek().map(|t| t.ty) {
-                    // Struct definition or constant
+                    // Struct definition, constant or enum
                     Some(TokenType::DoubleColon) => {
                         self.toks.step_assert(TokenType::DoubleColon);
-                        if self.toks.step_if(TokenType::LBrace).is_some() {
+                        let def = if self.toks.step_if(TokenType::LBrace).is_some() {
                             let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
                             let mut methods = HashMap::new();
                             self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
@@ -196,22 +195,28 @@ impl<'a> Parser<'a> {
                                     }
                                 })
                             })?;
-                            Item::Definition {
-                                name: name.to_owned(),
-                                name_span: ident_span,
-                                def: Definition::Struct(StructDefinition {
-                                    generics: generics.map_or(Vec::new(), |g| g.1),
-                                    members,
-                                    methods
-                                })
+                            Definition::Struct(StructDefinition {
+                                generics: generics.map_or(Vec::new(), |g| g.1),
+                                members,
+                                methods
+                            })
+                        } else if self.toks.step_if(TokenType::Keyword(Keyword::Enum)).is_some() {
+                            self.toks.step_expect(TokenType::LBrace)?;
+                            let mut variants = Vec::new();
+                            while self.toks.step_if(TokenType::RBrace).is_none() {
+                                let tok = self.toks.step_expect(TokenType::Ident)?;
+                                let span = tok.span();
+                                let variant = tok.get_val(self.src).to_owned();
+                                variants.push((span, variant));
                             }
+                            Definition::Enum(EnumDefinition {
+                                generics: generics.map_or(Vec::new(), |g| g.1),
+                                variants
+                            })
                         } else {
-                            Item::Definition {
-                                name: name.to_owned(),
-                                name_span: ident_span,
-                                def: Definition::Const(UnresolvedType::Infer(0), self.parse_expr()?),
-                            }
-                        }
+                            Definition::Const(UnresolvedType::Infer(0), self.parse_expr()?)
+                        };
+                        Item::Definition { name: name.to_owned(), name_span: ident_span, def }
                     }
                     // Variable declaration with explicit type
                     Some(TokenType::Colon) => {
@@ -302,16 +307,16 @@ impl<'a> Parser<'a> {
             })?;
         }
         //FIXME: this is a pretty ugly hack for determining wether to parse a type
-        let return_type = if !matches!(
+        let return_type = if matches!(
             self.toks.peek().map(|tok| tok.ty),
             Some(
                 TokenType::LBrace | TokenType::Colon | TokenType::Keyword(Keyword::Extern)
                 | TokenType::Keyword(Keyword::Fn) | TokenType::RBrace
             )
         ) {
-            self.parse_type()?
-        } else {
             UnresolvedType::Primitive(Primitive::Unit, self.toks.previous().unwrap().span())
+        } else {
+            self.parse_type()?
         };
         Ok((name, name_span, Function {
             params,
@@ -612,6 +617,9 @@ impl<'a> Parser<'a> {
             },
             TokenType::Star => {
                 Ok(UnresolvedType::Pointer(Box::new((self.parse_type()?, type_tok.start))))
+            },
+            TokenType::Bang => {
+                Ok(UnresolvedType::Primitive(Primitive::Never, type_tok.span()))  
             },
             TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
         )

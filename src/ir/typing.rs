@@ -1,7 +1,7 @@
 use std::ops::Index;
 
 use crate::{error::*, ast::ModuleId, span::{TSpan, Span}};
-use super::*;
+use super::{*, gen::TypingCtx};
 
 /// Type inference debugging
 fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
@@ -92,10 +92,10 @@ impl TypeTable {
         self.add(TypeInfo::Unknown)
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span) {
+    pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span, ctx: &TypingCtx) {
         let prev = self.get_type(idx);
         ty_dbg("Specifying", (prev, idx, other));
-        let ty = merge_twosided(prev, other, self).unwrap_or_else(|err| {
+        let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|err| {
             errors.emit_span(err, span);
             TypeInfo::Invalid
         });
@@ -108,14 +108,17 @@ impl TypeTable {
         errors: &mut Errors,
         module: ModuleId,
         span: TSpan,
+        ctx: &TypingCtx,
     ) {
         match other {
-            TypeInfoOrIndex::Info(info) => self.specify(idx, info, errors, span.in_mod(module)),
-            TypeInfoOrIndex::Index(other_idx) => self.merge(idx, other_idx, errors, module, span),
+            TypeInfoOrIndex::Info(info) => self.specify(idx, info, errors, span.in_mod(module), ctx),
+            TypeInfoOrIndex::Index(other_idx) => self.merge(idx, other_idx, errors, module, span, ctx),
         }
     }
 
-    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, errors: &mut Errors, module: ModuleId, span: TSpan) {
+    pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex,
+        errors: &mut Errors, module: ModuleId, span: TSpan, ctx: &TypingCtx
+    ) {
         let a_idx = self.indices[a.idx()];
         let a_ty = self.types[a_idx.get()];
         let b_idx = &mut self.indices[b.idx()];
@@ -125,7 +128,7 @@ impl TypeTable {
 
 
         // merge b's previous type into a
-        self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self) {
+        self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self, ctx) {
             Ok(ty) => ty_dbg("\t... merged", ty),
             Err(err) => {
                 ty_dbg("\t... failed to merge", err);
@@ -252,6 +255,8 @@ pub enum TypeInfo {
     Invalid,
 }
 impl TypeInfo {
+    pub const UNIT: Self = Self::Primitive(Primitive::Unit);
+    
     pub fn is_invalid(&self) -> bool {
         matches!(self, TypeInfo::Invalid)
     }
@@ -285,18 +290,19 @@ impl TypeInfo {
     }
 }
 
-fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Result<TypeInfo, Error> {
-    match merge_onesided(ty, other, types) {
+fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Result<TypeInfo, Error> {
+    match merge_onesided(ty, other, types, ctx) {
         Ok(t) => Ok(t),
-        Err(_) => merge_onesided(other, ty, types)
+        Err(_) => merge_onesided(other, ty, types, ctx)
     }
 }
 
 /// merge the types and return the merged type
-fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Result<TypeInfo, Error> {
+fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Result<TypeInfo, Error> {
     use TypeInfo::*;
     match ty {
         Unknown => Ok(other),
+        Primitive(crate::types::Primitive::Never) => Ok(ty),
         Int => {
             match other {
                 Int => Ok(other),
@@ -327,7 +333,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                     generics.iter()
                         .zip(other_generics.iter())
                         .map(|(a, b)| {
-                            let new = merge_onesided(types[a], types[b], types)?;
+                            let new = merge_onesided(types[a], types[b], types, ctx)?;
                             types.update_type(a, new);
                             types.point_to(b, a);
                             Ok(())
@@ -336,13 +342,18 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
                         .and(Ok(()))
                 }).transpose()?
                 .is_some()
+            } else if let TypeDef::Enum(def) = ctx.get_type(id) {
+                if let Enum(names) = other {
+                    !types.get_names(names).iter()
+                        .any(|name| !def.variants.contains_key(name))
+                } else { false }
             } else { false }
                 .then(|| ty)
                 .ok_or(Error::MismatchedType)
         }
         Pointer(inner) => {
             let Pointer(other_inner) = other else { return Err(Error::MismatchedType) };
-            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
             types.update_type(inner, new_inner);
             types.point_to(other_inner, inner);
             Ok(Pointer(inner))
@@ -350,7 +361,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
         Array(size, inner) => {
             let Array(other_size, other_inner) = other else { return Err(Error::MismatchedType) };
     
-            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types)?;
+            let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
             types.update_type(inner, new_inner);
             types.point_to(other_inner, inner);
             
@@ -376,7 +387,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable) -> Resul
             let Tuple(other_elems) = other else { return Err(Error::MismatchedType) };
             if elems.count != other_elems.count { return Err(Error::MismatchedType) }
             for (a, b) in elems.iter().zip(other_elems.iter()) {
-                let new_a = merge_onesided(types.get_type(a), types.get_type(b), types)?;
+                let new_a = merge_onesided(types.get_type(a), types.get_type(b), types, ctx)?;
                 types.update_type(a, new_a);
                 types.point_to(b, a);
             }

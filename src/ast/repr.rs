@@ -76,7 +76,7 @@ impl Representer for ReprPrinter<'_> {
 
 impl<C: Representer> Repr<C> for Module {
     fn repr(&self, c: &C) {
-        for (name, def) in &self.definitions {
+        for (name, def) in &c.ast()[self.definitions] {
             def.repr(c, name);
             c.writeln("\n");
         }
@@ -88,6 +88,7 @@ impl Definition {
         match self {
             Self::Function(func) => func.repr(c, name, false),
             Self::Struct(struc) => struc.repr(c, name),
+            Self::Enum(def) => def.repr(c, name),
             Self::Trait(t) => t.repr(c, name),
             Self::Module(_) => {}
             Self::Use(path) => {
@@ -155,6 +156,19 @@ impl StructDefinition {
         c.write_start("}");
     }
 }
+
+impl EnumDefinition {
+    fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.writeln(format!("{} :: {{", name));
+        let child = c.child();
+        for (_, name) in self.variants.iter() {
+            child.begin_line();
+            child.write_add(name.as_str());
+        }
+        c.write_start("}");
+    }
+}
+
 
 impl TraitDefinition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {

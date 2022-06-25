@@ -7,6 +7,11 @@ NEGATIVE_ONE :: -1
 # simple calculation
 CALC :: 3 + 3 * 9 + (12 % 8) - (5 / 2)
 
+# dependant constants
+
+PI :: 3.14159
+PI_SQUARED :: PI * PI
+
 fn main {
 
     # constant can be used as any integer type
@@ -21,4 +26,6 @@ fn main {
     if !A or B {
         std.c.printf("Invalid constant values: %d, %d\n", A, B)
     }
+
+    std.c.printf("%.1f, %.1f\n", f64 PI, f64 PI_SQUARED)
 }

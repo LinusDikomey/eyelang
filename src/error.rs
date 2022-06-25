@@ -1,6 +1,3 @@
-#![allow(unused)]
-
-use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
 use crate::{ast::{Ast, ModuleId}, span::Span};
@@ -37,6 +34,7 @@ impl Errors {
         self.errors.len()
     }
 
+    #[cfg(feature = "lsp")]
     pub fn get(&self) -> &[CompileError] {
         &self.errors
     }
@@ -89,7 +87,7 @@ impl Errors {
             };
             
 
-            cprintln!("#r!<error>: #r!<{:?}>", error.err);
+            cprintln!("#r!<error>: #r!<{}>", error.err.conclusion());
             cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
             let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
             let p = cformat!("{} #c<|> ", " ".repeat(spaces));
@@ -125,7 +123,7 @@ impl Errors {
         }
     }
 
-    pub fn emit_unwrap<T>(&mut self, res: Result<T, CompileError>, otherwise: T) -> T {
+    pub fn _emit_unwrap<T>(&mut self, res: Result<T, CompileError>, otherwise: T) -> T {
         match res {
             Ok(t) => t,
             Err(err) => {
@@ -135,7 +133,7 @@ impl Errors {
         }
     }
 
-    pub fn emit_unwrap_or<T>(&mut self, res: Result<T, CompileError>, otherwise: impl Fn() -> T) -> T {
+    pub fn _emit_unwrap_or<T>(&mut self, res: Result<T, CompileError>, otherwise: impl Fn() -> T) -> T {
         match res {
             Ok(t) => t,
             Err(err) => {
@@ -158,6 +156,7 @@ impl CompileError {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(unused)]
 pub enum Error {
     FileSizeExceeeded,
     UnexpectedEndOfFile,
@@ -176,7 +175,6 @@ pub enum Error {
     UseOfUnassignedVariable,
     MissingReturnValue,
     DuplicateDefinition,
-    ModuleNameConflictsWithDefinition,
     InvalidTopLevelBlockItem,
     UnknownEscapeCode,
     TypeExpected,
@@ -191,10 +189,10 @@ pub enum Error {
     InvalidArgCount,
     CantNegateType,
     NonexistantMember,
+    NonexistantEnumVariant,
     TypeMustBeKnownHere,
     MissingMainFile,
     CantAssignTo,
-    TooLargePointer,
     CantTakeRef,
     CantDeref,
     CantUseRootPath,
@@ -208,10 +206,63 @@ pub enum Error {
     InvalidGenericCount { expected: u8, found: u8 },
     UnexpectedGenerics,
     NotConst,
+    FunctionOrStructTypeExpected,
+    RecursiveDefinition,
 }
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+impl Error {
+    pub fn conclusion(self) -> &'static str {
+        match self {
+            Error::FileSizeExceeeded => "maximum file size exceeded",
+            Error::UnexpectedEndOfFile => "unexpected end of file",
+            Error::UnexpectedCharacters => "unexpected characters",
+            Error::UnexpectedToken => "token was not expected here",
+            Error::UnknownIdent => "identifier not found",
+            Error::UnknownType => "type not found",
+            Error::UnknownFunction => "function not found",
+            Error::UnknownVariable => "variable not found",
+            Error::UnknownModule => "module not found",
+            Error::MissingMain => "no main function provided",
+            Error::UnexpectedType => "type was not expected here",
+            Error::IntLiteralOutOfRange => "int literal out of range",
+            Error::FloatLiteralOutOfRange => "float literal out of range",
+            Error::MultipleDotsInFloatLiteral => "multiple dots in float literal",
+            Error::UseOfUnassignedVariable => "variable is uninitialized here",
+            Error::MissingReturnValue => "missing return value",
+            Error::DuplicateDefinition => "duplicate definition",
+            Error::InvalidTopLevelBlockItem => "block item found in top level scope",
+            Error::UnknownEscapeCode => "invalid escape code",
+            Error::TypeExpected => "expected a type",
+            Error::ModuleExpected => "expected a module",
+            Error::FunctionOrTypeExpected => "expected a type or function",
+            Error::IntExpected => "integer expected",
+            Error::FloatExpected => "float expected",
+            Error::MismatchedType => "type mismatch",
+            Error::ExpectedVarFoundDefinition => "expected variable but found a definition",
+            Error::ExpectedValueFoundDefinition => "expected value but found a definition",
+            Error::ExpectedValueOrModuleFoundDefiniton => "expected value or module but found a definition",
+            Error::InvalidArgCount => "invalid argument count",
+            Error::CantNegateType => "can't negate this value",
+            Error::NonexistantMember => "member doesn't exist",
+            Error::NonexistantEnumVariant => "enum variant doesn't exist",
+            Error::TypeMustBeKnownHere => "type of value must be known here",
+            Error::MissingMainFile => "no main.eye file found",
+            Error::CantAssignTo => "not assignable",
+            Error::CantTakeRef => "can't take reference of value",
+            Error::CantDeref => "can't dereference value",
+            Error::CantUseRootPath => "root path can't be used here",
+            Error::InferredTypeNotAllowedHere => "type can't be inferred here",
+            Error::ArrayTooLarge => "maximum array size exceeded",
+            Error::ArraySizeCantBeInferredHere => "can't infer array size here",
+            Error::InvalidArgumentCountForArrayIndex => "single argument for array index expected",
+            Error::TupleIndexingOnNonValue => "indexing a non-tuple",
+            Error::TupleIndexOutOfRange => "tuple doesn't have this many items",
+            Error::NotAnInstanceMethod => "not an instance method",
+            Error::InvalidGenericCount { .. } => "invalid generic count",
+            Error::UnexpectedGenerics => "no generics expected",
+            Error::NotConst => "can't evaluate constantly",
+            Error::FunctionOrStructTypeExpected => "expected a struct type or a function",
+            Error::RecursiveDefinition => "definition depends on itself recursively"
+        }
     }
 }
 impl Error {
@@ -220,5 +271,8 @@ impl Error {
             err: self,
             span: Span::new(start, end, module)
         }
+    }
+    pub fn at_span(self, span: Span) -> CompileError {
+        CompileError { err: self, span }
     }
 }

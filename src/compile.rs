@@ -32,7 +32,8 @@ pub fn project(
     
     if let Some(std) = (std).then(std_path) {
         let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, reconstruct_src, stats);
-        ast[main].definitions.insert(
+        let defs = ast[main].definitions;
+        ast[defs].insert(
             "std".to_owned(),
             ast::Definition::Module(std_mod)    
         );
@@ -71,7 +72,7 @@ impl TreeType {
 
 fn tree(
     path: &Path,
-    modules: &mut Ast,
+    ast: &mut Ast,
     errors: &mut Errors,
     t: TreeType,
     reconstruct_src: bool,
@@ -81,9 +82,9 @@ fn tree(
     let base_exists = std::fs::try_exists(&base_file)
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
     let base_module = if base_exists {
-        file(&base_file, modules, errors, reconstruct_src, stats)
+        file(&base_file, ast, errors, reconstruct_src, stats)
     } else {
-        let main_mod = modules.add_module(Module::empty(), "".to_owned(), path.to_owned());
+        let main_mod = ast.add_empty_module(String::new(), path.to_owned());
         if let TreeType::Main = t {
             errors.emit(Error::MissingMainFile, 0, 0, main_mod);
         }
@@ -96,17 +97,18 @@ fn tree(
         if entry.file_name() == t.file() { continue; }
         let file_ty = entry.file_type().expect("Failed to retrieve file type");
         let child_module = if file_ty.is_dir() {
-            tree(&path, modules, errors, TreeType::Mod, reconstruct_src, stats)
+            tree(&path, ast, errors, TreeType::Mod, reconstruct_src, stats)
         } else if file_ty.is_file() {
             let is_eye = matches!(path.extension(), Some(extension) if extension == "eye");
             if !is_eye { continue; }
-            file(&path, modules, errors, reconstruct_src, stats)
+            file(&path, ast, errors, reconstruct_src, stats)
         } else {
             eprintln!("Invalid file type found in module tree");
             continue;
         };
 
-        modules[base_module].definitions.insert(
+        let defs = ast[base_module].definitions;
+        ast[defs].insert(
             path.with_extension("").file_name().unwrap().to_string_lossy().into_owned(),
             ast::Definition::Module(child_module)
         );
@@ -134,12 +136,13 @@ fn file(
         Err(err) => panic!("Failed to read file {path:?}: {err}")
     };
 
-    let module_id = ast.add_module(Module::empty(), String::new(), path.to_owned());
+    let module_id = ast.add_empty_module(String::new(), path.to_owned());
 
     let lex_res = lexer::parse(&src, errors, module_id);
     file_stats.lex = lex_start_time.elapsed();
     let Some(tokens) = lex_res else {
-        ast.update(module_id, Module::empty(), src, path.to_owned());
+        let empty = Module::empty(ast);
+        ast.update(module_id, empty, src, path.to_owned());
         return module_id;
     };
     
@@ -160,7 +163,8 @@ fn file(
             ast.update(module_id, module, src, path.to_owned());
         },
         Err(err) => {
-            ast.update(module_id, Module::empty(), src, path.to_owned());
+            let empty = Module::empty(ast);
+            ast.update(module_id, empty, src, path.to_owned());
             errors.emit_err(err);
         }
     };

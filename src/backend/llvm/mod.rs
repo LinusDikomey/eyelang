@@ -52,8 +52,7 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
         F32 => LLVMFloatTypeInContext(ctx),
         F64 => LLVMDoubleTypeInContext(ctx),
         Bool => LLVMInt1TypeInContext(ctx),
-        Unit => LLVMVoidTypeInContext(ctx),
-        Never => unreachable!(), // should the never type ever be represented in llvm?
+        Unit | Never => LLVMVoidTypeInContext(ctx),
     }
 }
 
@@ -99,14 +98,20 @@ unsafe fn llvm_ty_recursive(
                 }
                 name.push(']');
                 let name = ffi::CString::new(name).unwrap();
-                let llvm_struct = LLVMStructCreateNamed(ctx, name.as_ptr());
-                map.insert(generics.clone(), llvm_struct);
-                let ir::TypeDef::Struct(def) = &module.types[id.idx()];
-                let mut members = def.members.iter()
-                    .map(|(_, ty)| llvm_ty_recursive(ctx, module, types, ty, false, generics))
-                    .collect::<Vec<_>>();
-                LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
-                llvm_struct
+                match &module.types[id.idx()].1 {
+                    ir::TypeDef::Struct(def) => {
+                        let llvm_struct = LLVMStructCreateNamed(ctx, name.as_ptr());
+                        map.insert(generics.clone(), llvm_struct);
+                        let mut members = def.members.iter()
+                            .map(|(_, ty)| llvm_ty_recursive(ctx, module, types, ty, false, generics))
+                            .collect::<Vec<_>>();
+                            LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
+                        llvm_struct
+                    }
+                    ir::TypeDef::Enum(def) => {
+                        int_from_variant_count(ctx, def.variants.len())
+                    }
+                }
             }
         }
         Type::Pointer(inner) => {
@@ -151,22 +156,36 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
 
 
     let mut types = module.types.iter()
-        .map(|ty| {
-            let ir::TypeDef::Struct(struct_) = ty;
-            if struct_.generic_count != 0 { return TypeInstance::Generic(HashMap::new()); }
-            let name = ffi::CString::new(struct_.name.as_bytes()).unwrap();
-            TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
+        .map(|(name, ty)| {
+            match ty {
+                ir::TypeDef::Struct(def) => {
+                    if def.generic_count != 0 { return TypeInstance::Generic(HashMap::new()); }
+                    let name = ffi::CString::new(name.as_bytes()).unwrap();
+                    TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
+                }
+                ir::TypeDef::Enum(def) => {
+                    if def.generic_count != 0 {
+                        TypeInstance::Generic(HashMap::new())
+                    } else {
+                        TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()))
+                    }
+                }
+            }            
         })
         .collect::<Vec<_>>();
 
-    for (i, ty) in module.types.iter().enumerate() {
+    for (i, (_, ty)) in module.types.iter().enumerate() {
         let &TypeInstance::Simple(struct_ty) = &types[i] else { continue };
-        let ir::TypeDef::Struct(struct_) = ty;
-        if struct_.generic_count != 0 { continue }
-        let mut members = struct_.members.iter()
-            .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
-            .collect::<Vec<_>>();
-        LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
+        match ty {
+            ir::TypeDef::Struct(def) => {
+                    if def.generic_count != 0 { continue }
+                    let mut members = def.members.iter()
+                        .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
+                        .collect::<Vec<_>>();
+                    LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
+            }
+            ir::TypeDef::Enum(_) => continue, // nothing to do, just an int right now
+        }
     }
 
     let type_creation_time = start_time.elapsed();
@@ -340,13 +359,30 @@ unsafe fn build_func(
             ir::Tag::EnumLit => {
                 let range = data.extra_len.0 as usize .. data.extra_len.0 as usize + data.extra_len.1 as usize;
                 let name = &ir.extra[range];
-                let ir::Type::Enum(variants) = &ir.types[*ty] else { panic!("Enum variant found for non-enum type")};
-                let index = variants.iter()
-                    .enumerate()
-                    .find(|(_, s)| s.as_bytes() == name)
-                    .unwrap_or_else(|| panic!("Missing enum variant {}.", std::str::from_utf8(name).unwrap()))
-                    .0;
-                let ty = int_from_variant_count(ctx, variants.len());
+                let (ty, index) = match &ir.types[*ty] {
+                    ir::Type::Enum(variants) => {
+                        let index = variants.iter()
+                            .enumerate()
+                            .find(|(_, s)| s.as_bytes() == name)
+                            .unwrap_or_else(|| panic!("Missing enum variant {}.", std::str::from_utf8(name).unwrap()))
+                            .0;
+                        let ty = int_from_variant_count(ctx, variants.len());
+                        (ty, index)
+                    }
+                    ir::Type::Id(id, _) => {
+                        let name = std::str::from_utf8(name)
+                            .expect("Typecheck error: Internal Error: Enum variant in invalid utf8 encoded");
+                        match &module.types[id.idx()].1 {
+                            ir::TypeDef::Struct(_) => panic!("Expected enum, found struct type"),
+                            ir::TypeDef::Enum(def) => {
+                                let index = *def.variants.get(name)
+                                    .expect("Typecheck failure: Missing enum variant.");
+                                (int_from_variant_count(ctx, def.variants.len()), index as usize)
+                            }
+                        }
+                    }
+                    _ => panic!("Enum variant not found for non-enum type")
+                };
                 LLVMConstInt(ty, index as _, FALSE)
             }
             ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty, types), NONE),
@@ -428,7 +464,14 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                if matches!(ty, Type::Enum(_) | Type::Prim(Primitive::Bool)) || info_to_num(&ty).int() {
+                let is_enum_ty = || {
+                    if let Type::Id(id, _) = ty {
+                        matches!(module.types[id.idx()].1, ir::TypeDef::Enum(_))
+                    } else { false }
+                };
+
+                if matches!(ty, Type::Enum(_) | Type::Prim(Primitive::Bool)) 
+                || is_enum_ty() || info_to_num(&ty).int() {
                     LLVMBuildICmp(builder, if *tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
                     LLVMBuildFCmp(builder, if *tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
@@ -537,7 +580,7 @@ unsafe fn build_func(
                             t => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
                     }
-                    Type::Enum(_variants) => {
+                    Type::Enum(_) => {
                         //TODO: int to enum casts
                         panic!("Enum casts unsupported")
                     }

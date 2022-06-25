@@ -4,6 +4,8 @@ use crate::{
     error::Errors, span::TSpan
 };
 
+use super::TypingCtx;
+
 #[derive(Clone)]
 pub struct IrBuilder {
     module: ModuleId,
@@ -37,10 +39,10 @@ impl IrBuilder {
         let idx = Ref::index(self.ir.len() as u32);
         if self.emit {
             if inst.tag == Tag::BlockBegin {
-                debug_assert!(self.ir.last().map(|last| last.tag.is_terminator()).unwrap_or(true),
+                debug_assert!(self.ir.last().map_or(true, |last| last.tag.is_terminator()),
                     "New block started without preceding terminator: \n{}", self.clone().finish());
             } else {
-                debug_assert!(self.ir.last().map(|last| !last.tag.is_terminator()).unwrap_or(true),
+                debug_assert!(self.ir.last().map_or(true, |last| !last.tag.is_terminator()),
                     "Instruction added after a terminator: \n{}", self.clone().finish());
             }
             self.ir.push(inst);
@@ -146,8 +148,8 @@ impl IrBuilder {
         block
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan) {
-        self.types.specify(idx, info, errors, span.in_mod(self.module));
+    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan, ctx: &TypingCtx) {
+        self.types.specify(idx, info, errors, span.in_mod(self.module), ctx);
     }
 
     pub fn invalidate(&mut self, idx: TypeTableIndex) {

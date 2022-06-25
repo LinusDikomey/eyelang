@@ -1,18 +1,18 @@
 Compiling errors ...
 Finished with 4 errors
-error: UnexpectedCharacters
+error: unexpected characters
 at: eye/errors.eye:12:1
      | 
   12 | µ
      | ^
 
-error: UnexpectedCharacters
+error: unexpected characters
 at: eye/errors.eye:15:1
      | 
   15 | µ∆ºª©ƒ
      | ^^^^^^
 
-error: UnexpectedCharacters
+error: unexpected characters
 at: eye/errors.eye:19:1
      | 
   19 | µ∑®⁄¨Ω   µ∆
@@ -22,7 +22,7 @@ at: eye/errors.eye:19:1
   21 | ƒª©ƒ∂∂€®øπå√∫
      | ^^^^^^^^^^^^^
 
-error: UnexpectedToken
+error: token was not expected here
 at: eye/errors.eye:24:27
      | 
   24 |     print("Test Function"); # oh no, a semicolon

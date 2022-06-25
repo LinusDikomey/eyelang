@@ -23,6 +23,10 @@ fn fread(ptr *i8, size u64, count u64, stream FileHandle ) u64 extern
 
 fn sleep(seconds u32) extern
 
+fn rand() i32 extern
+fn srand(seed u32) extern
+
+fn exit(status i32) ! extern
 
 # from help.c
 

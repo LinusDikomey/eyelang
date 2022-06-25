@@ -63,7 +63,7 @@ fn check(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
             errors.get().iter().map(|error| {
                 Diagnostic {
                     severity: Some(DiagnosticSeverity::ERROR),
-                    message: error.err.to_string(),
+                    message: error.err.conclusion().to_owned(),
                     range: calc_range(error.span, &modules),
                     
                     ..Default::default()

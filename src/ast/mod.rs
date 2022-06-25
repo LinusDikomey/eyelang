@@ -6,7 +6,7 @@ pub mod repr;
 pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
-    pub expr_builder: ExprBuilder
+    pub expr_builder: ExprBuilder,
 }
 impl Ast {
     pub fn new() -> Self {
@@ -16,7 +16,7 @@ impl Ast {
             expr_builder: ExprBuilder {
                 exprs: Vec::new(),
                 extra: Vec::new(),
-                defs: Vec::new()
+                defs: Vec::new(),
             }
         }
     }
@@ -38,8 +38,19 @@ impl Index<ExprRef> for Ast {
 
     fn index(&self, index: ExprRef) -> &Self::Output {
         &self.expr_builder.exprs[index.0 as usize]    
+    }   
+}
+impl Index<Defs> for Ast {
+    type Output = HashMap<String, Definition>;
+
+    fn index(&self, index: Defs) -> &Self::Output {
+        &self.expr_builder.defs[index.0 as usize]
     }
-    
+}
+impl IndexMut<Defs> for Ast {
+    fn index_mut(&mut self, index: Defs) -> &mut Self::Output {
+        &mut self.expr_builder.defs[index.0 as usize]
+    }
 }
 
 pub struct ExprBuilder {
@@ -59,6 +70,7 @@ impl ExprBuilder {
         idx
     }
     pub fn defs(&mut self, defs: HashMap<String, Definition>) -> Defs {
+        //defs.shrink_to_fit(); //PERF: test performance gains/losses of this
         let idx = self.defs.len();
         self.defs.push(defs);
         Defs(idx as u32)
@@ -101,6 +113,11 @@ impl Ast {
         id
     }
 
+    pub fn add_empty_module(&mut self, src: String, path: PathBuf) -> ModuleId {
+        let empty = Module::empty(self);
+        self.add_module(empty, src, path)
+    }
+
     pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
         self.modules[id.0 as usize] = module;
         self.sources[id.0 as usize] = (src, path);
@@ -136,12 +153,12 @@ impl ModuleId {
 
 #[derive(Debug, Clone)]
 pub struct Module {
-    pub definitions: HashMap<String, Definition>,
+    pub definitions: Defs,
     pub uses: Vec<IdentPath>
 }
 impl Module {
-    pub fn empty() -> Self {
-        Self { definitions: HashMap::new(), uses: Vec::new() }
+    pub fn empty(ast: &mut Ast) -> Self {
+        Self { definitions: ast.expr_builder.defs(HashMap::new()), uses: Vec::new() }
     }
 }
 
@@ -155,6 +172,7 @@ pub enum Item {
 pub enum Definition {
     Function(Function),
     Struct(StructDefinition),
+    Enum(EnumDefinition),
     Trait(TraitDefinition),
     Module(ModuleId),
     Use(IdentPath),
@@ -166,6 +184,12 @@ pub struct StructDefinition {
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
     pub methods: HashMap<String, Function>
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDefinition {
+    pub generics: Vec<TSpan>,
+    pub variants: Vec<(TSpan, String)>,
 }
 
 #[derive(Debug, Clone)]

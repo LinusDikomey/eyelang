@@ -27,7 +27,7 @@ impl Token {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TokenType {
     Colon,
     DoubleColon,
@@ -117,7 +117,7 @@ impl fmt::Display for FloatLiteral {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Keyword {
     Primitive(Primitive),
     Fn,
