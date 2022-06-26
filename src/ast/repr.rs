@@ -336,6 +336,11 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char('.');
                 c.write_add(c.src(*name));
             }
+            Self::Index { expr, .. } => {
+                c.char('[');
+                ast[*expr].repr(c);
+                c.char(']');
+            }
             Self::TupleIdx { expr, idx, end: _ } => {
                 ast[*expr].repr(c);
                 c.char('.');
@@ -434,7 +439,8 @@ impl<C: Representer> Repr<C> for Primitive {
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
             Self::Bool => c.write_add("bool"),
             Self::Unit => c.write_add("()"),
-            Self::Never => c.write_add("!")
+            Self::Never => c.write_add("!"),
+            Self::Type => c.write_add("type"),
         }
     }
 }

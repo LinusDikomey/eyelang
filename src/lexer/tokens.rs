@@ -1,17 +1,21 @@
 use std::{u128, fmt, str::FromStr};
 
+use color_format::cwrite;
+
 use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, span::TSpan};
 
 #[derive(Debug, Clone, Copy)]
-pub struct Token {
+pub struct  Token {
     pub start: u32,
     pub end: u32,
     pub ty: TokenType,
+    /// is this token on a different line than the previous one
+    pub new_line: bool,
 }
 
 impl Token {
-    pub fn new(ty: TokenType, start: u32, end: u32) -> Self {
-        Self { start, end, ty }
+    pub fn new(ty: TokenType, start: u32, end: u32, new_line: bool) -> Self {
+        Self { start, end, ty, new_line }
     }
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
@@ -83,6 +87,66 @@ pub enum TokenType {
     Keyword(Keyword),
     Ident,
 }
+impl fmt::Display for TokenType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (s, is_text) = self.text_repr();
+        if is_text {
+            cwrite!(f, "#i;c<{}>", s)
+        } else {
+            cwrite!(f, "#c<{}>", s)
+        }
+    }
+}
+impl TokenType {
+    /// returns a raw text representation of the token type and wether it is a text
+    fn text_repr(&self) -> (&'static str, bool) {
+        let mut is_text = false;
+        let s = match self {
+            TokenType::Colon => ".",
+            TokenType::DoubleColon => "::",
+            TokenType::Comma => ",",
+            TokenType::Semicolon => ";",
+            TokenType::Dot => ".",
+            TokenType::TripleDot => "...",
+            TokenType::LParen => "(",
+            TokenType::RParen => ")",
+            TokenType::LBrace => "{",
+            TokenType::RBrace => "}",
+            TokenType::LBracket => "[",
+            TokenType::RBracket => "]",
+            TokenType::Bang => "!",
+            TokenType::Plus => "+",
+            TokenType::Minus => "-",
+            TokenType::Star => "*",
+            TokenType::Slash => "/",
+            TokenType::Percent => "%",
+            TokenType::Ampersand => "&",
+            TokenType::SnackWave => "~",
+            TokenType::Caret => "^",
+            TokenType::Underscore => "_",
+            TokenType::Equals => "=",
+            TokenType::DoubleEquals => "==",
+            TokenType::BangEquals => "!=",
+            TokenType::PlusEquals => "+=",
+            TokenType::MinusEquals => "-=",
+            TokenType::StarEquals => "*=",
+            TokenType::SlashEquals => "/=",
+            TokenType::PercentEquals => "%=",
+            TokenType::LessThan => "<",
+            TokenType::GreaterThan => ">",
+            TokenType::LessEquals => "<=",
+            TokenType::GreaterEquals => ">=",
+            TokenType::Declare => ":=",
+            TokenType::Arrow => "->",
+            TokenType::StringLiteral => "string literal",
+            TokenType::IntLiteral => "int literal",
+            TokenType::FloatLiteral => "float literal",
+            TokenType::Keyword(kw) => { is_text = true; kw.into() },
+            TokenType::Ident => "identifier",
+        };
+        (s, is_text)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct IntLiteral {
@@ -117,7 +181,7 @@ impl fmt::Display for FloatLiteral {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, strum::IntoStaticStr)]
 pub enum Keyword {
     Primitive(Primitive),
     Fn,
@@ -155,11 +219,14 @@ impl FromStr for Keyword {
             "u32"  => P(U32),
             "u64"  => P(U64),
             "u128" => P(U128),
+
             
             "f32" => P(F32),
             "f64" => P(F64),
             
             "bool" => P(Bool),
+            
+            "type" => P(Type),
             
             "fn" => Keyword::Fn,
             "ret" => Keyword::Ret,

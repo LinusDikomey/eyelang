@@ -1,7 +1,7 @@
-fn main: print("Hello")
+main :: fn: print("Hello")
 
 # invalid integer types
-InvalidTypes :: {
+InvalidTypes :: struct {
     valid u32,
     invalid u33,
     also_invalid u34,
@@ -20,7 +20,7 @@ InvalidTypes :: {
    º∂∑∑€®
 ƒª©ƒ∂∂€®øπå√∫
 
-fn test(x u32, y u33, z u34, valid InvalidTypes) {
+test :: fn(x u32, y u33, z u34, valid InvalidTypes) {
     print("Test Function"); # oh no, a semicolon
 }
 

@@ -43,7 +43,7 @@ impl IrBuilder {
                     "New block started without preceding terminator: \n{}", self.clone().finish());
             } else {
                 debug_assert!(self.ir.last().map_or(true, |last| !last.tag.is_terminator()),
-                    "Instruction added after a terminator: \n{}", self.clone().finish());
+                    "Instruction added after a terminator: instruction: {:?}\n\n{}", inst, self.clone().finish());
             }
             self.ir.push(inst);
         }
@@ -109,14 +109,15 @@ impl IrBuilder {
         idx
     }
 
+    pub fn currently_terminated(&self) -> bool {
+        self.ir.last().map_or(false, |last| last.tag.is_terminator())
+    }
+
     pub fn begin_block(&mut self, idx: BlockIndex) {
         if self.emit {
             debug_assert!(
-                matches!(
-                    self.ir[self.ir.len() - 1].tag,
-                    Tag::Branch | Tag::Goto | Tag::Ret
-                ),
-                "Can't begin next block without exiting previous one (Branch/Goto/Ret)"
+                self.currently_terminated(),
+                "Can't begin next block without exiting previous one"
             );
             self.current_block = idx.0;
         }

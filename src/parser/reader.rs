@@ -1,14 +1,14 @@
 use crate::{lexer::tokens::{TokenType, Token}, ast::ModuleId, error::{CompileError, Error}, span::Span};
 
 
-pub struct Tokens {
+pub struct TokenReader {
     tokens: Vec<Token>,
     index: usize,
     len: usize,
     pub module: ModuleId
 }
 
-impl Tokens {
+impl TokenReader {
     pub fn new(tokens: Vec<Token>, module: ModuleId) -> Self {
         let len = tokens.len();
         Self { tokens, index: 0, len, module }
@@ -57,19 +57,19 @@ impl Tokens {
     /// steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
-        let tok = self.step().expect("step_assert failed");
+        let tok = unsafe { self.step().unwrap_unchecked() };
         debug_assert_eq!(tok.ty, ty.into());
         tok
     }
 
     pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T)
     -> Result<Token, CompileError> {
-        let expected = expected.into().0;
+        let expected = expected.into();
         let module = self.module;
         let tok = self.step()?;
-        if !expected.iter().any(|expected_tok| *expected_tok == tok.ty) {
+        if !expected.0.iter().any(|expected_tok| *expected_tok == tok.ty) {
             return Err(CompileError {
-                err: Error::UnexpectedToken,
+                err: Error::UnexpectedToken { expected: expected.into(), found: tok.ty },
                 span: Span::new(tok.start, tok.end, module)
             });
         }
@@ -82,6 +82,10 @@ impl Tokens {
         } else {
             None
         }
+    }
+
+    pub fn more_on_line(&self) -> bool {
+        self.peek().map_or(false, |tok| !tok.new_line)
     }
 
     pub fn peek(&self) -> Option<Token> {
@@ -98,18 +102,37 @@ impl Tokens {
 }
 
 macro_rules! match_or_unexpected {
-    ($tok_expr: expr, $module: expr, $($match_arm: pat => $res: expr),*) => {{
+    ($tok_expr: expr, $module: expr, $($match_arm: pat = $match_expr: expr => $res: expr),*) => {{
         let tok = $tok_expr;
         match tok.ty {
             $($match_arm => $res,)*
             _ => return Err(CompileError {
-                err:  Error::UnexpectedToken, // (tok.ty, vec![$(String::from(stringify!($match_arm)), )*]),
+                err: Error::UnexpectedToken {
+                    expected: ExpectedTokens::AnyOf(vec![$($match_expr),*]),
+                    found: tok.ty
+                },
                 span: Span::new(tok.start, tok.end, $module),
             })
         }
     }};
 }
 pub(crate) use match_or_unexpected;
+macro_rules! match_or_unexpected_value {
+    ($tok_expr: expr, $module: expr, $expected_tokens: expr, $($match_arm: pat => $res: expr),*) => {{
+        let tok = $tok_expr;
+        match tok.ty {
+            $($match_arm => $res,)*
+            _ => return Err(CompileError {
+                err: Error::UnexpectedToken {
+                    expected: $expected_tokens,
+                    found: tok.ty
+                },
+                span: Span::new(tok.start, tok.end, $module),
+            })
+        }
+    }};
+}
+pub(crate) use match_or_unexpected_value;
 
 pub struct TokenTypes<const N: usize>(pub [TokenType; N]);
 impl From<TokenType> for TokenTypes<1> {

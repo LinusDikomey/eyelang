@@ -28,6 +28,20 @@ pub enum Type {
     Generic(u8),
     Invalid
 }
+impl Type {
+    pub fn is_zero_sized(&self, types: &[(String, TypeDef)], generics: &[Type]) -> bool {
+        match self {
+            Type::Prim(p) => p.size() == 0,
+            Type::Id(key, generics) => types[key.idx()].1.is_zero_sized(types, generics),
+            Type::Pointer(_) => false,
+            Type::Array(box (inner, size)) => *size == 0 || inner.is_zero_sized(types, generics),
+            Type::Enum(variants) => variants.len() < 2,
+            Type::Tuple(elems) => elems.iter().all(|ty| ty.is_zero_sized(types, generics)),
+            Type::Generic(idx) => generics[*idx as usize].is_zero_sized(types, generics),
+            Type::Invalid => true,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum TypeInfoOrIndex {
@@ -188,12 +202,21 @@ pub struct FunctionHeader {
 pub enum TypeDef {
     Struct(Struct),
     Enum(Enum),
+    NotGenerated { generating: bool },
 }
 impl TypeDef {
     pub fn generic_count(&self) -> u8 {
         match self {
             TypeDef::Struct(struct_) => struct_.generic_count,
             TypeDef::Enum(enum_) => enum_.generic_count,
+            Self::NotGenerated { .. } => unreachable!()
+        }
+    }
+    pub fn is_zero_sized(&self, types: &[(String, TypeDef)], generics: &[Type]) -> bool {
+        match self {
+            Self::Struct(def) => def.members.iter().all(|(_, member)| member.is_zero_sized(types, generics)),
+            Self::Enum(def) => def.variants.len() < 2,
+            Self::NotGenerated { .. } => unreachable!()
         }
     }
 }
@@ -202,6 +225,7 @@ impl fmt::Display for TypeDef {
         match self {
             TypeDef::Struct(s) => write!(f, "{s}"),
             TypeDef::Enum(e) => write!(f, "{e}"),
+            Self::NotGenerated { .. } => write!(f, "not generated")
         }
     }
 }
@@ -249,6 +273,7 @@ pub enum ConstVal {
     String(String),
     EnumVariant(String),
     Bool(bool),
+    Symbol(Symbol),
     NotGenerated { defs: Defs, generating: bool },
 }
 impl ConstVal {
@@ -265,6 +290,7 @@ impl ConstVal {
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
+            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
             ConstVal::NotGenerated { .. } => panic!()
         }
     }
@@ -298,10 +324,14 @@ impl fmt::Display for Module {
             )?;
         }
         for func in &self.funcs {
-            cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
+            if func.ir.is_none() {
+                cwriteln!(f, "#m<extern> #r<{}>{}", func.name, func)?;
+            } else {
+                cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
                 func,
                 name = func.name
             )?;
+            }
         }
         Ok(())
     }
@@ -401,7 +431,7 @@ impl Instruction {
                 bytes.copy_from_slice(&extra[i+4..i+8]);
                 let b = u32::from_le_bytes(bytes);
                 write_ref(f, self.data.branch.0)?;
-                cwrite!(f, "#b!<b{}> #m<or> #b!<b{}>", a, b)
+                cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
             }
             DataVariant::None => Ok(())
         }}
@@ -429,6 +459,7 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
 pub enum Tag {
     BlockBegin,
     Ret,
+    RetUndef,
     Param,
     Int,
     LargeInt,
@@ -476,7 +507,7 @@ impl Tag {
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
             Tag::EnumLit | Tag::String => String,
-            Tag::Decl => None,
+            Tag::Decl | Tag::RetUndef => None,
             Tag::Call => Call,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
@@ -488,10 +519,10 @@ impl Tag {
     }
 
     pub fn is_untyped(self) -> bool {
-        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch)
+        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::RetUndef | Tag::Store | Tag::Goto | Tag::Branch)
     }
     pub fn is_terminator(self) -> bool {
-        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret)
+        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret | Tag::RetUndef)
     }
 }
 impl fmt::Display for Tag {

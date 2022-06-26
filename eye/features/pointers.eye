@@ -1,5 +1,5 @@
 
-fn main {
+main :: fn {
     x := 3
     y := &x
     y^ = 4
@@ -13,10 +13,10 @@ fn main {
     std.c.printf("x is %d, y^ is: %d\n", x, y^)
 }
 
-fn add_to(i *i64, amount i64) {
+add_to :: fn(i *i64, amount i64) {
     i^ += amount
 }
 
-fn double_ptr_add(i **i64, amount i64) {
+double_ptr_add :: fn(i **i64, amount i64) {
     i^^ += amount
 }

@@ -27,4 +27,5 @@ at: eye/errors.eye:24:27
      | 
   24 |     print("Test Function"); # oh no, a semicolon
      |                           ^
+     |                           expected an expression but found ;
 

@@ -1,5 +1,5 @@
 
-fn read_to_string(path *i8) *i8 {
+read_to_string :: fn(path *i8) *i8 {
     chunk_size := 64
     buf := root.std.buf(chunk_size)
     str := root.std.c.malloc(chunk_size+1) # reserve one byte for zero terminator

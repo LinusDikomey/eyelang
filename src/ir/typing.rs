@@ -131,7 +131,7 @@ impl TypeTable {
         self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self, ctx) {
             Ok(ty) => ty_dbg("\t... merged", ty),
             Err(err) => {
-                ty_dbg("\t... failed to merge", err);
+                ty_dbg("\t... failed to merge", &err);
                 errors.emit_span(err, span.in_mod(module));
                 TypeInfo::Invalid
             }
@@ -302,7 +302,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
     use TypeInfo::*;
     match ty {
         Unknown => Ok(other),
-        Primitive(crate::types::Primitive::Never) => Ok(ty),
+        Primitive(crate::types::Primitive::Never) => Ok(other),
         Int => {
             match other {
                 Int => Ok(other),

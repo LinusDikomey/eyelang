@@ -1,6 +1,7 @@
+use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::{ast::{Ast, ModuleId}, span::Span};
+use crate::{ast::{Ast, ModuleId}, span::Span, lexer::tokens::TokenType};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -109,7 +110,11 @@ impl Errors {
             cprint!("#c<{:#4} | >{}{}", line, pre, first.1);
             post_if_last(&mut lines);
 
-            cprintln!("{}{}#r!<{}>", p, " ".repeat(pre.chars().count()), "^".repeat(first.1.chars().count()));
+            let pre_error_offset = " ".repeat(pre.chars().count());
+            cprintln!("{}{}#r!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()));
+            if let Some(details) = error.err.details() {
+                cprintln!("{}{}{}", p, pre_error_offset, details)
+            }
 
             while let Some((i, line_str)) = lines.next() {
                 let line = line + i;
@@ -144,7 +149,7 @@ impl Errors {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CompileError {
     pub err: Error,
     pub span: Span
@@ -155,13 +160,53 @@ impl CompileError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+pub enum ExpectedTokens {
+    Specific(TokenType),
+    AnyOf(Vec<TokenType>),
+    Expr,
+    Type,
+}
+impl fmt::Display for ExpectedTokens {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            &Self::Specific(tok) => {
+                write!(f, "{}", tok)
+            }
+            Self::AnyOf(toks) => {
+                for (i, tok) in toks.iter().enumerate() {
+                    match i {
+                        0 => {}
+                        i if i != 0 || i == toks.len() -1 => {
+                            write!(f, " or ")?;
+                        }
+                        _ => write!(f, ", ")?,
+                    }
+                    write!(f, "{tok}")?;
+                }
+                Ok(())
+            }
+            Self::Expr => write!(f, "an expression"),
+            Self::Type => write!(f, "a type"),
+        }
+    }
+}
+impl<const N: usize> From<crate::parser::TokenTypes<N>> for ExpectedTokens {
+    fn from(t: crate::parser::TokenTypes<N>) -> Self {
+        match t.0.as_slice() {
+            [t] => Self::Specific(*t),
+            other => Self::AnyOf(other.to_vec())
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 #[allow(unused)]
 pub enum Error {
     FileSizeExceeeded,
     UnexpectedEndOfFile,
     UnexpectedCharacters,
-    UnexpectedToken,
+    UnexpectedToken { expected: ExpectedTokens, found: TokenType },
     UnknownIdent,
     UnknownType,
     UnknownFunction,
@@ -208,14 +253,16 @@ pub enum Error {
     NotConst,
     FunctionOrStructTypeExpected,
     RecursiveDefinition,
+    CantIndex,
+    ExpectedConstValue,
 }
 impl Error {
-    pub fn conclusion(self) -> &'static str {
+    pub fn conclusion(&self) -> &'static str {
         match self {
             Error::FileSizeExceeeded => "maximum file size exceeded",
             Error::UnexpectedEndOfFile => "unexpected end of file",
             Error::UnexpectedCharacters => "unexpected characters",
-            Error::UnexpectedToken => "token was not expected here",
+            Error::UnexpectedToken { .. } => "token was not expected here",
             Error::UnknownIdent => "identifier not found",
             Error::UnknownType => "type not found",
             Error::UnknownFunction => "function not found",
@@ -261,8 +308,23 @@ impl Error {
             Error::UnexpectedGenerics => "no generics expected",
             Error::NotConst => "can't evaluate constantly",
             Error::FunctionOrStructTypeExpected => "expected a struct type or a function",
-            Error::RecursiveDefinition => "definition depends on itself recursively"
+            Error::RecursiveDefinition => "definition depends on itself recursively",
+            Error::CantIndex => "can't index this",
+            Error::ExpectedConstValue => "constant value expected"
         }
+    }
+    pub fn details(&self) -> Option<String> {
+        Some(match self {
+            Error::UnexpectedToken { expected, found } => cformat!(
+                "expected {} but found {}",
+                expected, found
+            ),
+            Error::InvalidGenericCount { expected, found } => cformat!(
+                "expected #y<{}> parameters but found #r<{}>",
+                expected, found
+            ),
+            _ => return None
+        })
     }
 }
 impl Error {

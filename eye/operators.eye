@@ -1,14 +1,14 @@
 
-fn assert(b bool): if !b: std.c.printf("An assertion failed!\n")
+assert :: fn(b bool): if !b: std.c.printf("An assertion failed!\n")
 
-fn main {
+main :: fn {
     bools()
     arithmetic()
     comparisons()
     assign()
 }
 
-fn bools {
+bools :: fn {
     assert(true)
     assert(!false)
     assert(!!true)
@@ -31,7 +31,7 @@ fn bools {
     assert((false and false) == false)
 }
 
-fn arithmetic {
+arithmetic :: fn {
     assert(1+1 == 2)
     assert(5-3 == 2)
     assert(3*4 == 12)
@@ -48,7 +48,7 @@ fn arithmetic {
     assert(-11 % 10 == -1)
 }
 
-fn comparisons {
+comparisons :: fn {
     assert(1 < 2)
     assert(2 > 1)
     assert(1 <= 3)
@@ -58,9 +58,9 @@ fn comparisons {
     assert(3 > 2)
 }
 
-Point :: { x i32, y i32 }
+Point :: struct { x i32, y i32 }
 
-fn assign {
+assign :: fn {
     x := 3
     x += 1
     assert(x == 4)

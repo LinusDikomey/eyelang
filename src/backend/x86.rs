@@ -106,7 +106,7 @@ impl TryFrom<Primitive> for Type {
     fn try_from(p: Primitive) -> Result<Self, ()> {
         use Primitive::*;
         Ok(match p {
-            Unit | Never => return Err(()),
+            Unit | Never | Type => return Err(()),
             I8 | U8 | Bool => Self::byte,
             I16 | U16 => Self::word,
             I32 | U32 | F32 => Self::dword,

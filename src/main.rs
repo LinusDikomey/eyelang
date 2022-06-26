@@ -195,7 +195,8 @@ fn run(args: &Args) {
     match run_path(path, args, name) {
         Ok(()) => {}
         Err((modules, errors)) => {
-            cprintln!("#r<Finished with #u;r!<{}> errors>", errors.error_count());
+            cprintln!("#r<Finished with #u;r!<{}> error{}>",
+                errors.error_count(), if errors.error_count() == 1 { "" } else { "s" });
             errors.print(&modules);
         }
     }

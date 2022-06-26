@@ -16,7 +16,8 @@ pub fn parse(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Tok
         chars,
         index: 0,
         tokens: Vec::new(),
-        module
+        module,
+        newline: true,
     }.parse(errors))
 }
 
@@ -25,13 +26,14 @@ struct Lexer<'a> {
     chars: Vec<(u32, char)>,
     index: usize,
     tokens: Vec<Token>,
-    module: ModuleId
+    module: ModuleId,
+    newline: bool,
 }
 
 impl<'a> Lexer<'a> {
     fn parse(mut self, errors: &mut Errors) -> Vec<Token> {
         while self.index < self.chars.len() {
-            self.skip_junk();
+            self.newline |= self.skip_junk();
             if self.is_at_end() { break; }
 
             if let Some(token) = self.parse_token(errors) {
@@ -75,13 +77,18 @@ impl<'a> Lexer<'a> {
                     emit_invalid(&mut invalid_chars, errors, self.module);
                     if let Some('-') = self.peek() {
                         self.step();
-                        self.parse_multiline_comment(errors);
+                        if self.parse_multiline_comment(errors) > 0 {
+                            self.newline = true;
+                        }
                     } else {
                         while let Some(c) = self.step() {
                             match c {
                                 '#' if matches!(self.peek(), Some('-')) => {
                                     self.step();
-                                    if self.parse_multiline_comment(errors) > 0 { break; }
+                                    if self.parse_multiline_comment(errors) > 0 {
+                                        self.newline = true;
+                                        break;
+                                    }
                                 }
                                 '\n' => break,
                                 _ => {}
@@ -89,7 +96,7 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     self.step();
-                    self.skip_junk();
+                    self.newline |= self.skip_junk();
                     continue;
                 }
                 ':' => {
@@ -238,7 +245,7 @@ impl<'a> Lexer<'a> {
                     } else {
                         invalid_chars = Some((start, end));
                     }
-                    self.skip_junk();
+                    self.newline |= self.skip_junk();
                     continue;
                 }
             };
@@ -246,7 +253,9 @@ impl<'a> Lexer<'a> {
         emit_invalid(&mut invalid_chars, errors, self.module);
         let end = self.pos();
         self.step();
-        Some(Token::new(ty, start, end))
+        let new_line = self.newline;
+        self.newline = false;
+        Some(Token::new(ty, start, end, new_line))
     }
     
     fn parse_multiline_comment(&mut self, errors: &mut Errors) -> usize {
@@ -279,14 +288,21 @@ impl<'a> Lexer<'a> {
         newlines
     }
 
-    fn skip_junk(&mut self) {
-        if self.is_at_end() { return; }
+    /// returns: new line: bool
+    #[must_use]
+    fn skip_junk(&mut self) -> bool {
+        let mut new_line = false;
+        if self.is_at_end() { return new_line; }
         while let ' ' | '\r' | '\n' = self.current() {
-            if self.step().is_none() { // end of file, no more checking for junk tokens
-                return;
+            if self.current() == '\n' {
+                new_line = true;
             }
-            if self.is_at_end() { return; }
+            if self.step().is_none() { // end of file, no more checking for junk tokens
+                return new_line;
+            }
+            if self.is_at_end() { return new_line; }
         }
+        new_line
     }
 
     fn is_at_end(&self) -> bool {

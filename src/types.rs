@@ -7,7 +7,8 @@ pub enum Primitive {
     F32, F64,
     Bool,
     Unit,
-    Never
+    Never,
+    Type,
 }
 impl Primitive {
     pub fn as_int(self) -> Option<IntType> {
@@ -39,7 +40,7 @@ impl Primitive {
     pub fn size(self) -> u32 {
         use Primitive::*;
         match self {
-            Unit | Never => 0,
+            Unit | Never | Type => 0,
             I8 | U8 | Bool => 1,
             I16 | U16 => 2,
             I32 | U32 | F32 => 4,
@@ -66,7 +67,8 @@ impl fmt::Display for Primitive {
             F64 => "f64",
             Bool => "bool",
             Unit => "()",
-            Never => "!"
+            Never => "!",
+            Type => "type",
         };
         write!(f, "{}", s)
     }

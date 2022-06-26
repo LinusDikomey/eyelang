@@ -256,6 +256,7 @@ pub enum Expr {
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
     MemberAccess { left: ExprRef, name: TSpan },
+    Index { expr: ExprRef, idx: ExprRef, end: u32 },
     TupleIdx { expr: ExprRef, idx: u32, end: u32 },
     Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32)
@@ -295,6 +296,7 @@ impl Expr {
             }
             Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name } => TSpan::new(s(left), name.end),
+            Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::TupleIdx { expr, idx: _, end } => TSpan { start: s(expr), end: *end },
             Expr::Root(start) => TSpan::new(*start, *start + 3),
         }

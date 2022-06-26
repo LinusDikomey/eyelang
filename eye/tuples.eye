@@ -1,6 +1,6 @@
 use std.c.printf
 
-fn main {
+main :: fn {
     x := (1, 2.5)
     ptr := &x.1
 

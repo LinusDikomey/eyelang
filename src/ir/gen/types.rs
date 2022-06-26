@@ -182,7 +182,7 @@ fn gen_def(
     errors: &mut Errors,
     mut state: impl ResolveState,
 ) -> Option<Symbol> {
-    Some(match def {
+    let ret = Some(match def {
         ast::Definition::Function(func) => {
             let header = state.gen_func(module, func, errors);
             let key = state.ctx().add_func(FunctionOrHeader::Header(header));
@@ -218,7 +218,8 @@ fn gen_def(
             state.insert_symbol(module, name.to_owned(), symbol);
             symbol
         }
-    })
+    });
+    ret
 }
 
 fn resolve_ty(
@@ -252,6 +253,19 @@ fn resolve_ty(
                     }
                 }
                 Some(Symbol::Generic(idx)) => Type::Generic(idx),
+                Some(Symbol::Const(key)) => {
+                    let mut scope = state.scope(module);
+                    let val = scope.get_or_gen_const(key, unresolved.span(), errors);
+                    match val {
+                        ConstVal::Invalid => Type::Invalid ,
+                        ConstVal::Symbol(Symbol::Type(key))
+                        => Type::Id(*key, vec![]),
+                        _ => {
+                            errors.emit_span(Error::TypeExpected, unresolved.span().in_mod(module));
+                            Type::Invalid
+                        }
+                    }
+                }
                 Some(_) => {
                     errors.emit_span(Error::TypeExpected, path.span().in_mod(module));
                     Type::Invalid

@@ -1,5 +1,5 @@
 
-fn main {
+main :: fn {
     x: u16 = 257 # 1_00000001
     ptr := &x
     std.c.printf("x = %d, ptr^ = %d\n", x, ptr^)

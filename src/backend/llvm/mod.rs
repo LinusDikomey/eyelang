@@ -52,7 +52,7 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
         F32 => LLVMFloatTypeInContext(ctx),
         F64 => LLVMDoubleTypeInContext(ctx),
         Bool => LLVMInt1TypeInContext(ctx),
-        Unit | Never => LLVMVoidTypeInContext(ctx),
+        Unit | Never | Type => LLVMVoidTypeInContext(ctx),
     }
 }
 
@@ -111,6 +111,7 @@ unsafe fn llvm_ty_recursive(
                     ir::TypeDef::Enum(def) => {
                         int_from_variant_count(ctx, def.variants.len())
                     }
+                    ir::TypeDef::NotGenerated { .. } => unreachable!()
                 }
             }
         }
@@ -136,6 +137,10 @@ unsafe fn llvm_ty_recursive(
             llvm_ty_recursive(ctx, module, types, &Type::Prim(Primitive::Unit), pointee, generics)
         }
     }
+}
+
+fn is_void_type(ty: &Type) -> bool {
+    matches!(ty, Type::Prim(Primitive::Unit | Primitive::Never))
 }
 
 enum TypeInstance {
@@ -170,7 +175,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                         TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()))
                     }
                 }
-            }            
+                ir::TypeDef::NotGenerated { .. } => unreachable!()
+            }
         })
         .collect::<Vec<_>>();
 
@@ -185,6 +191,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                     LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
             }
             ir::TypeDef::Enum(_) => continue, // nothing to do, just an int right now
+            ir::TypeDef::NotGenerated { .. } => unreachable!()
         }
     }
 
@@ -326,7 +333,7 @@ unsafe fn build_func(
             print!("Generating %{i} = {} ->", inst.display(&ir.extra, &ir.types));
             std::io::stdout().flush().unwrap();
         }
-        let ir::Instruction { tag, data, ty, used: _} = inst;
+        let &ir::Instruction { tag, data, ty, used: _ } = inst;
         let val: LLVMValueRef = match tag {
             ir::Tag::BlockBegin => {
                 LLVMPositionBuilderAtEnd(builder, blocks[data.int32 as usize]);
@@ -334,10 +341,18 @@ unsafe fn build_func(
             }
             ir::Tag::Ret => {
                 let (r, ty) = get_ref_and_type(&instructions, data.un_op);
-                if let Type::Prim(Primitive::Unit) = ty {
+                if is_void_type(&ty) {
                     LLVMBuildRetVoid(builder)
                 } else {
                     LLVMBuildRet(builder, r)
+                }
+            }
+            ir::Tag::RetUndef => {
+                if is_void_type(&func.header.return_type) {
+                    LLVMBuildRetVoid(builder)
+                } else {
+                    let val = LLVMGetUndef(llvm_ty(ctx, module, types, &func.header.return_type));
+                    LLVMBuildRet(builder, val)
                 }
             }
             ir::Tag::Param => {
@@ -347,19 +362,19 @@ unsafe fn build_func(
                 LLVMBuildStore(builder, val, param_var);
                 param_var
             },
-            ir::Tag::Int => LLVMConstInt(table_ty(*ty, types), data.int, FALSE),
+            ir::Tag::Int => LLVMConstInt(table_ty(ty, types), data.int, FALSE),
             ir::Tag::LargeInt => {
                 let mut bytes = [0; 16];
                 bytes.copy_from_slice(&ir.extra[data.extra as usize .. data.extra as usize + 16]);
                 let num = u128::from_le_bytes(bytes);
                 let words = [(num >> 64) as u64, (num as u64)];
-                LLVMConstIntOfArbitraryPrecision(table_ty(*ty, types), 2, words.as_ptr())
+                LLVMConstIntOfArbitraryPrecision(table_ty(ty, types), 2, words.as_ptr())
             }
-            ir::Tag::Float => LLVMConstReal(table_ty(*ty, types), data.float),
+            ir::Tag::Float => LLVMConstReal(table_ty(ty, types), data.float),
             ir::Tag::EnumLit => {
                 let range = data.extra_len.0 as usize .. data.extra_len.0 as usize + data.extra_len.1 as usize;
                 let name = &ir.extra[range];
-                let (ty, index) = match &ir.types[*ty] {
+                let (ty, index) = match &ir.types[ty] {
                     ir::Type::Enum(variants) => {
                         let index = variants.iter()
                             .enumerate()
@@ -379,24 +394,35 @@ unsafe fn build_func(
                                     .expect("Typecheck failure: Missing enum variant.");
                                 (int_from_variant_count(ctx, def.variants.len()), index as usize)
                             }
+                            ir::TypeDef::NotGenerated { .. } => unreachable!()
                         }
                     }
                     _ => panic!("Enum variant not found for non-enum type")
                 };
                 LLVMConstInt(ty, index as _, FALSE)
             }
-            ir::Tag::Decl => LLVMBuildAlloca(builder, table_ty(*ty, types), NONE),
+            ir::Tag::Decl => {
+                if ir.types[ty].is_zero_sized(&module.types, &[]) {
+                    ptr::null_mut()
+                } else {
+                    LLVMBuildAlloca(builder, table_ty(ty, types), NONE)
+                }
+            }
             ir::Tag::Load => {
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
                 let Type::Pointer(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty}"); };
                 let pointee_ty = llvm_ty(ctx, module, types, &inner);
                 LLVMBuildLoad2(builder, pointee_ty, val, NONE)
             }
-            ir::Tag::Store => LLVMBuildStore(
-                builder,
-                get_ref(&instructions, data.bin_op.1),
-                get_ref(&instructions, data.bin_op.0)
-            ),
+            ir::Tag::Store => {
+                let (val, ty) = get_ref_and_type(&instructions, data.bin_op.1);
+                if ty.is_zero_sized(&module.types, &[]) {
+                    ptr::null_mut()
+                } else {
+                    let ptr = get_ref(&instructions, data.bin_op.0);
+                    LLVMBuildStore(builder, val, ptr)
+                }
+            }
             ir::Tag::String 
                 => LLVMBuildGlobalStringPtr(builder, ir.extra.as_ptr().add(data.extra_len.0 as usize).cast(), NONE),
             ir::Tag::Call => {
@@ -415,7 +441,7 @@ unsafe fn build_func(
             }
             ir::Tag::Neg => {
                 let r = get_ref(&instructions, data.un_op);
-                if float_or_int(*ty).float() {
+                if float_or_int(ty).float() {
                     LLVMBuildFNeg(builder, r, NONE)
                 } else {
                     LLVMBuildNeg(builder, r, NONE)
@@ -430,27 +456,27 @@ unsafe fn build_func(
                 let r = get_ref(&instructions, data.bin_op.1);
                 
                 match tag {
-                    ir::Tag::Add => if float_or_int(*ty).float() {
+                    ir::Tag::Add => if float_or_int(ty).float() {
                         LLVMBuildFAdd(builder, l, r, NONE)
                     } else {
                         LLVMBuildAdd(builder, l, r, NONE)
                     }
-                    ir::Tag::Sub => if float_or_int(*ty).float() {
+                    ir::Tag::Sub => if float_or_int(ty).float() {
                         LLVMBuildFSub(builder, l, r, NONE)
                     } else {
                         LLVMBuildSub(builder, l, r, NONE)
                     }
-                    ir::Tag::Mul => if float_or_int(*ty).float() {
+                    ir::Tag::Mul => if float_or_int(ty).float() {
                         LLVMBuildFMul(builder, l, r, NONE)
                     } else {
                         LLVMBuildMul(builder, l, r, NONE)
                     }
-                    ir::Tag::Div => match float_or_int(*ty) {
+                    ir::Tag::Div => match float_or_int(ty) {
                         Numeric::Float(_) => LLVMBuildFDiv(builder, l, r, NONE),
                         Numeric::Int(false, _) => LLVMBuildUDiv(builder, l, r, NONE),
                         Numeric::Int(true, _) => LLVMBuildSDiv(builder, l, r, NONE),
                     }
-                    ir::Tag::Mod => match float_or_int(*ty) {
+                    ir::Tag::Mod => match float_or_int(ty) {
                         Numeric::Float(_) => LLVMBuildFRem(builder, l, r, NONE),
                         Numeric::Int(false, _) => LLVMBuildURem(builder, l, r, NONE),
                         Numeric::Int(true, _) => LLVMBuildSRem(builder, l, r, NONE),
@@ -472,9 +498,9 @@ unsafe fn build_func(
 
                 if matches!(ty, Type::Enum(_) | Type::Prim(Primitive::Bool)) 
                 || is_enum_ty() || info_to_num(&ty).int() {
-                    LLVMBuildICmp(builder, if *tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
+                    LLVMBuildICmp(builder, if tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
-                    LLVMBuildFCmp(builder, if *tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
+                    LLVMBuildFCmp(builder, if tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
                 }
             }
             // TODO: operator short circuiting
@@ -529,7 +555,7 @@ unsafe fn build_func(
                 // IR should probably just have different types of casts like in LLVM. 
                 // (reinterpret, trunc, extend, float to int, int to float, etc.)
                 let (val, origin) = get_ref_and_type(&instructions, data.un_op);
-                let target = ir.types.get(*ty);
+                let target = ir.types.get(ty);
                 match target {
                     Type::Prim(target) => {
                         //TODO: enum to int casts
@@ -601,10 +627,10 @@ unsafe fn build_func(
                 LLVMBuildCondBr(builder, get_ref(&instructions, data.branch.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
-                if *ir.types.get(*ty) == Type::Prim(Primitive::Unit) {
+                if *ir.types.get(ty) == Type::Prim(Primitive::Unit) {
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx))
                 } else {
-                    let phi = LLVMBuildPhi(builder, table_ty(*ty, types), NONE);
+                    let phi = LLVMBuildPhi(builder, table_ty(ty, types), NONE);
                     let begin = data.extra_len.0 as usize;
                     for i in 0..data.extra_len.1 {
                         let c = begin + i as usize * 8;

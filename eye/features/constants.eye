@@ -12,7 +12,7 @@ CALC :: 3 + 3 * 9 + (12 % 8) - (5 / 2)
 PI :: 3.14159
 PI_SQUARED :: PI * PI
 
-fn main {
+main :: fn {
 
     # constant can be used as any integer type
     x: i32 = X
