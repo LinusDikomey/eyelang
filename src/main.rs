@@ -165,10 +165,13 @@ fn main() {
         ast::Expr::debug_sizes();
         ast::UnresolvedType::debug_sizes();
     }
-    run(&args);
+    let errors = run(&args);
+    if errors {
+        std::process::exit(42)
+    }
 }
 
-fn run(args: &Args) {
+fn run(args: &Args) -> bool {
     #[cfg(feature = "lsp")]
     if let Cmd::Lsp = args.cmd {
         match lsp::lsp(args) {
@@ -193,11 +196,12 @@ fn run(args: &Args) {
     cprintln!("#g<Compiling> #u;b!<{}> ...", name);
 
     match run_path(path, args, name) {
-        Ok(()) => {}
+        Ok(()) => false,
         Err((modules, errors)) => {
             cprintln!("#r<Finished with #u;r!<{}> error{}>",
                 errors.error_count(), if errors.error_count() == 1 { "" } else { "s" });
             errors.print(&modules);
+            true
         }
     }
 }

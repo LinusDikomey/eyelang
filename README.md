@@ -1,6 +1,7 @@
 # eyelang
 
-A basic programming language. The compiler is written in rust using LLVM as its backend.
+A basic statically typed systems-level programming language.
+The compiler is written in rust using LLVM as its backend.
 A simple unoptimized x86_64 backend is also on it's way.
 
 ## Ideas
@@ -10,12 +11,11 @@ A simple unoptimized x86_64 backend is also on it's way.
 - Compilation speed: Compilation speed over a few seconds makes debugging painfully slow.
 - Simplicity: Syntax features are nice but too many of them make the language too complicated.
 
-
 ## Examples
 
 ### Basic
 ```rust
-fn main {
+main :: fn {
     std.println("Hello World")
     x := 3
     y := 2 * x + 3
@@ -28,9 +28,9 @@ fn main {
 ```rust
 use std.c.printf
 
-fn add_pointer_values(x *i32, y *i32) i32: x^ + y^
+add_pointer_values :: fn(x *i32, y *i32) i32: x^ + y^
 
-fn main {
+main :: fn {
     x := 5
     y := 7
     printf("Result: %d\n", add_pointer_values(&x, &y))
@@ -39,9 +39,9 @@ fn main {
 
 ### Expressions, type inference
 ```rust
-fn add(x i64, y i64) i64: x + y
+add :: fn(x i64, y i64) i64: x + y
 
-fn main {
+main :: fn {
     x := 3 # x is inferred to have type i64
     pointer := &x
     std.c.printf("Result: %d\n", if 1 < 2: add(pointer^, 4) else -1)
@@ -52,7 +52,7 @@ fn main {
 # this constant doesn't have a specific integer type
 A :: 40 + 2
 
-fn main {
+main :: fn {
     std.c.printf("%d\n", A) # prints 42
 
     # can be assigned to any integer
@@ -70,13 +70,13 @@ fn main {
 ```rust
 use std.c
 
-Vec3 :: { x f64, y f64, z f64 }
+Vec3 :: struct { x f64, y f64, z f64 }
 
-fn print_vec3(v *Vec3) {
+print_vec3 :: fn(v *Vec3) {
     c.printf("Vec3: [%.1f, %.1f, %.1f]\n", v^.x, v^.y, v^.z)
 }
 
-fn main {
+main :: fn {
     v := c.malloc(12) as *Vec3
     v^ = Vec3(1.0, 2.0, 3.0)
     print_vec3(v)
@@ -87,7 +87,7 @@ fn main {
 This is all a bit awkward right now because there is no switch/match and no string equality with ==.
 Despite the enum type being completely inferred here, an exhaustive switch would work pretty well.
 ```rust
-fn main {
+main :: fn {
     use std.streq # compare strings
     color := .NoColor
     inp := std.input("Which color do you want? ")
@@ -105,3 +105,10 @@ fn main {
     )
 }
 ```
+
+## Build Instructions
+
+You will need LLVM 14 to build this project. The environment variable `LLVM_SYS_140_PREFIX` should be set to the path of your LLVM installation. Look at the (llvm-sys)[https://crates.io/crates/llvm-sys] crate 
+for detailed instructions on how to build llvm.
+
+To run a program, use `cargo run -- run example.eye`

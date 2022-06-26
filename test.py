@@ -6,7 +6,8 @@ from sys import stdout
 from requests import patch
 
 build = ['cargo', 'build']
-run = ['./target/debug/eyelang', 'run']
+run_cmd = ['./target/debug/eyelang', 'run']
+tmp_file = 'tmp_test.eye'
 
 GREEN = '\033[1;32m'
 RED = '\033[1;31m'
@@ -14,18 +15,60 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
+    errors = test_files() + test_readme()
+    if errors > 0:
+        s = 's' if errors > 1 else ''
+        print(f'{RED}{errors} test{s} failed!{R}')
+        exit(1)
+    else:
+        print(f'{GREEN}All tests passed!{R}')
+
+def test_files():
     print(f'{CYAN}Compiling...{R}')
     if subprocess.run(build).returncode != 0:
         print(f'{RED}An error occurred while compiling{R}')
         exit(1)
-    print(f'{GREEN}Running tests ...{R}')
-    errors = walk('eye')
-    if errors > 0:
-        s = 's' if errors > 1 else ''
-        print(f'{errors} test{s} failed!')
-        exit(1)
-    else:
-        print(f'{GREEN}All tests passed!{R}')
+    print(f'{CYAN}Running tests ...{R}')
+    return walk('eye')
+    
+    
+
+
+def test_readme():
+    print(f'{CYAN}Running README tests ...{R}')
+    file = open('README.md')
+    # contents = file.read()
+    current_source = ''
+    in_code_block = False
+    block_count = 0
+    errors = 0
+    for line in file:
+        if line.find('```') != -1:
+            if in_code_block:
+                temp_code_file = open(tmp_file, 'w')
+                temp_code_file.write(current_source)
+                temp_code_file.close()
+                
+                print(f'Testing README block #{block_count}', end = '')
+                out, exit_code = run(tmp_file)
+                padding = ' ' * max(0, 32 - len(f'{block_count}'))
+                if exit_code != 0:
+                    print(f'{padding}{RED}[ERR]{R}')
+                    print(f'{RED}Output{R}:\n{out}')
+                    errors += 1
+                else:
+                    print(f'{padding}{GREEN}[OK]{R}')
+                current_source = ''
+            else: block_count += 1
+            in_code_block = not in_code_block
+        elif in_code_block:
+            current_source += line
+
+    os.remove(tmp_file)
+    return errors
+
+
+
 
 def walk(walkdir):
     errors = 0
@@ -65,9 +108,7 @@ def test(eye_file) -> bool:
         with open(no_ext + '.in') as file:
             input = memoryview(bytes(file.read(), 'utf-8'))
 
-    res = subprocess.run(run + [eye_file], stdout = subprocess.PIPE, input=input)
-
-    out = res.stdout.decode('utf-8')
+    out, exit_code = run(eye_file, input)
     
     padding = ' ' * max(0, 50 - len(eye_file))
     
@@ -75,14 +116,16 @@ def test(eye_file) -> bool:
         print(f'{padding}{GREEN}[OK]{R}')
         return True
     else:
-        print(f'{padding}{RED}[ERR]{R}\nFailed with status: {res.returncode}, output:')
+        print(f'{padding}{RED}[ERR]{R}\nFailed with status: {exit_code}, output:')
         print(f'--------------------\n{out}\n--------------------')
         print('... but expected:')
         print(f'--------------------\n{expected_output}\n--------------------')
         return False
 
 
-
+def run(eye_file, input = ''):
+    res = subprocess.run(run_cmd + [eye_file], stdout = subprocess.PIPE, input=input)
+    return res.stdout.decode('utf-8'), res.returncode
 
 
     
