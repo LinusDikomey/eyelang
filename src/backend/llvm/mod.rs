@@ -580,6 +580,11 @@ unsafe fn build_func(
                 let (val, origin) = get_ref_and_type(&instructions, data.un_op);
                 let target = ir.types.get(ty);
                 match target {
+                    // pointer to int
+                    Type::Prim(Primitive::U64) if matches!(origin, Type::Pointer(_)) => {
+                        let llvm_target = llvm_ty(ctx, module, types, target);
+                        LLVMBuildPtrToInt(builder, val, llvm_target, NONE)
+                    }
                     Type::Prim(target) => {
                         //TODO: enum to int casts
                         match origin {
@@ -626,6 +631,8 @@ unsafe fn build_func(
                         let llvm_target = llvm_ty(ctx, module, types, target);
                         match origin {
                             Type::Pointer(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
+                            // int to ptr
+                            Type::Prim(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
                             t => panic!("Can't cast from non-pointer type {t} to pointer")
                         }
                     }
