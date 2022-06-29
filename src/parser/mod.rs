@@ -470,6 +470,21 @@ impl<'a> Parser<'a> {
             TokenType::Dot => {
                 let ident = self.toks.step_expect(TokenType::Ident)?.span();
                 Expr::EnumLiteral { dot: start, ident }
+            },
+            TokenType::Keyword(Keyword::Asm) => {
+                self.toks.step_expect(TokenType::LParen)?;
+                let asm_str_span = self.toks.step_expect(TokenType::StringLiteral)?.span();
+                let mut args = Vec::new();
+                let end = loop {
+                    let paren_or_comma = self.toks.step_expect([TokenType::Comma, TokenType::RParen])?;
+                    match paren_or_comma.ty {
+                        TokenType::Comma => {}
+                        TokenType::RParen => break paren_or_comma.end,
+                        _ => unreachable!()
+                    }
+                    args.push(self.parse_expr()?)
+                };
+                Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.extra(&args) }
             }
         );
         let expr = self.ast.add_expr(expr);

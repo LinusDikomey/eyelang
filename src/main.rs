@@ -181,7 +181,7 @@ fn run(args: &Args) -> bool {
                 std::process::exit(123)
             }
         }
-        return;
+        return false;
     }
 
     let path = Path::new(args.file.as_deref().unwrap_or("./"));

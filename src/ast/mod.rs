@@ -259,7 +259,13 @@ pub enum Expr {
     Index { expr: ExprRef, idx: ExprRef, end: u32 },
     TupleIdx { expr: ExprRef, idx: u32, end: u32 },
     Cast(TSpan, UnresolvedType, ExprRef),
-    Root(u32)
+    Root(u32),
+
+    Asm {
+        span: TSpan,
+        asm_str_span: TSpan,
+        args: ExprExtra,
+    }
 }
 impl Expr {
     pub fn is_block(&self) -> bool {
@@ -299,6 +305,7 @@ impl Expr {
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::TupleIdx { expr, idx: _, end } => TSpan { start: s(expr), end: *end },
             Expr::Root(start) => TSpan::new(*start, *start + 3),
+            Expr::Asm { span, .. } => *span
         }
     }
     pub fn span_in(&self, ast: &Ast, module: ModuleId) -> Span {

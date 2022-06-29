@@ -37,6 +37,13 @@ const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
 const NONE: *const i8 = "\0".as_ptr().cast();
 
+fn llvm_bool(b: bool) -> LLVMBool {
+    match b {
+        true => TRUE,
+        false => FALSE
+    }
+}
+
 fn val_str(val: LLVMValueRef) -> ffi::CString {
     unsafe { ffi::CString::from_raw(LLVMPrintValueToString(val)) }
 }
@@ -255,6 +262,22 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     )
 }
 
+unsafe fn inline_asm(asm: &str, ctx: LLVMContextRef, builder: LLVMBuilderRef, values: &[LLVMValueRef])
+-> LLVMValueRef {
+    let side_effects = true;
+    let align_stack = true;
+    let func_ty = LLVMFunctionType(LLVMVoidTypeInContext(ctx), [].as_mut_ptr(), 0, FALSE);
+    let asm = LLVMGetInlineAsm(
+        func_ty,
+        asm.as_ptr() as *mut i8, asm.len(),
+        "".as_ptr() as *mut i8, 0,
+        llvm_bool(side_effects),
+        llvm_bool(align_stack),
+        llvm_sys::LLVMInlineAsmDialect::LLVMInlineAsmDialectIntel,
+        FALSE
+    );
+    LLVMBuildCall2(builder, func_ty, asm, values.as_ptr() as *mut LLVMValueRef, values.len() as _, NONE)
+}
 
 unsafe fn build_func(
     func: &ir::Function,
@@ -644,6 +667,19 @@ unsafe fn build_func(
                     }
                     phi
                 }
+            }
+            ir::Tag::Asm => {
+                let ir::Data { asm: (extra, str_len, arg_count) } = data;
+                let str_bytes = &ir.extra[extra as usize .. extra as usize + str_len as usize];
+                
+                let expr_base = extra as usize + str_len as usize;
+                let values = (0..arg_count as usize).map(|i| {
+                    let mut arg_bytes = [0; 4];
+                    arg_bytes.copy_from_slice(&ir.extra[expr_base + 4*i .. expr_base + 5*i ]);
+                    get_ref(&instructions, ir::Ref::from_bytes(arg_bytes))
+                }).collect::<Vec<LLVMValueRef>>();
+
+                inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &values)
             }
         };
         if val.is_null() {

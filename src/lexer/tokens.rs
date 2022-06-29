@@ -200,6 +200,7 @@ pub enum Keyword {
     Extern,
     Root,
     Use,
+    Asm,
 }
 impl FromStr for Keyword {
     type Err = ();
@@ -245,6 +246,8 @@ impl FromStr for Keyword {
             "extern" => Keyword::Extern,
             "root" => Keyword::Root,
             "use" => Keyword::Use,
+
+            "asm" => Keyword::Asm,
             _ => return Err(())
         })
     }

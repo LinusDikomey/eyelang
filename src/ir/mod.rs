@@ -433,6 +433,7 @@ impl Instruction {
                 write_ref(f, self.data.branch.0)?;
                 cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
             }
+            DataVariant::Asm => cwrite!(f, "#r!<TODO:> asm repr"),
             DataVariant::None => Ok(())
         }}
     }
@@ -495,7 +496,9 @@ pub enum Tag {
 
     Goto,
     Branch,
-    Phi
+    Phi,
+
+    Asm,
 }
 impl Tag {
     fn union_data_type(self) -> DataVariant {
@@ -514,12 +517,13 @@ impl Tag {
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
             Tag::Goto => Block,
             Tag::Branch => Branch,
-            Tag::Phi => ExtraBranchRefs
+            Tag::Phi => ExtraBranchRefs,
+            Tag::Asm => Asm,
         }
     }
 
     pub fn is_untyped(self) -> bool {
-        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::RetUndef | Tag::Store | Tag::Goto | Tag::Branch)
+        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::RetUndef | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm)
     }
     pub fn is_terminator(self) -> bool {
         matches!(self, Tag::Goto | Tag::Branch | Tag::Ret | Tag::RetUndef)
@@ -607,6 +611,7 @@ pub union Data {
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),
     pub branch: (Ref, u32),
+    pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
     pub none: (),
     pub block: BlockIndex
 }
@@ -643,5 +648,6 @@ enum DataVariant {
     Float,
     UnOp,
     BinOp,
+    Asm,
     None,
 }

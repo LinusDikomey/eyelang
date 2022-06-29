@@ -1366,6 +1366,25 @@ impl<'s> Scope<'s> {
             ast::Expr::Root(_) => {
                 return ExprResult::Module(ModuleId::ROOT)
             }
+            ast::Expr::Asm { span: _, asm_str_span, args } => {
+                let expr_refs = self.ast.get_extra(*args).iter()
+                .map(|arg| {
+                    let expr = &self.ast[*arg];
+                    let info = info.with_expected(ir.types.add_unknown());
+                    self.reduce_expr_val_spanned(errors, ir, expr, expr.span(&self.ast), info)
+                })
+                .collect::<Vec<_>>();
+                assert!(expr_refs.len() <= u16::MAX as usize, "too many arguments for inline assembly");
+                
+                let asm_str = self.src(TSpan::new(asm_str_span.start + 1, asm_str_span.end - 1));
+                assert!(asm_str.len() <= u16::MAX as usize, "inline assembly string is too long");
+                let extra = ir.extra_data(asm_str.as_bytes());
+                for &r in &expr_refs {
+                    ir.extra_data(&r.to_bytes());
+                }
+                ir.add_unused_untyped(Tag::Asm, Data { asm: (extra, asm_str.len() as u16, expr_refs.len() as u16) });
+                return ExprResult::Val(Ref::UNDEF)
+            }
         };
         ExprResult::Val(r)
     }

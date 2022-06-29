@@ -351,7 +351,16 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(" as ");
                 ty.repr(c);
             },
-            Self::Root(_) => c.write_add("root")
+            Self::Root(_) => c.write_add("root"),
+            Self::Asm { span: _, asm_str_span, args } => {
+                c.write_add("asm(");
+                c.write_add(c.src(*asm_str_span));
+                for arg in ast.get_extra(*args) {
+                    c.write_add(", ");
+                    ast[*arg].repr(c);
+                }
+                c.char(')');
+            }
         }
     }
 }
