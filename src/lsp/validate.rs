@@ -55,22 +55,28 @@ fn calc_range(span: Span, ast: &crate::ast::Ast) -> lsp_types::Range {
 fn check(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
     let path = uri.to_file_path().map_err(|_| LspError::InvalidPath)?;
     debug(format!("validation path: {path:?}"));
-    let diagnostics = match crate::compile::project(&path, false, true, &[], true, &mut crate::Stats::default()) {
-        Ok(_) => {
-            Vec::new()
-        }
-        Err((modules, errors)) => {
-            errors.get().iter().map(|error| {
-                Diagnostic {
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    message: error.err.conclusion().to_owned(),
-                    range: calc_range(error.span, &modules),
-                    
-                    ..Default::default()
-                }
-            }).collect::<Vec<Diagnostic>>()
-        }
-    };
+    let (_, ast, errors) = crate::compile::project(&path, false, true, &[], true, &mut crate::Stats::default());
+    let diagnostics = if errors.error_count() > 0 {
+        errors.get_errors().iter().map(|error| {
+            Diagnostic {
+                severity: Some(DiagnosticSeverity::ERROR),
+                message: error.err.conclusion().to_owned(),
+                range: calc_range(error.span, &ast),
+                
+                ..Default::default()
+            }
+        }).collect::<Vec<Diagnostic>>()
+    } else if errors.warning_count() > 0 {
+        errors.get_warnings().iter().map(|error| {
+            Diagnostic {
+                severity: Some(DiagnosticSeverity::WARNING),
+                message: error.err.conclusion().to_owned(),
+                range: calc_range(error.span, &ast),
+                
+                ..Default::default()
+            }
+        }).collect::<Vec<Diagnostic>>()
+    } else { Vec::new() };
     send_diagnostics(uri, sender, diagnostics)?;
     Ok(())
 }

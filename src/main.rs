@@ -27,7 +27,6 @@ mod help;
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
-use crate::error::Errors;
 use clap::StructOpt;
 use color_format::*;
 use std::{
@@ -195,15 +194,7 @@ fn run(args: &Args) -> bool {
 
     cprintln!("#g<Compiling> #u;b!<{}> ...", name);
 
-    match run_path(path, args, name) {
-        Ok(()) => false,
-        Err((modules, errors)) => {
-            cprintln!("#r<Finished with #u;r!<{}> error{}>",
-                errors.error_count(), if errors.error_count() == 1 { "" } else { "s" });
-            errors.print(&modules);
-            true
-        }
-    }
+    run_path(path, args, name)
 }
 
 #[derive(Default)]
@@ -260,9 +251,17 @@ impl fmt::Display for BackendStats {
     }
 }
 
-fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast, Errors)> {
+fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let mut stats = Stats::default();
-    let ir = compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats)?;
+    let ir = {
+        let (res, ast, errors) = 
+            compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats); 
+        errors.print(&ast);
+        match res {
+            Ok(val) => val,
+            Err(()) => return true
+        }
+    };
 
     if args.ir {
         eprintln!("\n\n{ir}\n");
@@ -332,11 +331,11 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
 
                 if args.emit_obj {
                     cprintln!("#g<Object successfully emitted!>");
-                    return Ok(());
+                    return false;
                 }
                 if !link::link(&obj_file, &exe_file, args) {
                     cprintln!("#r<Aborting because linking failed>");
-                    return Ok(());
+                    return false;
                 }
                 if args.cmd == Cmd::Run {
                     exec();
@@ -353,11 +352,11 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
             unsafe { backend::x86::emit(&ir, asm_file) };
             if !backend::x86::assemble(&asm_path, Path::new(&obj_file)) {
                 eprintln!("Assembler failed! Exiting");
-                return Ok(());
+                return true;
             }
             if !link::link(&obj_file, &exe_file, args) {
                 ceprintln!("#r<Aborting because linking failed>");
-                return Ok(());
+                return true;
             }
             if args.cmd == Cmd::Run {
                 exec();
@@ -368,5 +367,5 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> Result<(), (ast::Ast
         #[cfg(feature = "lsp")]
         (Cmd::Lsp, _) => unreachable!(),
     }
-    Ok(())
+    false
 }

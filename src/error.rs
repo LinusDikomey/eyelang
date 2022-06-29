@@ -7,24 +7,30 @@ pub type EyeResult<T> = Result<T, CompileError>;
 #[derive(Debug)]
 pub struct Errors {
     errors: Vec<CompileError>,
+    warnings: Vec<CompileError>,
 }
 impl Errors {
     pub fn new() -> Self {
         Self {
-            errors: Vec::new()
+            errors: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
     pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
-        self.errors.push(CompileError { err, span: Span { start, end, module } });
+        self.emit_span(err, Span { start, end, module });
     }
     
     pub fn emit_span(&mut self, err: Error, span: Span) {
-        self.errors.push(CompileError { err, span });
+        self.emit_err(CompileError { err, span });
     }
 
     pub fn emit_err(&mut self, err: CompileError) {
-        self.errors.push(err);
+        let list = match err.err.severity() {
+            Severity::Error => &mut self.errors,
+            Severity::Warn => &mut self.warnings,      
+        };
+        list.push(err);
     }
 
     pub fn has_errors(&self) -> bool {
@@ -35,96 +41,33 @@ impl Errors {
         self.errors.len()
     }
 
+    pub fn warning_count(&self) -> usize {
+        self.warnings.len()
+    }
+
     #[cfg(feature = "lsp")]
-    pub fn get(&self) -> &[CompileError] {
+    pub fn get_errors(&self) -> &[CompileError] {
         &self.errors
     }
 
+    #[cfg(feature = "lsp")]
+    pub fn get_warnings(&self) -> &[CompileError] {
+        &self.warnings
+    }
+
     pub fn print(&self, modules: &Ast) {
-        for error in &self.errors {
-            let (src, file) = modules.src(error.span.module);
-
-            let s = error.span.start as usize;
-            let e = error.span.end as usize;
-
-            // calculate line and position in line
-            let until_start = if s >= src.len() { src } else { &src[..s] };
-            let mut line = 1;
-            let mut col = 1;
-            let mut start_of_line_byte = 0;
-            for (i, c) in until_start.char_indices() {
-                if c == '\n' {
-                    line += 1;
-                    col = 1;
-
-                    start_of_line_byte = i+1;
-                } else {
-                    col += 1;
-                }
+        if self.error_count() != 0 {
+            cprintln!("#r<Finished with #u;r!<{}> error{}>",
+                self.error_count(), if self.error_count() == 1 { "" } else { "s" });
+            for error in &self.errors {
+                print(error, modules);
             }
-
-            let src_loc: std::borrow::Cow<str> = if e >= src.len() {
-                if s >= src.len() {
-                    "[no file location]".into()
-                } else {
-                    (&src[s..]).into()
-                }
-            } else {
-                (&src[s..=e]).into()
-            };
-            assert!(src_loc.len() > 0, "empty source location in error");
-
-            let pre = &src[start_of_line_byte..s];
-
-            // find end of the line to print the rest of the line
-            let post = if e == src.len() || src.as_bytes()[e] == b'\n' {
-                ""
-            } else {
-                let mut surrounding_end = std::cmp::min(src.len(), e);
-                while surrounding_end < src.len() && src.as_bytes()[surrounding_end] != b'\n' {
-                    surrounding_end += 1;
-                }
-                &src[(e+1)..surrounding_end]
-            };
-            
-
-            cprintln!("#r!<error>: #r!<{}>", error.err.conclusion());
-            cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
-            let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
-            let p = cformat!("{} #c<|> ", " ".repeat(spaces));
-
-            println!("{p}");
-
-            let mut lines = src_loc.lines().enumerate().peekable();
-
-            let first = lines.next().unwrap();
-            
-            let post_if_last = |lines: &mut Peekable<Enumerate<Lines>>| {
-                if lines.peek().is_some() {
-                    println!();
-                } else {
-                    println!("{post}");
-                }
-            };
-
-            cprint!("#c<{:#4} | >{}{}", line, pre, first.1);
-            post_if_last(&mut lines);
-
-            let pre_error_offset = " ".repeat(pre.chars().count());
-            cprintln!("{}{}#r!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()));
-            if let Some(details) = error.err.details() {
-                cprintln!("{}{}{}", p, pre_error_offset, details)
+        } else if self.warning_count() != 0 {
+            cprintln!("#r<Finished with #u;r!<{}> warning{}>",
+                self.warning_count(), if self.warning_count() == 1 { "" } else { "s" });
+            for warn in &self.warnings {
+                print(warn, modules);
             }
-
-            while let Some((i, line_str)) = lines.next() {
-                let line = line + i;
-                
-                cprint!("#c<{:#4} | >{}", line, line_str);
-                post_if_last(&mut lines);
-
-                cprintln!("{}#r!<{}>", p, "^".repeat(line_str.chars().count()));
-            }
-            println!();
         }
     }
 
@@ -255,6 +198,7 @@ pub enum Error {
     RecursiveDefinition,
     CantIndex,
     ExpectedConstValue,
+    UnusedStatementValue,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -310,7 +254,8 @@ impl Error {
             Error::FunctionOrStructTypeExpected => "expected a struct type or a function",
             Error::RecursiveDefinition => "definition depends on itself recursively",
             Error::CantIndex => "can't index this",
-            Error::ExpectedConstValue => "constant value expected"
+            Error::ExpectedConstValue => "constant value expected",
+            Error::UnusedStatementValue => "unused expression value",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -323,8 +268,17 @@ impl Error {
                 "expected #y<{}> parameters but found #r<{}>",
                 expected, found
             ),
+            Error::UnusedStatementValue => cformat!(
+                "this statement only produces a value that is not used"
+            ),
             _ => return None
         })
+    }
+    pub fn severity(&self) -> Severity {
+        match self {
+            Self::UnusedStatementValue => Severity::Warn,
+            _ => Severity::Error
+        }
     }
 }
 impl Error {
@@ -337,4 +291,111 @@ impl Error {
     pub fn at_span(self, span: Span) -> CompileError {
         CompileError { err: self, span }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Severity { Error, Warn }
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Error => cwrite!(f, "#r!<error>"),
+            Self::Warn => cwrite!(f, "#y!<warn>"),
+        }
+    }
+}
+
+fn print(error: &CompileError, modules: &Ast) {
+    let (src, file) = modules.src(error.span.module);
+
+    let s = error.span.start as usize;
+    let e = error.span.end as usize;
+
+    // calculate line and position in line
+    let until_start = if s >= src.len() { src } else { &src[..s] };
+    let mut line = 1;
+    let mut col = 1;
+    let mut start_of_line_byte = 0;
+    for (i, c) in until_start.char_indices() {
+        if c == '\n' {
+            line += 1;
+            col = 1;
+
+            start_of_line_byte = i+1;
+        } else {
+            col += 1;
+        }
+    }
+
+    let src_loc: std::borrow::Cow<str> = if e >= src.len() {
+        if s >= src.len() {
+            "[no file location]".into()
+        } else {
+            (&src[s..]).into()
+        }
+    } else {
+        (&src[s..=e]).into()
+    };
+    assert!(src_loc.len() > 0, "empty source location in error");
+
+    let pre = &src[start_of_line_byte..s];
+
+    // find end of the line to print the rest of the line
+    let post = if e == src.len() || src.as_bytes()[e] == b'\n' {
+        ""
+    } else {
+        let mut surrounding_end = std::cmp::min(src.len(), e);
+        while surrounding_end < src.len() && src.as_bytes()[surrounding_end] != b'\n' {
+            surrounding_end += 1;
+        }
+        &src[(e+1)..surrounding_end]
+    };
+    
+
+    cprint!("{}: ", error.err.severity());
+    match error.err.severity() {
+        Severity::Error => cprintln!("#r!<{}>", error.err.conclusion()),
+        Severity::Warn => cprintln!("#y!<{}>", error.err.conclusion()),
+    }
+    cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
+    let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
+    let p = cformat!("{} #c<|> ", " ".repeat(spaces));
+
+    println!("{p}");
+
+    let mut lines = src_loc.lines().enumerate().peekable();
+
+    let first = lines.next().unwrap();
+    
+    let post_if_last = |lines: &mut Peekable<Enumerate<Lines>>| {
+        if lines.peek().is_some() {
+            println!();
+        } else {
+            println!("{post}");
+        }
+    };
+
+    cprint!("#c<{:#4} | >{}{}", line, pre, first.1);
+    post_if_last(&mut lines);
+
+    let pre_error_offset = " ".repeat(pre.chars().count());
+    match error.err.severity() {
+        Severity::Error => cprintln!("{}{}#r!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count())),
+        Severity::Warn => cprintln!("{}{}#y!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()))
+    }
+    if let Some(details) = error.err.details() {
+        cprintln!("{}{}{}", p, pre_error_offset, details)
+    }
+
+    while let Some((i, line_str)) = lines.next() {
+        let line = line + i;
+        
+        cprint!("#c<{:#4} | >{}", line, line_str);
+        post_if_last(&mut lines);
+
+        match error.err.severity() {
+            Severity::Error => cprintln!("{}#r!<{}>", p, "^".repeat(line_str.chars().count())),
+            Severity::Warn => cprintln!("{}#y!<{}>", p, "^".repeat(line_str.chars().count())),
+        }
+    }
+    println!();
 }

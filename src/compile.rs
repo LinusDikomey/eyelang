@@ -20,7 +20,7 @@ pub fn project(
     _deps: &[Dependency],
     require_main_func: bool,
     stats: &mut Stats
-) -> Result<crate::ir::Module, (Ast, Errors)> {
+) -> (Result<crate::ir::Module, ()>, Ast, Errors) {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
 
@@ -39,12 +39,12 @@ pub fn project(
         );
     }
     let reduce_start_time = Instant::now();
-    let reduce_res = crate::ir::reduce(&ast, errors, require_main_func);
+    let (reduce_res, errors) = crate::ir::reduce(&ast, errors, require_main_func);
     stats.irgen += reduce_start_time.elapsed();
-    match reduce_res {
+    (match reduce_res {
         Ok((ir, _globals)) => Ok(ir),
-        Err(err) => Err((ast, err))
-    }
+        Err(()) => Err(())
+    }, ast, errors)
 }
 
 fn std_path() -> PathBuf {
