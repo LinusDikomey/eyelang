@@ -20,6 +20,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         types: Vec::new(),
         traits: Vec::new(),
         consts: Vec::new(),
+        globals: Vec::new(),
     };
     let globals = types::gen_globals(ast, &mut ctx, &mut errors);
 
@@ -34,6 +35,17 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
     if errors.has_errors() {
         return (Err(()), errors);
     }
+    
+    let global_vars = globals.iter().filter_map(|(name, symbol)| {
+        match symbol {
+            Symbol::GlobalVar(key) => {
+                let (ty, initial_val) = ctx.get_global(*key);
+                Some((name.clone(), ty.clone(), initial_val.clone()))
+            }
+            _ => None
+        }
+    }).collect();
+
     let funcs = ctx
         .funcs
         .into_iter()
@@ -52,15 +64,19 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
             return (Err(()), errors);
         });
     }
-    
+
 
     (
-        Ok((Module {
-        name: "MainModule".to_owned(),
-        funcs,
-        main,
-        types: ctx.types,
-        }, globals)),
+        Ok((
+            Module {
+                name: "MainModule".to_owned(),
+                funcs,
+                globals: global_vars,
+                main,
+                types: ctx.types,
+            },
+            globals
+        )),
         errors,
     )
 }
@@ -172,6 +188,7 @@ pub enum Symbol {
     Generic(u8),
     Module(ModuleId),
     Var { ty: TypeTableIndex, var: Ref },
+    GlobalVar(SymbolKey),
     Const(SymbolKey),
 }
 
@@ -205,6 +222,7 @@ impl<'a> ScopeInfo<'a> {
                 Symbol::Generic(_) => todo!(),
                 Symbol::Module(m) => Resolved::Module(*m),
                 Symbol::Var { ty, var } => Resolved::Var(*ty, *var),
+                Symbol::GlobalVar(k) => Resolved::GlobalVar(*k),
                 Symbol::Const(c) => Resolved::Const(*c),
             })
         } else {
@@ -234,6 +252,7 @@ pub struct TypingCtx {
     types: Vec<(String, TypeDef)>,
     traits: Vec<TraitDef>,
     consts: Vec<ConstVal>,
+    globals: Vec<(Type, Option<ConstVal>)>,
 }
 impl TypingCtx {
     pub fn add_func(&mut self, func: FunctionOrHeader) -> SymbolKey {
@@ -264,17 +283,24 @@ impl TypingCtx {
         self.consts.push(c);
         key
     }
+    pub fn add_global(&mut self, ty: Type, val: Option<ConstVal>) -> SymbolKey {
+        let key = SymbolKey(self.globals.len() as u64);
+        self.globals.push((ty, val));
+        key
+    }
     pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()].1 }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()].1 }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
     pub fn get_trait(&self, key: SymbolKey) -> &TraitDef { &self.traits[key.idx()] }
     pub fn get_const(&self, key: SymbolKey) -> &ConstVal { &self.consts[key.idx()] }
+    pub fn get_global(&self, key: SymbolKey) -> &(Type, Option<ConstVal>) { &self.globals[key.idx()] }
     pub fn get_const_mut(&mut self, key: SymbolKey) -> &mut ConstVal { &mut self.consts[key.idx()] }
 }
 
 enum Resolved {
     Var(TypeTableIndex, Ref),
+    GlobalVar(SymbolKey),
     Func(SymbolKey),
     Type(SymbolKey),
     Trait(SymbolKey),
@@ -285,7 +311,7 @@ enum Resolved {
 impl Resolved {
     pub fn into_symbol(self) -> Option<Symbol> {
         match self {
-            Resolved::Var(_, _) | Resolved::LocalType(_) => None,
+            Resolved::Var(_, _) | Resolved::LocalType(_) | Resolved::GlobalVar(_) => None,
             Resolved::Func(id) => Some(Symbol::Func(id)),
             Resolved::Type(id) => Some(Symbol::Type(id)),
             Resolved::Trait(t) => Some(Symbol::Trait(t)),
@@ -777,6 +803,12 @@ impl<'s> Scope<'s> {
                             ir.types.merge(ty, info.expected, errors, self.module, *span, self.ctx);
                             ExprResult::VarRef(var)
                         }
+                        Resolved::GlobalVar(key) => {
+                            let (ty, _) = self.ctx.get_global(key);
+                            let ty_info = ty.as_info(&mut ir.types);
+                            ir.specify(info.expected, ty_info, errors, expr.span(self.ast), &self.ctx);
+                            ExprResult::VarRef(ir.add(Data { symbol: key }, Tag::Global, info.expected))
+                        }
                         Resolved::Func(f) => ExprResult::Func(f),
                         Resolved::Type(t) => ExprResult::Type(t),
                         Resolved::Trait(t) => ExprResult::Trait(t),
@@ -1262,7 +1294,14 @@ impl<'s> Scope<'s> {
                                 Symbol::LocalType(t) => ExprResult::LocalType(t),
                                 Symbol::Generic(_) => todo!(), // is this a possibility
                                 Symbol::Module(m) => ExprResult::Module(m),
-                                Symbol::Var { ty: _, var } => ExprResult::VarRef(var),
+                                Symbol::Var { .. } => unreachable!("vars in module shouldn't exist"),
+                                Symbol::GlobalVar(key) => {
+                                    let (ty, _) = self.ctx.get_global(key);
+                                    let ty_info = ty.as_info(&mut ir.types);
+                                    let span = name_span.in_mod(self.module);
+                                    ir.types.specify(info.expected, ty_info, errors, span, self.ctx);
+                                    ExprResult::VarRef(ir.add(Data { symbol: key }, Tag::Global, info.expected))
+                                }
                                 Symbol::Const(key) => {
                                     let val = self.ctx.get_const(key);
                                     self.const_val_to_result(val, ir, info)
@@ -1462,8 +1501,7 @@ impl<'s> Scope<'s> {
                     Symbol::LocalType(..) => unreachable!(),
                     Symbol::Generic(_) => todo!(),
                     Symbol::Module(key) => ExprResult::Module(key),
-                    Symbol::Var { .. } => unreachable!(),
-                    Symbol::Const(_) => unreachable!(),
+                    Symbol::Var { .. } | Symbol::GlobalVar(_) | Symbol::Const(_) => unreachable!(),
                 }
             }
             ConstVal::Invalid => Ref::UNDEF,
@@ -1525,7 +1563,8 @@ impl<'s> Scope<'s> {
                         let name = name.to_owned(); // PERF: ownership
                         self.get_or_gen_const(key, *span, errors).clone()
                     }
-                    Resolved::LocalType(_) => return Err(Error::NotConst.at_span(span.in_mod(self.module)))
+                    Resolved::LocalType(_)
+                    | Resolved::GlobalVar(_) => return Err(Error::NotConst.at_span(span.in_mod(self.module)))
                 }
             }
             // ast::Expr::Array(_, _) => todo!(),

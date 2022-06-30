@@ -177,6 +177,7 @@ pub enum Definition {
     Module(ModuleId),
     Use(IdentPath),
     Const(UnresolvedType, ExprRef),
+    Global(UnresolvedType, Option<ExprRef>),
 }
 
 #[derive(Debug, Clone)]

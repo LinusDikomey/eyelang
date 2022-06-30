@@ -312,6 +312,7 @@ impl PartialEq for ConstVal {
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
+    pub globals: Vec<(String, Type, Option<ConstVal>)>,
     pub types: Vec<(String, TypeDef)>,
     pub main: Option<SymbolKey>
 }
@@ -434,6 +435,7 @@ impl Instruction {
                 cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
             }
             DataVariant::Asm => cwrite!(f, "#r!<TODO:> asm repr"),
+            DataVariant::Global => cwrite!(f, "global #c<{:?}>", self.data.symbol),
             DataVariant::None => Ok(())
         }}
     }
@@ -474,6 +476,8 @@ pub enum Tag {
     Neg,
     Not,
 
+    Global,
+
     Add,
     Sub,
     Mul,
@@ -512,6 +516,7 @@ impl Tag {
             Tag::EnumLit | Tag::String => String,
             Tag::Decl | Tag::RetUndef => None,
             Tag::Call => Call,
+            Tag::Global => Global,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
@@ -612,6 +617,7 @@ pub union Data {
     pub bin_op: (Ref, Ref),
     pub branch: (Ref, u32),
     pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
+    pub symbol: SymbolKey,
     pub none: (),
     pub block: BlockIndex
 }
@@ -649,5 +655,6 @@ enum DataVariant {
     UnOp,
     BinOp,
     Asm,
+    Global,
     None,
 }

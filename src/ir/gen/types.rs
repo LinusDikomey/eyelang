@@ -13,6 +13,11 @@ impl Globals {
         GlobalsRef(&self.0)
     }
 }
+impl Globals {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Symbol)> {
+        self.0.iter().flat_map(|it| it.iter())
+    }
+}
 impl std::ops::Index<ModuleId> for Globals {
     type Output = HashMap<String, Symbol>;
 
@@ -215,6 +220,13 @@ fn gen_def(
         }
         ast::Definition::Const(_, _) => {
             let symbol = Symbol::Const(state.ctx().add_const(ConstVal::NotGenerated { defs, generating: false }));
+            state.insert_symbol(module, name.to_owned(), symbol);
+            symbol
+        }
+        ast::Definition::Global(ty, val) => {
+            let ty = state.resolve_ty(ty, module, errors);
+            assert!(val.is_none(), "TODO: Globals with initial values are unsupported right now");
+            let symbol = Symbol::GlobalVar(state.ctx().add_global(ty, None));
             state.insert_symbol(module, name.to_owned(), symbol);
             symbol
         }

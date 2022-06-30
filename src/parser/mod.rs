@@ -61,20 +61,37 @@ impl<'a> Parser<'a> {
         
         while !self.toks.is_at_end() {
             let start = self.toks.current().unwrap().start;
-            match self.parse_item()? {
-                Item::Definition { name, name_span, def } => if let Some(_existing) = definitions.insert(name, def) {
-                    return Err(Error::DuplicateDefinition.at(
-                        name_span.start,
-                        name_span.end,
-                        self.toks.module
-                    ));
-                }
-                Item::Expr(_) => return Err(
-                    CompileError {
-                        err: Error::InvalidTopLevelBlockItem,
-                        span: Span { start, end: self.toks.current_end_pos(), module: self.toks.module }
+            let (name, name_span, def) = match self.parse_item()? {
+                Item::Definition { name, name_span, def } => (name, name_span, def),
+                Item::Expr(r) => {
+                    match &self.ast[r] {
+                        Expr::Declare { name, annotated_ty, end: _ } => {
+                            (
+                                self.src[name.range()].to_owned(),
+                                *name,
+                                Definition::Global(annotated_ty.clone(), None)
+                            )
+                        }
+                        Expr::DeclareWithVal { name, annotated_ty, val } => {
+                            (
+                                self.src[name.range()].to_owned(),
+                                *name,
+                                Definition::Global(annotated_ty.clone(), Some(*val))
+                            )
+                        }
+                        _ => return Err(CompileError {
+                            err: Error::InvalidTopLevelBlockItem,
+                            span: Span { start, end: self.toks.current_end_pos(), module: self.toks.module }
+                        })
                     }
-                )
+                }
+            };
+            if let Some(_existing) = definitions.insert(name, def) {
+                return Err(Error::DuplicateDefinition.at(
+                    name_span.start,
+                    name_span.end,
+                    self.toks.module
+                ));
             }
         }
         uses.shrink_to_fit();

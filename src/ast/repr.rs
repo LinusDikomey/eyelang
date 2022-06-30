@@ -106,6 +106,15 @@ impl Definition {
                 }
                 c.ast()[*expr].repr(c);
             }
+            Self::Global(ty, val) => {
+                c.write_add(name);
+                c.write_add(": ");
+                ty.repr(c);
+                if let &Some(val) = val {
+                    c.write_add(" = ");
+                    c.ast()[val].repr(c);
+                }
+            }
         }
     }
 }

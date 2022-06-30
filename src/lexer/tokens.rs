@@ -102,7 +102,7 @@ impl TokenType {
     fn text_repr(&self) -> (&'static str, bool) {
         let mut is_text = false;
         let s = match self {
-            TokenType::Colon => ".",
+            TokenType::Colon => ":",
             TokenType::DoubleColon => "::",
             TokenType::Comma => ",",
             TokenType::Semicolon => ";",
