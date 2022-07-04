@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::{
     ast::*,
+    dmap,
     error::{CompileError, EyeResult, Error, ExpectedTokens},
     lexer::tokens::{Keyword, Token, TokenType, Operator},
     types::Primitive, span::{TSpan, Span},
@@ -56,7 +56,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_module(&mut self) -> Result<Module, CompileError> {
-        let mut definitions = HashMap::new();
+        let mut definitions = dmap::new();
         let mut uses = Vec::new();
         
         while !self.toks.is_at_end() {
@@ -123,7 +123,7 @@ impl<'a> Parser<'a> {
     fn parse_block_from_lbrace(&mut self, lbrace: Token) -> EyeResult<ExprRef> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
 
-        let mut defs = HashMap::new();
+        let mut defs = dmap::new();
         let mut items = Vec::new();
 
         while self.toks.current()?.ty != TokenType::RBrace {
@@ -184,7 +184,7 @@ impl<'a> Parser<'a> {
                             self.toks.step_expect(TokenType::LBrace)?;
 
                             let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
-                            let mut methods = HashMap::new();
+                            let mut methods = dmap::new();
                             self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
                                 let ident = p.toks.step_expect(TokenType::Ident)?;
                                 let ident_span = ident.span();
@@ -353,7 +353,7 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
         self.toks.step_expect(TokenType::LBrace)?;
-        let mut functions = HashMap::new();
+        let mut functions = dmap::new();
         loop {
             let next = self.toks.step()?;
             match_or_unexpected!{next, self.toks.module,

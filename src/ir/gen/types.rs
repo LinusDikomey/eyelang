@@ -1,13 +1,12 @@
-use std::collections::HashMap;
 use crate::{
     ast::{Ast, ModuleId, StructDefinition, self, UnresolvedType, IdentPath, TraitDefinition, EnumDefinition},
     error::{Errors, Error},
-    ir::{gen::FunctionOrHeader, Type, ConstVal}, span::{Span, TSpan},
+    ir::{gen::FunctionOrHeader, Type, ConstVal}, span::{Span, TSpan}, dmap::{self, DHashMap},
 };
 use super::{gen::{TypingCtx, Symbol}, SymbolKey, TypeDef, FunctionHeader, Scope};
 
 #[derive(Clone, Debug)]
-pub struct Globals(Vec<HashMap<String, Symbol>>);
+pub struct Globals(Vec<DHashMap<String, Symbol>>);
 impl Globals {
     pub fn get_ref(&self) -> GlobalsRef {
         GlobalsRef(&self.0)
@@ -19,7 +18,7 @@ impl Globals {
     }
 }
 impl std::ops::Index<ModuleId> for Globals {
-    type Output = HashMap<String, Symbol>;
+    type Output = DHashMap<String, Symbol>;
 
     fn index(&self, index: ModuleId) -> &Self::Output {
         &self.0[index.idx()]
@@ -28,16 +27,16 @@ impl std::ops::Index<ModuleId> for Globals {
 
 /// For passing arround a reference to globals. More efficient than &Globals.
 #[derive(Clone, Copy)]
-pub struct GlobalsRef<'a>(&'a [HashMap<String, Symbol>]);
+pub struct GlobalsRef<'a>(&'a [DHashMap<String, Symbol>]);
 impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
-    type Output = HashMap<String, Symbol>;
+    type Output = DHashMap<String, Symbol>;
     fn index(&self, index: ModuleId) -> &Self::Output {
         &self.0[index.idx()]
     }
 }
 
 pub fn gen_globals(ast: &Ast, ctx: &mut TypingCtx, errors: &mut Errors) -> Globals {
-    let mut symbols = (0..ast.modules.len()).map(|_| HashMap::new()).collect::<Vec<_>>();
+    let mut symbols = (0..ast.modules.len()).map(|_| dmap::new()).collect::<Vec<_>>();
 
     for (module_id, module) in ast.modules.iter().enumerate() {
         let module_id = ModuleId::new(module_id as u32);
@@ -54,8 +53,8 @@ pub fn gen_locals(
     scope: &mut Scope,
     defs: ast::Defs,
     errors: &mut Errors
-) -> HashMap<String, Symbol> {
-    let mut symbols = HashMap::with_capacity(scope.ast[defs].len());
+) -> DHashMap<String, Symbol> {
+    let mut symbols = dmap::with_capacity(scope.ast[defs].len());
     for (name, def) in &scope.ast[defs] {
         if symbols.contains_key(name) { continue }
         gen_def(def, defs, scope.module, name, errors,
@@ -83,7 +82,7 @@ trait ResolveState {
     fn scope(&mut self, module: ModuleId) -> Scope;
 }
 struct GlobalResolveState<'a> {
-    symbols: &'a mut [HashMap<String, Symbol>],
+    symbols: &'a mut [DHashMap<String, Symbol>],
     ctx: &'a mut TypingCtx,
     ast: &'a Ast,
 }
@@ -109,7 +108,7 @@ impl<'a> ResolveState for GlobalResolveState<'a> {
     }
 }
 struct LocalResolveState<'a, 's> {
-    symbols: &'a mut HashMap<String, Symbol>,
+    symbols: &'a mut DHashMap<String, Symbol>,
     scope: Scope<'s>,
     defs: ast::Defs,
 }
@@ -140,7 +139,7 @@ impl<'a, 's> ResolveState for LocalResolveState<'a, 's> {
 /// and generic type parameters.
 struct DefinitionResolveState<'a, R: ResolveState> {
     parent: R,
-    generics: &'a HashMap<String, u8>,
+    generics: &'a DHashMap<String, u8>,
     module: ModuleId,
 }
 impl<'a, R: ResolveState> ResolveState for DefinitionResolveState<'a, R> {
@@ -353,7 +352,7 @@ fn gen_struct(
     )}).collect::<Vec<_>>();
     *state.ctx().get_type_mut(key) = TypeDef::Struct(super::Struct {
         members,
-        methods: HashMap::with_capacity(def.members.len()),
+        methods: dmap::with_capacity(def.members.len()),
         generic_count: def.generics.len() as u8,
         name: name.to_owned(),
     });
@@ -405,7 +404,7 @@ fn gen_trait(
 ) -> SymbolKey {
     let mut state = DefinitionResolveState {
         parent: state,
-        generics: &HashMap::new(),
+        generics: &dmap::new(),
         module,
     };
     let functions = def.functions.iter()
@@ -418,7 +417,7 @@ fn gen_trait(
 }
 
 enum PathResolveState<'a, 's> {
-    Local(&'a mut Scope<'s>, &'a mut HashMap<String, Symbol>, ast::Defs),
+    Local(&'a mut Scope<'s>, &'a mut DHashMap<String, Symbol>, ast::Defs),
     Module(ModuleId, &'a Ast)
 }
 impl<'a> PathResolveState<'a, '_> {
@@ -430,7 +429,7 @@ impl<'a> PathResolveState<'a, '_> {
     }
 }
 enum PathResolveSymbols<'a> {
-    Mutable(&'a Ast, &'a mut [HashMap<String, Symbol>], &'a mut TypingCtx),
+    Mutable(&'a Ast, &'a mut [DHashMap<String, Symbol>], &'a mut TypingCtx),
     Finished(GlobalsRef<'a>)
 }
 impl<'a> PathResolveSymbols<'a> {
@@ -524,7 +523,7 @@ fn resolve_global_path(
     path: &IdentPath,
     ast: &Ast,
     ctx: &mut TypingCtx,
-    symbols: &mut [HashMap<String, Symbol>],
+    symbols: &mut [DHashMap<String, Symbol>],
     module: ModuleId,
     errors: &mut Errors
 ) -> Option<Symbol> {
@@ -541,7 +540,7 @@ fn resolve_global_path(
 fn resolve_local_path(
     path: &IdentPath,
     scope: &mut Scope,
-    symbols: &mut HashMap<String, Symbol>,
+    symbols: &mut DHashMap<String, Symbol>,
     defs: ast::Defs,
     errors: &mut Errors,
 ) -> Option<Symbol> {
@@ -562,7 +561,7 @@ fn resolve_in_scope(
     name: &str,
     span: TSpan,
     scope: &mut Scope,
-    symbols: &mut HashMap<String, Symbol>,
+    symbols: &mut DHashMap<String, Symbol>,
     defs: ast::Defs,
     errors: &mut Errors,
 ) -> Option<Symbol> {

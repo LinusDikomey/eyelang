@@ -1,6 +1,6 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{ir::{self, Type}, types::Primitive, BackendStats};
-use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant, collections::HashMap};
+use crate::{dmap::{self, DHashMap}, ir::{self, Type}, types::Primitive, BackendStats};
+use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
 pub mod output;
 
@@ -53,13 +53,13 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
         .map(|(name, ty)| {
             match ty {
                 ir::TypeDef::Struct(def) => {
-                    if def.generic_count != 0 { return TypeInstance::Generic(HashMap::new()); }
+                    if def.generic_count != 0 { return TypeInstance::Generic(dmap::new()); }
                     let name = ffi::CString::new(name.as_bytes()).unwrap();
                     TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
                 }
                 ir::TypeDef::Enum(def) => {
                     if def.generic_count != 0 {
-                        TypeInstance::Generic(HashMap::new())
+                        TypeInstance::Generic(dmap::new())
                     } else {
                         TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()))
                     }
@@ -554,13 +554,17 @@ unsafe fn build_func(
                 let str_bytes = &ir.extra[extra as usize .. extra as usize + str_len as usize];
                 
                 let expr_base = extra as usize + str_len as usize;
-                let values = (0..arg_count as usize).map(|i| {
+                let mut asm_values = Vec::with_capacity(arg_count as usize);
+                let mut asm_types = Vec::with_capacity(arg_count as usize);
+                for i in 0..arg_count as usize {
                     let mut arg_bytes = [0; 4];
-                    arg_bytes.copy_from_slice(&ir.extra[expr_base + 4*i .. expr_base + 5*i ]);
-                    get_ref(&instructions, ir::Ref::from_bytes(arg_bytes))
-                }).collect::<Vec<LLVMValueRef>>();
+                    arg_bytes.copy_from_slice(&ir.extra[expr_base + 4*i .. expr_base + 4*(i+1) ]);
+                    let (val, ty) = get_ref_and_type(&instructions, ir::Ref::from_bytes(arg_bytes));
+                    asm_values.push(val);
+                    asm_types.push(llvm_ty(ctx, module, types, &ty));
+                }
 
-                inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &values)
+                inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &asm_values, &mut asm_types)
             }
         };
         if val.is_null() {
@@ -574,15 +578,19 @@ unsafe fn build_func(
     }
 }
 
-unsafe fn inline_asm(asm: &str, ctx: LLVMContextRef, builder: LLVMBuilderRef, values: &[LLVMValueRef])
--> LLVMValueRef {
+unsafe fn inline_asm(
+    asm: &str, ctx: LLVMContextRef, builder: LLVMBuilderRef,
+    values: &[LLVMValueRef], types: &mut [LLVMTypeRef]
+) -> LLVMValueRef {
+    debug_assert!(values.len() == types.len());
     let side_effects = true;
     let align_stack = true;
-    let func_ty = LLVMFunctionType(LLVMVoidTypeInContext(ctx), [].as_mut_ptr(), 0, FALSE);
+    let func_ty = LLVMFunctionType(LLVMVoidTypeInContext(ctx), types.as_mut_ptr(), types.len() as _, FALSE);
+    println!("----- {:?} -----\n\n", ffi::CStr::from_ptr(LLVMPrintTypeToString(func_ty)));
     let asm = LLVMGetInlineAsm(
         func_ty,
         asm.as_ptr() as *mut i8, asm.len(),
-        "".as_ptr() as *mut i8, 0,
+        "\0".as_ptr() as *mut i8, 0,
         llvm_bool(side_effects),
         llvm_bool(align_stack),
         llvm_sys::LLVMInlineAsmDialect::LLVMInlineAsmDialectIntel,
@@ -706,7 +714,7 @@ fn is_void_type(ty: &Type) -> bool {
 
 enum TypeInstance {
     Simple(LLVMTypeRef),
-    Generic(HashMap<Vec<Type>, LLVMTypeRef>),
+    Generic(DHashMap<Vec<Type>, LLVMTypeRef>),
 }
 
 // returns the constant or None in case of a zero sized type

@@ -13,6 +13,7 @@
 mod ast;
 mod backend;
 mod compile;
+mod dmap;
 mod error;
 mod ir;
 mod lexer;
@@ -58,6 +59,7 @@ enum Cmd {
     /// Compile and run using LLVMs JIT compiler. Might produce different results.
     Jit,
     /// Starts a language server that can be used by IDEs for syntax highlighting, autocompletions etc.
+    /// Only basic error highlighting is implemented right now.
     #[cfg(feature = "lsp")]
     Lsp,
 }

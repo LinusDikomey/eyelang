@@ -1,5 +1,5 @@
-use std::{collections::HashMap, ops::{Index, IndexMut}, path::{PathBuf, Path}};
-use crate::{lexer::tokens::Operator, types::Primitive, span::{TSpan, Span}};
+use std::{ops::{Index, IndexMut}, path::{PathBuf, Path}};
+use crate::{lexer::tokens::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}};
 
 pub mod repr;
 
@@ -41,7 +41,7 @@ impl Index<ExprRef> for Ast {
     }   
 }
 impl Index<Defs> for Ast {
-    type Output = HashMap<String, Definition>;
+    type Output = DHashMap<String, Definition>;
 
     fn index(&self, index: Defs) -> &Self::Output {
         &self.expr_builder.defs[index.0 as usize]
@@ -56,7 +56,7 @@ impl IndexMut<Defs> for Ast {
 pub struct ExprBuilder {
     exprs: Vec<Expr>,
     extra: Vec<ExprRef>,
-    defs: Vec<HashMap<String, Definition>>
+    defs: Vec<DHashMap<String, Definition>>
 }
 impl ExprBuilder {
     pub fn add(&mut self, expr: Expr) -> ExprRef {
@@ -69,7 +69,7 @@ impl ExprBuilder {
         self.extra.extend(extra);
         idx
     }
-    pub fn defs(&mut self, defs: HashMap<String, Definition>) -> Defs {
+    pub fn defs(&mut self, defs: DHashMap<String, Definition>) -> Defs {
         //defs.shrink_to_fit(); //PERF: test performance gains/losses of this
         let idx = self.defs.len();
         self.defs.push(defs);
@@ -77,7 +77,7 @@ impl ExprBuilder {
     }
 }
 impl Index<Defs> for ExprBuilder {
-    type Output = HashMap<String, Definition>;
+    type Output = DHashMap<String, Definition>;
 
     fn index(&self, index: Defs) -> &Self::Output {
         &self.defs[index.0 as usize]
@@ -158,7 +158,7 @@ pub struct Module {
 }
 impl Module {
     pub fn empty(ast: &mut Ast) -> Self {
-        Self { definitions: ast.expr_builder.defs(HashMap::new()), uses: Vec::new() }
+        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new() }
     }
 }
 
@@ -184,7 +184,7 @@ pub enum Definition {
 pub struct StructDefinition {
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
-    pub methods: HashMap<String, Function>
+    pub methods: DHashMap<String, Function>
 }
 
 #[derive(Debug, Clone)]
@@ -196,7 +196,7 @@ pub struct EnumDefinition {
 #[derive(Debug, Clone)]
 pub struct TraitDefinition {
     pub generics: Vec<TSpan>,
-    pub functions: HashMap<String, (TSpan, Function)>,
+    pub functions: DHashMap<String, (TSpan, Function)>,
 }
 
 #[derive(Debug, Clone)]

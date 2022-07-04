@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::fmt;
 use color_format::*;
 use crate::ast::Defs;
+use crate::dmap::DHashMap;
 use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
 use typing::{TypeTable, TypeInfo, FinalTypeTable};
@@ -202,7 +202,7 @@ pub struct FunctionHeader {
 pub enum TypeDef {
     Struct(Struct),
     Enum(Enum),
-    NotGenerated { generating: bool },
+    NotGenerated { generic_count: u8, generating: bool },
 }
 impl TypeDef {
     pub fn generic_count(&self) -> u8 {
@@ -232,7 +232,7 @@ impl fmt::Display for TypeDef {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub members: Vec<(String, Type)>,
-    pub methods: HashMap<String, SymbolKey>,
+    pub methods: DHashMap<String, SymbolKey>,
     pub generic_count: u8,
     pub name: String
 }
@@ -247,7 +247,7 @@ impl fmt::Display for Struct {
 
 #[derive(Debug, Clone)]
 pub struct Enum {
-    pub variants: HashMap<String, u32>,
+    pub variants: DHashMap<String, u32>,
     pub generic_count: u8,
 }
 impl fmt::Display for Enum {
@@ -261,7 +261,7 @@ impl fmt::Display for Enum {
 
 #[derive(Debug, Clone)]
 pub struct TraitDef {
-    pub functions: HashMap<String, (u32, FunctionHeader)>
+    pub functions: DHashMap<String, (u32, FunctionHeader)>
 }
 
 #[derive(Debug, Clone)]
@@ -434,7 +434,19 @@ impl Instruction {
                 write_ref(f, self.data.branch.0)?;
                 cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
             }
-            DataVariant::Asm => cwrite!(f, "#r!<TODO:> asm repr"),
+            DataVariant::Asm => {
+                let Data { asm: (extra_idx, str_len, arg_count) } = self.data;
+                let str_bytes = &extra[extra_idx as usize .. extra_idx as usize + str_len as usize];
+                cwrite!(f, "#y<\"{}\">", std::str::from_utf8_unchecked(str_bytes))?;
+                let expr_base = extra_idx as usize + str_len as usize;
+                for i in 0..arg_count as usize {
+                    write!(f, ", ")?;
+                    let mut arg_bytes = [0; 4];
+                    arg_bytes.copy_from_slice(&extra[expr_base + 4*i .. expr_base + 4*(i+1) ]);
+                    write_ref(f, Ref::from_bytes(arg_bytes))?;
+                }
+                Ok(())
+            }
             DataVariant::Global => cwrite!(f, "global #c<{:?}>", self.data.symbol),
             DataVariant::None => Ok(())
         }}

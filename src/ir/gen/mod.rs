@@ -2,9 +2,9 @@ use crate::{
     ast::{self, Expr, ModuleId, UnOp, ExprRef},
     error::{Error, Errors, EyeResult},
     lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
-    types::Primitive, span::{Span, TSpan},
+    types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
 };
-use std::{borrow::{Cow, Borrow}, collections::HashMap, ptr::NonNull};
+use std::{borrow::{Cow, Borrow}, ptr::NonNull};
 use builder::IrBuilder;
 use self::types::{GlobalsRef, Globals};
 
@@ -84,7 +84,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
 // should be called after gen_globals or gen_locals to generate the bodies of all the prototypes that were created
 fn generate_bodies(
     scope: &mut Scope,
-    defs: &HashMap<String, ast::Definition>,
+    defs: &DHashMap<String, ast::Definition>,
     errors: &mut Errors,
     get_symbol: impl for<'a> Fn(&'a mut Scope, &str) -> Option<&'a Symbol>,
 ) {
@@ -99,7 +99,7 @@ fn generate_bodies(
         };
         let ir = def.body.as_ref().map(|body| {
             let mut builder = IrBuilder::new(scope.module);
-            let mut scope_symbols = HashMap::with_capacity(header.params.len() + def.generics.len());
+            let mut scope_symbols = dmap::with_capacity(header.params.len() + def.generics.len());
             
             for generic in &def.generics {
                 let name = &scope.ast.src(scope.module).0[generic.range()];
@@ -194,8 +194,8 @@ pub enum Symbol {
 
 struct ScopeInfo<'a> {
     parent: Option<NonNull<ScopeInfo<'a>>>,
-    symbols: Cow<'a, HashMap<String, Symbol>>,
-    defs: &'a HashMap<String, ast::Definition>,
+    symbols: Cow<'a, DHashMap<String, Symbol>>,
+    defs: &'a DHashMap<String, ast::Definition>,
 }
 impl<'a> ScopeInfo<'a> {
     fn parent(&self) -> Option<&ScopeInfo<'a>> {
@@ -271,12 +271,7 @@ impl TypingCtx {
         key
     }
     pub fn add_proto_ty(&mut self, name: String, generic_count: u8) -> SymbolKey {
-        self.add_type(name, TypeDef::Struct(Struct {
-            members: Vec::new(),
-            methods: HashMap::new(),
-            generic_count,
-            name: String::new()
-        }))
+        self.add_type(name, TypeDef::NotGenerated { generic_count, generating: false })
     }
     pub fn add_const(&mut self, c: ConstVal) -> SymbolKey {
         let key = SymbolKey(self.consts.len() as u64);
@@ -392,8 +387,8 @@ pub struct Scope<'s> {
 impl<'s> Scope<'s> {
     pub fn new(
         ctx: &'s mut TypingCtx,
-        symbols: &'s HashMap<String, Symbol>,
-        defs: &'s HashMap<String, ast::Definition>,
+        symbols: &'s DHashMap<String, Symbol>,
+        defs: &'s DHashMap<String, ast::Definition>,
         globals: GlobalsRef<'s>,
         ast: &'s ast::Ast,
         module: ModuleId,
@@ -428,7 +423,7 @@ impl<'s> Scope<'s> {
     pub fn src(&self, span: TSpan) -> &str {
         &self.ast.sources()[self.module.idx()].0[span.range()]
     }
-    pub fn child<'c>(&'c mut self, symbols: HashMap<String, Symbol>, defs: &'c HashMap<String, ast::Definition>)
+    pub fn child<'c>(&'c mut self, symbols: DHashMap<String, Symbol>, defs: &'c DHashMap<String, ast::Definition>)
     -> Scope<'c>
     where 's: 'c {
         Scope {
