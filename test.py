@@ -15,13 +15,16 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
-    errors = test_files() + test_readme()
+    total, errors = test_files()
+    total2, errors2 = test_readme()
+    total += total2
+    errors += errors2
+
     if errors > 0:
-        s = 's' if errors > 1 else ''
-        print(f'{RED}{errors} test{s} failed!{R}')
+        print(f'{RED}{errors}/{total} tests failed!{R}')
         exit(1)
     else:
-        print(f'{GREEN}All tests passed!{R}')
+        print(f'{GREEN}All {total} tests passed!{R}')
 
 def test_files():
     print(f'{CYAN}Compiling...{R}')
@@ -65,23 +68,28 @@ def test_readme():
             current_source += line
 
     os.remove(tmp_file)
-    return errors
+    return block_count, errors
 
 
 
 
 def walk(walkdir):
     errors = 0
+    total = 0
     with os.scandir(walkdir) as it:
         for entry in it:
             if entry.name.endswith('.eye') and entry.is_file():
+                total += 1
                 if not test(entry.path): errors += 1
             elif entry.is_dir():
                 if os.path.exists(entry.path + "/main.eye"):
+                    total += 1
                     if not test(entry.path): errors += 1
                 else:
-                    walk(entry.path)
-    return errors
+                    total2, errors2 = walk(entry.path)
+                    total += total2
+                    errors += errors2
+    return total, errors
     
 
 

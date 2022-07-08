@@ -1,6 +1,5 @@
 use std::fmt;
 use color_format::*;
-use crate::ast::Defs;
 use crate::dmap::DHashMap;
 use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
@@ -209,7 +208,7 @@ impl TypeDef {
         match self {
             TypeDef::Struct(struct_) => struct_.generic_count,
             TypeDef::Enum(enum_) => enum_.generic_count,
-            Self::NotGenerated { .. } => unreachable!()
+            Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
     pub fn is_zero_sized(&self, types: &[(String, TypeDef)], generics: &[Type]) -> bool {
@@ -234,7 +233,6 @@ pub struct Struct {
     pub members: Vec<(String, Type)>,
     pub methods: DHashMap<String, SymbolKey>,
     pub generic_count: u8,
-    pub name: String
 }
 impl fmt::Display for Struct {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -274,7 +272,7 @@ pub enum ConstVal {
     EnumVariant(String),
     Bool(bool),
     Symbol(Symbol),
-    NotGenerated { defs: Defs, generating: bool },
+    NotGenerated,
 }
 impl ConstVal {
     pub fn is_invalid(&self) -> bool {

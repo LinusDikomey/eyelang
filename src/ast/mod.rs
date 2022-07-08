@@ -20,9 +20,6 @@ impl Ast {
             }
         }
     }
-    pub fn sources(&self) -> &[(String, PathBuf)] {
-        &self.sources
-    }
     pub fn add_expr(&mut self, expr: Expr) -> ExprRef {
         self.expr_builder.add(expr)
     }
