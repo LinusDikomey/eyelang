@@ -1,6 +1,6 @@
 use std.c.printf
 
-fib :: fn(x i32) i32: if x < 2: x else fib(x-1) + fib(x-2)
+fib :: fn(x i32) -> i32: if x < 2: x else fib(x-1) + fib(x-2)
 
 # this is implemented with recursion instead of a loop because loops don't exist yet
 fibs :: fn(n i32) {

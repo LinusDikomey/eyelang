@@ -1,5 +1,5 @@
 
-main :: fn i32 {
+main :: fn -> i32 {
     #-
     x := std.string_to_int(std.input("Enter a number: "))
     y := std.string_to_int(std.input("Enter another number: "))

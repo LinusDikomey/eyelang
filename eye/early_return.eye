@@ -5,12 +5,12 @@ main :: fn {
 }
 
 
-half :: fn(x i32) i32 {
+half :: fn(x i32) -> i32 {
     if x < 2: ret 0
     ret x / 2
 }
 
-test :: fn(num i32) *i8 {
+test :: fn(num i32) -> *i8 {
     ret if num < 10 {
         ret "Your number is small"
     } else "Your number is at least 10"
@@ -20,7 +20,7 @@ test :: fn(num i32) *i8 {
     if x < y { ret "" }
 }
 
-while_loop :: fn i32 {
+while_loop :: fn -> i32 {
     while true {
         ret 0
     }

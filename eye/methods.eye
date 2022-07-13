@@ -13,7 +13,7 @@ Vec2 :: struct {
     x i32,
     y i32,
 
-    zero :: fn() Vec2: Vec2(0, 0)
+    zero :: fn() -> Vec2: Vec2(0, 0)
     add :: fn(a *Vec2, b Vec2) {
         a^.x += b.x
         a^.y += b.y

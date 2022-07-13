@@ -5,7 +5,7 @@ main :: fn {
     std.c.printf("Result: %d\n", calc(mode, a, b))
 }
 
-calc :: fn(mode *i8, a i32, b i32) i32 {
+calc :: fn(mode *i8, a i32, b i32) -> i32 {
     ret if std.streq(mode, "+"): a + b
     else if std.streq(mode, "-"): a - b
     else if std.streq(mode, "*"): a * b
@@ -15,5 +15,5 @@ calc :: fn(mode *i8, a i32, b i32) i32 {
     else -1
 }
 
-shl :: fn(x i32, amount i32) i32: if amount <= 0: x else shl(x, amount - 1) * 2
-shr :: fn(x i32, amount i32) i32: if amount <= 0: x else shr(x, amount - 1) / 2
+shl :: fn(x i32, amount i32) -> i32: if amount <= 0: x else shl(x, amount - 1) * 2
+shr :: fn(x i32, amount i32) -> i32: if amount <= 0: x else shr(x, amount - 1) / 2

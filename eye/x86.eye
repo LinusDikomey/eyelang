@@ -1,5 +1,5 @@
 fn getchar() extern
-fn printf(msg *i8, ...) i32 extern
+fn printf(msg *i8, ...) -> i32 extern
 
 fn main {
     x := calc(7, 3)
@@ -8,4 +8,4 @@ fn main {
 }
 
 
-fn calc(a i64, b i64) i64: a / b
+fn calc(a i64, b i64) -> i64: a / b

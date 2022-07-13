@@ -17,15 +17,15 @@ main :: fn {
 
 PI :: 3.14
 
-circle_area :: fn(r f64) f64: PI * r * r
+circle_area :: fn(r f64) -> f64: PI * r * r
 
 Fruit :: enum { Apple Banana }
 
-fruit_to_string :: fn(f Fruit) *i8:
+fruit_to_string :: fn(f Fruit) -> *i8:
     if f == .Apple: "Apple"
     else "Banana"
 
 
 ToString :: trait {
-    to_string :: fn *i8
+    to_string :: fn -> *i8
 }

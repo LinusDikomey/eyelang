@@ -315,17 +315,12 @@ impl<'a> Parser<'a> {
             })?;
         }
         //FIXME: this is a pretty ugly hack for determining wether to parse a type
-        let return_type = if matches!(
-            self.toks.peek().map(|tok| tok.ty),
-            Some(
-                TokenType::LBrace | TokenType::Colon | TokenType::Keyword(Keyword::Extern)
-                | TokenType::Keyword(Keyword::Fn) | TokenType::RBrace
-            )
-        ) {
-            UnresolvedType::Primitive(Primitive::Unit, self.toks.previous().unwrap().span())
-        } else {
+        let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
             self.parse_type()?
+        } else {
+            UnresolvedType::Primitive(Primitive::Unit, self.toks.previous().unwrap().span())
         };
+
         Ok(Function {
             params,
             generics,

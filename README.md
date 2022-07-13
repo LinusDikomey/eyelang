@@ -28,7 +28,7 @@ main :: fn {
 ```rust
 use std.c.printf
 
-add_pointer_values :: fn(x *i32, y *i32) i32: x^ + y^
+add_pointer_values :: fn(x *i32, y *i32) -> i32: x^ + y^
 
 main :: fn {
     x := 5
@@ -39,7 +39,7 @@ main :: fn {
 
 ### Expressions, type inference
 ```rust
-add :: fn(x i64, y i64) i64: x + y
+add :: fn(x i64, y i64) -> i64: x + y
 
 main :: fn {
     x := 3 # x is inferred to have type i64

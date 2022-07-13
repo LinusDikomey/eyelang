@@ -11,31 +11,31 @@ skip_char :: fn {
     c.scanf("%c", (&tmp) as *i8)
 }
 
-readline :: fn *i8 {
+readline :: fn -> *i8 {
     line := c.malloc(1024)
     c.scanf("%1023[^\n]", line)
     skip_char()
     ret line
 }
 
-input :: fn(msg *i8) *i8 {
+input :: fn(msg *i8) -> *i8 {
     print(msg)
     line := readline()
     ret line
 }
 
-int_to_string :: fn(i i32) *i8 {
+int_to_string :: fn(i i32) -> *i8 {
     max_len := 10
     buffer := c.malloc(max_len)
     c.snprintf(buffer, max_len, "%d", i)
     ret buffer
 }
 
-parse_int :: fn(s *i8) i32 {
+parse_int :: fn(s *i8) -> i32 {
     ret c.atoi(s)
 }
 
-streq :: fn(a *i8, b *i8) bool {
+streq :: fn(a *i8, b *i8) -> bool {
     ret c.strcmp(a, b) == 0
 }
 
@@ -45,9 +45,9 @@ Buf :: struct {
     cap u64
 }
 
-buf :: fn(initial_cap u64) Buf: Buf(c.malloc(initial_cap), 0, initial_cap)
+buf :: fn(initial_cap u64) -> Buf: Buf(c.malloc(initial_cap), 0, initial_cap)
 
-buf_write :: fn(buf Buf, ptr *i8, len u64) Buf {
+buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
     if buf.cap - buf.size >= len {
         # enough capacity
         c.memcpy(c.ptr_add(buf.ptr as *i8, buf.size), ptr as *i8, len)
@@ -67,7 +67,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) Buf {
     ret buf
 }
 
-panic :: fn(msg *i8) ! {
+panic :: fn(msg *i8) -> ! {
     root.std.c.printf("PANIC: %s\n", msg)
     root.std.c.exit(1)
 }

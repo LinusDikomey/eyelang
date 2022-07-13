@@ -11,9 +11,9 @@ main :: fn {
 
 SomeType :: struct { x i32, y i32 }
 
-never_return :: fn SomeType: exit(5)
+never_return :: fn -> SomeType: exit(5)
 
-if_never :: fn f32 {
+if_never :: fn -> f32 {
 
     if 1 > 2 {
         exit(7)
@@ -23,7 +23,7 @@ if_never :: fn f32 {
     ret 3.5
 }
 
-while_never :: fn *i8 {
+while_never :: fn -> *i8 {
 
     while false {
         exit(7)
@@ -33,7 +33,7 @@ while_never :: fn *i8 {
     ret "Hello from while_never"
 }
 
-block_never :: fn i16 {
+block_never :: fn -> i16 {
     {
         x := 123
         exit(8)

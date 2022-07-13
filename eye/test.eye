@@ -1,13 +1,13 @@
 # print and parse are no longer intrinsics so these are added to make the program work
 print :: fn(s *i8, ...) {}
-parse :: fn(s *i8) i32: 0
+parse :: fn(s *i8) -> i32: 0
 
 sayHello :: fn(newline bool): print("Hello", if newline: "\n" else "")
 bye :: fn { print("Bye") }
 
-add :: fn(x i32, y i32) i32: x + y
+add :: fn(x i32, y i32) -> i32: x + y
 
-abs :: fn(x i32) i32: if x < 0: -x else x
+abs :: fn(x i32) -> i32: if x < 0: -x else x
 bla :: fn(x i32, y i32) {
     z := 3
     w := 5
@@ -46,7 +46,7 @@ main :: fn {
     
     i := 5
     while i < 10: i = incAndPrint(i)
-    incAndPrint :: fn(i i32) i32 {
+    incAndPrint :: fn(i i32) -> i32 {
         std.c.printf("I is %d\n", i)
         ret i + 1
     }
@@ -72,7 +72,7 @@ Vec3 :: struct {
     z f32
 }
 
-addVec3 :: fn(a Vec3, b Vec3) Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 printVec3 :: fn(v Vec3) {
     std.c.printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
 }
