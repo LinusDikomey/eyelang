@@ -85,11 +85,13 @@ impl<C: Representer> Repr<C> for Module {
 
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
+        c.write_start(name);
+        c.write_add(" :: ");
         match self {
-            Self::Function(func) => func.repr(c, name, false),
-            Self::Struct(struc) => struc.repr(c, name),
-            Self::Enum(def) => def.repr(c, name),
-            Self::Trait(t) => t.repr(c, name),
+            Self::Function(func) => func.repr(c, false),
+            Self::Struct(struc) => struc.repr(c),
+            Self::Enum(def) => def.repr(c),
+            Self::Trait(t) => t.repr(c),
             Self::Module(_) => {}
             Self::Use(path) => {
                 c.write_add("use ");
@@ -120,9 +122,8 @@ impl Definition {
 }
 
 impl Function {
-    fn repr<C: Representer>(&self, c: &C, name: &str, in_trait: bool) {
-        c.write_start("fn ");
-        c.write_add(name);
+    fn repr<C: Representer>(&self, c: &C, in_trait: bool) {
+        c.write_add("fn");
         if !self.params.is_empty() {
             c.write_add("(");
             for (i, (name, param, _, _)) in self.params.iter().enumerate() {
@@ -152,8 +153,8 @@ impl Function {
 }
 
 impl StructDefinition {
-    fn repr<C: Representer>(&self, c: &C, name: &str) {
-        c.writeln(format!("{} :: {{", name));
+    fn repr<C: Representer>(&self, c: &C) {
+        c.write_add("struct {\n");
         let child = c.child();
         for (i, (name, ty, _, _)) in self.members.iter().enumerate() {
             child.begin_line();
@@ -167,8 +168,8 @@ impl StructDefinition {
 }
 
 impl EnumDefinition {
-    fn repr<C: Representer>(&self, c: &C, name: &str) {
-        c.writeln(format!("{} :: {{", name));
+    fn repr<C: Representer>(&self, c: &C) {
+        c.write_add("enum {\n");
         let child = c.child();
         for (_, name) in self.variants.iter() {
             child.begin_line();
@@ -180,13 +181,13 @@ impl EnumDefinition {
 
 
 impl TraitDefinition {
-    fn repr<C: Representer>(&self, c: &C, name: &str) {
-        c.write_start("trait ");
-        c.write_add(name);
-        c.write_add(" {\n");
+    fn repr<C: Representer>(&self, c: &C) {
+        c.write_add("trait {\n");
         let child = c.child();
         for (name, (_, func)) in &self.functions {
-            func.repr(&child, name, true);
+            c.write_start(name.as_str());
+            c.write_add(" :: ");
+            func.repr(&child, true);
         }
         c.write_start("}");
     }

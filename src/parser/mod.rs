@@ -227,8 +227,7 @@ impl<'a> Parser<'a> {
                                 generics: generics.map_or(Vec::new(), |g| g.1),
                                 variants
                             })
-                        } else if self.toks.step_if(TokenType::Keyword(Keyword::Trait)).is_some() {
-                            let trait_tok = self.toks.step_assert(Keyword::Trait);
+                        } else if let Some(trait_tok) = self.toks.step_if(TokenType::Keyword(Keyword::Trait)) {
                             let def = self.parse_trait_def(trait_tok)?;
                             Definition::Trait(def)
                         } else {
@@ -362,7 +361,8 @@ impl<'a> Parser<'a> {
                     let name = next.get_val(self.src).to_owned();
                     let name_span = next.span();
                     self.toks.step_expect(TokenType::DoubleColon)?;
-                    let mut func = self.parse_function_header(next)?;
+                    let fn_tok = self.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
+                    let mut func = self.parse_function_header(fn_tok)?;
                     if matches!(
                         self.toks.peek().map(|t| t.ty),
                         Some(TokenType::Colon | TokenType::LBrace)

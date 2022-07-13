@@ -277,12 +277,22 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let exe_file = format!("eyebuild/{output_name}");
     let exec = || {
         cprintln!("#g<Running {}>...", output_name);
-        let _status = std::process::Command::new(&exe_file)
+        let mut command = std::process::Command::new(&exe_file);
+        // use the exec() syscall on unix systems or just spawn a child process and pass on it's exit code otherwise. 
+        #[cfg(unix)]
+        {
+            let error = std::os::unix::prelude::CommandExt::exec(&mut command);
+            panic!("Failed to exec the executable command: {error:?}");
+        }
+        #[cfg(not(unix))]
+        {
+            let status = command
             .spawn()
             .expect("Failed to run the executable command")
             .wait()
             .expect("Running process failed");
-        //println!("{}", format!("\nThe program {output_name} exited with status: {status}").green());
+            std::process::exit(status.code().unwrap_or(0));
+        }
     };
 
     if args.cmd.is_compiled() {
