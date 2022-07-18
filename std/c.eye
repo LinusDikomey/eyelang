@@ -27,11 +27,3 @@ rand :: fn -> i32 extern
 srand :: fn(seed u32) extern
 
 exit :: fn(status i32) -> ! extern
-
-# from help.c
-
-ptr_add :: fn(ptr *i8, offset u64) -> *i8 extern
-ptr_sub :: fn(ptr *i8, offset u64) -> *i8 extern
-
-ptr_to_int :: fn(ptr *()) -> u64 extern
-int_to_ptr :: fn(i u64) -> *() extern

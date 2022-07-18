@@ -304,15 +304,6 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                 Err(err) => panic!("Failed to create eyebuild directory: {}", err)
             }
         }
-        // compile help.c for some helper methods implemented in c
-        let res = std::process::Command::new("clang")
-            .args(["-c", "help/help.c", "-o", "eyebuild/help.o"])
-            .status()
-            .expect("Failed to run command to compile help.c");
-        if !res.success() {
-            eprintln!("The help.c compilation command failed. \
-                The help.o object file is assumed to be found in the eyebuild directory now.");
-        }
     }
 
     match (args.cmd, args.backend) {

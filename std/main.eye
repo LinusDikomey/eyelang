@@ -50,7 +50,7 @@ buf :: fn(initial_cap u64) -> Buf: Buf(c.malloc(initial_cap), 0, initial_cap)
 buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
     if buf.cap - buf.size >= len {
         # enough capacity
-        c.memcpy(c.ptr_add(buf.ptr as *i8, buf.size), ptr as *i8, len)
+        c.memcpy((buf.ptr as u64 + buf.size) as *i8, ptr as *i8, len)
         buf.size += len
     } else {
         # not enough capacity, reallocate
@@ -60,7 +60,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
         c.memcpy(new_ptr, buf.ptr as *i8, buf.size)
         c.free(buf.ptr as *i8)
 
-        c.memcpy(c.ptr_add(new_ptr, buf.size), ptr as *i8, len)
+        c.memcpy((new_ptr as u64 + buf.size) as *i8, ptr as *i8, len)
 
         buf = Buf(new_ptr, new_size, new_cap)
     }
