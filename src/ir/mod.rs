@@ -2,7 +2,7 @@ use std::fmt;
 use color_format::*;
 use crate::dmap::DHashMap;
 use crate::help::{write_delimited, write_delimited_with};
-use crate::types::Primitive;
+use crate::types::{Primitive, IntType, FloatType};
 use typing::{TypeTable, TypeInfo, FinalTypeTable};
 
 mod gen;
@@ -266,8 +266,8 @@ pub struct TraitDef {
 pub enum ConstVal {
     Invalid,
     Unit,
-    Int(i128),
-    Float(f64),
+    Int(Option<IntType>, i128),
+    Float(Option<FloatType>, f64),
     String(String),
     EnumVariant(String),
     Bool(bool),
@@ -283,8 +283,8 @@ impl ConstVal {
         match self {
             ConstVal::Invalid => TypeInfo::Invalid,
             ConstVal::Unit => TypeInfo::Primitive(Primitive::Unit),
-            ConstVal::Int(_) => TypeInfo::Int,
-            ConstVal::Float(_) => TypeInfo::Float,
+            ConstVal::Int(ty, _) => ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into())),
+            ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
@@ -296,13 +296,28 @@ impl ConstVal {
 impl PartialEq for ConstVal {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
-            (Self::Float(l0), Self::Float(r0)) => l0 == r0,
+            (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
+            (Self::Float(_, l0), Self::Float(_, r0)) => l0 == r0,
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
             (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
             _ => false
+        }
+    }
+}
+impl fmt::Display for ConstVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConstVal::Invalid => write!(f, "[invalid]"),
+            ConstVal::Unit => write!(f, "()"),
+            ConstVal::Int(_, int) => write!(f, "{int}"),
+            ConstVal::Float(_, float) => write!(f, "{float}"),
+            ConstVal::String(s) => write!(f, "{s}"),
+            ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
+            ConstVal::Bool(b) => write!(f, "{b}"),
+            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
+            ConstVal::NotGenerated => write!(f, "[not generated]"),
         }
     }
 }
@@ -322,14 +337,20 @@ impl fmt::Display for Module {
                 name = name,
             )?;
         }
+        for (name, ty, val) in &self.globals {
+            cwriteln!(f, "#b<global> #r<{}> : #m<{}>\n", name, ty)?;
+            if let Some(val) = val {
+                cwriteln!(f, " = {}", val)?;
+            }
+        }
         for func in &self.funcs {
             if func.ir.is_none() {
                 cwriteln!(f, "#m<extern> #r<{}>{}", func.name, func)?;
             } else {
                 cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
-                func,
-                name = func.name
-            )?;
+                    func,
+                    name = func.name
+                )?;
             }
         }
         Ok(())
@@ -445,7 +466,7 @@ impl Instruction {
                 }
                 Ok(())
             }
-            DataVariant::Global => cwrite!(f, "global #c<{:?}>", self.data.symbol),
+            DataVariant::Global => cwrite!(f, "#c<##{}>", self.data.symbol.0),
             DataVariant::None => Ok(())
         }}
     }

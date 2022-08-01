@@ -731,11 +731,11 @@ unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ir::ConstVal) ->
     Some(match val {
         ir::ConstVal::Invalid => LLVMGetUndef(ty),
         ir::ConstVal::Unit => return None,
-        &ir::ConstVal::Int(int) => {
+        &ir::ConstVal::Int(_, int) => {
             let unsigned_int = if int < 0 { (-int) as u128 } else { int as u128 };
             LLVMConstInt(ty, u64::try_from(unsigned_int).expect("TODO: large global ints"), llvm_bool(int < 0))
         }
-        ir::ConstVal::Float(_float) => todo!("Float globals"),
+        ir::ConstVal::Float(_, _float) => todo!("Float globals"),
         ir::ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
         ir::ConstVal::EnumVariant(_val) => todo!("static enum values"),
         &ir::ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), if b {1} else {0}, FALSE),

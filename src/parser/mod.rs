@@ -235,24 +235,34 @@ impl<'a> Parser<'a> {
                         };
                         Item::Definition { name: name.to_owned(), name_span: ident_span, def }
                     }
-                    // Variable declaration with explicit type
+                    // Variable or constant declaration with explicit type
                     Some(TokenType::Colon) => {
                         self.toks.step_assert(TokenType::Colon);
                         let ty = self.parse_type()?;
-                        Item::Expr(if self.toks.step_if(TokenType::Equals).is_some() {
+                        if self.toks.step_if(TokenType::Equals).is_some() {
+                            // typed variable with initial value
+
                             let val = self.parse_expr()?;
-                            self.ast.add_expr(Expr::DeclareWithVal {
+                            Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
                                 name: ident_span,
                                 annotated_ty: ty,
                                 val
-                            })
+                            }))
+                        } else if self.toks.step_if(TokenType::Colon).is_some() {
+                            // typed constant
+                            Item::Definition {
+                                name: name.to_owned(),
+                                name_span: ident_span,
+                                def: Definition::Const(ty, self.parse_expr()?)
+                            }
                         } else {
-                            self.ast.add_expr(Expr::Declare {
+                            // typed variable without initial value
+                            Item::Expr(self.ast.add_expr(Expr::Declare {
                                 name: ident_span,
                                 annotated_ty: ty,
                                 end: self.toks.previous().unwrap().end
-                            })
-                        })
+                            }))
+                        }
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {

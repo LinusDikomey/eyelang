@@ -86,7 +86,9 @@ impl<C: Representer> Repr<C> for Module {
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         c.write_start(name);
-        c.write_add(" :: ");
+        if !matches!(self, Self::Global(_, _) | Self::Const(_, _)) {
+            c.write_add(" :: ");
+        }
         match self {
             Self::Function(func) => func.repr(c, false),
             Self::Struct(struc) => struc.repr(c),
@@ -136,7 +138,7 @@ impl Function {
             }
             c.write_add(")");
         }
-        c.space();
+        c.write_add(" -> ");
         self.return_type.repr(c);
         match &self.body.map(|body| &c.ast()[body]) {
             Some(block@Expr::Block { .. }) => {

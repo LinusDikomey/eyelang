@@ -141,7 +141,7 @@ impl TokenType {
             TokenType::StringLiteral => "string literal",
             TokenType::IntLiteral => "int literal",
             TokenType::FloatLiteral => "float literal",
-            TokenType::Keyword(kw) => { is_text = true; kw.into() },
+            &TokenType::Keyword(kw) => { is_text = true; kw.into() },
             TokenType::Ident => "identifier",
         };
         (s, is_text)
@@ -181,7 +181,7 @@ impl fmt::Display for FloatLiteral {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, strum::IntoStaticStr)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Keyword {
     Primitive(Primitive),
     Fn,
@@ -201,6 +201,30 @@ pub enum Keyword {
     Root,
     Use,
     Asm,
+}
+impl Into<&'static str> for Keyword {
+    fn into(self) -> &'static str {
+        match self {
+            Keyword::Primitive(p) => p.into(),
+            Keyword::Fn => "fn",
+            Keyword::Ret => "ret",
+            Keyword::True => "true",
+            Keyword::False => "false",
+            Keyword::And => "and",
+            Keyword::Or => "or",
+            Keyword::As => "as",
+            Keyword::Struct => "struct",
+            Keyword::Enum => "enum",
+            Keyword::Trait => "trait",
+            Keyword::If => "if",
+            Keyword::Else => "else",
+            Keyword::While => "while",
+            Keyword::Extern => "extern",
+            Keyword::Root => "root",
+            Keyword::Use => "use",
+            Keyword::Asm => "asm",
+        }
+    }
 }
 impl FromStr for Keyword {
     type Err = ();

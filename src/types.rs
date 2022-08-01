@@ -27,6 +27,9 @@ impl Primitive {
             _ => return None
         })
     }
+    pub fn is_int(self) -> bool {
+        self.as_int().is_some()
+    }
 
     pub fn as_float(self) -> Option<FloatType> {
         use Primitive::*;
@@ -35,6 +38,9 @@ impl Primitive {
             F64 => FloatType::F64,
             _ => return None
         })
+    }
+    pub fn is_float(self) -> bool {
+        self.as_float().is_some()
     }
 
     pub fn size(self) -> u32 {
@@ -49,10 +55,10 @@ impl Primitive {
         }
     }
 }
-impl fmt::Display for Primitive {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Into<&'static str> for Primitive {
+    fn into(self) -> &'static str {
         use Primitive::*;
-        let s = match self {
+        match self {
             I8 => "i8",
             U8 => "u8",
             I16 => "i16",
@@ -69,8 +75,12 @@ impl fmt::Display for Primitive {
             Unit => "()",
             Never => "!",
             Type => "type",
-        };
-        write!(f, "{}", s)
+        }
+    }
+}
+impl fmt::Display for Primitive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", Into::<&'static str>::into(*self))
     }
 }
 

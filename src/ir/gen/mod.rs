@@ -1,7 +1,7 @@
 use std::ptr::NonNull;
 
 use crate::{
-    ast::{self, Expr, ModuleId, UnOp, ExprRef, IdentPath},
+    ast::{self, Expr, ModuleId, UnOp, ExprRef, IdentPath, UnresolvedType},
     error::{Error, Errors, EyeResult},
     lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
     types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
@@ -630,7 +630,7 @@ impl<'s> Scope<'s> {
     }
         
 
-    fn resolve_type(&mut self, unresolved: &ast::UnresolvedType, types: &mut TypeTable, ctx: &mut GenCtx)
+    fn resolve_type(&mut self, unresolved: &UnresolvedType, types: &mut TypeTable, ctx: &mut GenCtx)
     -> Result<TypeInfo, Error> {
         match unresolved {
             ast::UnresolvedType::Primitive(p, _) => Ok(TypeInfo::Primitive(*p)),
@@ -733,7 +733,7 @@ impl<'s> Scope<'s> {
     }
 
     // TODO: rename to uninferred
-    fn resolve_uninferred_type(&mut self, unresolved: &ast::UnresolvedType, ctx: &mut GenCtx)
+    fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx)
     -> Type {
         match unresolved {
             ast::UnresolvedType::Primitive(p, _) => Type::Prim(*p),
@@ -1139,7 +1139,8 @@ impl<'s> Scope<'s> {
                         Symbol::LocalType(t) => ExprResult::LocalType(t),
                         Symbol::Module(m) => ExprResult::Module(m),
                         Symbol::Const(c) => {
-                            let const_ty = self.get_or_gen_const(ctx, c, *span).type_info(&mut ir.types);
+                            let const_val = self.get_or_gen_const(ctx, c, *span);
+                            let const_ty = const_val.type_info(&mut ir.types);
                             ir.specify(info.expected, const_ty, &mut ctx.errors, *span, &ctx.ctx);
                             let val = ctx.ctx.get_const(c);
                             self.const_val_to_result(val, ir, info)
@@ -1827,7 +1828,7 @@ impl<'s> Scope<'s> {
             }
             ConstVal::Invalid => Ref::UNDEF,
             ConstVal::Unit => Ref::UNIT,
-            ConstVal::Int(val) => {
+            ConstVal::Int(_, val) => {
                 if *val > u64::MAX as i128 || *val < -(u64::MAX as i128) {
                     todo!("Large ints aren't implemented");
                 }
@@ -1838,7 +1839,7 @@ impl<'s> Scope<'s> {
                     ir.add(Data { int: *val as u64 }, Tag::Int, info.expected)
                 }
             }
-            ConstVal::Float(val) => ir.add(Data { float: *val }, Tag::Float, info.expected),
+            ConstVal::Float(_, val) => ir.add(Data { float: *val }, Tag::Float, info.expected),
             ConstVal::String(val) => {
                 let extra = ir.extra_data(val.as_bytes());
                 ir.add(Data { extra_len: (extra, val.len() as u32) }, Tag::String, info.expected)
@@ -1854,8 +1855,9 @@ impl<'s> Scope<'s> {
     }
 
     // move to types.rs
-    fn eval_const(&mut self, ctx: &mut GenCtx, ty: Option<&ast::UnresolvedType>, val: ExprRef)
+    fn eval_const(&mut self, ctx: &mut GenCtx, ty: Option<&UnresolvedType>, val: ExprRef)
     -> EyeResult<ConstVal> {
+        // typechecking has to work differently here
         #![allow(unused)]
         use crate::error::CompileError;
 
@@ -1865,11 +1867,40 @@ impl<'s> Scope<'s> {
             // ast::Expr::Declare { name, annotated_ty, end } => todo!(),
             // ast::Expr::DeclareWithVal { name, annotated_ty, val } => todo!(),
             // ast::Expr::Return { start, val } => todo!(),
-            ast::Expr::IntLiteral(span) => ConstVal::Int(ctx.src(*span).parse().unwrap()),
-            ast::Expr::FloatLiteral(span) => ConstVal::Float(ctx.src(*span).parse().unwrap()),
-            ast::Expr::StringLiteral(span) => ConstVal::String(string_literal(*span, ctx.ast.src(ctx.module).0)),
-            ast::Expr::BoolLiteral { start, val } => ConstVal::Bool(*val),
-            ast::Expr::EnumLiteral { dot, ident } => ConstVal::EnumVariant(ctx.src(*ident).to_owned()),
+            ast::Expr::IntLiteral(span) => {
+                let ty = match ty {
+                    Some(ast::UnresolvedType::Primitive(p, _)) if p.is_int() => p.as_int(),
+                    Some(ast::UnresolvedType::Infer(_)) | None => None,
+                    _ => return Err(Error::IntExpected.at_span(expr.span_in(ctx.ast, ctx.module)))
+                };
+                ConstVal::Int(ty, ctx.src(*span).parse().unwrap())
+            }
+            ast::Expr::FloatLiteral(span) => {
+                let ty = match dbg!(ty) {
+                    Some(ast::UnresolvedType::Primitive(p, _)) if p.is_float() => p.as_float(),
+                    Some(UnresolvedType::Infer(_)) | None => None,
+                    _ => return Err(Error::FloatExpected.at_span(expr.span_in(ctx.ast, ctx.module)))
+                };
+                ConstVal::Float(ty, ctx.src(*span).parse().unwrap())
+            }
+            ast::Expr::StringLiteral(span) => {
+                if !matches!(ty, Some(UnresolvedType::Pointer(
+                        box (ast::UnresolvedType::Primitive(Primitive::I8, _), _)
+                    )) | Some(UnresolvedType::Infer(_)) | None) {
+                    return Err(Error::MismatchedType.at_span(expr.span_in(ctx.ast, ctx.module)))
+                }
+                ConstVal::String(string_literal(*span, ctx.ast.src(ctx.module).0))
+            }
+            ast::Expr::BoolLiteral { start, val } => {
+                if !matches!(ty, Some(UnresolvedType::Primitive(Primitive::Bool, _))
+                    | Some(UnresolvedType::Infer(_)) | None) {
+                    return Err(Error::MismatchedType.at_span(expr.span_in(ctx.ast, ctx.module)))
+                }
+                ConstVal::Bool(*val)
+            }
+            ast::Expr::EnumLiteral { dot, ident } => {
+                ConstVal::EnumVariant(ctx.src(*ident).to_owned())
+            }
             ast::Expr::Nested(_, inner) => self.eval_const(ctx, ty, *inner)?,
             ast::Expr::Unit(_) => ConstVal::Unit,
             ast::Expr::Variable(span) => {
@@ -1903,10 +1934,10 @@ impl<'s> Scope<'s> {
                 if val.is_invalid() { return Ok(ConstVal::Invalid) }
                 match op {
                     ast::UnOp::Neg => {
-                        let ConstVal::Int(int_val) = val else {
+                        let ConstVal::Int(int_ty, int_val) = val else {
                             return Err(CompileError::new(Error::CantNegateType, ctx.span(&ctx.ast[*inner])));
                         };
-                        ConstVal::Int(-int_val)
+                        ConstVal::Int(int_ty, -int_val)
                     }
                     ast::UnOp::Not => {
                         let ConstVal::Bool(bool_val) = val else {
@@ -1924,6 +1955,17 @@ impl<'s> Scope<'s> {
 
                 if l_val.is_invalid() || r_val.is_invalid() { return Ok(ConstVal::Invalid); }
 
+                macro_rules! ty_merge {
+                    ($l: expr, $r: expr) => {
+                        match ($l, $r) {
+                            (Some(t), None) | (None, Some(t)) => Some(t),
+                            (Some(l), Some(r)) => if l == r { Some(l) } else {
+                                return Err(Error::MismatchedType.at_span(ctx.span(expr)))
+                            }
+                            (None, None) => None,
+                        }
+                    };
+                }
 
                 match op {
                     Operator::Assignment(_) => {
@@ -1937,8 +1979,20 @@ impl<'s> Scope<'s> {
                                         Operator::$tok => {
                                             match (l_val, r_val) {
                                                 (ConstVal::Invalid, ConstVal::Invalid) => ConstVal::Invalid,
-                                                (ConstVal::Int(l), ConstVal::Int(r)) => ConstVal::Int(l $t r),
-                                                (ConstVal::Float(l), ConstVal::Float(r)) => ConstVal::Float(l $t r),
+                                                (ConstVal::Int(l_ty, l), ConstVal::Int(r_ty, r)) => {
+                                                    let ty = ty_merge!(l_ty, r_ty);
+                                                    ConstVal::Int(ty, l $t r)
+                                                },
+                                                (ConstVal::Float(l_ty, l), ConstVal::Float(r_ty, r)) => {
+                                                    let ty = match (l_ty, r_ty) {
+                                                        (Some(t), None) | (None, Some(t)) => Some(t),
+                                                        (Some(l), Some(r)) => if l == r { Some(l) } else {
+                                                            return Err(Error::MismatchedType.at_span(ctx.span(expr)))
+                                                        }
+                                                        (None, None) => None,
+                                                    };
+                                                    ConstVal::Float(l_ty, l $t r)
+                                                }
                                                 _ => {
                                                     return Err(CompileError::new(
                                                         Error::MismatchedType, ctx.span(expr)
@@ -1974,8 +2028,14 @@ impl<'s> Scope<'s> {
                                         Operator::$op => ConstVal::Bool(match (l_val, r_val) {
                                             (ConstVal::Invalid, ConstVal::Invalid) => return Ok(ConstVal::Invalid),
                                             (ConstVal::Unit, ConstVal::Unit) => $eq,
-                                            (ConstVal::Int(l), ConstVal::Int(r)) => l $t r,
-                                            (ConstVal::Float(l), ConstVal::Float(r)) => l $t r,
+                                            (ConstVal::Int(l_ty, l), ConstVal::Int(r_ty, r)) => {
+                                                ty_merge!(l_ty, r_ty);
+                                                l $t r
+                                            }
+                                            (ConstVal::Float(l_ty, l), ConstVal::Float(r_ty, r)) => {
+                                                ty_merge!(l_ty, r_ty);
+                                                l $t r
+                                            }
                                             (ConstVal::Bool(l), ConstVal::Bool(r)) => l $t r,
                                             _ => {
                                                 return Err(CompileError::new(
