@@ -146,6 +146,7 @@ impl ModuleId {
     }
     pub const ROOT: Self = Self(0);
     pub fn idx(self) -> usize { self.0 as usize }
+    pub fn inner(self) -> u32 { self.0 }
 }
 
 #[derive(Debug, Clone)]

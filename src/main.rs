@@ -6,7 +6,6 @@
     nonzero_ops,
     is_some_with,
     int_log,
-    generic_associated_types,
 )]
 #![warn(unused_qualifications)]
 

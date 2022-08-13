@@ -2,8 +2,13 @@ main :: fn {
     std.c.printf("%d, %d, %d, %d\n", half(-3), half(0), half(1), half(7))
     std.c.printf("%s, %s\n", test(7), test(11))
     std.c.printf("%d\n", while_loop())
+    do_nothing()
 }
 
+do_nothing :: fn {
+    ret
+    std.c.printf("This should never be printed!\n")
+}
 
 half :: fn(x i32) -> i32 {
     if x < 2: ret 0

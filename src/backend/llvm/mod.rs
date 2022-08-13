@@ -161,7 +161,7 @@ unsafe fn build_func(
     globals: &[LLVMValueRef],
 ) {
     crate::log!("-------------------- Building LLVM IR for func {}", func.name);
-    let blocks = (0..ir.block_count)
+    let blocks = ir.blocks.iter()
         .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
         .collect::<Vec<_>>();
 
@@ -294,6 +294,9 @@ unsafe fn build_func(
                     _ => panic!("Enum variant not found for non-enum type")
                 };
                 LLVMConstInt(ty, index as _, FALSE)
+            }
+            ir::Tag::Func| ir::Tag::_TraitFunc| ir::Tag::Type| ir::Tag::Trait| ir::Tag::LocalType| ir::Tag::Module => {
+                ptr::null_mut() // should never be used in runtime code
             }
             ir::Tag::Decl => {
                 if ir.types[ty].is_zero_sized(&module.types, &[]) {
@@ -500,7 +503,7 @@ unsafe fn build_func(
                             _ => panic!("Invalid cast to primitive")
                         }
                     }
-                    Type::Id(_, _) | Type::Array(_) | Type::Tuple(_) => panic!("Invalid cast"),
+                    Type::Id(_, _) | Type::Array(_) | Type::Tuple(_) | Type::Symbol => panic!("Invalid cast"),
                     Type::Pointer(_) => {
                         let llvm_target = llvm_ty(ctx, module, types, target);
                         match origin {
@@ -519,7 +522,11 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::AsPointer => get_ref(&instructions, data.un_op),
-            ir::Tag::Goto => LLVMBuildBr(builder, blocks[data.int32 as usize]),
+            ir::Tag::Goto => {
+                let block_inst = ir.inst[ir.blocks[data.int32 as usize] as usize];
+                debug_assert_eq!(block_inst.tag, ir::Tag::BlockBegin);
+                LLVMBuildBr(builder, blocks[block_inst.data.int32 as usize])
+            }
             ir::Tag::Branch => {
                 let mut bytes = [0; 4];
                 let begin = data.branch.1 as usize;
@@ -648,6 +655,7 @@ unsafe fn llvm_ty_recursive(
 ) -> LLVMTypeRef {
     match ty {
         Type::Prim(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
+        Type::Symbol => LLVMVoidTypeInContext(ctx),
         Type::Prim(p) => llvm_primitive_ty(ctx, *p),
         Type::Id(id, generics) => match &mut types[id.idx()] {
             TypeInstance::Simple(simple) => {

@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::{ast::{Ast, ModuleId}, span::Span, lexer::tokens::TokenType};
+use crate::{ast::{Ast, ModuleId}, span::Span, lexer::tokens::TokenType, ir::Type};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -156,6 +156,7 @@ pub enum Error {
     UnknownVariable,
     UnknownModule,
     MissingMain,
+    InvalidMainReturnType(Type),
     UnexpectedType,
     IntLiteralOutOfRange,
     FloatLiteralOutOfRange,
@@ -173,6 +174,7 @@ pub enum Error {
     MismatchedType,
     ExpectedVarFoundDefinition,
     ExpectedValueFoundDefinition,
+    ExpectedValueFoundFunction,
     ExpectedValueOrModuleFoundDefiniton,
     InvalidArgCount,
     CantNegateType,
@@ -199,6 +201,7 @@ pub enum Error {
     CantIndex,
     ExpectedConstValue,
     UnusedStatementValue,
+    InfiniteLoop,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -213,6 +216,7 @@ impl Error {
             Error::UnknownVariable => "variable not found",
             Error::UnknownModule => "module not found",
             Error::MissingMain => "no main function provided",
+            Error::InvalidMainReturnType(_) => "invalid main return type",
             Error::UnexpectedType => "type was not expected here",
             Error::IntLiteralOutOfRange => "int literal out of range",
             Error::FloatLiteralOutOfRange => "float literal out of range",
@@ -230,6 +234,7 @@ impl Error {
             Error::MismatchedType => "type mismatch",
             Error::ExpectedVarFoundDefinition => "expected variable but found a definition",
             Error::ExpectedValueFoundDefinition => "expected value but found a definition",
+            Error::ExpectedValueFoundFunction => "expected value but found a function",
             Error::ExpectedValueOrModuleFoundDefiniton => "expected value or module but found a definition",
             Error::InvalidArgCount => "invalid argument count",
             Error::CantNegateType => "can't negate this value",
@@ -256,6 +261,7 @@ impl Error {
             Error::CantIndex => "can't index this",
             Error::ExpectedConstValue => "constant value expected",
             Error::UnusedStatementValue => "unused expression value",
+            Error::InfiniteLoop => "possibly detected infinite loop",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -263,6 +269,10 @@ impl Error {
             Error::UnexpectedToken { expected, found } => cformat!(
                 "expected {} but found {}",
                 expected, found
+            ),
+            Error::InvalidMainReturnType(ty) => cformat!(
+                "the main function should return either an integer or the unit type #m<()> but returns {}",
+                ty
             ),
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",

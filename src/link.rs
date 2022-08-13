@@ -50,7 +50,6 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
         Os::Windows => "link.exe",
     });
     cmd.arg(obj);
-    cmd.arg("eyebuild/help.o");
     match os {
         Os::Linux => {
             cmd.args([
@@ -60,8 +59,7 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
                 "help/linux/entry.o",
             ]);
         }
-        Os::Windows => todo!("Can't link automatically with windows yet. \
-            You will have to link the object file in the eyebuild directory manually"),
+        Os::Windows => return None, // TODO: windows linker support
         Os::Osx => {
             let sdk_path_output = Command::new("xcrun")
                 .args(["-sdk", "macosx", "--show-sdk-path"])

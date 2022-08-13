@@ -179,10 +179,9 @@ impl Drop for TypeTable {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TypeTableIndex(u32);
+pub struct TypeTableIndex(pub u32);
 impl TypeTableIndex {
     pub const NONE: Self = Self(u32::MAX);
-
     pub fn idx(self) -> usize { self.0 as usize }
     pub fn is_present(self) -> bool { self.0 != u32::MAX }
 }
@@ -252,6 +251,7 @@ pub enum TypeInfo {
     Array(Option<u32>, TypeTableIndex),
     Enum(TypeTableNames),
     Tuple(TypeTableIndices),
+    Symbol, // compile time Symbol like a function, type or trait
     Invalid,
 }
 impl TypeInfo {
@@ -285,6 +285,9 @@ impl TypeInfo {
             }
             Self::Tuple(indices) => {
                 Type::Tuple(indices.iter().map(|ty| types.get_type(ty).finalize(types)).collect())
+            }
+            Self::Symbol => {
+                Type::Symbol
             }
         }
     }
@@ -393,6 +396,11 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
             }
             Ok(ty)
         
+        }
+        Symbol => if let Symbol = other {
+            Ok(ty)
+        } else {
+            Err(Error::MismatchedType)
         }
         Invalid => Ok(Invalid), // invalid type 'spreading'
     }

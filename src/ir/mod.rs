@@ -7,9 +7,12 @@ use typing::{TypeTable, TypeInfo, FinalTypeTable};
 
 mod gen;
 mod typing;
+mod eval;
 
 pub use gen::Symbol;
 pub use gen::reduce;
+pub use gen::IrBuilder;
+use self::gen::ConstSymbol;
 pub use self::typing::TypeTableIndex;
 use self::typing::TypeTableIndices;
 
@@ -23,6 +26,7 @@ pub enum Type {
     //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
     Enum(Vec<String>),
     Tuple(Vec<Type>),
+    Symbol,
     /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
     Invalid
@@ -36,6 +40,7 @@ impl Type {
             Type::Array(box (inner, size)) => *size == 0 || inner.is_zero_sized(types, generics),
             Type::Enum(variants) => variants.len() < 2,
             Type::Tuple(elems) => elems.iter().all(|ty| ty.is_zero_sized(types, generics)),
+            Type::Symbol => true,
             Type::Generic(idx) => generics[*idx as usize].is_zero_sized(types, generics),
             Type::Invalid => true,
         }
@@ -103,6 +108,7 @@ impl Type {
                 );
                 return TypeInfoOrIndex::Index(generics.nth(*idx as usize));
             }
+            Self::Symbol => TypeInfo::Symbol,
             Self::Invalid => TypeInfo::Invalid
         })
     }
@@ -132,6 +138,7 @@ impl fmt::Display for Type {
                 write!(f, ")")
             }
             Self::Generic(idx) => write!(f, "Generic #{idx}"),
+            Self::Symbol => write!(f, "[symbol]"),
             Self::Invalid => write!(f, "[invalid]"),
         }
     }
@@ -170,7 +177,7 @@ pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
     pub types: FinalTypeTable,
-    pub block_count: u32
+    pub blocks: Vec<u32>,
 }
 impl fmt::Display for FunctionIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -266,19 +273,16 @@ pub struct TraitDef {
 pub enum ConstVal {
     Invalid,
     Unit,
+    // FIXME: storing the value as an i128 is a problem for large values
     Int(Option<IntType>, i128),
     Float(Option<FloatType>, f64),
     String(String),
     EnumVariant(String),
     Bool(bool),
-    Symbol(Symbol),
+    Symbol(ConstSymbol),
     NotGenerated,
 }
 impl ConstVal {
-    pub fn is_invalid(&self) -> bool {
-        matches!(self, Self::Invalid)
-    }
-    
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
         match self {
             ConstVal::Invalid => TypeInfo::Invalid,
@@ -292,15 +296,16 @@ impl ConstVal {
             ConstVal::NotGenerated { .. } => panic!()
         }
     }
-}
-impl PartialEq for ConstVal {
-    fn eq(&self, other: &Self) -> bool {
+
+    fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
         match (self, other) {
+            (Self::Unit, Self::Unit) => true,
             (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
             (Self::Float(_, l0), Self::Float(_, r0)) => l0 == r0,
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
+            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
             (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
             _ => false
         }
@@ -327,7 +332,6 @@ pub struct Module {
     pub funcs: Vec<Function>,
     pub globals: Vec<(String, Type, Option<ConstVal>)>,
     pub types: Vec<(String, TypeDef)>,
-    pub main: Option<SymbolKey>
 }
 impl fmt::Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -374,7 +378,7 @@ impl Instruction {
         InstructionDisplay { inst: self, extra, types }
     }
 
-    fn display_data(&self, f: &mut fmt::Formatter<'_>, extra: &[u8]) -> fmt::Result {
+    fn display_data(&self, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &FinalTypeTable) -> fmt::Result {
         let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
             if let Some(val) = r.into_val() {
                 cwrite!(f, "#y<{}>", val)
@@ -437,6 +441,16 @@ impl Instruction {
                 Ok(())
             }
             DataVariant::Float => cwrite!(f, "#y<{}>", self.data.float),
+            DataVariant::Symbol => cwrite!(f, "f#m<{}>", self.data.symbol.0),
+            DataVariant::TraitFunc => {
+                let mut buf = [0; 8];
+                buf.copy_from_slice(&extra[self.data.trait_func.0 as usize ..self.data.trait_func.0 as usize + 8]);
+                
+                cwrite!(f, "#m<t{}>.#m<f{}>", SymbolKey::from_bytes(buf).0, self.data.trait_func.1)
+            }
+            DataVariant::LocalType => {
+                cwrite!(f, "ty {}", types[TypeTableIndex(self.data.int32)])
+            }
             DataVariant::UnOp => write_ref(f, self.data.un_op),
             DataVariant::BinOp => {
                 write_ref(f, self.data.bin_op.0)?;
@@ -475,7 +489,7 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let InstructionDisplay { inst, extra, types } = self;
         write!(f, "{} ", inst.tag)?;
-        inst.display_data(f, extra)?;
+        inst.display_data(f, extra, self.types)?;
         if inst.ty.is_present() {
             match inst.tag {
                 Tag::Decl => (),
@@ -495,10 +509,19 @@ pub enum Tag {
     Ret,
     RetUndef,
     Param,
+
     Int,
     LargeInt,
     Float,
     EnumLit,
+
+    Func,
+    _TraitFunc,
+    Type,
+    Trait,
+    LocalType,
+    Module,
+
     Decl,
     Load,
     Store,
@@ -545,6 +568,12 @@ impl Tag {
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
             Tag::EnumLit | Tag::String => String,
+            
+            Tag::Func | Tag::Type | Tag::Trait => Symbol,
+            Tag::_TraitFunc => TraitFunc,
+            Tag::LocalType => LocalType,
+            Tag::Module => LargeInt,
+
             Tag::Decl | Tag::RetUndef => None,
             Tag::Call => Call,
             Tag::Global => Global,
@@ -649,6 +678,7 @@ pub union Data {
     pub branch: (Ref, u32),
     pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
     pub symbol: SymbolKey,
+    pub trait_func: (u32, u32), // extra_index for SymbolKey, func index in trait
     pub none: (),
     pub block: BlockIndex
 }
@@ -659,7 +689,7 @@ impl fmt::Debug for Data {
 }
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
     pub fn bytes(self) -> [u8; 4] {
@@ -677,6 +707,9 @@ enum DataVariant {
     Int,
     Int32,
     LargeInt,
+    Symbol,
+    TraitFunc,
+    LocalType,
     Block,
     Branch,
     String,

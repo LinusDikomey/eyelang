@@ -366,6 +366,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                         ir::Type::Id(_, _) | ir::Type::Array(_) | ir::Type::Enum(_) | ir::Type::Tuple(_)
                             => todo!("Non-primitives not supported in x86 backend"),
                         ir::Type::Pointer { .. } => 8,
+                        ir::Type::Symbol => 0,
                         ir::Type::Generic(_) => todo!("Generics not supported in x86 backend"),
                         ir::Type::Invalid => panic!("Invalid type reached codegen")
                     };

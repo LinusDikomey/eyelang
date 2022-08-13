@@ -6,11 +6,12 @@ use crate::{
     lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
     types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
 };
-use builder::IrBuilder;
 
 use super::{typing::*, *};
 
 mod builder;
+
+pub use builder::IrBuilder;
 
 struct GenCtx<'s> {
     ctx: TypingCtx,
@@ -106,23 +107,31 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         }
     }).collect();
 
-    let funcs = ctx
+    let mut funcs = ctx
         .funcs
         .into_iter()
         .map(|func| match func {
             FunctionOrHeader::Header(_) => panic!("Function was not generated"),
             FunctionOrHeader::Func(func) => func,
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let mut main = None;
     if require_main_func {
-        main = Some(if let Some(Symbol::Func(func)) = globals[ModuleId::ROOT].get("main") {
-            *func
+        if let Some(Symbol::Func(func)) = globals[ModuleId::ROOT].get("main") {
+            let eye_main = &mut funcs[func.idx()];
+            debug_assert_eq!(eye_main.name, "main");
+            eye_main.name = "eyemain".to_owned();
+            match main_wrapper(*func, &eye_main.header.return_type) {
+                Ok(main) => funcs.push(main),
+                Err(err) => {
+                    errors.emit_err(err);
+                    return (Err(()), errors)
+                }
+            }
         } else {
             errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
             return (Err(()), errors);
-        });
+        }
     }
 
 
@@ -132,13 +141,54 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
                 name: "MainModule".to_owned(),
                 funcs,
                 globals: global_vars,
-                main,
                 types: ctx.types,
             },
             globals
         )),
         errors,
     )
+}
+
+/// Add hidden function wrapping and calling main to handle exit codes properly.
+/// This will return the main functions exit code casted to i32 if it is an integer.
+/// If the main returns unit, it will always return 0.
+fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Function> {
+    let mut builder = IrBuilder::new(ModuleId::ROOT);
+    let extra = builder.extra_data(&eye_main.bytes());
+
+    let main_return = match main_return_ty {
+        Type::Prim(Primitive::Unit) => None,
+        Type::Prim(p) if p.is_int() => Some(p.as_int().unwrap()),
+        _ => return Err(Error::InvalidMainReturnType(main_return_ty.clone()).at_span(Span::_todo(ModuleId::ROOT)))
+    };
+
+    let main_ret_ty = builder.types.add(
+        main_return.map_or(TypeInfo::UNIT, |int_ty| TypeInfo::Primitive(int_ty.into()))
+    );
+    let i32_ty = builder.types.add(TypeInfo::Primitive(Primitive::I32));
+
+    let exit_code = match main_return {
+        Some(int_ty) => {
+            let main_ret = builder.add(Data { extra_len: (extra, 0) }, Tag::Call, main_ret_ty);
+            if int_ty == IntType::I32 {
+                main_ret
+            } else {
+                builder.add(Data { un_op: main_ret }, Tag::Cast, i32_ty)
+            }
+        }
+        None => {
+            builder._add_unused(Tag::Call, Data { extra_len: (extra, 0) }, main_ret_ty);
+            
+            builder.add(Data { int: 0 }, Tag::Int, i32_ty)
+        }
+    };
+    builder.add_unused_untyped(Tag::Ret, Data { un_op: exit_code });
+    
+    Ok(Function {
+        name: "main".to_owned(),
+        header: FunctionHeader { params: vec![], varargs: false, return_type: Type::Prim(Primitive::I32) },
+        ir: Some(builder.finish())
+    })
 }
 
 fn generate_bodies(
@@ -491,38 +541,76 @@ impl TypingCtx {
 enum ExprResult {
     VarRef(Ref),
     Val(Ref),
-    Func(SymbolKey),
-    TraitFunc(SymbolKey, u32),
+    Stored(Ref),
+    
     /// method call on a variable: x.method
     Method(Ref, SymbolKey),
+    
+    Symbol(ConstSymbol),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConstSymbol {
+    Func(SymbolKey),
+    TraitFunc(SymbolKey, u32),
     Type(SymbolKey),
     Trait(SymbolKey),
     LocalType(TypeTableIndex),
     Module(ModuleId),
-    Stored(Ref),
+}
+impl ConstSymbol {
+    fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
+        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
+        match self {
+            &ConstSymbol::Func(symbol) => ir.add(Data { symbol }, Tag::Func, ty),
+            &ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+                let symbol_extra = ir.extra_data(&trait_symbol.bytes());
+                ir.add(Data { trait_func: (symbol_extra, func_idx) }, Tag::LocalType, ty)
+            }
+            &ConstSymbol::Type(symbol) => ir.add(Data { symbol }, Tag::Type, ty),
+            &ConstSymbol::Trait(symbol) => ir.add(Data { symbol }, Tag::Trait, ty),
+            ConstSymbol::LocalType(idx) => ir.add(Data { int32: idx.0 }, Tag::LocalType, ty),
+            ConstSymbol::Module(module_id) => ir.add(Data { int32: module_id.inner() }, Tag::Module, ty),
+        }
+    }
+    pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
+        match (self, other) {
+            (Self::Func(l), Self::Func(r))
+            | (Self::Type(l), Self::Type(r))
+            | (Self::Trait(l), Self::Trait(r)) => l == r,
+            (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
+            (Self::LocalType(l), Self::LocalType(r)) => {
+                let TypeInfo::Resolved(_l_id, _l_generics) = types[*l] else { unreachable!() };
+                let TypeInfo::Resolved(_r_id, _r_generics) = types[*r] else { unreachable!() };
+                todo!()
+            }
+            (Self::Module(l), Self::Module(r)) => l == r,
+            _ => false,
+        }
+    }
 }
 
 impl ExprResult {
     pub fn get_or_load(
         self,
         ir: &mut IrBuilder,
+        ctx: &TypingCtx,
         ty: TypeTableIndex,
         errors: &mut Errors,
         span: Span,
     ) -> Ref {
-        self.try_get_or_load(ir, ty).unwrap_or_else(|| {
-            errors.emit_span(Error::ExpectedValueFoundDefinition, span);
-            Ref::UNDEF
-        })
-    }
-
-    pub fn try_get_or_load(&self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Option<Ref> {
         match self {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => {
-                Some(ir.add(Data { un_op: *var }, Tag::Load, ty))
+                ir.add(Data { un_op: var }, Tag::Load, ty)
             }
-            ExprResult::Val(val) => Some(*val),
-            _ => None,
+            ExprResult::Val(val) => val,
+            ExprResult::Method(_, _) => {
+                errors.emit_span(Error::ExpectedValueFoundFunction, span);
+                Ref::UNDEF
+            }
+            ExprResult::Symbol(symbol) => {
+                symbol.add_instruction(ir, ctx, ty, errors, span)
+            }
         }
     }
 }
@@ -695,7 +783,7 @@ impl<'s> Scope<'s> {
                             Symbol::LocalType(ty) => Ok(types.get_type(*ty)),
                             Symbol::Const(key) => {
                                 match ctx.ctx.get_const(*key) {
-                                    &ConstVal::Symbol(Symbol::Type(key)) => {
+                                    &ConstVal::Symbol(ConstSymbol::Type(key)) => {
                                         let generics = resolve_generics(ctx, self, key)?;
                                         Ok(TypeInfo::Resolved(key, generics))
                                     }
@@ -812,7 +900,7 @@ impl<'s> Scope<'s> {
                             Some(Symbol::LocalType(_ty)) => todo!(), // what to do here, what was LocalType again?
                             Some(Symbol::Const(key)) => {
                                 match ctx.ctx.get_const(*key) {
-                                    &ConstVal::Symbol(Symbol::Type(key)) => {
+                                    &ConstVal::Symbol(ConstSymbol::Type(key)) => {
                                         let Ok(generics) = resolve_generics(ctx, self, key) else { return Type::Invalid };
                                         Type::Id(key, generics)
                                     }
@@ -889,7 +977,7 @@ impl<'s> Scope<'s> {
         mut info: ExprInfo,
     ) -> Ref {
         self.reduce_expr(ctx, ir, expr, info.reborrow())
-            .get_or_load(ir, info.expected, &mut ctx.errors, span.in_mod(ctx.module))
+            .get_or_load(ir, &ctx.ctx, info.expected, &mut ctx.errors, span.in_mod(ctx.module))
     }
 
     fn reduce_expr_idx_val(
@@ -944,6 +1032,11 @@ impl<'s> Scope<'s> {
             ExprResult::Stored(_) => return,
             ExprResult::VarRef(other_var) => ir.add(Data { un_op: other_var }, Tag::Load, info.expected),
             ExprResult::Val(val) => val,
+            ExprResult::Symbol(symbol) => {
+                // TODO: this should only happen in compile time code
+                let span = ctx.span(expr);
+                symbol.add_instruction(ir, &ctx.ctx, info.expected, &mut ctx.errors, span)
+            }
             _ => {
                 ctx.errors.emit_span(Error::ExpectedValueFoundDefinition, expr.span(ctx.ast).in_mod(ctx.module));
                 Ref::UNDEF
@@ -966,15 +1059,7 @@ impl<'s> Scope<'s> {
             |ir| ir.add(Data { none: () }, Tag::Decl, expected)
         ).0 {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
-            ExprResult::Val(_)
-            | ExprResult::Func(_)
-            | ExprResult::TraitFunc(_, _)
-            | ExprResult::Method(_, _)
-            | ExprResult::Type(_)
-            | ExprResult::Trait(_)
-            | ExprResult::LocalType(_)
-            | ExprResult::Module(_)
-            => {
+            ExprResult::Val(_) | ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
                 if !ir.types.get_type(info.expected).is_invalid() {
                     ctx.errors.emit_span(error, expr.span(ctx.ast).in_mod(ctx.module));
                 }
@@ -1133,11 +1218,11 @@ impl<'s> Scope<'s> {
                             ir.specify(info.expected, ty_info, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
                             ExprResult::VarRef(ir.add(Data { symbol: key }, Tag::Global, info.expected))
                         }
-                        Symbol::Func(f) => ExprResult::Func(f),
-                        Symbol::Type(t) => ExprResult::Type(t),
-                        Symbol::Trait(t) => ExprResult::Trait(t),
-                        Symbol::LocalType(t) => ExprResult::LocalType(t),
-                        Symbol::Module(m) => ExprResult::Module(m),
+                        Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
+                        Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
+                        Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
+                        Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
+                        Symbol::Module(m) => ExprResult::Symbol(ConstSymbol::Module(m)),
                         Symbol::Const(c) => {
                             let const_val = self.get_or_gen_const(ctx, c, *span);
                             let const_ty = const_val.type_info(&mut ir.types);
@@ -1353,7 +1438,7 @@ impl<'s> Scope<'s> {
                 }
                 let called = &ctx.ast[*func];
                 (match self.reduce_expr(ctx, ir, called, info.with_expected(called_ty)) {
-                    ExprResult::Func(key) => {
+                    ExprResult::Symbol(ConstSymbol::Func(key)) => {
                         gen_call(self, ctx, expr, key, None, args.iter().copied(), ir, info)
                     }
                     //TODO: Trait function calls
@@ -1362,7 +1447,7 @@ impl<'s> Scope<'s> {
                         let this = Some((self_var, called_ty, called_span));
                         gen_call(self, ctx, expr, key, this, args.iter().copied(), ir, info)
                     }
-                    ExprResult::Type(ty) => {
+                    ExprResult::Symbol(ConstSymbol::Type(ty)) => {
                         let (_, TypeDef::Struct(struct_)) = &ctx.ctx.types[ty.idx()] else {
                             ctx.errors.emit_span(Error::FunctionOrStructTypeExpected, ctx.span(called));
                             return (ExprResult::Val(Ref::UNDEF), false)
@@ -1557,14 +1642,13 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         MemberAccessType::Var(var)
                     }
-                    ExprResult::Type(ty) => MemberAccessType::Associated(ty),
-                    ExprResult::Trait(t) => MemberAccessType::TraitFunction(t),
-                    ExprResult::Func(_) | ExprResult::TraitFunc(_, _) | ExprResult::Method(_, _)
-                    | ExprResult::LocalType(_) => {
+                    ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::Associated(ty),
+                    ExprResult::Symbol(ConstSymbol::Trait(t)) => MemberAccessType::TraitFunction(t),
+                    ExprResult::Symbol(ConstSymbol::Module(id)) => MemberAccessType::Module(id),
+                    ExprResult::Symbol(_) | ExprResult::Method(_, _) => {
                         ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
                         MemberAccessType::Invalid
                     }
-                    ExprResult::Module(id) => MemberAccessType::Module(id),
                 };
 
                 (match left_val {
@@ -1617,12 +1701,12 @@ impl<'s> Scope<'s> {
                     MemberAccessType::Module(id) => {
                         if let Some(symbol) = resolve_module_symbol(ctx, id, member) {
                             return (match symbol {
-                                Symbol::Func(f) => ExprResult::Func(f),
-                                Symbol::Type(t) => ExprResult::Type(t),
-                                Symbol::Trait(t) => ExprResult::Trait(t),
-                                Symbol::LocalType(t) => ExprResult::LocalType(t),
+                                Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
+                                Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
+                                Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
+                                Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
                                 Symbol::Generic(_) => todo!(), // is this a possibility
-                                Symbol::Module(m) => ExprResult::Module(m),
+                                Symbol::Module(m) => ExprResult::Symbol(ConstSymbol::Module(m)),
                                 Symbol::Var { .. } => unreachable!("vars in module shouldn't exist"),
                                 Symbol::GlobalVar(key) => {
                                     let (ty, _) = ctx.ctx.get_global(key);
@@ -1650,7 +1734,7 @@ impl<'s> Scope<'s> {
                         match ctx.ctx.get_type(key) {
                             TypeDef::Struct(def) => {
                                 if let Some(method) = def.methods.get(member) {
-                                    return (ExprResult::Func(*method), true);
+                                    return (ExprResult::Symbol(ConstSymbol::Func(*method)), true);
                                 } else {
                                     ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
                                     ir.invalidate(info.expected);
@@ -1675,7 +1759,7 @@ impl<'s> Scope<'s> {
                     }
                     MemberAccessType::TraitFunction(t) => {
                         if let Some((idx, _)) = ctx.ctx.get_trait(t).functions.get(member) {
-                            return (ExprResult::TraitFunc(t, *idx), true);
+                            return (ExprResult::Symbol(ConstSymbol::TraitFunc(t, *idx)), true);
                         } else {
                             ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
                             ir.invalidate(info.expected);
@@ -1711,11 +1795,7 @@ impl<'s> Scope<'s> {
                         ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
                         var
                     }
-                    ExprResult::Func(_) | ExprResult::TraitFunc(_, _) | ExprResult::Method(_, _) 
-                    | ExprResult::Type(_)
-                    | ExprResult::Trait(_)
-                    | ExprResult::LocalType(_)
-                    | ExprResult::Module(_) => {
+                    ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
                         ctx.errors.emit_span(Error::TupleIndexingOnNonValue, ctx.span(expr));
                         ir.invalidate(info.expected);
                         return (ExprResult::Val(Ref::UNDEF), true)
@@ -1750,7 +1830,7 @@ impl<'s> Scope<'s> {
                 (ir.add(Data { un_op: val, }, Tag::Cast, info.expected), true)
             }
             ast::Expr::Root(_) => {
-                return (ExprResult::Module(ModuleId::ROOT), true)
+                return (ExprResult::Symbol(ConstSymbol::Module(ModuleId::ROOT)), true)
             }
             ast::Expr::Asm { span: _, asm_str_span, args } => {
                 let expr_refs = ctx.ast.get_extra(*args).iter()
@@ -1813,17 +1893,14 @@ impl<'s> Scope<'s> {
         ExprResult::Val(match val {
             &ConstVal::Symbol(symbol) => {
                 return match symbol {
-                    Symbol::Func(key) => ExprResult::Func(key),
-                    Symbol::Type(key) => ExprResult::Type(key),
-                    Symbol::Trait(key) => ExprResult::Trait(key),
-                    Symbol::LocalType(..) => unreachable!(),
-                    Symbol::Generic(_) => todo!(),
-                    Symbol::Module(key) => ExprResult::Module(key),
-                    Symbol::Invalid => {
-                        ir.invalidate(info.expected);
-                        ExprResult::Val(Ref::UNDEF)
+                    ConstSymbol::Func(key) => ExprResult::Symbol(ConstSymbol::Func(key)),
+                    ConstSymbol::Type(key) => ExprResult::Symbol(ConstSymbol::Type(key)),
+                    ConstSymbol::Trait(key) => ExprResult::Symbol(ConstSymbol::Trait(key)),
+                    ConstSymbol::LocalType(..) => unreachable!(),
+                    ConstSymbol::Module(key) => ExprResult::Symbol(ConstSymbol::Module(key)),
+                    ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+                        ExprResult::Symbol(ConstSymbol::TraitFunc(trait_symbol, func_idx))
                     }
-                    Symbol::Var { .. } | Symbol::GlobalVar(_) | Symbol::Const(_) => unreachable!(),
                 }
             }
             ConstVal::Invalid => Ref::UNDEF,
@@ -1857,213 +1934,37 @@ impl<'s> Scope<'s> {
     // move to types.rs
     fn eval_const(&mut self, ctx: &mut GenCtx, ty: Option<&UnresolvedType>, val: ExprRef)
     -> EyeResult<ConstVal> {
-        // typechecking has to work differently here
-        #![allow(unused)]
-        use crate::error::CompileError;
-
+        let err_count = ctx.errors.error_count();
+        let mut builder = IrBuilder::new(ctx.module);
         let expr = &ctx.ast[val];
-        Ok(match expr {
-            // ast::Expr::Block { span, items, defs } => todo!(),
-            // ast::Expr::Declare { name, annotated_ty, end } => todo!(),
-            // ast::Expr::DeclareWithVal { name, annotated_ty, val } => todo!(),
-            // ast::Expr::Return { start, val } => todo!(),
-            ast::Expr::IntLiteral(span) => {
-                let ty = match ty {
-                    Some(ast::UnresolvedType::Primitive(p, _)) if p.is_int() => p.as_int(),
-                    Some(ast::UnresolvedType::Infer(_)) | None => None,
-                    _ => return Err(Error::IntExpected.at_span(expr.span_in(ctx.ast, ctx.module)))
-                };
-                ConstVal::Int(ty, ctx.src(*span).parse().unwrap())
+        let expected = ty.map_or(Ok(TypeInfo::Unknown),
+            |t| self.resolve_type(t, &mut builder.types, ctx).map_err(|e| e.at_span(t.span().in_mod(ctx.module))))?;
+        let expected_info = builder.types.add(expected);
+        let mut noreturn = false;
+        let val_span = expr.span(ctx.ast);
+        let r = self.reduce_expr_val_spanned(ctx, &mut builder, expr, val_span, ExprInfo {
+            expected: expected_info,
+            ret: expected_info,
+            noreturn: &mut noreturn,
+        });
+        if !noreturn {
+            if matches!(expected, TypeInfo::Primitive(Primitive::Unit)) {
+                builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
+            } else if !expr.is_block() {
+                builder.add_unused_untyped(Tag::Ret, Data { un_op: r });
+            } else {
+                ctx.errors.emit_span(Error::MissingReturnValue, val_span.in_mod(ctx.module));
             }
-            ast::Expr::FloatLiteral(span) => {
-                let ty = match dbg!(ty) {
-                    Some(ast::UnresolvedType::Primitive(p, _)) if p.is_float() => p.as_float(),
-                    Some(UnresolvedType::Infer(_)) | None => None,
-                    _ => return Err(Error::FloatExpected.at_span(expr.span_in(ctx.ast, ctx.module)))
-                };
-                ConstVal::Float(ty, ctx.src(*span).parse().unwrap())
-            }
-            ast::Expr::StringLiteral(span) => {
-                if !matches!(ty, Some(UnresolvedType::Pointer(
-                        box (ast::UnresolvedType::Primitive(Primitive::I8, _), _)
-                    )) | Some(UnresolvedType::Infer(_)) | None) {
-                    return Err(Error::MismatchedType.at_span(expr.span_in(ctx.ast, ctx.module)))
-                }
-                ConstVal::String(string_literal(*span, ctx.ast.src(ctx.module).0))
-            }
-            ast::Expr::BoolLiteral { start, val } => {
-                if !matches!(ty, Some(UnresolvedType::Primitive(Primitive::Bool, _))
-                    | Some(UnresolvedType::Infer(_)) | None) {
-                    return Err(Error::MismatchedType.at_span(expr.span_in(ctx.ast, ctx.module)))
-                }
-                ConstVal::Bool(*val)
-            }
-            ast::Expr::EnumLiteral { dot, ident } => {
-                ConstVal::EnumVariant(ctx.src(*ident).to_owned())
-            }
-            ast::Expr::Nested(_, inner) => self.eval_const(ctx, ty, *inner)?,
-            ast::Expr::Unit(_) => ConstVal::Unit,
-            ast::Expr::Variable(span) => {
-                let name = ctx.src(*span).to_owned(); // PERF: ownership
-                let symbol = self.resolve(&name, ctx)
-                    .ok_or_else(|| Error::UnknownIdent.at_span(span.in_mod(ctx.module)))?;
-                match symbol {
-                    Symbol::Var { .. } => todo!(),
-                    Symbol::Func(key) => ConstVal::Symbol(Symbol::Func(key)),
-                    Symbol::Type(key) => ConstVal::Symbol(Symbol::Type(key)),
-                    Symbol::Trait(key) => ConstVal::Symbol(Symbol::Trait(key)),
-                    Symbol::Module(key) => ConstVal::Symbol(Symbol::Module(key)),
-                    Symbol::Const(key) => {
-                        self.get_or_gen_const(ctx, key, *span).clone()
-                    }
-                    Symbol::Invalid => ConstVal::Invalid,
-                    Symbol::LocalType(_)
-                    | Symbol::GlobalVar(_)
-                    | Symbol::Generic(_) => return Err(Error::NotConst.at_span(span.in_mod(ctx.module))),
-                }
-            }
-            // ast::Expr::Array(_, _) => todo!(),
-            // ast::Expr::Tuple(_, _) => todo!(),
-            ast::Expr::If { .. }
-            | ast::Expr::IfElse { .. }
-            | ast::Expr::While { .. }
-            | ast::Expr::FunctionCall { .. }
-            => return Err(CompileError::new(Error::NotConst, ctx.span(expr))),
-            ast::Expr::UnOp(_, op, inner) => {
-                let val = self.eval_const(ctx, ty, *inner)?;
-                if val.is_invalid() { return Ok(ConstVal::Invalid) }
-                match op {
-                    ast::UnOp::Neg => {
-                        let ConstVal::Int(int_ty, int_val) = val else {
-                            return Err(CompileError::new(Error::CantNegateType, ctx.span(&ctx.ast[*inner])));
-                        };
-                        ConstVal::Int(int_ty, -int_val)
-                    }
-                    ast::UnOp::Not => {
-                        let ConstVal::Bool(bool_val) = val else {
-                            return Err(CompileError::new(Error::UnexpectedType, ctx.span(&ctx.ast[*inner])));
-                        };
-                        ConstVal::Bool(!bool_val)
-                    }
-                    ast::UnOp::Ref | ast::UnOp::Deref => return Err(CompileError::new(
-                        Error::UnexpectedType, ctx.span(expr))),
-                }
-            }
-            ast::Expr::BinOp(op, l, r) => {
-                let l_val = self.eval_const(ctx, None, *l)?;
-                let r_val = self.eval_const(ctx, None, *r)?;
+        } else if !builder.currently_terminated() {
+            builder.add_unused_untyped(Tag::RetUndef, Data { none: () });
+        }
 
-                if l_val.is_invalid() || r_val.is_invalid() { return Ok(ConstVal::Invalid); }
-
-                macro_rules! ty_merge {
-                    ($l: expr, $r: expr) => {
-                        match ($l, $r) {
-                            (Some(t), None) | (None, Some(t)) => Some(t),
-                            (Some(l), Some(r)) => if l == r { Some(l) } else {
-                                return Err(Error::MismatchedType.at_span(ctx.span(expr)))
-                            }
-                            (None, None) => None,
-                        }
-                    };
-                }
-
-                match op {
-                    Operator::Assignment(_) => {
-                        return Err(Error::NotConst.at_span(ctx.span(expr)));
-                    }
-                    Operator::Add | Operator::Sub | Operator::Mul | Operator::Div | Operator::Mod => {
-                        macro_rules! math_op {
-                            ($($tok: ident $t: tt),*) => {
-                                match op {
-                                    $(
-                                        Operator::$tok => {
-                                            match (l_val, r_val) {
-                                                (ConstVal::Invalid, ConstVal::Invalid) => ConstVal::Invalid,
-                                                (ConstVal::Int(l_ty, l), ConstVal::Int(r_ty, r)) => {
-                                                    let ty = ty_merge!(l_ty, r_ty);
-                                                    ConstVal::Int(ty, l $t r)
-                                                },
-                                                (ConstVal::Float(l_ty, l), ConstVal::Float(r_ty, r)) => {
-                                                    let ty = match (l_ty, r_ty) {
-                                                        (Some(t), None) | (None, Some(t)) => Some(t),
-                                                        (Some(l), Some(r)) => if l == r { Some(l) } else {
-                                                            return Err(Error::MismatchedType.at_span(ctx.span(expr)))
-                                                        }
-                                                        (None, None) => None,
-                                                    };
-                                                    ConstVal::Float(l_ty, l $t r)
-                                                }
-                                                _ => {
-                                                    return Err(CompileError::new(
-                                                        Error::MismatchedType, ctx.span(expr)
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    )*
-                                    _ => unreachable!()
-                                }
-                            };
-                        }
-                        math_op!(Add +, Sub -, Mul *, Div /, Mod %)
-                    }
-                    Operator::And | Operator::Or => {
-                        let ConstVal::Bool(l) = l_val else { return Err(CompileError::new(
-                            Error::UnexpectedType, ctx.span(&ctx.ast[*l]))) };
-                        let ConstVal::Bool(r) = r_val else { return Err(CompileError::new(
-                            Error::UnexpectedType, ctx.span(&ctx.ast[*r]))) };
-                        ConstVal::Bool(match op {
-                            Operator::Or => l || r,
-                            Operator::And => l && r,
-                            op => unreachable!()
-                        })
-                    }
-                    Operator::Equals => ConstVal::Bool(l_val == r_val),
-                    Operator::NotEquals => ConstVal::Bool(l_val != r_val),
-                    Operator::LT | Operator::GT | Operator::LE | Operator::GE | Operator::Equals => {
-                        macro_rules! cmp_ops {
-                            ($($op: ident $t: tt $eq: expr),*) => {
-                                match op {
-                                    $(
-                                        Operator::$op => ConstVal::Bool(match (l_val, r_val) {
-                                            (ConstVal::Invalid, ConstVal::Invalid) => return Ok(ConstVal::Invalid),
-                                            (ConstVal::Unit, ConstVal::Unit) => $eq,
-                                            (ConstVal::Int(l_ty, l), ConstVal::Int(r_ty, r)) => {
-                                                ty_merge!(l_ty, r_ty);
-                                                l $t r
-                                            }
-                                            (ConstVal::Float(l_ty, l), ConstVal::Float(r_ty, r)) => {
-                                                ty_merge!(l_ty, r_ty);
-                                                l $t r
-                                            }
-                                            (ConstVal::Bool(l), ConstVal::Bool(r)) => l $t r,
-                                            _ => {
-                                                return Err(CompileError::new(
-                                                    Error::MismatchedType, ctx.span(expr)
-                                                ));
-                                            }
-                                        }),
-                                    )*
-                                    _ => unreachable!()
-                                }
-                            };
-                        }
-                        cmp_ops!{
-                            LT < false,
-                            GT > false,
-                            LE <= true,
-                            GE >= true,
-                            Equals == true
-                        }
-                    }
-                }
-            }
-            // ast::Expr::MemberAccess { left, name } => todo!(),
-            // ast::Expr::TupleIdx { expr, idx, end } => todo!(),
-            // ast::Expr::Cast(_, _, _) => todo!(),
-            // ast::Expr::Root(_) => todo!(),
-            _ => return Err(CompileError::new(Error::NotConst, ctx.span(expr)))
-        })
+        if err_count != ctx.errors.error_count() {
+            eprintln!("Errors found while evaluating constant: {:?}", ctx.errors);
+        }
+        
+        unsafe { super::eval::eval(&builder, &[]) }
+            .map_err(|err| err.at_span(expr.span_in(ctx.ast, ctx.module)))
     }
 }
 
