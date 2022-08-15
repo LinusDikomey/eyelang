@@ -182,17 +182,35 @@ unsafe fn build_func(
             }
         } else {
             let i = r.into_ref().unwrap() as usize;
+            let tag = ir.inst[i].tag;
+            debug_assert!(!tag.is_untyped(), "Tried to get type of untyped instruction {tag:?}");
+            debug_assert!(tag.is_usable(), "Tried to get value of unusable instruction {tag:?}");
+            
             let r = instructions[i];
             debug_assert!(!r.is_null());
-            let mut ty = ir.types.get(ir.inst[i].ty).clone();
-            if matches!(ir.inst[i].tag, ir::Tag::Decl | ir::Tag::Param | ir::Tag::Member | ir::Tag::Global) {
-                ty = Type::Pointer(Box::new(ty));
-            }
+            let ty = ir.types.get(ir.inst[i].ty).clone();
             (r, ty)
         }
     };
     let get_ref_and_type = |instructions: &[LLVMValueRef], r: ir::Ref| get_ref_and_type_ptr(instructions, r);
-    let get_ref = |instructions: &[LLVMValueRef], r: ir::Ref| get_ref_and_type(instructions, r).0;
+    let get_ref = |instructions: &[LLVMValueRef], r: ir::Ref| {
+        if let Some(val) = r.into_val() {
+            match val {
+                ir::RefVal::True | ir::RefVal::False =>
+                    LLVMConstInt(LLVMInt1TypeInContext(ctx), if val == ir::RefVal::True { 1 } else { 0 }, FALSE),
+                ir::RefVal::Unit =>
+                    LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
+                ir::RefVal::Undef => panic!("Tried to use an undefined IR value. This is an internal compiler error."),
+            }
+        } else {
+            let i = r.into_ref().unwrap() as usize;
+            debug_assert!(ir.inst[i].tag.is_usable());
+            
+            let r = instructions[i];
+            debug_assert!(!r.is_null());
+            r
+        }
+    };
 
 
     let table_ty = |ty: ir::TypeTableIndex, types: &mut [TypeInstance]| {
@@ -295,14 +313,18 @@ unsafe fn build_func(
                 };
                 LLVMConstInt(ty, index as _, FALSE)
             }
-            ir::Tag::Func| ir::Tag::_TraitFunc| ir::Tag::Type| ir::Tag::Trait| ir::Tag::LocalType| ir::Tag::Module => {
-                ptr::null_mut() // should never be used in runtime code
-            }
+            ir::Tag::Func
+            | ir::Tag::TraitFunc
+            | ir::Tag::Type
+            | ir::Tag::Trait
+            | ir::Tag::LocalType
+            | ir::Tag::Module
+            => ptr::null_mut(), // should never be used in runtime code
             ir::Tag::Decl => {
-                if ir.types[ty].is_zero_sized(&module.types, &[]) {
+                if ir.types[data.ty].is_zero_sized(&module.types, &[]) {
                     ptr::null_mut()
                 } else {
-                    LLVMBuildAlloca(builder, table_ty(ty, types), NONE)
+                    LLVMBuildAlloca(builder, table_ty(data.ty, types), NONE)
                 }
             }
             ir::Tag::Load => {

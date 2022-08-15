@@ -164,7 +164,6 @@ impl<'a> Lexer<'a> {
                 '&' => TokenType::Ampersand,
                 '~' => TokenType::SnackWave,
                 '^' => TokenType::Caret,
-                '_' => TokenType::Underscore,
 
                 '<' => match self.peek() {
                     Some('=') => { self.step(); TokenType::LessEquals },
@@ -226,8 +225,11 @@ impl<'a> Lexer<'a> {
                     self.step();
                     TokenType::StringLiteral
                 },
-                'A'..='Z' | 'a'..='z' => { // keyword/identifier
-                    while let Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_') = self.peek() {
+                c @ ('A'..='Z' | 'a'..='z' | '_') => { // keyword/identifier
+                    if c == '_' && !is_ident_char(self.peek()) {
+                        break TokenType::Underscore
+                    }
+                    while is_ident_char(self.peek()) {
                         self.step().unwrap();
                     }
                     if let Ok(keyword) = self.src[start as usize ..= self.pos() as usize].parse() {
@@ -338,4 +340,8 @@ impl<'a> Lexer<'a> {
     fn unstep(&mut self) {
         self.index -= 1;
     }
+}
+
+fn is_ident_char(c: Option<char>) -> bool {
+    matches!(c, Some('A'..='Z' | 'a'..='z' | '0'..='9' | '_'))
 }

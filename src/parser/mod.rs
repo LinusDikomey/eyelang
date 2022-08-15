@@ -324,7 +324,6 @@ impl<'a> Parser<'a> {
                 Ok(())
             })?;
         }
-        //FIXME: this is a pretty ugly hack for determining wether to parse a type
         let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
             self.parse_type()?
         } else {

@@ -55,6 +55,7 @@ impl IrBuilder {
     #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     pub fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
         debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
+        debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
         self.add_inst(Instruction {
             data,
             tag,
@@ -63,14 +64,16 @@ impl IrBuilder {
         })
     }
 
-    pub fn add_untyped(&mut self, tag: Tag, data: Data) {
+    #[must_use = "Use add_unused_untyped if the result of this instruction isn't needed."]
+    pub fn _add_untyped(&mut self, tag: Tag, data: Data) -> Ref {
         debug_assert!(tag.is_untyped(), "The IR instruction {tag:?} needs a type");
+        debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
         self.add_inst(Instruction {
             data,
             tag,
             ty: TypeTableIndex::NONE,
             used: false
-        });
+        })
     }
 
     pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
@@ -166,4 +169,29 @@ impl IrBuilder {
     pub fn invalidate(&mut self, idx: TypeTableIndex) {
         self.types.update_type(idx, TypeInfo::Invalid);
     }
+
+    pub fn build_decl(&mut self, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
+        let ty = ty.into().into_idx(&mut self.types);
+        let ptr_ty = self.types.add(TypeInfo::Pointer(ty));
+        self.add(Data { ty }, Tag::Decl, ptr_ty)
+    }
+}
+
+pub enum TypeTableIdxOrInfo {
+    Idx(TypeTableIndex),
+    Info(TypeInfo),
+}
+impl TypeTableIdxOrInfo {
+    pub fn into_idx(self, types: &mut TypeTable) -> TypeTableIndex {
+        match self {
+            TypeTableIdxOrInfo::Idx(idx) => idx,
+            TypeTableIdxOrInfo::Info(info) => types.add(info),
+        }
+    }
+}
+impl From<TypeTableIndex> for TypeTableIdxOrInfo {
+    fn from(idx: TypeTableIndex) -> Self { Self::Idx(idx) }
+}
+impl From<TypeInfo> for TypeTableIdxOrInfo {
+    fn from(info: TypeInfo) -> Self { Self::Info(info) }
 }

@@ -276,7 +276,7 @@ pub enum ConstVal {
     // FIXME: storing the value as an i128 is a problem for large values
     Int(Option<IntType>, i128),
     Float(Option<FloatType>, f64),
-    String(String),
+    String(Vec<u8>),
     EnumVariant(String),
     Bool(bool),
     Symbol(ConstSymbol),
@@ -318,7 +318,7 @@ impl fmt::Display for ConstVal {
             ConstVal::Unit => write!(f, "()"),
             ConstVal::Int(_, int) => write!(f, "{int}"),
             ConstVal::Float(_, float) => write!(f, "{float}"),
-            ConstVal::String(s) => write!(f, "{s}"),
+            ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
             ConstVal::Bool(b) => write!(f, "{b}"),
             ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
@@ -448,8 +448,8 @@ impl Instruction {
                 
                 cwrite!(f, "#m<t{}>.#m<f{}>", SymbolKey::from_bytes(buf).0, self.data.trait_func.1)
             }
-            DataVariant::LocalType => {
-                cwrite!(f, "ty {}", types[TypeTableIndex(self.data.int32)])
+            DataVariant::TypeTableIdx => {
+                cwrite!(f, "#m<{}>", types[self.data.ty])
             }
             DataVariant::UnOp => write_ref(f, self.data.un_op),
             DataVariant::BinOp => {
@@ -492,7 +492,6 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
         inst.display_data(f, extra, self.types)?;
         if inst.ty.is_present() {
             match inst.tag {
-                Tag::Decl => (),
                 Tag::Cast => cwrite!(f, "#m!< as >")?,
                 _ => cwrite!(f, " :: ")?
             };
@@ -516,7 +515,7 @@ pub enum Tag {
     EnumLit,
 
     Func,
-    _TraitFunc,
+    TraitFunc,
     Type,
     Trait,
     LocalType,
@@ -570,11 +569,11 @@ impl Tag {
             Tag::EnumLit | Tag::String => String,
             
             Tag::Func | Tag::Type | Tag::Trait => Symbol,
-            Tag::_TraitFunc => TraitFunc,
-            Tag::LocalType => LocalType,
+            Tag::TraitFunc => TraitFunc,
+            Tag::LocalType | Tag::Decl => TypeTableIdx,
             Tag::Module => LargeInt,
 
-            Tag::Decl | Tag::RetUndef => None,
+            Tag::RetUndef => None,
             Tag::Call => Call,
             Tag::Global => Global,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
@@ -588,7 +587,16 @@ impl Tag {
     }
 
     pub fn is_untyped(self) -> bool {
-        matches!(self, Tag::BlockBegin | Tag::Ret | Tag::RetUndef | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm)
+        matches!(self,
+            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
+            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
+        )
+    }
+    pub fn is_usable(self) -> bool {
+        !matches!(self,
+            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
+            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
+        )
     }
     pub fn is_terminator(self) -> bool {
         matches!(self, Tag::Goto | Tag::Branch | Tag::Ret | Tag::RetUndef)
@@ -672,6 +680,7 @@ pub union Data {
     pub int: u64,
     pub extra: u32,
     pub extra_len: (u32, u32),
+    pub ty: TypeTableIndex,
     pub float: f64,
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),
@@ -707,9 +716,9 @@ enum DataVariant {
     Int,
     Int32,
     LargeInt,
+    TypeTableIdx,
     Symbol,
     TraitFunc,
-    LocalType,
     Block,
     Branch,
     String,

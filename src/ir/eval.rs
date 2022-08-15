@@ -8,10 +8,55 @@ enum LocalVal {
     Var(ConstVal),
 }
 
+struct StackMem {
+    mem: Vec<u8>,
+}
+impl StackMem {
+    pub fn new() -> StackMem {
+        Self {
+            mem: vec![],
+        }
+    }
+    pub fn new_frame<'a>(&'a mut self) -> StackFrame<'a> {
+        let base_pointer = self.mem.len();
+        StackFrame { mem: self, base_pointer, alloc_count: 0 }
+    }
+}
+
+struct StackFrame<'a> {
+    mem: &'a mut StackMem,
+    base_pointer: usize,
+    alloc_count: usize, // just for debugging
+}
+impl<'a> StackFrame<'a> {
+    fn new_frame<'b: 'a>(&'b mut self) -> StackFrame<'b> {
+        self.mem.new_frame()
+    }
+    fn alloc(&mut self, count: usize) -> usize {
+        self.alloc_count += count;
+        let idx = self.mem.mem.len();
+        self.mem.mem.extend((0..count).map(|_| 0));
+        idx
+    }
+}
+impl<'a> Drop for StackFrame<'a> {
+    fn drop(&mut self) {
+        debug_assert_eq!(self.mem.mem.len() - self.alloc_count, self.base_pointer);
+        self.mem.mem.truncate(self.base_pointer)
+    }
+}
+
 pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
+pub fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Error> {
+    let mut stack = StackMem::new();
+    unsafe {
+        eval_internal(ir, params, stack.new_frame())
+    }
+}
+
 // TODO: give errors a span by giving all IR instructions spans.
-pub unsafe fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Error> {
+unsafe fn eval_internal(ir: &super::IrBuilder, params: &[ConstVal], frame: StackFrame) -> Result<ConstVal, Error> {
     let mut values = vec![LocalVal::Val(ConstVal::Invalid); ir.inst.len()];
 
     fn get_ref(values: &[LocalVal], r: Ref) -> ConstVal {
@@ -121,7 +166,7 @@ pub unsafe fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVa
             }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
             super::Tag::RetUndef => break ConstVal::Invalid, // could this also be unit?
-            super::Tag::Param => params[inst.data.int32 as usize].clone(),
+            super::Tag::Param => todo!("should give pointer to param"), //params[inst.data.int32 as usize].clone(),
             super::Tag::Int => {
                 let int_ty = match ir.types[inst.ty] {
                     TypeInfo::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
@@ -165,7 +210,7 @@ pub unsafe fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVa
             super::Tag::Func => {
                 ConstVal::Symbol(ConstSymbol::Func(inst.data.symbol))
             }
-            super::Tag::_TraitFunc => {
+            super::Tag::TraitFunc => {
                 let mut buf = [0; 8];
                 buf.copy_from_slice(&ir.extra[inst.data.trait_func.0 as usize .. inst.data.trait_func.0 as usize + 8]);
 
@@ -177,30 +222,33 @@ pub unsafe fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVa
             super::Tag::Module => ConstVal::Symbol(ConstSymbol::Module(ModuleId::new(inst.data.int32))),
 
             super::Tag::Decl => {
-                let val = inst.data.un_op;
-                values[pos as usize] = LocalVal::Var(get_ref(&values, val));
+                values[pos as usize] = LocalVal::Var(ConstVal::Invalid);
                 pos += 1;
                 continue;
             }
             super::Tag::Load => {
-                let LocalVal::Var(val) = &values[inst.data.un_op.into_ref().unwrap() as usize]
-                    else { panic!("not a variable") };
-                val.clone()
+                match &values[inst.data.un_op.into_ref().unwrap() as usize] {
+                    LocalVal::Var(val) => {
+                        val.clone()
+                    }
+                    _ => panic!("not a variable")
+                }
             }
             super::Tag::Store => {
                 let (var, val) = inst.data.bin_op;
                 let val = get_ref(&values, val);
-                let LocalVal::Var(current_val) = &mut values[var.into_ref().unwrap() as usize]
-                    else { panic!("Var expected") };
-                *current_val = val;
+                match &mut values[var.into_ref().unwrap() as usize] {
+                    LocalVal::Var(current_val) => *current_val = val,
+                    LocalVal::Val(_) => panic!("can't store in val")
+                }
                 ConstVal::Invalid
             }
             super::Tag::String => {
-                let string = String::from_utf8_lossy(&ir.extra[
+                let string = ir.extra[
                     inst.data.extra_len.0 as usize
                     .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
-                ]);
-                ConstVal::String(string.into_owned())
+                ].to_vec();
+                ConstVal::String(string)
             }
             super::Tag::Call => {
                 todo!();
@@ -254,17 +302,22 @@ pub unsafe fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVa
             super::Tag::LE => cmp_op!(<=, inst),
             super::Tag::GE => cmp_op!(>=, inst),
             super::Tag::Member => {
-                let ConstVal::Int(_, _member) = get_ref(&values, inst.data.bin_op.1)
+                todo!("should give pointer to member")
+                /*
+                let ConstVal::Int(_, member) = get_ref(&values, inst.data.bin_op.1)
                     else { panic!("member should be an int") };
-                let LocalVal::Var(val) = &values[inst.data.bin_op.0.0 as usize]
-                    else { panic!("Member used on non-variable" ) };
-
-                match val {
-                    ConstVal::Invalid => ConstVal::Invalid,
-                    ConstVal::Symbol(_symbol) => todo!("does this make sense?"),
-                    ConstVal::NotGenerated => panic!(),
-                    _ => panic!("tried to take member of {val}")
-                }
+                let var_idx = inst.data.bin_op.0.into_ref().expect("Can't get member of value");
+                values[pos as usize] = match &values[var_idx as usize] {
+                    LocalVal::Val(_) => panic!("Member used on value '{:?}'", values[var_idx as usize]),
+                    LocalVal::Var(_) => LocalVal::VarMember(var_idx, vec![member as u32]),
+                    LocalVal::VarMember(idx, members) => LocalVal::VarMember(
+                        *idx,
+                        members.iter().copied().chain([member as _]).collect()
+                    ),
+                };
+                pos += 1;
+                continue;
+                */
             }
             super::Tag::Cast => todo!(),
             super::Tag::AsPointer => todo!(),
