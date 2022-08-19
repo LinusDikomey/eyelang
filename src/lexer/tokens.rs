@@ -196,6 +196,7 @@ pub enum Keyword {
     Trait,
     If,
     Else,
+    Match,
     While,
     Extern,
     Root,
@@ -218,6 +219,7 @@ impl Into<&'static str> for Keyword {
             Keyword::Trait => "trait",
             Keyword::If => "if",
             Keyword::Else => "else",
+            Keyword::Match => "match",
             Keyword::While => "while",
             Keyword::Extern => "extern",
             Keyword::Root => "root",
@@ -265,6 +267,7 @@ impl FromStr for Keyword {
             "trait" => Keyword::Trait,
             "if" => Keyword::If,
             "else" => Keyword::Else,
+            "match" => Keyword::Match,
             "while" => Keyword::While,
 
             "extern" => Keyword::Extern,

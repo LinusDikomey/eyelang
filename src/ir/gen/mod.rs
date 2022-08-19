@@ -1,7 +1,7 @@
 use std::ptr::NonNull;
 
 use crate::{
-    ast::{self, Expr, ModuleId, UnOp, ExprRef, IdentPath, UnresolvedType},
+    ast::{self, Expr, ModuleId, UnOp, ExprRef, IdentPath, UnresolvedType, ExprExtra},
     error::{Error, Errors, EyeResult},
     lexer::tokens::{Operator, AssignType, IntLiteral, FloatLiteral},
     types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
@@ -13,12 +13,12 @@ mod builder;
 
 pub use builder::IrBuilder;
 
-struct GenCtx<'s> {
-    ctx: TypingCtx,
-    globals: Globals,
-    ast: &'s ast::Ast,
-    module: ModuleId,
-    errors: Errors,
+pub struct GenCtx<'s> {
+    pub ctx: TypingCtx,
+    pub globals: Globals,
+    pub ast: &'s ast::Ast,
+    pub module: ModuleId,
+    pub errors: Errors,
 }
 impl<'s> GenCtx<'s> {
     pub fn span(&self, expr: &Expr) -> Span {
@@ -352,10 +352,13 @@ fn gen_struct(
     let scope_defs = dmap::new();
     let mut scope = scope.child(&mut generic_symbols, &scope_defs);
 
-    let members = def.members.iter().map(|(name, unresolved, _start, _end)| {(
-        name.clone(),
-        scope.resolve_uninferred_type(unresolved, ctx),
-    )}).collect::<Vec<_>>();
+    let members = def.members.iter().map(|(name, unresolved, _start, _end)| {
+        let ty = scope.resolve_uninferred_type(unresolved, ctx);
+        (
+            name.clone(),
+            ty,
+        )
+    }).collect::<Vec<_>>();
 
     *ctx.ctx.get_type_mut(key) = TypeDef::Struct(Struct {
         members,
@@ -821,7 +824,6 @@ impl<'s> Scope<'s> {
         }
     }
 
-    // TODO: rename to uninferred
     fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx)
     -> Type {
         match unresolved {
@@ -1141,23 +1143,7 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::IntLiteral(span) => {
                 let s = ctx.src(*span);
-                let lit = IntLiteral::parse(s);
-                let int_ty = lit
-                    .ty
-                    .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
-                ir.specify(info.expected, int_ty, &mut ctx.errors, *span, &ctx.ctx);
-                (if lit.val <= std::u64::MAX as u128 {
-                    ir.add(
-                        Data {
-                            int: lit.val as u64,
-                        },
-                        Tag::Int,
-                        info.expected,
-                    )
-                } else {
-                    let extra = ir.extra_data(&lit.val.to_le_bytes());
-                    ir.add(Data { extra }, Tag::LargeInt, info.expected)
-                }, true)
+                (int_literal(IntLiteral::parse(s), *span, ir, info.expected, ctx), true)
             }
             ast::Expr::FloatLiteral(span) => {
                 let lit = FloatLiteral::parse(ctx.src(*span));
@@ -1180,22 +1166,7 @@ impl<'s> Scope<'s> {
                 let variant_name = ctx.src(*ident);
                 let extra = ir.extra_data(variant_name.as_bytes());
                 let variant_name_len = variant_name.len() as u32;
-                // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
-                if let TypeInfo::Enum(names) = ir.types.get_type(info.expected) {
-                    if !ir.types.get_names(names).iter().any(|s| *s == variant_name) {
-                        let new_names = ir.types.extend_names(names, std::iter::once(variant_name.to_owned()));
-                        ir.types.update_type(info.expected, TypeInfo::Enum(new_names));
-                    }
-                } else {
-                    let variant = ir.types.add_names(std::iter::once(variant_name.to_owned()));
-                    ir.types.specify(
-                        info.expected,
-                        TypeInfo::Enum(variant),
-                        &mut ctx.errors,
-                        expr.span(ctx.ast).in_mod(ctx.module),
-                        &ctx.ctx,
-                    );
-                }
+                ir.specify_enum_variant(info.expected, *ident, ctx);
                 (ir.add(Data { extra_len: (extra, variant_name_len)  }, Tag::EnumLit, info.expected), true)
             }
             ast::Expr::Nested(_, inner) => {
@@ -1331,13 +1302,60 @@ impl<'s> Scope<'s> {
                     } else if else_noreturn {
                         then_val
                     } else {
-                        let extra = ir.extra_data(&then_exit.bytes());
-                        ir.extra_data(&then_val.to_bytes());
-                        ir.extra_data(&else_exit.bytes());
-                        ir.extra_data(&else_val.to_bytes());
-                        ir.add(Data { extra_len: (extra, 2) }, Tag::Phi, info.expected)
+                        ir.build_phi([(then_exit, then_val), (else_exit, else_val)], info.expected)
                     }
                 }, false)
+            }
+            ast::Expr::Match { start: _, end: _, val, extra_branches, branch_count } => {
+                // TODO: match is not checked for exhaustiveness right now
+
+                let val_ty = ir.types.add_unknown();
+                let val_expr = &ctx.ast[*val];
+                let val_span = val_expr.span(ctx.ast);
+                let val = self.reduce_expr_val_spanned(ctx, ir, val_expr, val_span, info.with_expected(val_ty));
+                let extra = ctx.ast.get_extra(ExprExtra { idx: *extra_branches, count: *branch_count * 2 });
+
+                let else_block = ir.create_block();
+                let after_block = ir.create_block();
+
+
+                let mut all_branches_noreturn = true;
+                
+                let mut branches = Vec::new();
+
+                for (i, [pat, branch]) in extra.array_chunks().enumerate() {
+                    let pattern_matches = self.reduce_pat(ctx, ir, val, *pat, val_ty);
+                    let on_match = ir.create_block();
+                    let otherwise = if i as u32 == *branch_count - 1 {
+                        else_block
+                    } else {
+                        ir.create_block()
+                    };
+                    ir.build_branch(pattern_matches, on_match, otherwise);
+                    ir.begin_block(on_match);
+                    let branch_expr = &ctx.ast[*branch];
+                    let mut branch_noreturn = false;
+                    let val = self.reduce_expr_val_spanned(ctx, ir, branch_expr, branch_expr.span(ctx.ast),
+                        info.with_noreturn(&mut branch_noreturn));
+
+                    branches.push((on_match, val));
+                    ir.build_goto(after_block);
+                    ir.begin_block(otherwise);
+
+                    all_branches_noreturn |= branch_noreturn;
+                }
+                // we are now in else_block
+                let uninit = ir.build_uninit(info.expected);
+                branches.push((else_block, uninit));
+                ir.build_goto(after_block);
+                ir.begin_block(after_block);
+                
+                _ = all_branches_noreturn;
+                // TODO: exhaustive match, will also make this sensible to enable
+                // if all_branches_noreturn {
+                //     info.mark_noreturn();
+                // }
+                (ir.build_phi(branches, info.expected), false)
             }
             ast::Expr::While { start: _, cond, body } => {
                 ir.specify(info.expected, TypeInfo::Primitive(Primitive::Unit), &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
@@ -1346,15 +1364,13 @@ impl<'s> Scope<'s> {
                 let body_block = ir.create_block();
                 let after_block = ir.create_block();
 
-                ir.add_unused_untyped(Tag::Goto, Data { int32: cond_block.0 });
+                ir.add_unused_untyped(Tag::Goto, Data { block: cond_block });
                 ir.begin_block(cond_block);
                 
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
                 let cond = self.reduce_expr_idx_val(ctx, ir, *cond, info.with_expected(b));
 
-                let branch_extra = ir.extra_data(&body_block.0.to_le_bytes());
-                ir.extra_data(&after_block.0.to_le_bytes());
-                ir.add_unused_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
+                ir.build_branch(cond, body_block, after_block);
                 ir.begin_block(body_block);
                 let body_ty = ir.types.add(TypeInfo::Unknown);
                 let mut body_noreturn = false;
@@ -1862,6 +1878,64 @@ impl<'s> Scope<'s> {
         (ExprResult::Val(r), should_use)
     }
 
+    /// builds code to check if `pat` matches on `val` and gives back a boolean `Ref`
+    fn reduce_pat(&mut self, ctx: &mut GenCtx, ir: &mut IrBuilder, val: Ref, pat: ExprRef, expected: TypeTableIndex)
+    -> Ref {
+        let pat_expr = &ctx.ast[pat];
+        match pat_expr {
+            Expr::IntLiteral(lit_span) => {
+                let lit = IntLiteral::parse(ctx.src(*lit_span));
+                let lit_val = int_literal(lit, *lit_span, ir, expected, ctx);
+                ir.add(Data { bin_op: (val, lit_val) }, Tag::Eq, expected)
+            }
+            Expr::FloatLiteral(_) => todo!(),
+            Expr::BoolLiteral { start: _, val: bool_val } => {
+                let bool_val = Ref::val(if *bool_val { RefVal::True } else { RefVal::False });
+                ir.specify(expected, TypeInfo::Primitive(Primitive::Bool),
+                &mut ctx.errors, pat_expr.span(ctx.ast), &ctx.ctx);
+                ir.add(Data { bin_op: (val, bool_val) }, Tag::Eq, expected)
+            }
+            Expr::EnumLiteral { dot: _, ident } => {
+                let variant_name = ctx.src(*ident);
+                let variant = ir.build_enum_lit(variant_name, expected);
+                ir.specify_enum_variant(expected, *ident, ctx);
+                ir.add(Data { bin_op: (val, variant) }, Tag::Eq, expected)
+            }
+            Expr::Unit(span) => {
+                ir.specify(expected, TypeInfo::UNIT, &mut ctx.errors, *span, &ctx.ctx);
+                Ref::val(RefVal::True)
+            }
+            Expr::Nested(_, expr) => self.reduce_pat(ctx, ir, val, *expr, expected),
+            
+            Expr::StringLiteral(_) // TODO definitely very important
+            | Expr::Block { .. }
+            | Expr::Declare { .. }
+            | Expr::DeclareWithVal { .. }
+            | Expr::Return { .. }
+            | Expr::Variable(_) 
+            | Expr::Array(_, _) 
+            | Expr::Tuple(_, _) 
+            | Expr::If { .. } 
+            | Expr::IfElse { .. } 
+            | Expr::Match { .. } 
+            | Expr::While { .. } 
+            | Expr::FunctionCall { .. } 
+            | Expr::UnOp(_, _, _) 
+            | Expr::BinOp(_, _, _) 
+            | Expr::MemberAccess { .. } // maybe when variables are allowed
+            | Expr::Index { .. } 
+            | Expr::TupleIdx { .. } 
+            | Expr::Cast(_, _, _) 
+            | Expr::Root(_) 
+            | Expr::Asm { .. } 
+            => {
+                ctx.errors.emit_span(Error::NotAPattern, ctx.span(pat_expr));
+                ir.invalidate(expected);
+                Ref::UNDEF
+            }
+        }
+    }
+
     fn gen_if_then(&mut self, ctx: &mut GenCtx, ir: &mut IrBuilder, cond: ExprRef, ret: TypeTableIndex,
         noreturn: &mut bool)
     -> BlockIndex {
@@ -1921,8 +1995,7 @@ impl<'s> Scope<'s> {
                 ir.add(Data { extra_len: (extra, val.len() as u32) }, Tag::String, info.expected)
             }
             ConstVal::EnumVariant(variant) => {
-                let extra = ir.extra_data(variant.as_bytes());
-                ir.add(Data { extra_len: (extra, variant.len() as u32) }, Tag::EnumLit, info.expected)
+                ir.build_enum_lit(variant, info.expected)
             }
             ConstVal::Bool(false) => Ref::val(RefVal::False),
             ConstVal::Bool(true) => Ref::val(RefVal::True),
@@ -1974,6 +2047,26 @@ pub fn string_literal(span: TSpan, src: &str) -> String {
         .replace("\\r", "\r")
         .replace("\\0", "\0")
         .replace("\\\"", "\"")
+}
+
+fn int_literal(lit: IntLiteral, span: TSpan, ir: &mut IrBuilder, expected: TypeTableIndex, ctx: &mut GenCtx) -> Ref {
+    let int_ty = lit
+        .ty
+        .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
+    ir.specify(expected, int_ty, &mut ctx.errors, span, &ctx.ctx);
+    
+    if lit.val <= std::u64::MAX as u128 {
+        ir.add(
+            Data {
+                int: lit.val as u64,
+            },
+            Tag::Int,
+            expected,
+        )
+    } else {
+        let extra = ir.extra_data(&lit.val.to_le_bytes());
+        ir.add(Data { extra }, Tag::LargeInt, expected)
+    }
 }
 
 fn gen_string(string: &str, ir: &mut IrBuilder, expected: TypeTableIndex, span: TSpan, errors: &mut Errors,

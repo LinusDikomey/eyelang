@@ -475,6 +475,30 @@ impl<'a> Parser<'a> {
                     Expr::If { start, cond, then }
                 }
             },
+            TokenType::Keyword(Keyword::Match) => {
+                let val = self.parse_expr()?;
+                let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+
+                let mut branches = Vec::<ExprRef>::new();
+                let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+                    let pat = p.parse_expr()?;
+                    let next = p.toks.step()?;
+                    let (branch, delimit) = match_or_unexpected!{next, p.toks.module,
+                        TokenType::Colon = TokenType::Colon => {
+                            (p.parse_expr()?, Delimit::Yes)
+                        },
+                        TokenType::LBrace = TokenType::LBrace => {
+                            (p.parse_block_from_lbrace(next)?, Delimit::Optional)
+                        }
+                    };
+                    branches.extend([pat, branch]);
+                    Ok(delimit)
+                })?;
+                let extra_branches = self.ast.extra(&branches).idx;
+                debug_assert_eq!(branches.len() % 2, 0);
+                let branch_count = (branches.len() / 2) as u32;
+                Expr::Match { start: lbrace.start, end: rbrace.end, val, extra_branches, branch_count }
+            },
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first)?,
             TokenType::Keyword(Keyword::Primitive(p)) => {
                 let prim_span = first.span();

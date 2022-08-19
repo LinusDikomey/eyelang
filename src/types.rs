@@ -1,4 +1,5 @@
 use std::fmt;
+use crate::ir::Layout;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
@@ -43,16 +44,17 @@ impl Primitive {
         self.as_float().is_some()
     }
 
-    pub fn size(self) -> u32 {
+    pub fn layout(self) -> Layout {
         use Primitive::*;
-        match self {
+        let size_and_align = match self {
             Unit | Never | Type => 0,
             I8 | U8 | Bool => 1,
             I16 | U16 => 2,
             I32 | U32 | F32 => 4,
             I64 | U64 | F64 => 8,
             I128 | U128 => 16,
-        }
+        };
+        Layout { size: size_and_align, alignment: size_and_align.max(1) }
     }
 }
 impl Into<&'static str> for Primitive {

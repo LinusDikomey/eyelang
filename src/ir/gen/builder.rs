@@ -4,7 +4,7 @@ use crate::{
     error::Errors, span::TSpan
 };
 
-use super::TypingCtx;
+use super::{TypingCtx, GenCtx};
 
 #[derive(Clone, Debug)]
 pub struct IrBuilder {
@@ -119,6 +119,7 @@ impl IrBuilder {
         self.inst.last().map_or(false, |last| last.tag.is_terminator())
     }
 
+    #[track_caller]
     pub fn begin_block(&mut self, idx: BlockIndex) {
         if self.emit {
             debug_assert!(
@@ -165,15 +166,68 @@ impl IrBuilder {
     pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan, ctx: &TypingCtx) {
         self.types.specify(idx, info, errors, span.in_mod(self.module), ctx);
     }
+    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name_span: TSpan, ctx: &mut GenCtx) {
+        
+        let name = ctx.src(name_span);
+        
+        // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
+        if let TypeInfo::Enum(names) = self.types.get_type(idx) {
+            if !self.types.get_names(names).iter().any(|s| *s == name) {
+                let new_names = self.types.extend_names(names, std::iter::once(name.to_owned()));
+                self.types.update_type(idx, TypeInfo::Enum(new_names));
+            }
+        } else {
+            let variant = self.types.add_names(std::iter::once(name.to_owned()));
+            self.types.specify(
+                idx,
+                TypeInfo::Enum(variant),
+                &mut ctx.errors,
+                name_span.in_mod(self.module),
+                &ctx.ctx,
+            );
+        }
+    }
 
     pub fn invalidate(&mut self, idx: TypeTableIndex) {
         self.types.update_type(idx, TypeInfo::Invalid);
+    }
+
+    pub fn build_goto(&mut self, block: BlockIndex) {
+        self.add_unused_untyped(Tag::Goto, Data { block })
+    }
+
+    pub fn build_uninit(&mut self, ty: TypeTableIndex) -> Ref {
+        self.add(Data { none: () }, Tag::Uninit, ty)
+    }
+
+    pub fn build_branch(&mut self, cond: Ref, on_true: BlockIndex, on_false: BlockIndex) {
+        let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
+        self.extra_data(&on_false.0.to_le_bytes());
+        self.add_unused_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
     }
 
     pub fn build_decl(&mut self, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
         let ty = ty.into().into_idx(&mut self.types);
         let ptr_ty = self.types.add(TypeInfo::Pointer(ty));
         self.add(Data { ty }, Tag::Decl, ptr_ty)
+    }
+
+    pub fn build_enum_lit(&mut self, variant: &str, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
+        let ty = ty.into().into_idx(&mut self.types);
+        let extra = self.extra_data(variant.as_bytes());
+        self.add(Data { extra_len: (extra, variant.len() as u32) }, Tag::EnumLit, ty)
+    }
+
+    pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: TypeTableIndex)
+    -> Ref {
+        let extra = self.extra.len() as u32;
+        let mut branch_count = 0;
+        for (branch, r) in branches.into_iter() {
+            branch_count += 1;
+            self.extra_data(&branch.bytes());
+            self.extra_data(&r.to_bytes());
+        }
+        self.add(Data { extra_len: (extra, branch_count) }, Tag::Phi, expected)
     }
 }
 

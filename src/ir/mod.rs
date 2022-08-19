@@ -32,9 +32,26 @@ pub enum Type {
     Invalid
 }
 impl Type {
+    pub fn layout(&self, ctx: &gen::TypingCtx, generics: &[Type]) -> Layout {
+        match self {
+            Type::Prim(p) => p.layout(),
+            Type::Id(key, generics) => ctx.get_type(*key).layout(ctx, generics),
+            Type::Pointer(_) => Layout::PTR,
+            Type::Array(b) => {
+                let (ty, size) = &**b;
+                ty.layout(ctx, generics).mul_size(*size as u64)
+            }
+            Type::Enum(variants) => Enum::layout_from_variant_count(variants.len()),
+            Type::Tuple(tuple) => {
+                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
+            }
+            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
+            Type::Symbol | Type::Invalid => Layout::ZERO,
+        }
+    }
     pub fn is_zero_sized(&self, types: &[(String, TypeDef)], generics: &[Type]) -> bool {
         match self {
-            Type::Prim(p) => p.size() == 0,
+            Type::Prim(p) => p.layout().size == 0,
             Type::Id(key, generics) => types[key.idx()].1.is_zero_sized(types, generics),
             Type::Pointer(_) => false,
             Type::Array(box (inner, size)) => *size == 0 || inner.is_zero_sized(types, generics),
@@ -187,11 +204,12 @@ impl fmt::Display for FunctionIr {
                 cwriteln!(f, "  #m<block> #b!<b{}>:", unsafe { inst.data.int32 })?;
                 continue;
             }
-            cwriteln!(f, "    #c<{:>4}>{}= {}",
-                format!("%{i}"),
-                if inst.used {' '} else {'!'},
-                inst.display(&self.extra, &self.types)
-            )?;
+            if inst.used {
+                cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?
+            } else {
+                write!(f, "           ")?
+            }
+            cwriteln!(f, "{}", inst.display(&self.extra, &self.types))?;
         }
         Ok(())
     }
@@ -202,6 +220,39 @@ pub struct FunctionHeader {
     pub params: Vec<(String, Type)>,
     pub varargs: bool,
     pub return_type: Type
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub size: u64,
+    pub alignment: u64,
+}
+impl Layout {
+    pub const ZERO: Self = Self { size: 0, alignment: 1 };
+    pub const PTR: Self = Self { size: 8, alignment: 8 };
+
+    pub fn align(offset: u64, alignment: u64) -> u64 {
+        let misalignment = offset % alignment;
+        if misalignment > 0 {
+            offset + alignment - misalignment
+        } else {
+            offset
+        }
+    }
+    #[must_use]
+    pub fn accumulate(self, other: Self) -> Self {
+        Self {
+            size: Self::align(self.size, other.alignment),
+            alignment: self.alignment.max(other.alignment),
+        }
+    }
+    #[must_use]
+    pub fn mul_size(self, factor: u64) -> Self {
+        Self {
+            size: self.size * factor,
+            alignment: self.alignment,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -216,6 +267,27 @@ impl TypeDef {
             TypeDef::Struct(struct_) => struct_.generic_count,
             TypeDef::Enum(enum_) => enum_.generic_count,
             Self::NotGenerated { generic_count, .. } => *generic_count
+        }
+    }
+    pub fn layout(&self, ctx: &gen::TypingCtx, generics: &[Type]) -> Layout {
+        match self {
+            TypeDef::Struct(struct_) => {
+                let mut alignment = 1;
+                let size = struct_.members.iter()
+                    .map(|(_, ty)| {
+                        let layout = ty.layout(ctx, generics);
+                        alignment = alignment.max(layout.alignment);
+                        layout.size
+                    })
+                    .sum();
+
+                Layout { size, alignment }
+            }
+            TypeDef::Enum(enum_) => {
+                enum_.layout()
+            }
+            TypeDef::NotGenerated { .. }
+                => panic!("layout of NotGenerated types should not be requested"),
         }
     }
     pub fn is_zero_sized(&self, types: &[(String, TypeDef)], generics: &[Type]) -> bool {
@@ -254,6 +326,27 @@ impl fmt::Display for Struct {
 pub struct Enum {
     pub variants: DHashMap<String, u32>,
     pub generic_count: u8,
+}
+impl Enum {
+    pub fn layout_from_variant_count(count: usize) -> Layout {
+        let size = ((count as u64 - 1).ilog2() as u64 + 1).div_ceil(8);
+        let alignment = match size {
+            0 | 1 => 1,
+            2 => 2,
+            3..=4 => 4,
+            5.. => 8,
+        };
+        Layout { size, alignment }
+    }
+    pub fn layout(&self) -> Layout {
+        Self::layout_from_variant_count(self.variants.len())
+    }
+    pub fn _bit_size(&self) -> u64 {
+        (self.variants.len() as u64 - 1).ilog2() as u64 + 1
+    }
+    pub fn _size(&self) -> u64 {
+        self._bit_size().div_ceil(8)
+    }
 }
 impl fmt::Display for Enum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -389,7 +482,7 @@ impl Instruction {
         unsafe { match self.tag.union_data_type() {
             DataVariant::Int => cwrite!(f, "#y<{}>", self.data.int),
             DataVariant::Int32 => cwrite!(f, "#y<{}>", self.data.int32),
-            DataVariant::Block => cwrite!(f, "#b!<b{}>", self.data.int32),
+            DataVariant::Block => cwrite!(f, "{}", self.data.block),
             DataVariant::LargeInt => {
                 let bytes = &extra[
                     self.data.extra as usize
@@ -434,7 +527,7 @@ impl Instruction {
                     current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
                     let r = Ref::from_bytes(current_bytes);
                     cwrite!(f, "[")?;
-                    cwrite!(f, "#b!<b{}>", block)?;
+                    cwrite!(f, "#b!<b{}>, ", block)?;
                     write_ref(f, r)?;
                     cwrite!(f, "]")?;
                 }
@@ -509,6 +602,8 @@ pub enum Tag {
     RetUndef,
     Param,
 
+    Uninit,
+
     Int,
     LargeInt,
     Float,
@@ -562,6 +657,7 @@ impl Tag {
         use DataVariant::*;
         match self {
             Tag::BlockBegin | Tag::Param => Int32,
+            Tag::Uninit => None,
             Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => UnOp,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,

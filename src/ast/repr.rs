@@ -296,6 +296,24 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(" else ");
                 ast[*else_].repr(c);
             }
+            Self::Match { start: _, end: _, val, extra_branches, branch_count } => {
+                c.write_add("match ");
+                ast[*val].repr(c);
+                c.write_add(" {\n");
+                let extra = ExprExtra { idx: *extra_branches, count: *branch_count * 2 };
+                let match_c = c.child();
+                for [pat, branch] in ast.expr_builder[extra].array_chunks() {
+                    c.begin_line();
+                    ast[*pat].repr(&match_c);
+                    let branch = &ast[*branch];
+                    if !matches!(branch, Expr::Block { .. }) {
+                        match_c.write_add(": ");
+                    }
+                    branch.repr(&match_c);
+                    match_c.char('\n');
+                }
+                c.writeln("}");
+            }
             Self::While { start: _, cond, body } => {
                 c.write_add("while ");
                 ast[*cond].repr(c);

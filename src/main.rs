@@ -3,9 +3,10 @@
     box_patterns,
     variant_count,
     fs_try_exists,
-    nonzero_ops,
     is_some_with,
     int_log,
+    int_roundings,
+    array_chunks,
 )]
 #![warn(unused_qualifications)]
 

@@ -27,7 +27,7 @@ enum Val {
     NoVal,
     Int(Type, u64),
     NegInt(Type, u64),
-    Stack { offset: u32, size: u32 },
+    Stack { offset: u64, size: u64 },
     Data(u32),
 
     // parameter registers
@@ -55,7 +55,7 @@ impl Val {
         }
     }*/
 
-    fn size(self) -> u32 {
+    fn size(self) -> u64 {
         match self {
             NoVal => 0,
             Int(ty, _) | NegInt(ty, _) => ty.size(),
@@ -80,7 +80,7 @@ enum Type {
     oword,
 }
 impl Type {
-    fn from_size(size: u32) -> Option<Self> {
+    fn from_size(size: u64) -> Option<Self> {
         Some(match size {
             1 => Self::byte,
             2 => Self::word,
@@ -90,7 +90,7 @@ impl Type {
             _ => return None
         })
     }
-    fn size(self) -> u32 {
+    fn size(self) -> u64 {
         match self {
             Self::byte => 1,
             Self::word => 2,
@@ -301,7 +301,7 @@ pub fn assemble(asm: &Path, output: &Path) -> bool {
 
 const CALL_REGS: [Val; 6] = [rdi, rsi, rdx, rcx, r8, r9];
 
-const CALL_STACK_ALIGNMENT: u32 = 16;
+const CALL_STACK_ALIGNMENT: u64 = 16;
 
 unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &mut AsmWriter) {
     if let Some(ir) = &func.ir {
@@ -310,7 +310,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
         w.inst(mov(rbp, rsp));
         let mut r = Vec::with_capacity(ir.inst.len());
         
-        let mut stack_pos: u32 = 0;
+        let mut stack_pos: u64 = 0;
         
         let get_ref = |r: Ref, refs: &[Val]| {
             if let Some(v) = r.into_val() {
@@ -362,7 +362,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                 Tag::Float => todo!(),
                 Tag::Decl => {
                     let size = match ir.types[inst.ty] {
-                        ir::Type::Prim(p) => p.size(),
+                        ir::Type::Prim(p) => p.layout().size,
                         ir::Type::Id(_, _) | ir::Type::Array(_) | ir::Type::Enum(_) | ir::Type::Tuple(_)
                             => todo!("Non-primitives not supported in x86 backend"),
                         ir::Type::Pointer { .. } => 8,

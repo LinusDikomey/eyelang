@@ -27,7 +27,7 @@ impl Ast {
         self.expr_builder.extra(extra)
     }
     pub fn get_extra(&self, idx: ExprExtra) -> &[ExprRef] {
-        &self.expr_builder.extra[idx.0 as usize .. idx.0 as usize + idx.1 as usize]
+        &self.expr_builder.extra[idx.idx as usize .. idx.idx as usize + idx.count as usize]
     }
 }
 impl Index<ExprRef> for Ast {
@@ -62,7 +62,7 @@ impl ExprBuilder {
         r
     }
     pub fn extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
-        let idx = ExprExtra(self.extra.len() as u32, extra.len() as u32);
+        let idx = ExprExtra { idx: self.extra.len() as u32, count: extra.len() as u32 };
         self.extra.extend(extra);
         idx
     }
@@ -84,7 +84,7 @@ impl Index<ExprExtra> for ExprBuilder {
     type Output = [ExprRef];
 
     fn index(&self, index: ExprExtra) -> &Self::Output {
-        &self.extra[index.0 as usize .. index.0 as usize + index.1 as usize]
+        &self.extra[index.idx as usize .. index.idx as usize + index.count as usize]
     }
 }
 
@@ -94,7 +94,7 @@ impl Index<ExprExtra> for ExprBuilder {
 pub struct ExprRef(u32);
 
 #[derive(Debug, Clone, Copy)]
-pub struct ExprExtra(u32, u32);
+pub struct ExprExtra { pub idx: u32, pub count: u32 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExprExtraSpans(u32, u32);
@@ -246,6 +246,13 @@ pub enum Expr {
         then: ExprRef,
         else_: ExprRef
     },
+    Match {
+        start: u32,
+        end: u32,
+        val: ExprRef,
+        extra_branches: u32, // each branch consists of a pat expr and a branch expr
+        branch_count: u32,
+    },
     While {
         start: u32,
         cond: ExprRef,
@@ -292,6 +299,7 @@ impl Expr {
             Expr::EnumLiteral { dot, ident } => TSpan::new(*dot, ident.end),
             Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
             Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
+            Expr::Match { start, end, .. } => TSpan::new(*start, *end),
             Expr::While { start, cond: _, body } => TSpan::new(*start, e(body)),
             Expr::FunctionCall { func, args: _, end } => TSpan::new(s(func), *end),
             Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {

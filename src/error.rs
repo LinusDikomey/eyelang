@@ -202,6 +202,7 @@ pub enum Error {
     ExpectedConstValue,
     UnusedStatementValue,
     InfiniteLoop,
+    NotAPattern,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -262,6 +263,7 @@ impl Error {
             Error::ExpectedConstValue => "constant value expected",
             Error::UnusedStatementValue => "unused expression value",
             Error::InfiniteLoop => "possibly detected infinite loop",
+            Error::NotAPattern => "not a pattern",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -280,6 +282,9 @@ impl Error {
             ),
             Error::UnusedStatementValue => cformat!(
                 "this statement only produces a value that is not used"
+            ),
+            Error::NotAPattern => cformat!(
+                "this expression is not a valid pattern"
             ),
             _ => return None
         })

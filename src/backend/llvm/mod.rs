@@ -273,7 +273,11 @@ unsafe fn build_func(
                 let val = LLVMGetParam(llvm_func, data.int32);
                 LLVMBuildStore(builder, val, param_var);
                 param_var
-            },
+            }
+            ir::Tag::Uninit => {
+                let llvm_ty = llvm_ty(ctx, module, types, &ir.types[inst.ty]);
+                LLVMGetUndef(llvm_ty)
+            }
             ir::Tag::Int => LLVMConstInt(table_ty(ty, types), data.int, FALSE),
             ir::Tag::LargeInt => {
                 let mut bytes = [0; 16];
@@ -662,7 +666,7 @@ unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeR
     if count < 2 {
         LLVMVoidTypeInContext(ctx)
     } else {
-        let bit_size = (count-1).log2() + 1;
+        let bit_size = (count-1).ilog2() + 1;
         LLVMIntTypeInContext(ctx, bit_size)
     }
 }

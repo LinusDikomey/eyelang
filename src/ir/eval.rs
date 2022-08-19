@@ -167,6 +167,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, params: &[ConstVal], frame: Stack
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
             super::Tag::RetUndef => break ConstVal::Invalid, // could this also be unit?
             super::Tag::Param => todo!("should give pointer to param"), //params[inst.data.int32 as usize].clone(),
+            super::Tag::Uninit => ConstVal::Invalid,
             super::Tag::Int => {
                 let int_ty = match ir.types[inst.ty] {
                     TypeInfo::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
