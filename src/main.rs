@@ -2,7 +2,6 @@
     let_else,
     variant_count,
     fs_try_exists,
-    is_some_with,
     int_log,
     int_roundings,
     array_chunks,

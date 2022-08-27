@@ -24,7 +24,7 @@ impl Default for Exhaustion {
     fn default() -> Self { Self::None }
 }
 impl Exhaustion {
-    pub fn is_exhausted(&self, ty: &Type) -> Option<bool> {
+    pub fn is_exhausted(&self, ty: &Type, ctx: &super::TypingCtx) -> Option<bool> {
         Some(match self {
             Exhaustion::None => false,
             Exhaustion::Full => true,
@@ -51,8 +51,18 @@ impl Exhaustion {
                 }
             }
             Exhaustion::Enum(exhausted_variants) => {
-                let Type::Enum(variants) = ty else { return None; };
-                variants.iter().all(|v| exhausted_variants.contains(v))
+                match ty {
+                    Type::Enum(variants) => variants.iter().all(|v| exhausted_variants.contains(v)),
+                    Type::Id(symbol, _generics) => {
+                        match &ctx.get_type(*symbol) {
+                            crate::ir::TypeDef::Enum(enum_def) => {
+                                enum_def.variants.iter().all(|(v, _)| exhausted_variants.contains(v))
+                            }
+                            _ => return None
+                        }
+                    }
+                    _ => return None
+                }
             }
             &Exhaustion::Bool { true_, false_ } => true_ && false_,
             Exhaustion::Invalid => return None,
@@ -67,9 +77,9 @@ impl Exhaustion {
     /// exhaust an integer range and return true if it wasn't fully covered yet
     pub fn exhaust_int_range(&mut self, mut start: SignedInt, mut end: SignedInt) -> bool {
         fn exhaust(ranges: &mut Vec<Range>, start: u128, end: u128) -> bool {
-            if ranges.len() == 0 {
+            if ranges.is_empty() {
                 ranges.push(Range { start, end });
-                return true;
+                true
             } else {
                 if end + 1 < ranges.first().unwrap().start {
                     ranges.insert(0, Range { start, end });
@@ -97,10 +107,10 @@ impl Exhaustion {
                 if let Some(merged) = merge_ranges(Range { start, end }, *last) {
                     debug_assert!(merged.start < last.start || merged.end > last.end);
                     *last = merged;
-                    return true;
+                    true
                 } else {
                     ranges.push(Range { start, end });
-                    return true;
+                    true
                 }
             }
         }
@@ -214,12 +224,10 @@ fn merge_ranges(a: Range, b: Range) -> Option<Range> {
         } else {
             Some(Range::new(a.start, a.end.max(b.end)))
         }
+    } else if b.end < a.start-1 {
+        None
     } else {
-        if b.end < a.start-1 {
-            None
-        } else {
-            Some(Range::new(b.start, b.end.max(a.end)))
-        }
+        Some(Range::new(b.start, b.end.max(a.end)))
     }
 }
 

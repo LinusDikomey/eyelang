@@ -76,13 +76,7 @@ impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
 
 pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool) 
 -> (Result<(Module, Globals), ()>, Errors) {
-    let mut ctx = TypingCtx {
-        funcs: Vec::new(),
-        types: Vec::new(),
-        traits: Vec::new(),
-        consts: Vec::new(),
-        globals: Vec::new(),
-    };
+    let mut ctx = TypingCtx::new();
     //let mut globals = types2::gen_globals(ast, &mut ctx, &mut errors);
     let mut globals = Globals((0..ast.modules.len()).map(|_| dmap::new()).collect());
 
@@ -188,7 +182,8 @@ fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Functio
     builder.add_unused_untyped(Tag::Ret, Data { un_op: exit_code });
     
     let mut no_errors = Errors::new();
-    let ir = builder.finish(&mut no_errors);
+    // new empty TypingCtx can be used here as no type ids are referenced in this outer main function.
+    let ir = builder.finish(&TypingCtx::new(), &mut no_errors);
     assert!(!no_errors.has_errors());
 
     Ok(Function {
@@ -204,7 +199,7 @@ fn generate_bodies(
     gen_ctx: &mut GenCtx,
 ) {
     for (name, def) in defs {
-        if scope.get_scope_symbol(gen_ctx.globals.get_ref(), &name).is_some() { continue }
+        if scope.get_scope_symbol(gen_ctx.globals.get_ref(), name).is_some() { continue }
         gen_definition(name, def, scope, gen_ctx,
             |scope, name, symbol, globals| scope.add_symbol(name, symbol, globals));
     }
@@ -336,7 +331,7 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
         } else if !builder.currently_terminated() {
             builder.add_unused_untyped(Tag::RetUndef, Data { none: () });
         }
-        builder.finish(&mut ctx.errors)
+        builder.finish(&ctx.ctx, &mut ctx.errors)
     });
 
     ctx.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
@@ -382,7 +377,7 @@ fn gen_struct(
     for (method_name, method) in &def.methods {
         // type is set to Struct above
         let TypeDef::Struct(struct_) = ctx.ctx.get_type_mut(key) else { unreachable!() };
-        gen_func_body(&method_name, method, struct_.methods[method_name], &mut scope, ctx);
+        gen_func_body(method_name, method, struct_.methods[method_name], &mut scope, ctx);
     }
 }
 
@@ -510,6 +505,15 @@ pub struct TypingCtx {
     globals: Vec<(Type, Option<ConstVal>)>,
 }
 impl TypingCtx {
+    pub fn new() -> Self {
+        Self {
+            funcs: Vec::new(),
+            types: Vec::new(),
+            traits: Vec::new(),
+            consts: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
     pub fn add_func(&mut self, func: FunctionOrHeader) -> SymbolKey {
         let key = SymbolKey(self.funcs.len() as u64);
         self.funcs.push(func);
@@ -886,16 +890,14 @@ impl<'s> Scope<'s> {
                         generics.iter()
                             .map(|ty| s.resolve_uninferred_type(ty, ctx))
                             .collect::<Vec<_>>()
+                    } else if generic_count != 0 {
+                        ctx.errors.emit_span(
+                            Error::InvalidGenericCount { expected: generic_count, found: 0 },
+                            unresolved.span().in_mod(ctx.module)
+                        );
+                        return Err(())
                     } else {
-                        if generic_count != 0 {
-                            ctx.errors.emit_span(
-                                Error::InvalidGenericCount { expected: generic_count, found: 0 },
-                                unresolved.span().in_mod(ctx.module)
-                            );
-                            return Err(())
-                        } else {
-                            Vec::new()
-                        }
+                        Vec::new()
                     })
                 };
                 match current_module {
@@ -1363,7 +1365,7 @@ impl<'s> Scope<'s> {
 
                 ir.add_exhaustion_check(exhaustion, val_ty, val_span);
 
-                if extra.len() == 0 {
+                if extra.is_empty() {
                     ir.build_goto(else_block);
                     ir.begin_block(else_block);
                 }

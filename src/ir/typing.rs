@@ -326,7 +326,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
             if let Primitive(other) = other {
                 prim == other
             } else { false }
-                .then(|| ty)
+                .then_some(ty)
                 .ok_or(Error::MismatchedType)
         }
         Resolved(id, generics) => {
@@ -351,7 +351,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                         .any(|name| !def.variants.contains_key(name))
                 } else { false }
             } else { false }
-                .then(|| ty)
+                .then_some(ty)
                 .ok_or(Error::MismatchedType)
         }
         Pointer(inner) => {

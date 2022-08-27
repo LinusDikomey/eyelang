@@ -154,7 +154,7 @@ impl IrBuilder {
         BlockIndex(self.current_block)
     }
 
-    pub fn finish(self, errors: &mut Errors) -> FunctionIr {
+    pub fn finish(self, ctx: &TypingCtx, errors: &mut Errors) -> FunctionIr {
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
@@ -162,7 +162,7 @@ impl IrBuilder {
         let types = self.types.finalize();
         for (exhaustion, ty, span) in self.exhaustion_checks {
             let ty = &types[ty];
-            match exhaustion.is_exhausted(ty) {
+            match exhaustion.is_exhausted(ty, ctx) {
                 Some(true) => {}
                 Some(false) => {
                     errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));

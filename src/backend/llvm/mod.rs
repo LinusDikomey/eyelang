@@ -472,7 +472,7 @@ unsafe fn build_func(
                 let Type::Pointer(pointee) = origin_ty else { panic!("Tried to get member of non-pointer") };
                 let int_ty = llvm_ty(ctx, module, types, &idx_ty);
                 let mut elems = [LLVMConstInt(int_ty, 0, FALSE), idx];
-                let pointee_ty = llvm_ty(ctx, module, types, &*pointee);
+                let pointee_ty = llvm_ty(ctx, module, types, &pointee);
                 LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
             }
             ir::Tag::Cast => {

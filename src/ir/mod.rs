@@ -731,7 +731,7 @@ impl Ref {
     }
     pub fn is_ref(self) -> bool { !self.is_val() }
     pub fn into_ref(self) -> Option<u32> {
-        self.is_ref().then(|| self.0 - INDEX_OFFSET)
+        self.is_ref().then_some(self.0 - INDEX_OFFSET)
     }
 
     pub fn to_bytes(self) -> [u8; 4] {

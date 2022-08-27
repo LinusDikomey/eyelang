@@ -419,9 +419,8 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                         w.inst(mov(al, Int(Type::byte, vararg_count as u64)));
                     }
                     // align the stack to the required alignment before calling
-                    let missing_alignment = (
-                        (CALL_STACK_ALIGNMENT - (stack_pos % CALL_STACK_ALIGNMENT)) % CALL_STACK_ALIGNMENT
-                    ).into();
+                    let missing_alignment = 
+                        (CALL_STACK_ALIGNMENT - (stack_pos % CALL_STACK_ALIGNMENT)) % CALL_STACK_ALIGNMENT;
                     w.inst(sub(rsp, Int(Type::qword, missing_alignment)));
                     w.inst(call(&name_modifier(call_name)));
                     // move back the stack pointer

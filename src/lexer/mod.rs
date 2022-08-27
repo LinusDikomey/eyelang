@@ -186,11 +186,7 @@ impl<'a> Lexer<'a> {
 
                 '0'..='9' => { // int/float literal
                     let mut is_float = false;
-                    while match self.peek() {
-                        Some('0'..='9' | '.') => true,
-                        _ => false
-                        
-                    } {
+                    while matches!(self.peek(), Some('0'..='9' | '.')) {
                         if self.step().unwrap() == '.' {
                             if let Some('.') = self.peek() {
                                 self.unstep();

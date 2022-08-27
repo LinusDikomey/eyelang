@@ -17,22 +17,23 @@ impl StackMem {
             mem: vec![],
         }
     }
-    pub fn new_frame<'a>(&'a mut self) -> StackFrame<'a> {
+    pub fn new_frame(&mut self) -> StackFrame {
         let base_pointer = self.mem.len();
         StackFrame { mem: self, base_pointer, alloc_count: 0 }
     }
 }
 
+// TODO: integrate this to have proper memory when evaluating at comptime
 struct StackFrame<'a> {
     mem: &'a mut StackMem,
     base_pointer: usize,
     alloc_count: usize, // just for debugging
 }
 impl<'a> StackFrame<'a> {
-    fn new_frame<'b: 'a>(&'b mut self) -> StackFrame<'b> {
+    fn _new_frame<'b: 'a>(&'b mut self) -> StackFrame<'b> {
         self.mem.new_frame()
     }
-    fn alloc(&mut self, count: usize) -> usize {
+    fn _alloc(&mut self, count: usize) -> usize {
         self.alloc_count += count;
         let idx = self.mem.mem.len();
         self.mem.mem.extend((0..count).map(|_| 0));
@@ -56,7 +57,7 @@ pub fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Erro
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
-unsafe fn eval_internal(ir: &super::IrBuilder, params: &[ConstVal], frame: StackFrame) -> Result<ConstVal, Error> {
+unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstVal, Error> {
     let mut values = vec![LocalVal::Val(ConstVal::Invalid); ir.inst.len()];
 
     fn get_ref(values: &[LocalVal], r: Ref) -> ConstVal {

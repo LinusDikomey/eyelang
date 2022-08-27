@@ -57,7 +57,10 @@ fn std_path() -> PathBuf {
     match std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(|p| Path::join(p, "std"))) {
-            Some(path) if std::fs::try_exists(&path).is_ok_and(|v| *v) => path,
+            Some(path) => match std::fs::try_exists(&path) {
+                Ok(true) => path,
+                _ => "std".into()
+            }
             _ => "std".into()
         }
 }

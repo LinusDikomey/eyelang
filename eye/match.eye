@@ -19,6 +19,7 @@ main :: fn {
         1: "bye",
         2: "goodbye",
         3: "see you later alligator",
+        _other: "unknown"
     }
     println(s)
 
@@ -35,5 +36,6 @@ main :: fn {
         3 {
             println("bye")
         }
+        _other {}
     }
 }

@@ -207,9 +207,9 @@ pub enum Keyword {
     Use,
     Asm,
 }
-impl Into<&'static str> for Keyword {
-    fn into(self) -> &'static str {
-        match self {
+impl From<Keyword> for &'static str {
+    fn from(k: Keyword) -> Self {
+        match k {
             Keyword::Primitive(p) => p.into(),
             Keyword::Fn => "fn",
             Keyword::Ret => "ret",
