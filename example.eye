@@ -11,7 +11,8 @@ main :: fn {
         f = Fruit.Banana
     }
     # This would give an error because 'Pear' is not defined in the enum
-    # f = .Pear 
+    # f = .Pear
+
     std.c.printf("%s\n", fruit_to_string(f))
 }
 

@@ -38,6 +38,8 @@ pub enum TokenType {
     Comma,
     Semicolon,
     Dot,
+    DotDot,
+    DotDotLessThan,
     TripleDot,
 
     LParen,
@@ -107,6 +109,8 @@ impl TokenType {
             TokenType::Comma => ",",
             TokenType::Semicolon => ";",
             TokenType::Dot => ".",
+            TokenType::DotDot => "..",
+            TokenType::DotDotLessThan => "..<",
             TokenType::TripleDot => "...",
             TokenType::LParen => "(",
             TokenType::RParen => ")",
@@ -305,6 +309,9 @@ pub enum Operator {
     GT,
     LE,
     GE,
+
+    Range,
+    RangeExclusive,
 }
 impl From<TokenType> for Option<Operator> {
     fn from(tok: TokenType) -> Self {
@@ -334,6 +341,9 @@ impl From<TokenType> for Option<Operator> {
             TokenType::LessEquals => LE,
             TokenType::GreaterEquals => GE,
 
+            TokenType::DotDot => Range,
+            TokenType::DotDotLessThan => RangeExclusive,
+
             _ => return None
         })
     }
@@ -343,12 +353,13 @@ impl Operator {
         use Operator::*;
         match self {
             Assignment(_) => 10,
-            Or => 20,
-            And => 30,
-            Equals | NotEquals => 40,
-            LT | LE | GT | GE => 50,
-            Add | Sub => 60,
-            Mul | Div | Mod => 70,
+            Range | RangeExclusive => 20,
+            Or => 30,
+            And => 40,
+            Equals | NotEquals => 50,
+            LT | LE | GT | GE => 60,
+            Add | Sub => 70,
+            Mul | Div | Mod => 80,
         }
     }
     pub fn is_boolean(self) -> bool {

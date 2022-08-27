@@ -203,6 +203,7 @@ pub enum Error {
     UnusedStatementValue,
     InfiniteLoop,
     NotAPattern,
+    Inexhaustive,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -264,6 +265,7 @@ impl Error {
             Error::UnusedStatementValue => "unused expression value",
             Error::InfiniteLoop => "possibly detected infinite loop",
             Error::NotAPattern => "not a pattern",
+            Error::Inexhaustive => "not all possible values were covered",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -291,7 +293,8 @@ impl Error {
     }
     pub fn severity(&self) -> Severity {
         match self {
-            Self::UnusedStatementValue => Severity::Warn,
+            Self::UnusedStatementValue
+                => Severity::Warn,
             _ => Severity::Error
         }
     }

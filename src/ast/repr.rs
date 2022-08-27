@@ -436,11 +436,13 @@ impl<R: Representer> Repr<R> for UnresolvedType {
                     c.write_add("]");
                 }
             }
-            Self::Pointer(box (inner, _)) => {
+            Self::Pointer(ptr) => {
+                let (inner, _) = &**ptr;
                 c.char('*');
                 inner.repr(c);
             }
-            Self::Array(box (inner, _, size)) => {
+            Self::Array(array) => {
+                let (inner, _, size) = &**array;
                 c.char('[');
                 inner.repr(c);
                 c.write_add("; ");
@@ -532,6 +534,9 @@ impl<C: Representer> Repr<C> for Operator {
             Operator::GT => ">",
             Operator::LE => "<=",
             Operator::GE => ">=",
+
+            Operator::Range => "..",
+            Operator::RangeExclusive => "..<",
         });
     }
 }

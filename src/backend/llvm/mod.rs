@@ -721,7 +721,8 @@ unsafe fn llvm_ty_recursive(
         Type::Pointer(inner) => {
             LLVMPointerType(llvm_ty_recursive(ctx, module, types, inner, true, generics), 0)
         }
-        Type::Array(box (inner, count)) => {
+        Type::Array(array) => {
+            let (inner, count) = &**array;
             let elem_ty = llvm_ty_recursive(ctx, module, types, inner, false, generics);
             LLVMArrayType(elem_ty, *count)
         }

@@ -1,6 +1,5 @@
 #![feature(
     let_else,
-    box_patterns,
     variant_count,
     fs_try_exists,
     is_some_with,
@@ -108,9 +107,6 @@ pub struct Args {
     #[clap(arg_enum)]
     cmd: Cmd,
     file: Option<String>,
-    /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
-    #[clap(short, long)]
-    reconstruct_src: bool,
 
     /// Enable debug logging
     #[clap(short, long)]
@@ -132,6 +128,14 @@ pub struct Args {
     /// Report compilation times of all files/compilation steps.
     #[clap(long)]
     timings: bool,
+
+    /// prints out all tokens after lexing.
+    #[clap(short, long)]
+    tokens: bool,
+
+    /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
+    #[clap(short, long)]
+    reconstruct_src: bool,
 
     /// Debug the type inferer.
     #[clap(long)]
@@ -256,8 +260,12 @@ impl fmt::Display for BackendStats {
 fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let mut stats = Stats::default();
     let ir = {
-        let (res, ast, errors) = 
-            compile::project(path, args.reconstruct_src, !args.nostd, &[], !args.emit_obj, &mut stats); 
+        let debug_options = compile::Debug {
+            tokens: args.tokens,
+            reconstruct_src: args.reconstruct_src,
+        };
+        let (res, ast, errors) =
+            compile::project(path, debug_options, !args.nostd, &[], !args.emit_obj, &mut stats); 
         errors.print(&ast);
         match res {
             Ok(val) => val,

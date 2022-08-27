@@ -4,7 +4,7 @@ use crate::{
     error::Errors, span::TSpan
 };
 
-use super::{TypingCtx, GenCtx};
+use super::{TypingCtx, GenCtx, exhaust::Exhaustion};
 
 #[derive(Clone, Debug)]
 pub struct IrBuilder {
@@ -16,6 +16,9 @@ pub struct IrBuilder {
     pub blocks: Vec<u32>,
     pub types: TypeTable,
     pub extra: Vec<u8>,
+
+    // exhaustion checks are deferred until the end of the IR generation for the type is known.
+    exhaustion_checks: Vec<(Exhaustion, TypeTableIndex, TSpan)>,
 }
 impl IrBuilder {
     pub fn new(module: ModuleId) -> Self {
@@ -33,19 +36,22 @@ impl IrBuilder {
             blocks: vec![0],
             types: TypeTable::new(),
             extra: Vec::new(),
+
+            exhaustion_checks: Vec::new(),
         }
     }
 
     /// Internal function to add an instruction. This will not add anything if `emit` is set to false.
+    #[cfg_attr(debug_assertions, track_caller)]
     fn add_inst(&mut self, inst: Instruction) -> Ref {
         let idx = Ref::index(self.inst.len() as u32);
         if self.emit {
             if inst.tag == Tag::BlockBegin {
                 debug_assert!(self.inst.last().map_or(true, |last| last.tag.is_terminator()),
-                    "New block started without preceding terminator: \n{}", self.clone().finish());
+                    "New block started without preceding terminator");
             } else {
                 debug_assert!(self.inst.last().map_or(true, |last| !last.tag.is_terminator()),
-                    "Instruction added after a terminator: instruction: {:?}\n\n{}", inst, self.clone().finish());
+                    "Instruction added after a terminator: instruction: {:?}", inst);
             }
             self.inst.push(inst);
         }
@@ -53,6 +59,7 @@ impl IrBuilder {
     }
 
     #[must_use = "Use add_unused if the result of this instruction isn't needed."]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
         debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
         debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
@@ -65,6 +72,7 @@ impl IrBuilder {
     }
 
     #[must_use = "Use add_unused_untyped if the result of this instruction isn't needed."]
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn _add_untyped(&mut self, tag: Tag, data: Data) -> Ref {
         debug_assert!(tag.is_untyped(), "The IR instruction {tag:?} needs a type");
         debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
@@ -76,6 +84,7 @@ impl IrBuilder {
         })
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
         debug_assert!(!tag.is_untyped(), "The unused IR instruction {tag:?} doesn't need a type");
         self.add_inst(Instruction {
@@ -86,6 +95,7 @@ impl IrBuilder {
         });
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn add_unused_untyped(&mut self, tag: Tag, data: Data) {
         debug_assert!(tag.is_untyped(), "The unused IR instruction {tag:?} needs a type");
         self.add_inst(Instruction {
@@ -144,15 +154,27 @@ impl IrBuilder {
         BlockIndex(self.current_block)
     }
 
-    pub fn finish(self) -> FunctionIr {
+    pub fn finish(self, errors: &mut Errors) -> FunctionIr {
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
         }
+        let types = self.types.finalize();
+        for (exhaustion, ty, span) in self.exhaustion_checks {
+            let ty = &types[ty];
+            match exhaustion.is_exhausted(ty) {
+                Some(true) => {}
+                Some(false) => {
+                    errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));
+                }
+                None => debug_assert!(errors.has_errors(),
+                    "there should have been at least one error if this exhaustion is invalid")
+            }
+        }
         FunctionIr {
             inst: self.inst,
             extra: self.extra,
-            types: self.types.finalize(),
+            types,
             blocks: self.blocks,
         }
     }
@@ -163,7 +185,8 @@ impl IrBuilder {
         block
     }
 
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan, ctx: &TypingCtx) {
+    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan, ctx: &TypingCtx,
+    ) {
         self.types.specify(idx, info, errors, span.in_mod(self.module), ctx);
     }
     pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name_span: TSpan, ctx: &mut GenCtx) {
@@ -191,6 +214,14 @@ impl IrBuilder {
     pub fn invalidate(&mut self, idx: TypeTableIndex) {
         self.types.update_type(idx, TypeInfo::Invalid);
     }
+
+    pub fn add_exhaustion_check(&mut self, exhaustion: Exhaustion, idx: TypeTableIndex, span: TSpan) {
+        self.exhaustion_checks.push((exhaustion, idx, span));
+    }
+
+    /// --------------------------------------------------------------
+    /// -------------------- instruction builders --------------------
+    /// --------------------------------------------------------------
 
     pub fn build_goto(&mut self, block: BlockIndex) {
         self.add_unused_untyped(Tag::Goto, Data { block })

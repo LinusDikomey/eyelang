@@ -392,13 +392,16 @@ impl UnresolvedType {
     pub fn span(&self) -> TSpan {
         match self {
             UnresolvedType::Primitive(_, span) 
-            | UnresolvedType::Array(box (_, span, _))
             | UnresolvedType::Tuple(_, span) => *span,
             UnresolvedType::Unresolved(path, generics) => generics.as_ref().map_or_else(
                 || path.span(),
                 |generics| TSpan::new(path.span().start, generics.1.end)
             ),
-            UnresolvedType::Pointer(box (inner, start)) => TSpan::new(*start, inner.span().end),
+            UnresolvedType::Array(array) => array.1,
+            UnresolvedType::Pointer(ptr) => {
+                let (inner, start) = &**ptr;
+                TSpan::new(*start, inner.span().end)
+            }
             UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }

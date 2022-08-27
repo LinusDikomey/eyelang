@@ -188,7 +188,7 @@ impl<'a> Parser<'a> {
                             self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
                                 let ident = p.toks.step_expect(TokenType::Ident)?;
                                 let ident_span = ident.span();
-                                if let Some(_) = p.toks.step_if(TokenType::DoubleColon) {
+                                if p.toks.step_if(TokenType::DoubleColon).is_some() {
                                     let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                                     let method = p.parse_function_def(fn_tok)?;
                                     let name = ident.get_val(p.src).to_owned();

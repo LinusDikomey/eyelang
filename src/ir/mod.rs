@@ -54,7 +54,10 @@ impl Type {
             Type::Prim(p) => p.layout().size == 0,
             Type::Id(key, generics) => types[key.idx()].1.is_zero_sized(types, generics),
             Type::Pointer(_) => false,
-            Type::Array(box (inner, size)) => *size == 0 || inner.is_zero_sized(types, generics),
+            Type::Array(array) => {
+                let (inner, size) = &**array;
+                *size == 0 || inner.is_zero_sized(types, generics)
+            }
             Type::Enum(variants) => variants.len() < 2,
             Type::Tuple(elems) => elems.iter().all(|ty| ty.is_zero_sized(types, generics)),
             Type::Symbol => true,
@@ -108,7 +111,8 @@ impl Type {
                 let inner = inner.as_info_generic(types, generics);
                 TypeInfo::Pointer(types.add_info_or_idx(inner))
             }
-            Self::Array(box (ty, count)) => {
+            Self::Array(array) => {
+                let (ty, count) = &**array;
                 let inner = ty.as_info_generic(types, generics);
                 TypeInfo::Array(Some(*count), types.add_info_or_idx(inner))
             }
@@ -144,7 +148,10 @@ impl fmt::Display for Type {
                 Ok(())
             }
             Self::Pointer(inner) => write!(f, "*{inner}"),
-            Self::Array(box (ty, count)) => write!(f, "[{}; {}]", ty, count),
+            Self::Array(array) => {
+                let (ty, count) = &**array;
+                write!(f, "[{}; {}]", ty, count)
+            }
             Self::Enum(variants) => {
                 write_delimited(f, variants, " | ")?;
                 Ok(())

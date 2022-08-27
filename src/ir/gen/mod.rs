@@ -7,9 +7,12 @@ use crate::{
     types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
 };
 
+use self::exhaust::Exhaustion;
+
 use super::{typing::*, *};
 
 mod builder;
+mod exhaust;
 
 pub use builder::IrBuilder;
 
@@ -184,10 +187,14 @@ fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Functio
     };
     builder.add_unused_untyped(Tag::Ret, Data { un_op: exit_code });
     
+    let mut no_errors = Errors::new();
+    let ir = builder.finish(&mut no_errors);
+    assert!(!no_errors.has_errors());
+
     Ok(Function {
         name: "main".to_owned(),
         header: FunctionHeader { params: vec![], varargs: false, return_type: Type::Prim(Primitive::I32) },
-        ir: Some(builder.finish())
+        ir: Some(ir)
     })
 }
 
@@ -329,7 +336,7 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
         } else if !builder.currently_terminated() {
             builder.add_unused_untyped(Tag::RetUndef, Data { none: () });
         }
-        builder.finish()
+        builder.finish(&mut ctx.errors)
     });
 
     ctx.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
@@ -807,11 +814,13 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::UnresolvedType::Pointer(box (inner, _)) => {
+            ast::UnresolvedType::Pointer(ptr) => {
+                let (inner, _) = &**ptr;
                 let inner = self.resolve_type(inner, types, ctx)?;
                 Ok(TypeInfo::Pointer(types.add(inner)))
             }
-            ast::UnresolvedType::Array(box (inner, _, count)) => {
+            ast::UnresolvedType::Array(array) => {
+                let (inner, _, count) = &**array;
                 let inner = self.resolve_type(inner, types, ctx)?;
                 let inner = types.add(inner);
                 Ok(TypeInfo::Array(*count, inner))
@@ -937,11 +946,13 @@ impl<'s> Scope<'s> {
                     }
                 }
             }
-            ast::UnresolvedType::Pointer(box (inner, _)) => {
+            ast::UnresolvedType::Pointer(ptr) => {
+                let (inner, _) = &**ptr;
                 let inner = self.resolve_uninferred_type(inner, ctx);
                 Type::Pointer(Box::new(inner))
             }
-            ast::UnresolvedType::Array(box (inner, _, count)) => {
+            ast::UnresolvedType::Array(array) => {
+                let (inner, _, count) = &**array;
                 let inner = self.resolve_uninferred_type(inner, ctx);
                 let Some(count) = count else {
                     ctx.errors.emit_span(Error::ArraySizeCantBeInferredHere, unresolved.span().in_mod(ctx.module));
@@ -1100,7 +1111,7 @@ impl<'s> Scope<'s> {
                 if !block_noreturn {
                     ir.specify(info.expected, TypeInfo::UNIT, &mut ctx.errors, *span, &ctx.ctx);
                 }
-                (Ref::UNIT, false)
+                (Ref::UNIT, items.count == 0)
             }
             ast::Expr::Declare { name, end: _, annotated_ty } => {
                 let expr_span = ctx.span(expr);
@@ -1322,21 +1333,26 @@ impl<'s> Scope<'s> {
                 let mut all_branches_noreturn = true;
                 
                 let mut branches = Vec::new();
+                let mut exhaustion = Exhaustion::None;
 
                 for (i, [pat, branch]) in extra.array_chunks().enumerate() {
-                    let pattern_matches = self.reduce_pat(ctx, ir, val, *pat, val_ty);
+                    let mut branch_block_symbols = dmap::new();
+                    let branch_block_defs = dmap::new();
+                    let mut branch_block = self.child(&mut branch_block_symbols, &branch_block_defs);
                     let on_match = ir.create_block();
                     let otherwise = if i as u32 == *branch_count - 1 {
                         else_block
                     } else {
                         ir.create_block()
                     };
-                    ir.build_branch(pattern_matches, on_match, otherwise);
+                    let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+                    let matches = branch_block.reduce_pat(ctx, ir, val, *pat, val_ty, bool_ty, &mut exhaustion);   
+                    ir.build_branch(matches, on_match, otherwise);
                     ir.begin_block(on_match);
                     let branch_expr = &ctx.ast[*branch];
                     let mut branch_noreturn = false;
-                    let val = self.reduce_expr_val_spanned(ctx, ir, branch_expr, branch_expr.span(ctx.ast),
-                        info.with_noreturn(&mut branch_noreturn));
+                    let val = branch_block.reduce_expr_val_spanned(ctx, ir, branch_expr, branch_expr.span(ctx.ast),
+                    info.with_noreturn(&mut branch_noreturn));
 
                     branches.push((on_match, val));
                     ir.build_goto(after_block);
@@ -1344,12 +1360,19 @@ impl<'s> Scope<'s> {
 
                     all_branches_noreturn |= branch_noreturn;
                 }
+
+                ir.add_exhaustion_check(exhaustion, val_ty, val_span);
+
+                if extra.len() == 0 {
+                    ir.build_goto(else_block);
+                    ir.begin_block(else_block);
+                }
                 // we are now in else_block
                 let uninit = ir.build_uninit(info.expected);
                 branches.push((else_block, uninit));
                 ir.build_goto(after_block);
                 ir.begin_block(after_block);
-                
+
                 _ = all_branches_noreturn;
                 // TODO: exhaustive match, will also make this sensible to enable
                 // if all_branches_noreturn {
@@ -1638,6 +1661,10 @@ impl<'s> Scope<'s> {
                         Operator::GT => Tag::GT,
                         Operator::LE => Tag::LE,
                         Operator::GE => Tag::GE,
+                        
+                        Operator::Range | Operator::RangeExclusive => {
+                            todo!("range expressions")
+                        }
 
                         Operator::Assignment(_) => unreachable!()
                     };
@@ -1879,40 +1906,95 @@ impl<'s> Scope<'s> {
     }
 
     /// builds code to check if `pat` matches on `val` and gives back a boolean `Ref`
-    fn reduce_pat(&mut self, ctx: &mut GenCtx, ir: &mut IrBuilder, val: Ref, pat: ExprRef, expected: TypeTableIndex)
-    -> Ref {
+    fn reduce_pat(
+        &mut self, ctx: &mut GenCtx, ir: &mut IrBuilder, val: Ref, pat: ExprRef,
+        expected: TypeTableIndex, bool_ty: TypeTableIndex, exhaustion: &mut Exhaustion,
+    ) -> Ref {
         let pat_expr = &ctx.ast[pat];
+        let mut int_lit = |exhaustion: &mut Exhaustion, ctx: &mut GenCtx, lit: IntLiteral, lit_span: TSpan, neg| {
+            exhaustion.exhaust_int(exhaust::SignedInt(lit.val, neg));
+            let int_ty = lit.ty
+                .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
+
+            let mut lit_val = int_literal(lit, lit_span, ir, expected, ctx);
+            if neg {
+                lit_val = ir.add(Data { un_op: lit_val }, Tag::Neg, expected);
+            }
+            ir.specify(expected, int_ty, &mut ctx.errors, lit_span, &ctx.ctx);
+            ir.add(Data { bin_op: (val, lit_val) }, Tag::Eq, bool_ty)
+        };
+        
         match pat_expr {
             Expr::IntLiteral(lit_span) => {
                 let lit = IntLiteral::parse(ctx.src(*lit_span));
-                let lit_val = int_literal(lit, *lit_span, ir, expected, ctx);
-                ir.add(Data { bin_op: (val, lit_val) }, Tag::Eq, expected)
+                int_lit(exhaustion, ctx, lit, *lit_span, false)
+            }
+            Expr::UnOp(_, UnOp::Neg, val) => {
+                let val = &ctx.ast[*val];
+                match val {
+                    Expr::IntLiteral(lit_span) => {
+                        let lit = IntLiteral::parse(ctx.src(*lit_span));
+                        int_lit(exhaustion, ctx, lit, *lit_span, true)
+                    }
+                    Expr::FloatLiteral(_) => todo!(),
+                    _ => {
+                        ctx.errors.emit_span(Error::NotAPattern, ctx.span(pat_expr));
+                        ir.invalidate(expected);
+                        Ref::UNDEF
+                    }
+                }
             }
             Expr::FloatLiteral(_) => todo!(),
             Expr::BoolLiteral { start: _, val: bool_val } => {
+                exhaustion.exhaust_bool(*bool_val);
                 let bool_val = Ref::val(if *bool_val { RefVal::True } else { RefVal::False });
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Bool),
-                &mut ctx.errors, pat_expr.span(ctx.ast), &ctx.ctx);
-                ir.add(Data { bin_op: (val, bool_val) }, Tag::Eq, expected)
+                    &mut ctx.errors, pat_expr.span(ctx.ast), &ctx.ctx);
+                ir.add(Data { bin_op: (val, bool_val) }, Tag::Eq, bool_ty)
             }
             Expr::EnumLiteral { dot: _, ident } => {
                 let variant_name = ctx.src(*ident);
                 let variant = ir.build_enum_lit(variant_name, expected);
+                exhaustion.exhaust_enum_variant(variant_name.to_owned());
                 ir.specify_enum_variant(expected, *ident, ctx);
-                ir.add(Data { bin_op: (val, variant) }, Tag::Eq, expected)
+                ir.add(Data { bin_op: (val, variant) }, Tag::Eq, bool_ty)
             }
             Expr::Unit(span) => {
                 ir.specify(expected, TypeInfo::UNIT, &mut ctx.errors, *span, &ctx.ctx);
+                *exhaustion = Exhaustion::Full;
                 Ref::val(RefVal::True)
             }
-            Expr::Nested(_, expr) => self.reduce_pat(ctx, ir, val, *expr, expected),
-            
+            Expr::Nested(_, expr) => self.reduce_pat(ctx, ir, val, *expr, expected, bool_ty, exhaustion),    
+            Expr::Variable(span) => {
+                let name = ctx.src(*span);
+                let var = ir.build_decl(expected);
+                ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                self.add_symbol(name.to_owned(), Symbol::Var { ty: expected, var }, &mut ctx.globals);
+                *exhaustion = Exhaustion::Full;
+                Ref::val(RefVal::True)
+            }
+            &Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => {
+                // TODO: float literals, negated literals
+                let Expr::IntLiteral(l) = ctx.ast[l] else { todo!() };
+                let Expr::IntLiteral(r) = ctx.ast[r] else { todo!() };
+                let l_lit = IntLiteral::parse(ctx.src(l));
+                let r_lit = IntLiteral::parse(ctx.src(r));
+                exhaustion.exhaust_int_range(
+                    exhaust::SignedInt(l_lit.val, false),
+                    exhaust::SignedInt(r_lit.val, false)
+                );
+                let l_ref = int_literal(l_lit, l, ir, expected, ctx);
+                let r_ref = int_literal(r_lit, r, ir, expected, ctx);
+                let left_check = ir.add(Data { bin_op: (val, l_ref) }, Tag::GE, bool_ty);
+                let right_check = ir.add(Data { bin_op: (val, r_ref) }, Tag::LE, bool_ty);
+
+                ir.add(Data { bin_op: (left_check, right_check) }, Tag::And, bool_ty)
+            }
             Expr::StringLiteral(_) // TODO definitely very important
             | Expr::Block { .. }
             | Expr::Declare { .. }
             | Expr::DeclareWithVal { .. }
             | Expr::Return { .. }
-            | Expr::Variable(_) 
             | Expr::Array(_, _) 
             | Expr::Tuple(_, _) 
             | Expr::If { .. } 
@@ -1922,10 +2004,10 @@ impl<'s> Scope<'s> {
             | Expr::FunctionCall { .. } 
             | Expr::UnOp(_, _, _) 
             | Expr::BinOp(_, _, _) 
-            | Expr::MemberAccess { .. } // maybe when variables are allowed
+            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
             | Expr::Index { .. } 
             | Expr::TupleIdx { .. } 
-            | Expr::Cast(_, _, _) 
+            | Expr::Cast(_, _, _)
             | Expr::Root(_) 
             | Expr::Asm { .. } 
             => {
@@ -2070,8 +2152,7 @@ fn int_literal(lit: IntLiteral, span: TSpan, ir: &mut IrBuilder, expected: TypeT
 }
 
 fn gen_string(string: &str, ir: &mut IrBuilder, expected: TypeTableIndex, span: TSpan, errors: &mut Errors,
-    ctx: &TypingCtx) -> Ref 
-{
+    ctx: &TypingCtx) -> Ref {
     let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
     ir.specify(expected, TypeInfo::Pointer(i8_ty), errors, span, ctx);
         

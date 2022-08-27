@@ -57,10 +57,10 @@ impl Primitive {
         Layout { size: size_and_align, alignment: size_and_align.max(1) }
     }
 }
-impl Into<&'static str> for Primitive {
-    fn into(self) -> &'static str {
+impl From<Primitive> for &'static str {
+    fn from(p: Primitive) -> Self {
         use Primitive::*;
-        match self {
+        match p {
             I8 => "i8",
             U8 => "u8",
             I16 => "i16",
@@ -129,6 +129,35 @@ impl IntType {
 
     pub fn bit_count(self) -> u32 {
         self.size() * 8
+    }
+
+    pub fn max(self) -> u128 {
+        match self {
+            IntType::I8 => i8::MAX as u128,
+            IntType::I16 => i16::MAX as u128,
+            IntType::I32 => i32::MAX as u128,
+            IntType::I64 => i64::MAX as u128,
+            IntType::I128 => i128::MAX as u128,
+            IntType::U8 => u8::MAX as u128,
+            IntType::U16 => u16::MAX as u128,
+            IntType::U32 => u32::MAX as u128,
+            IntType::U64 => u64::MAX as u128,
+            IntType::U128 => u128::MAX as u128,
+        }
+    }
+    pub fn min(self) -> u128 {
+        match self {
+            IntType::I8
+            | IntType::I16
+            | IntType::I32
+            | IntType::I64
+            | IntType::I128 => 0,
+            IntType::U8 => 2u128.pow(7),
+            IntType::U16 => 2u128.pow(15),
+            IntType::U32 => 2u128.pow(31),
+            IntType::U64 => 2u128.pow(63),
+            IntType::U128 => 2u128.pow(127),
+        }
     }
 }
 

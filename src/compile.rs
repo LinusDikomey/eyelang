@@ -13,9 +13,15 @@ pub struct Dependency<'a> {
     _path: &'a Path
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct Debug {
+    pub tokens: bool,
+    pub reconstruct_src: bool,
+}
+
 pub fn project(
     module_path: &Path,
-    reconstruct_src: bool,
+    debug: Debug,
     std: bool,
     _deps: &[Dependency],
     require_main_func: bool,
@@ -25,13 +31,13 @@ pub fn project(
     let mut ast = Ast::new();
 
     let main = if module_path.is_dir() {
-        tree(module_path, &mut ast, &mut errors, TreeType::Main, reconstruct_src, stats)
+        tree(module_path, &mut ast, &mut errors, TreeType::Main, debug, stats)
     } else {
-        file(module_path, &mut ast, &mut errors, reconstruct_src, stats)
+        file(module_path, &mut ast, &mut errors, debug, stats)
     };
     
     if let Some(std) = (std).then(std_path) {
-        let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, reconstruct_src, stats);
+        let std_mod = tree(&std, &mut ast, &mut errors, TreeType::Main, debug, stats);
         let defs = ast[main].definitions;
         ast[defs].insert(
             "std".to_owned(),
@@ -75,14 +81,14 @@ fn tree(
     ast: &mut Ast,
     errors: &mut Errors,
     t: TreeType,
-    reconstruct_src: bool,
+    debug: Debug,
     stats: &mut Stats,
 ) -> ModuleId {
     let base_file = path.join(t.file());
     let base_exists = std::fs::try_exists(&base_file)
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
     let base_module = if base_exists {
-        file(&base_file, ast, errors, reconstruct_src, stats)
+        file(&base_file, ast, errors, debug, stats)
     } else {
         let main_mod = ast.add_empty_module(String::new(), path.to_owned());
         if let TreeType::Main = t {
@@ -97,11 +103,11 @@ fn tree(
         if entry.file_name() == t.file() { continue; }
         let file_ty = entry.file_type().expect("Failed to retrieve file type");
         let child_module = if file_ty.is_dir() {
-            tree(&path, ast, errors, TreeType::Mod, reconstruct_src, stats)
+            tree(&path, ast, errors, TreeType::Mod, debug, stats)
         } else if file_ty.is_file() {
             let is_eye = matches!(path.extension(), Some(extension) if extension == "eye");
             if !is_eye { continue; }
-            file(&path, ast, errors, reconstruct_src, stats)
+            file(&path, ast, errors, debug, stats)
         } else {
             eprintln!("Invalid file type found in module tree");
             continue;
@@ -120,7 +126,7 @@ fn file(
     path: &Path,
     ast: &mut Ast,
     errors: &mut Errors,
-    reconstruct_src: bool,
+    debug: Debug,
     stats: &mut Stats,
 ) -> ModuleId {
     stats.file_times.push(crate::FileStats {
@@ -139,6 +145,9 @@ fn file(
     let module_id = ast.add_empty_module(String::new(), path.to_owned());
 
     let lex_res = lexer::parse(&src, errors, module_id);
+    if debug.tokens {
+        println!("Tokens at path {:?}:\n{:#?}", path, lex_res);
+    }
     file_stats.lex = lex_start_time.elapsed();
     let Some(tokens) = lex_res else {
         let empty = Module::empty(ast);
@@ -153,7 +162,7 @@ fn file(
     
     match parse_res {
         Ok(module) => {
-            if reconstruct_src {
+            if debug.reconstruct_src {
                 log!("Module: {:#?}", module);
                 println!("\n---------- Start of AST code reconstruction for file {path:?} ----------\n");
                 let ast_repr_ctx = ast::repr::ReprPrinter::new("  ", ast, &src);

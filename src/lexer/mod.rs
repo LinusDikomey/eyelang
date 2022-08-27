@@ -111,12 +111,16 @@ impl<'a> Lexer<'a> {
                 '.' => {
                     if let Some('.') = self.peek() {
                         self.step();
-                        if let Some('.') = self.peek() {
-                            self.step();
-                            TokenType::TripleDot
-                        } else {
-                            self.unstep();
-                            TokenType::Dot
+                        match self.peek() {
+                            Some('.') => {
+                                self.step();
+                                TokenType::TripleDot
+                            }
+                            Some('<') => {
+                                self.step();
+                                TokenType::DotDotLessThan
+                            }
+                            _ => TokenType::DotDot
                         }
                     } else {
                         TokenType::Dot
@@ -183,8 +187,15 @@ impl<'a> Lexer<'a> {
                 '0'..='9' => { // int/float literal
                     let mut is_float = false;
                     while match self.peek() {
-                        Some('0'..='9') => true,
-                        Some('.') => {
+                        Some('0'..='9' | '.') => true,
+                        _ => false
+                        
+                    } {
+                        if self.step().unwrap() == '.' {
+                            if let Some('.') = self.peek() {
+                                self.unstep();
+                                break;
+                            }
                             if is_float {
                                 errors.emit(
                                     Error::MultipleDotsInFloatLiteral,
@@ -194,12 +205,7 @@ impl<'a> Lexer<'a> {
                                 );
                             }
                             is_float = true;
-                            true
-                        },
-                        _ => false
-                        
-                    } {
-                        self.step().unwrap();
+                        }
                     }
                     if is_float {
                         TokenType::FloatLiteral
