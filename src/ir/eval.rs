@@ -43,7 +43,7 @@ impl<'a> StackFrame<'a> {
 impl<'a> Drop for StackFrame<'a> {
     fn drop(&mut self) {
         debug_assert_eq!(self.mem.mem.len() - self.alloc_count, self.base_pointer);
-        self.mem.mem.truncate(self.base_pointer)
+        self.mem.mem.truncate(self.base_pointer);
     }
 }
 
@@ -294,7 +294,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 let r = get_ref(&values, inst.data.bin_op.1);
                 ConstVal::Bool(l.equal_to(&r, &ir.types))
             }
-            super::Tag::Ne => {
+            super::Tag::NE => {
                 let l = get_ref(&values, inst.data.bin_op.0);
                 let r = get_ref(&values, inst.data.bin_op.1);
                 ConstVal::Bool(!l.equal_to(&r, &ir.types))
@@ -322,7 +322,6 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 */
             }
             super::Tag::Cast => todo!(),
-            super::Tag::AsPointer => todo!(),
             super::Tag::Goto => {
                 let target = ir.blocks[inst.data.int32 as usize];
                 eprintln!("{pos} -> {target}");

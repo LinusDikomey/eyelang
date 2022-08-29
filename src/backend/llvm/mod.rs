@@ -58,10 +58,10 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                     TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
                 }
                 ir::TypeDef::Enum(def) => {
-                    if def.generic_count != 0 {
-                        TypeInstance::Generic(dmap::new())
-                    } else {
+                    if def.generic_count == 0 {
                         TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()))
+                    } else {
+                        TypeInstance::Generic(dmap::new())
                     }
                 }
                 ir::TypeDef::NotGenerated { .. } => unreachable!()
@@ -412,7 +412,7 @@ unsafe fn build_func(
                     _ => unreachable!()
                 }       
             }
-            ir::Tag::Eq | ir::Tag::Ne => {
+            ir::Tag::Eq | ir::Tag::NE => {
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
@@ -547,7 +547,6 @@ unsafe fn build_func(
                     Type::Invalid => unreachable!()
                 }
             }
-            ir::Tag::AsPointer => get_ref(&instructions, data.un_op),
             ir::Tag::Goto => {
                 let block_inst = ir.inst[ir.blocks[data.int32 as usize] as usize];
                 debug_assert_eq!(block_inst.tag, ir::Tag::BlockBegin);
@@ -633,10 +632,7 @@ unsafe fn inline_asm(
 }
 
 fn llvm_bool(b: bool) -> LLVMBool {
-    match b {
-        true => TRUE,
-        false => FALSE
-    }
+    if b { TRUE } else { FALSE }
 }
 
 fn val_str(val: LLVMValueRef) -> ffi::CString {

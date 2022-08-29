@@ -527,7 +527,7 @@ impl<'a> Parser<'a> {
                         TokenType::RParen => break paren_or_comma.end,
                         _ => unreachable!()
                     }
-                    args.push(self.parse_expr()?)
+                    args.push(self.parse_expr()?);
                 };
                 Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.extra(&args) }
             }

@@ -212,9 +212,9 @@ impl fmt::Display for FunctionIr {
                 continue;
             }
             if inst.used {
-                cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?
+                cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
             } else {
-                write!(f, "           ")?
+                write!(f, "           ")?;
             }
             cwriteln!(f, "{}", inst.display(&self.extra, &self.types))?;
         }
@@ -643,7 +643,7 @@ pub enum Tag {
     And,
 
     Eq,
-    Ne,
+    NE,
     LT,
     GT,
     LE,
@@ -651,7 +651,6 @@ pub enum Tag {
 
     Member,
     Cast,
-    AsPointer,
 
     Goto,
     Branch,
@@ -665,7 +664,7 @@ impl Tag {
         match self {
             Tag::BlockBegin | Tag::Param => Int32,
             Tag::Uninit => None,
-            Tag::Ret | Tag::AsPointer | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => UnOp,
+            Tag::Ret | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => UnOp,
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
@@ -674,14 +673,14 @@ impl Tag {
             Tag::Func | Tag::Type | Tag::Trait => Symbol,
             Tag::TraitFunc => TraitFunc,
             Tag::LocalType | Tag::Decl => TypeTableIdx,
-            Tag::Module => LargeInt,
+            Tag::Module => Int,
 
             Tag::RetUndef => None,
             Tag::Call => Call,
             Tag::Global => Global,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
-            | Tag::Eq | Tag::Ne | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
+            | Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
             Tag::Goto => Block,
             Tag::Branch => Branch,
             Tag::Phi => ExtraBranchRefs,

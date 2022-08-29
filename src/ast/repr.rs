@@ -173,7 +173,7 @@ impl EnumDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("enum {\n");
         let child = c.child();
-        for (_, name) in self.variants.iter() {
+        for (_, name) in &self.variants {
             child.begin_line();
             child.write_add(name.as_str());
         }

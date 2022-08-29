@@ -79,21 +79,34 @@ def walk(walkdir):
     with os.scandir(walkdir) as it:
         for entry in it:
             if entry.name.endswith('.eye') and entry.is_file():
-                total += 1
+                res = test(entry.path)
+                if res is OK:
+                    total += 1
+                elif res is ERR:
+                    total += 1
+                    errors += 1
+                else: assert res is SKIP
                 if not test(entry.path): errors += 1
             elif entry.is_dir():
                 if os.path.exists(entry.path + "/main.eye"):
-                    total += 1
-                    if not test(entry.path): errors += 1
+                    res = test(entry.path)
+                    if res is OK:
+                        total += 1
+                    elif res is ERR:
+                        total += 1
+                        errors += 1
+                    else: assert res is SKIP
                 else:
                     total2, errors2 = walk(entry.path)
                     total += total2
                     errors += errors2
     return total, errors
     
+OK = "OK"
+SKIP = "SKIP"
+ERR = "ERR"
 
-
-def test(eye_file) -> bool:
+def test(eye_file) -> str:
     print(eye_file, '...', end='')
     stdout.flush()
     no_ext = eye_file.rsplit('.', maxsplit=1)[0]
@@ -106,7 +119,7 @@ def test(eye_file) -> bool:
         t = 'No .out or .err file'
         padding = ' ' * max(0, 50 - len(eye_file) - len(t))
         print(f'{t}{padding}{CYAN}[SKIP]{R}')
-        return True
+        return SKIP
 
     with open(expected) as file:
         expected_output = file.read()
@@ -122,13 +135,13 @@ def test(eye_file) -> bool:
     
     if expected_output == out:
         print(f'{padding}{GREEN}[OK]{R}')
-        return True
+        return OK
     else:
         print(f'{padding}{RED}[ERR]{R}\nFailed with status: {exit_code}, output:')
         print(f'--------------------\n{out}\n--------------------')
         print('... but expected:')
         print(f'--------------------\n{expected_output}\n--------------------')
-        return False
+        return ERR
 
 
 def run(eye_file, input = ''):

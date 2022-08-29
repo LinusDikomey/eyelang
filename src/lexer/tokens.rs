@@ -101,7 +101,7 @@ impl fmt::Display for TokenType {
 }
 impl TokenType {
     /// returns a raw text representation of the token type and wether it is a text
-    fn text_repr(&self) -> (&'static str, bool) {
+    fn text_repr(self) -> (&'static str, bool) {
         let mut is_text = false;
         let s = match self {
             TokenType::Colon => ":",
@@ -145,14 +145,14 @@ impl TokenType {
             TokenType::StringLiteral => "string literal",
             TokenType::IntLiteral => "int literal",
             TokenType::FloatLiteral => "float literal",
-            &TokenType::Keyword(kw) => { is_text = true; kw.into() },
+            TokenType::Keyword(kw) => { is_text = true; kw.into() },
             TokenType::Ident => "identifier",
         };
         (s, is_text)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IntLiteral {
     pub val: u128,
     pub ty: Option<IntType>

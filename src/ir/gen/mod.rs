@@ -7,7 +7,7 @@ use crate::{
     types::Primitive, span::{Span, TSpan}, dmap::{self, DHashMap},
 };
 
-use self::exhaust::Exhaustion;
+use self::{exhaust::Exhaustion, builder::BinOp};
 
 use super::{typing::*, *};
 
@@ -151,7 +151,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
 /// If the main returns unit, it will always return 0.
 fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Function> {
     let mut builder = IrBuilder::new(ModuleId::ROOT);
-    let extra = builder.extra_data(&eye_main.bytes());
+    //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {
         Type::Prim(Primitive::Unit) => None,
@@ -164,22 +164,13 @@ fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Functio
     );
     let i32_ty = builder.types.add(TypeInfo::Primitive(Primitive::I32));
 
+    let main_val = builder.build_call(eye_main, [], main_ret_ty);
     let exit_code = match main_return {
-        Some(int_ty) => {
-            let main_ret = builder.add(Data { extra_len: (extra, 0) }, Tag::Call, main_ret_ty);
-            if int_ty == IntType::I32 {
-                main_ret
-            } else {
-                builder.add(Data { un_op: main_ret }, Tag::Cast, i32_ty)
-            }
-        }
-        None => {
-            builder._add_unused(Tag::Call, Data { extra_len: (extra, 0) }, main_ret_ty);
-            
-            builder.add(Data { int: 0 }, Tag::Int, i32_ty)
-        }
+        Some(IntType::I32) => main_val,
+        Some(_) => builder.build_cast(main_val, i32_ty),
+        None => builder.build_int(0, i32_ty)
     };
-    builder.add_unused_untyped(Tag::Ret, Data { un_op: exit_code });
+    builder.build_ret(exit_code);
     
     let mut no_errors = Errors::new();
     // new empty TypingCtx can be used here as no type ids are referenced in this outer main function.
@@ -308,7 +299,7 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
             let info = ty.as_info(&mut builder.types);
             let ty = builder.types.add(info);
             let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
-            let param = builder.add(Data { int32: i as u32 }, Tag::Param, ptr_ty);
+            let param = builder.build_param(i as u32, ptr_ty);
             scope_symbols.insert(name.clone(), Symbol::Var { ty, var: param });
         }
         let scope_defs = dmap::new();
@@ -322,14 +313,14 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
             ExprInfo { expected, ret: expected, noreturn: &mut noreturn });
         if !noreturn {
             if header.return_type == Type::Prim(Primitive::Unit) {
-                builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
+                builder.build_ret(Ref::UNIT);
             } else if !body.is_block() {
-                builder.add_unused_untyped(Tag::Ret, Data { un_op: val });
+                builder.build_ret(val);
             } else {
                 ctx.errors.emit_span(Error::MissingReturnValue, body_span.in_mod(ctx.module));
             }
         } else if !builder.currently_terminated() {
-            builder.add_unused_untyped(Tag::RetUndef, Data { none: () });
+            builder.build_ret_undef();
         }
         builder.finish(&ctx.ctx, &mut ctx.errors)
     });
@@ -384,7 +375,7 @@ fn gen_struct(
 fn gen_enum(
     def: &ast::EnumDefinition,
     ctx: &mut GenCtx,
-    _scope: &mut Scope,
+    scope: &mut Scope,
     key: SymbolKey,  
 ) {
     let mut generic_symbols = def.generics.iter()
@@ -392,7 +383,7 @@ fn gen_enum(
     .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
     .collect();
     let scope_defs = dmap::new();
-    let mut _scope = _scope.child(&mut generic_symbols, &scope_defs);
+    let mut _scope = scope.child(&mut generic_symbols, &scope_defs);
 
     let variants = def.variants.iter()
         .enumerate()
@@ -456,12 +447,11 @@ fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol
             State::Local => scope.resolve(last, ctx),
             State::Module(id) => resolve_module_symbol(ctx, id, last)
         };
-        match symbol {
-            Some(symbol) => symbol,
-            None => {
-                ctx.errors.emit_span(Error::UnknownIdent, last_span.in_mod(ctx.module));
-                Symbol::Invalid
-            }
+        if let Some(symbol) = symbol {
+            symbol
+        } else {
+            ctx.errors.emit_span(Error::UnknownIdent, last_span.in_mod(ctx.module));
+            Symbol::Invalid
         }
     } else {
         // there can't be no last symbol and not a single module because then there wouldn't be any path.
@@ -576,16 +566,15 @@ pub enum ConstSymbol {
 impl ConstSymbol {
     fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
         ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
-        match self {
-            &ConstSymbol::Func(symbol) => ir.add(Data { symbol }, Tag::Func, ty),
-            &ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
-                let symbol_extra = ir.extra_data(&trait_symbol.bytes());
-                ir.add(Data { trait_func: (symbol_extra, func_idx) }, Tag::TraitFunc, ty)
+        match *self {
+            ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
+            ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+                ir.build_trait_func(trait_symbol, func_idx, ty)
             }
-            &ConstSymbol::Type(symbol) => ir.add(Data { symbol }, Tag::Type, ty),
-            &ConstSymbol::Trait(symbol) => ir.add(Data { symbol }, Tag::Trait, ty),
-            ConstSymbol::LocalType(idx) => ir.add(Data { ty: *idx }, Tag::LocalType, ty),
-            ConstSymbol::Module(module_id) => ir.add(Data { int32: module_id.inner() }, Tag::Module, ty),
+            ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
+            ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
+            ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
+            ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
         }
     }
     pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
@@ -616,7 +605,7 @@ impl ExprResult {
     ) -> Ref {
         match self {
             ExprResult::VarRef(var) | ExprResult::Stored(var) => {
-                ir.add(Data { un_op: var }, Tag::Load, ty)
+                ir.build_load(var, ty)
             }
             ExprResult::Val(val) => val,
             ExprResult::Method(_, _) => {
@@ -913,15 +902,12 @@ impl<'s> Scope<'s> {
                             }
                             Some(Symbol::LocalType(_ty)) => todo!(), // what to do here, what was LocalType again?
                             Some(Symbol::Const(key)) => {
-                                match ctx.ctx.get_const(*key) {
-                                    &ConstVal::Symbol(ConstSymbol::Type(key)) => {
-                                        let Ok(generics) = resolve_generics(ctx, self, key) else { return Type::Invalid };
-                                        Type::Id(key, generics)
-                                    }
-                                    _ => {
-                                        ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
-                                        Type::Invalid
-                                    }
+                                if let &ConstVal::Symbol(ConstSymbol::Type(key)) = ctx.ctx.get_const(*key) {
+                                    let Ok(generics) = resolve_generics(ctx, self, key) else { return Type::Invalid };
+                                    Type::Id(key, generics)
+                                } else {
+                                    ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
+                                    Type::Invalid
                                 }
                             }
                             _ => {
@@ -1032,7 +1018,7 @@ impl<'s> Scope<'s> {
             ctx, ir, expr, info.reborrow(),
             |ir| ir.build_decl(expected), // declare new var
         ).1 {
-            ctx.errors.emit_span(Error::UnusedStatementValue, expr.span(ctx.ast).in_mod(ctx.module))  
+            ctx.errors.emit_span(Error::UnusedStatementValue, expr.span(ctx.ast).in_mod(ctx.module));
         }
     }
 
@@ -1046,7 +1032,7 @@ impl<'s> Scope<'s> {
     ) {
         let val = match self.reduce_expr_any(ctx, ir, expr, info.reborrow(), |_| var).0 {
             ExprResult::Stored(_) => return,
-            ExprResult::VarRef(other_var) => ir.add(Data { un_op: other_var }, Tag::Load, info.expected),
+            ExprResult::VarRef(other_var) => ir.build_load(other_var, info.expected),
             ExprResult::Val(val) => val,
             ExprResult::Symbol(symbol) => {
                 // TODO: this should only happen in compile time code
@@ -1058,7 +1044,7 @@ impl<'s> Scope<'s> {
                 Ref::UNDEF
             }
         };
-        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+        ir.build_store(var, val);
     }
 
     fn reduce_lval_expr(
@@ -1151,7 +1137,7 @@ impl<'s> Scope<'s> {
                 let r = self.reduce_expr_idx_val(ctx, ir, *val, info.with_expected(info.ret));
                 ir.specify(info.expected, TypeInfo::Primitive(Primitive::Never), &mut ctx.errors,
                     ctx.ast[*val].span(ctx.ast), &ctx.ctx);
-                ir.add_unused_untyped(Tag::Ret, Data { un_op: r });
+                ir.build_ret(r);
                 (Ref::UNDEF, false)
             }
             ast::Expr::IntLiteral(span) => {
@@ -1164,7 +1150,7 @@ impl<'s> Scope<'s> {
                     TypeInfo::Primitive(float_ty.into())
                 });
                 ir.specify(info.expected, float_ty, &mut ctx.errors, *span, &ctx.ctx);
-                (ir.add(Data { float: lit.val }, Tag::Float, info.expected), true)
+                (ir.build_float(lit.val, info.expected), true)
             }
             ast::Expr::StringLiteral(span) => {
                 let lit = string_literal(*span, ctx.ast.src(ctx.module).0);
@@ -1176,11 +1162,9 @@ impl<'s> Scope<'s> {
                 (Ref::val(if *val { RefVal::True } else { RefVal::False }), true)
             }
             ast::Expr::EnumLiteral { dot: _, ident } => {
-                let variant_name = ctx.src(*ident);
-                let extra = ir.extra_data(variant_name.as_bytes());
-                let variant_name_len = variant_name.len() as u32;
                 ir.specify_enum_variant(info.expected, *ident, ctx);
-                (ir.add(Data { extra_len: (extra, variant_name_len)  }, Tag::EnumLit, info.expected), true)
+                let variant_name = ctx.src(*ident);
+                (ir.build_enum_lit(variant_name, info.expected), true)
             }
             ast::Expr::Nested(_, inner) => {
                 return self.reduce_expr_any(ctx, ir, &ctx.ast[*inner], info, get_var);
@@ -1191,8 +1175,8 @@ impl<'s> Scope<'s> {
             }
             ast::Expr::Variable(span) => {
                 let name = &ctx.ast.sources[ctx.module.idx()].0[span.range()];
-                match self.resolve(name, ctx) {
-                    Some(resolved) => return (match resolved {
+                if let Some(resolved) = self.resolve(name, ctx) {
+                    return (match resolved {
                         Symbol::Var { ty, var } => {
                             ir.types.merge(ty, info.expected, &mut ctx.errors, ctx.module, *span, &ctx.ctx);
                             ExprResult::VarRef(var)
@@ -1202,7 +1186,7 @@ impl<'s> Scope<'s> {
                             let ty_info = ty.as_info(&mut ir.types);
                             ir.specify(info.expected, ty_info, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
                             let ptr = ir.types.add(TypeInfo::Pointer(info.expected));
-                            ExprResult::VarRef(ir.add(Data { symbol: key }, Tag::Global, ptr))
+                            ExprResult::VarRef(ir.build_global(key, ptr))
                         }
                         Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
                         Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
@@ -1210,23 +1194,22 @@ impl<'s> Scope<'s> {
                         Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
                         Symbol::Module(m) => ExprResult::Symbol(ConstSymbol::Module(m)),
                         Symbol::Const(c) => {
-                            let const_val = self.get_or_gen_const(ctx, c, *span);
+                            let const_val = Self::get_or_gen_const(ctx, c, *span);
                             let const_ty = const_val.type_info(&mut ir.types);
                             ir.specify(info.expected, const_ty, &mut ctx.errors, *span, &ctx.ctx);
                             let val = ctx.ctx.get_const(c);
-                            self.const_val_to_result(val, ir, info)
+                            Self::const_val_to_result(val, ir, info)
                         }
                         Symbol::Generic(_) => todo!(),
                         Symbol::Invalid => {
                             ir.invalidate(info.expected);
                             ExprResult::Val(Ref::UNDEF)
                         }
-                    }, true),
-                    None => {
-                        ctx.errors.emit_span(Error::UnknownIdent, span.in_mod(ctx.module));
-                        ir.invalidate(info.expected);
-                        (Ref::UNDEF, true)
-                    }
+                    }, true)
+                } else {
+                    ctx.errors.emit_span(Error::UnknownIdent, span.in_mod(ctx.module));
+                    ir.invalidate(info.expected);
+                    (Ref::UNDEF, true)
                 }
             }
             ast::Expr::Array(span, elems) => {
@@ -1236,29 +1219,25 @@ impl<'s> Scope<'s> {
                 let arr_ty = TypeInfo::Array(Some(elems.len() as u32), elem_ty);
                 ir.types.specify(info.expected, arr_ty, &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
                 let arr = get_var(ir);
-                let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 for (i, elem) in elems.iter().enumerate() {
                     let elem_val = self.reduce_expr_val_spanned(ctx, ir, &ctx.ast[*elem], *span,
                         info.with_expected(elem_ty));
-                    let idx = ir.add(Data { int: i as u64 }, Tag::Int, u64_ty);
-                    let elem_ptr = ir.add(Data { bin_op: (arr, idx) }, Tag::Member, elem_ty_ptr);
-                    ir.add_unused_untyped(Tag::Store, Data { bin_op: (elem_ptr, elem_val) });
+                    let elem_ptr = ir.build_member_int(arr, i as u32, elem_ty_ptr);
+                    ir.build_store(elem_ptr, elem_val);
                 }
                 return (ExprResult::Stored(arr), true)
             }
             ast::Expr::Tuple(span, elems) => {
                 let elems = ctx.ast.get_extra(*elems);
                 let var = get_var(ir);
-                let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                 let types = ir.types.add_multiple(std::iter::repeat(TypeInfo::Unknown).take(elems.len()));
                 ir.types.specify(info.expected, TypeInfo::Tuple(types), &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
                 for (i, elem) in elems.iter().enumerate() {
                     let member_ty = types.iter().nth(i).unwrap();
                     let member_ty_ptr = ir.types.add(TypeInfo::Pointer(member_ty));
                     let member_val = self.reduce_expr_idx_val(ctx, ir, *elem, info.with_expected(member_ty));
-                    let idx = ir.add(Data { int: i as u64 }, Tag::Int, i32_ty);
-                    let member = ir.add(Data { bin_op: (var, idx) }, Tag::Member, member_ty_ptr);
-                    ir.add_unused_untyped(Tag::Store, Data { bin_op: (member, member_val) });
+                    let member = ir.build_member_int(var, i as u32, member_ty_ptr);
+                    ir.build_store(member, member_val);
                 }
                 return (ExprResult::Stored(var), true);
             }
@@ -1271,9 +1250,9 @@ impl<'s> Scope<'s> {
                 self.reduce_expr(ctx, ir, &ctx.ast[*then],
                     ExprInfo { expected: then_ty, noreturn: &mut then_noreturn, ret: info.ret});
                 if !then_noreturn {
-                    ir.add_unused_untyped(Tag::Goto, Data { int32: after_block.0 });
+                    ir.build_goto(after_block);
                 } else if !ir.currently_terminated() {
-                    ir.add_unused_untyped(Tag::RetUndef, Data { none: () });
+                    ir.build_ret_undef();
                 }
                 ir.begin_block(after_block);
                 (Ref::UNIT, false)
@@ -1285,11 +1264,11 @@ impl<'s> Scope<'s> {
                 let then_exit = ir.current_block();
                 let after_block = if !then_noreturn {
                     let after_block = ir.create_block();
-                    ir.add_unused_untyped(Tag::Goto, Data { int32: after_block.0, });
+                    ir.build_goto(after_block);
                     Some(after_block)
                 } else {
                     if !ir.currently_terminated() {
-                        ir.add_unused_untyped(Tag::RetUndef, Data { none: () });
+                        ir.build_ret_undef();
                     }
                     None
                 };
@@ -1304,10 +1283,10 @@ impl<'s> Scope<'s> {
                     let after_block = after_block.unwrap_or_else(|| ir.create_block());
                     if else_noreturn {
                         if !ir.currently_terminated() {
-                            ir.add_unused_untyped(Tag::RetUndef, Data { none: () });
+                            ir.build_ret_undef();
                         }
                     } else {
-                        ir.add_unused_untyped(Tag::Goto, Data { int32: after_block.0, });
+                        ir.build_goto(after_block);
                     }
                     ir.begin_block(after_block);
                     if then_noreturn {
@@ -1389,7 +1368,7 @@ impl<'s> Scope<'s> {
                 let body_block = ir.create_block();
                 let after_block = ir.create_block();
 
-                ir.add_unused_untyped(Tag::Goto, Data { block: cond_block });
+                ir.build_goto(cond_block);
                 ir.begin_block(cond_block);
                 
                 let b = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
@@ -1402,9 +1381,9 @@ impl<'s> Scope<'s> {
                 self.reduce_expr_idx_val(ctx, ir, *body,
                     ExprInfo { expected: body_ty, ret: info.ret, noreturn: &mut body_noreturn });
                 if !body_noreturn {
-                    ir.add_unused_untyped(Tag::Goto, Data { int32: cond_block.0 });
+                    ir.build_goto(cond_block);
                 } else if !ir.currently_terminated() {
-                    ir.add_unused_untyped(Tag::RetUndef, Data { none: () });
+                    ir.build_ret_undef();
                 }
                 ir.begin_block(after_block);
                 (Ref::UNIT, false)
@@ -1450,8 +1429,7 @@ impl<'s> Scope<'s> {
                         } else {
                             params.collect::<Vec<_>>()
                         };
-                        let mut bytes = Vec::with_capacity(8 + 4 * arg_count);
-                        bytes.extend(&func.bytes());
+                        let mut arg_refs = Vec::with_capacity(arg_count + if this_arg.is_some() { 1 } else { 0 });
                         let mut param_iter = params.iter();
                         if let Some((this, this_ty, this_span)) = this_arg {
                             let ty = param_iter.next().unwrap(); // argument count was checked above, this can't fail
@@ -1461,7 +1439,7 @@ impl<'s> Scope<'s> {
                                     ir.types.specify(this_ty, info, &mut ctx.errors,
                                         this_span.in_mod(ctx.module), &ctx.ctx
                                     );
-                                    bytes.extend(this.to_bytes());
+                                    arg_refs.push(this);
                                 }
                                 None => {
                                     ctx.errors.emit_span(Error::NotAnInstanceMethod, this_span.in_mod(ctx.module));
@@ -1474,10 +1452,9 @@ impl<'s> Scope<'s> {
                                 .types
                                 .add(type_info);
                             let expr = scope.reduce_expr_idx_val(ctx, ir, arg, info.with_expected(ty));
-                            bytes.extend(&expr.to_bytes());
+                            arg_refs.push(expr);
                         }
-                        let extra = ir.extra_data(&bytes);
-                        ir.add(Data { extra_len: (extra, arg_count as u32) }, Tag::Call, info.expected)
+                        ir.build_call(func, arg_refs, info.expected)
                     }
                 }
                 let called = &ctx.ast[*func];
@@ -1506,7 +1483,6 @@ impl<'s> Scope<'s> {
                                 struct_.members.iter()
                                     .map(|(_, ty)| ty.as_info_generic(&mut ir.types, generics))
                                     .collect();
-                            let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
                             for (i, (member_val, member_ty)) in
                                 args.iter().zip(member_types).enumerate()
                             {
@@ -1514,15 +1490,9 @@ impl<'s> Scope<'s> {
                                 let member_ty_ptr = ir.types.add(TypeInfo::Pointer(member_ty));
                                 let member_val =
                                     self.reduce_expr_idx_val(ctx, ir, *member_val, info.with_expected(member_ty));
-                                let idx = ir.add(Data { int: i as u64 }, Tag::Int, i32_ty);
-                                let member = ir.add(
-                                    Data {
-                                        bin_op: (var, idx),
-                                    },
-                                    Tag::Member,
-                                    member_ty_ptr,
-                                );
-                                ir.add_unused_untyped(Tag::Store, Data { bin_op: (member, member_val) });
+                                let member = ir.build_member_int(var, i as u32, member_ty_ptr);
+
+                                ir.build_store(member, member_val);
                             }
                             return (ExprResult::Stored(var), true);
                         } else {
@@ -1543,10 +1513,11 @@ impl<'s> Scope<'s> {
                 }, false)
             }
             ast::Expr::UnOp(_, un_op, val) => {
+                enum UnOpTag { Neg, Not }
                 let span = expr.span(ctx.ast);
                 let (inner_expected, tag) = match un_op {
-                    UnOp::Neg => (info.expected, Tag::Neg),
-                    UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), Tag::Not),
+                    UnOp::Neg => (info.expected, UnOpTag::Neg),
+                    UnOp::Not => (ir.types.add(TypeInfo::Primitive(Primitive::Bool)), UnOpTag::Not),
                     UnOp::Ref => {
                         let ptr_ty = TypeInfo::Pointer(ir.types.add(TypeInfo::Unknown));
                         ir.types.specify(info.expected, ptr_ty, &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
@@ -1560,7 +1531,7 @@ impl<'s> Scope<'s> {
                             ExprResult::VarRef(r) | ExprResult::Stored(r) => {
                                 ir.types.specify(info.expected, TypeInfo::Pointer(inner_expected),
                                     &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
-                                ir.add(Data { un_op: r }, Tag::AsPointer, info.expected)
+                                r
                             }
                             ExprResult::Val(val) => {
                                 let val_expected = match ir.types.get_type(info.expected) {
@@ -1568,8 +1539,8 @@ impl<'s> Scope<'s> {
                                     _ => ir.types.add(TypeInfo::Invalid)
                                 };
                                 let var = ir.build_decl(val_expected);
-                                ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
-                                ir.add(Data { un_op: var }, Tag::AsPointer, info.expected)
+                                ir.build_store(var, val);
+                                var
                             }
                             _ => {
                                 ctx.errors.emit_span(Error::CantTakeRef, expr.span(ctx.ast).in_mod(ctx.module));
@@ -1609,7 +1580,10 @@ impl<'s> Scope<'s> {
                 if let Err(err) = res {
                     ctx.errors.emit_span(err, ctx.span(expr));
                 }
-                (ir.add(Data { un_op: inner }, tag, inner_expected), true)
+                (match tag {
+                    UnOpTag::Neg => ir.build_neg(inner, inner_expected),
+                    UnOpTag::Not => ir.build_not(inner, inner_expected),
+                }, true)
             }
             ast::Expr::BinOp(op, l, r) => {
                 if let Operator::Assignment(assignment) = op {
@@ -1622,18 +1596,18 @@ impl<'s> Scope<'s> {
                     let val = if *assignment == AssignType::Assign {
                         r
                     } else {
-                        let left_val = ir.add(Data { un_op: lval }, Tag::Load, var_ty);
-                        let tag = match assignment {
+                        let left_val = ir.build_load(lval, var_ty);
+                        let op = match assignment {
                             AssignType::Assign => unreachable!(),
-                            AssignType::AddAssign => Tag::Add,
-                            AssignType::SubAssign => Tag::Sub,
-                            AssignType::MulAssign => Tag::Mul,
-                            AssignType::DivAssign => Tag::Div,
-                            AssignType::ModAssign => Tag::Mod,
+                            AssignType::AddAssign => BinOp::Add,
+                            AssignType::SubAssign => BinOp::Sub,
+                            AssignType::MulAssign => BinOp::Mul,
+                            AssignType::DivAssign => BinOp::Div,
+                            AssignType::ModAssign => BinOp::Mod,
                         };
-                        ir.add(Data { bin_op: (left_val, r) }, tag, var_ty)
+                        ir.build_bin_op(op, left_val, r, var_ty)
                     };
-                    ir.add_unused_untyped(Tag::Store, Data { bin_op: (lval, val) });
+                    ir.build_store(lval, val);
                     (Ref::UNDEF, false)
                 } else {
                     // binary operations always require the same type on both sides right now
@@ -1646,23 +1620,23 @@ impl<'s> Scope<'s> {
                     };
                     let l = self.reduce_expr_idx_val(ctx, ir, *l, info.with_expected(inner_ty));
                     let r = self.reduce_expr_idx_val(ctx, ir, *r, info.with_expected(inner_ty));
-                    let tag = match op {
-                        Operator::Add => Tag::Add,
-                        Operator::Sub => Tag::Sub,
-                        Operator::Mul => Tag::Mul,
-                        Operator::Div => Tag::Div,
-                        Operator::Mod => Tag::Mod,
+                    let op = match op {
+                        Operator::Add => BinOp::Add,
+                        Operator::Sub => BinOp::Sub,
+                        Operator::Mul => BinOp::Mul,
+                        Operator::Div => BinOp::Div,
+                        Operator::Mod => BinOp::Mod,
 
-                        Operator::Or => Tag::Or,
-                        Operator::And => Tag::And,
+                        Operator::Or => BinOp::Or,
+                        Operator::And => BinOp::And,
     
-                        Operator::Equals => Tag::Eq,
-                        Operator::NotEquals => Tag::Ne,
+                        Operator::Equals => BinOp::Eq,
+                        Operator::NotEquals => BinOp::NE,
     
-                        Operator::LT => Tag::LT,
-                        Operator::GT => Tag::GT,
-                        Operator::LE => Tag::LE,
-                        Operator::GE => Tag::GE,
+                        Operator::LT => BinOp::LT,
+                        Operator::GT => BinOp::GT,
+                        Operator::LE => BinOp::LE,
+                        Operator::GE => BinOp::GE,
                         
                         Operator::Range | Operator::RangeExclusive => {
                             todo!("range expressions")
@@ -1670,7 +1644,7 @@ impl<'s> Scope<'s> {
 
                         Operator::Assignment(_) => unreachable!()
                     };
-                    (ir.add(Data { bin_op: (l, r) }, tag, info.expected), true)
+                    (ir.build_bin_op(op, l, r, info.expected), true)
                 }
             }
             ast::Expr::MemberAccess { left, name: name_span } => {
@@ -1688,7 +1662,7 @@ impl<'s> Scope<'s> {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                     ExprResult::Val(val) => {
                         let var = ir.build_decl(info.expected);
-                        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                        ir.build_store(var, val);
                         MemberAccessType::Var(var)
                     }
                     ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::Associated(ty),
@@ -1738,14 +1712,8 @@ impl<'s> Scope<'s> {
                         };
                         ir.types.specify_or_merge(info.expected, ty, &mut ctx.errors, ctx.module, expr.span(ctx.ast),
                             &ctx.ctx);
-                        let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
-                        let idx = ir.add(
-                            Data { int: idx as u64 },
-                            Tag::Int,
-                            i32_ty
-                        );
                         let ptr = ir.types.add(TypeInfo::Pointer(info.expected));
-                        let member = ir.add(Data { bin_op: (var, idx) }, Tag::Member, ptr);
+                        let member = ir.build_member_int(var, idx as u32, ptr);
                         return (ExprResult::VarRef(member), true);
                     }
                     MemberAccessType::Module(id) => {
@@ -1763,11 +1731,11 @@ impl<'s> Scope<'s> {
                                     let ty_info = ty.as_info(&mut ir.types);
                                     let span = name_span.in_mod(ctx.module);
                                     ir.types.specify(info.expected, ty_info, &mut ctx.errors, span, &ctx.ctx);
-                                    ExprResult::VarRef(ir.add(Data { symbol: key }, Tag::Global, info.expected))
+                                    ExprResult::VarRef(ir.build_global(key, info.expected))
                                 }
                                 Symbol::Const(key) => {
                                     let val = ctx.ctx.get_const(key);
-                                    self.const_val_to_result(val, ir, info)
+                                    Self::const_val_to_result(val, ir, info)
                                 }
                                 Symbol::Invalid => {
                                     ir.invalidate(info.expected);
@@ -1796,7 +1764,7 @@ impl<'s> Scope<'s> {
                                 return (if let Some(&variant) = def.variants.get(member) {
                                     ir.types.specify(info.expected, TypeInfo::Resolved(key, TypeTableIndices::EMPTY),
                                         &mut ctx.errors, expr_span, &ctx.ctx);
-                                    let r = ir.add(Data { int: variant as u64 }, Tag::Int, info.expected);
+                                    let r = ir.build_int(variant as u64, info.expected);
                                     ExprResult::Val(r)
                                 } else {
                                     ctx.errors.emit_span(Error::NonexistantEnumVariant, name_span.in_mod(ctx.module));
@@ -1832,9 +1800,7 @@ impl<'s> Scope<'s> {
                 let idx_expr = &ctx.ast[*idx];
                 let idx = self.reduce_expr_val_spanned(ctx, ir, idx_expr,
                     idx_expr.span(ctx.ast), info.with_expected(idx_ty));
-                return (ExprResult::VarRef(
-                    ir.add(Data { bin_op: (val, idx) }, Tag::Member, ptr_ty)
-                ), true)
+                return (ExprResult::VarRef(ir.build_member(val, idx, ptr_ty)), true)
             }
             ast::Expr::TupleIdx { expr: indexed, idx, end: _ } => {
                 let indexed_ty = ir.types.add(TypeInfo::Unknown);
@@ -1843,7 +1809,7 @@ impl<'s> Scope<'s> {
                     ExprResult::VarRef(r) | ExprResult::Stored(r) => r,
                     ExprResult::Val(val) => {
                         let var = ir.build_decl(info.expected);
-                        ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                        ir.build_store(var, val);
                         var
                     }
                     ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
@@ -1861,10 +1827,9 @@ impl<'s> Scope<'s> {
                     return (ExprResult::Val(Ref::UNDEF), true)
                 };
                 ir.types.merge(info.expected, elem_ty, &mut ctx.errors, ctx.module, expr.span(ctx.ast), &ctx.ctx);
-                let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
-                let idx = ir.add(Data { int: *idx as _ }, Tag::Int, i32_ty);
                 let elem_ty_ptr = ir.types.add(TypeInfo::Pointer(elem_ty));
-                return (ExprResult::VarRef(ir.add(Data { bin_op: (expr_var, idx) }, Tag::Member, elem_ty_ptr)), true);
+                let member = ir.build_member_int(expr_var, *idx as u32, elem_ty_ptr);
+                return (ExprResult::VarRef(member), true);
             }
             ast::Expr::Cast(span, target, val) => {
                 let target = match self.resolve_type(target, &mut ir.types, ctx) {
@@ -1879,7 +1844,7 @@ impl<'s> Scope<'s> {
                 let inner_ty = ir.types.add(TypeInfo::Unknown);
                 let val = self.reduce_expr_idx_val(ctx, ir, *val, info.with_expected(inner_ty));
                 //TODO: check table for available casts
-                (ir.add(Data { un_op: val, }, Tag::Cast, info.expected), true)
+                (ir.build_cast(val, info.expected), true)
             }
             ast::Expr::Root(_) => {
                 return (ExprResult::Symbol(ConstSymbol::Module(ModuleId::ROOT)), true)
@@ -1892,15 +1857,9 @@ impl<'s> Scope<'s> {
                     self.reduce_expr_val_spanned(ctx, ir, expr, expr.span(ctx.ast), info)
                 })
                 .collect::<Vec<_>>();
-                assert!(expr_refs.len() <= u16::MAX as usize, "too many arguments for inline assembly");
                 
                 let asm_str = ctx.src(TSpan::new(asm_str_span.start + 1, asm_str_span.end - 1));
-                assert!(asm_str.len() <= u16::MAX as usize, "inline assembly string is too long");
-                let extra = ir.extra_data(asm_str.as_bytes());
-                for &r in &expr_refs {
-                    ir.extra_data(&r.to_bytes());
-                }
-                ir.add_unused_untyped(Tag::Asm, Data { asm: (extra, asm_str.len() as u16, expr_refs.len() as u16) });
+                ir.build_asm(asm_str, expr_refs);
                 return (ExprResult::Val(Ref::UNDEF), false)
             }
         };
@@ -1920,10 +1879,10 @@ impl<'s> Scope<'s> {
 
             let mut lit_val = int_literal(lit, lit_span, ir, expected, ctx);
             if neg {
-                lit_val = ir.add(Data { un_op: lit_val }, Tag::Neg, expected);
+                lit_val = ir.build_neg(lit_val, expected);
             }
             ir.specify(expected, int_ty, &mut ctx.errors, lit_span, &ctx.ctx);
-            ir.add(Data { bin_op: (val, lit_val) }, Tag::Eq, bool_ty)
+            ir.build_bin_op(BinOp::Eq, val, lit_val, bool_ty)
         };
         
         match pat_expr {
@@ -1952,14 +1911,14 @@ impl<'s> Scope<'s> {
                 let bool_val = Ref::val(if *bool_val { RefVal::True } else { RefVal::False });
                 ir.specify(expected, TypeInfo::Primitive(Primitive::Bool),
                     &mut ctx.errors, pat_expr.span(ctx.ast), &ctx.ctx);
-                ir.add(Data { bin_op: (val, bool_val) }, Tag::Eq, bool_ty)
+                ir.build_bin_op(BinOp::Eq, val, bool_val, bool_ty)
             }
             Expr::EnumLiteral { dot: _, ident } => {
                 let variant_name = ctx.src(*ident);
                 let variant = ir.build_enum_lit(variant_name, expected);
                 exhaustion.exhaust_enum_variant(variant_name.to_owned());
                 ir.specify_enum_variant(expected, *ident, ctx);
-                ir.add(Data { bin_op: (val, variant) }, Tag::Eq, bool_ty)
+                ir.build_bin_op(BinOp::Eq, val, variant, bool_ty)
             }
             Expr::Unit(span) => {
                 ir.specify(expected, TypeInfo::UNIT, &mut ctx.errors, *span, &ctx.ctx);
@@ -1970,7 +1929,7 @@ impl<'s> Scope<'s> {
             Expr::Variable(span) => {
                 let name = ctx.src(*span);
                 let var = ir.build_decl(expected);
-                ir.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+                ir.build_store(var, val);
                 self.add_symbol(name.to_owned(), Symbol::Var { ty: expected, var }, &mut ctx.globals);
                 *exhaustion = Exhaustion::Full;
                 Ref::val(RefVal::True)
@@ -1987,10 +1946,10 @@ impl<'s> Scope<'s> {
                 );
                 let l_ref = int_literal(l_lit, l, ir, expected, ctx);
                 let r_ref = int_literal(r_lit, r, ir, expected, ctx);
-                let left_check = ir.add(Data { bin_op: (val, l_ref) }, Tag::GE, bool_ty);
-                let right_check = ir.add(Data { bin_op: (val, r_ref) }, Tag::LE, bool_ty);
+                let left_check = ir.build_bin_op(BinOp::GE, val, l_ref, bool_ty);
+                let right_check = ir.build_bin_op(BinOp::LE, val, r_ref, bool_ty);
 
-                ir.add(Data { bin_op: (left_check, right_check) }, Tag::And, bool_ty)
+                ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty)
             }
             Expr::StringLiteral(_) // TODO definitely very important
             | Expr::Block { .. }
@@ -2028,15 +1987,12 @@ impl<'s> Scope<'s> {
         let then_block = ir.create_block();
         let other_block = ir.create_block();
 
-        let branch_extra = ir.extra_data(&then_block.0.to_le_bytes());
-        ir.extra_data(&other_block.0.to_le_bytes());
-
-        ir.add_unused_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
+        ir.build_branch(cond, then_block, other_block);
         ir.begin_block(then_block);
         other_block
     }
 
-    fn get_or_gen_const<'a>(&'a mut self, ctx: &'a mut GenCtx, key: SymbolKey, span: TSpan) -> &'a ConstVal {
+    fn get_or_gen_const<'a>(ctx: &'a mut GenCtx, key: SymbolKey, span: TSpan) -> &'a ConstVal {
         if let ConstVal::NotGenerated = ctx.ctx.get_const_mut(key) {
             ctx.errors.emit_span(Error::RecursiveDefinition, span.in_mod(ctx.module));
             ctx.ctx.consts[key.idx()] = ConstVal::Invalid;
@@ -2044,7 +2000,7 @@ impl<'s> Scope<'s> {
         &ctx.ctx.consts[key.idx()]
     }
 
-    fn const_val_to_result(&self, val: &ConstVal, ir: &mut IrBuilder, info: ExprInfo)
+    fn const_val_to_result(val: &ConstVal, ir: &mut IrBuilder, info: ExprInfo)
     -> ExprResult {
         // TODO: specify types here
         ExprResult::Val(match val {
@@ -2067,16 +2023,15 @@ impl<'s> Scope<'s> {
                     todo!("Large ints aren't implemented");
                 }
                 if *val < 0 {
-                    let positive_val = ir.add(Data { int: (-*val) as u64 }, Tag::Int, info.expected);
-                    ir.add(Data { un_op: positive_val }, Tag::Neg, info.expected)
+                    let positive_val = ir.build_int(-*val as u64, info.expected);
+                    ir.build_neg(positive_val, info.expected)
                 } else {
-                    ir.add(Data { int: *val as u64 }, Tag::Int, info.expected)
+                    ir.build_int(*val as u64, info.expected)
                 }
             }
-            ConstVal::Float(_, val) => ir.add(Data { float: *val }, Tag::Float, info.expected),
+            ConstVal::Float(_, val) => ir.build_float(*val, info.expected),
             ConstVal::String(val) => {
-                let extra = ir.extra_data(val);
-                ir.add(Data { extra_len: (extra, val.len() as u32) }, Tag::String, info.expected)
+                ir.build_string(val, false, info.expected)
             }
             ConstVal::EnumVariant(variant) => {
                 ir.build_enum_lit(variant, info.expected)
@@ -2105,14 +2060,14 @@ impl<'s> Scope<'s> {
         });
         if !noreturn {
             if matches!(expected, TypeInfo::Primitive(Primitive::Unit)) {
-                builder.add_unused_untyped(Tag::Ret, Data { un_op: Ref::UNIT });
+                builder.build_ret(Ref::UNIT);
             } else if !expr.is_block() {
-                builder.add_unused_untyped(Tag::Ret, Data { un_op: r });
+                builder.build_ret(r);
             } else {
                 ctx.errors.emit_span(Error::MissingReturnValue, val_span.in_mod(ctx.module));
             }
         } else if !builder.currently_terminated() {
-            builder.add_unused_untyped(Tag::RetUndef, Data { none: () });
+            builder.build_ret_undef();
         }
 
         if err_count != ctx.errors.error_count() {
@@ -2125,7 +2080,7 @@ impl<'s> Scope<'s> {
 }
 
 pub fn string_literal(span: TSpan, src: &str) -> String {
-    src[span.start as usize + 1 ..= span.end as usize - 1]
+    src[span.start as usize + 1 .. span.end as usize]
         .replace("\\n", "\n")
         .replace("\\t", "\t")
         .replace("\\r", "\r")
@@ -2134,22 +2089,16 @@ pub fn string_literal(span: TSpan, src: &str) -> String {
 }
 
 fn int_literal(lit: IntLiteral, span: TSpan, ir: &mut IrBuilder, expected: TypeTableIndex, ctx: &mut GenCtx) -> Ref {
+    // TODO: check int type for overflow
     let int_ty = lit
         .ty
         .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
     ir.specify(expected, int_ty, &mut ctx.errors, span, &ctx.ctx);
     
     if lit.val <= std::u64::MAX as u128 {
-        ir.add(
-            Data {
-                int: lit.val as u64,
-            },
-            Tag::Int,
-            expected,
-        )
+        ir.build_int(lit.val as u64, expected)
     } else {
-        let extra = ir.extra_data(&lit.val.to_le_bytes());
-        ir.add(Data { extra }, Tag::LargeInt, expected)
+        ir.build_large_int(lit.val, expected)
     }
 }
 
@@ -2158,8 +2107,5 @@ fn gen_string(string: &str, ir: &mut IrBuilder, expected: TypeTableIndex, span: 
     let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
     ir.specify(expected, TypeInfo::Pointer(i8_ty), errors, span, ctx);
         
-    let extra_len = ir._extra_len(string.as_bytes());
-    // add zero byte
-    ir.extra_data(&[b'\0']);
-    ir.add(Data { extra_len }, Tag::String, expected)
+    ir.build_string(string.as_bytes(), true, expected)
 }

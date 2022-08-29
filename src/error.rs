@@ -401,7 +401,7 @@ fn print(error: &CompileError, modules: &Ast) {
         Severity::Warn => cprintln!("{}{}#y!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()))
     }
     if let Some(details) = error.err.details() {
-        cprintln!("{}{}{}", p, pre_error_offset, details)
+        cprintln!("{}{}{}", p, pre_error_offset, details);
     }
 
     while let Some((i, line_str)) = lines.next() {

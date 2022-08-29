@@ -211,17 +211,14 @@ impl<'a> Lexer<'a> {
                 }
                 '"' => { // string literal
                     while self.peek() != Some('"') {
-                        match self.step() {
-                            Some(_) => {}
-                            None => {
-                                errors.emit(
-                                    Error::UnexpectedEndOfFile,
-                                    start,
-                                    self.pos()-1,
-                                    self.module
-                                );
-                                break;
-                            }
+                        if self.step().is_none() {
+                            errors.emit(
+                                Error::UnexpectedEndOfFile,
+                                start,
+                                self.pos()-1,
+                                self.module
+                            );
+                            break;
                         }
                     }
                     self.step();
