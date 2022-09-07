@@ -171,7 +171,7 @@ pub enum Error {
     FunctionOrTypeExpected,
     IntExpected,
     FloatExpected,
-    MismatchedType,
+    MismatchedType { expected: String, found: String  },
     ExpectedVarFoundDefinition,
     ExpectedValueFoundDefinition,
     ExpectedValueFoundFunction,
@@ -233,7 +233,7 @@ impl Error {
             Error::FunctionOrTypeExpected => "expected a type or function",
             Error::IntExpected => "integer expected",
             Error::FloatExpected => "float expected",
-            Error::MismatchedType => "type mismatch",
+            Error::MismatchedType { .. } => "type mismatch",
             Error::ExpectedVarFoundDefinition => "expected variable but found a definition",
             Error::ExpectedValueFoundDefinition => "expected value but found a definition",
             Error::ExpectedValueFoundFunction => "expected value but found a function",
@@ -278,6 +278,9 @@ impl Error {
                 "the main function should return either an integer or the unit type #m<()> but returns {}",
                 ty
             ),
+            Error::MismatchedType { expected, found } => {
+                cformat!("expected value of type #m<{}> but found #m<{}>", expected, found)
+            }
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",
                 expected, found

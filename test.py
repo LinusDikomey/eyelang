@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import os
 import subprocess
+import time
 from sys import stdout
 
 from requests import patch
@@ -15,16 +16,19 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
+    start_time = time.time()
     total, errors = test_files()
     total2, errors2 = test_readme()
     total += total2
     errors += errors2
 
+    elapsed = time.time() - start_time
+
     if errors > 0:
-        print(f'{RED}{errors}/{total} tests failed!{R}')
+        print(f'{RED}{errors}/{total} tests failed!{R} in {elapsed:.2f}s')
         exit(1)
     else:
-        print(f'{GREEN}All {total} tests passed!{R}')
+        print(f'{GREEN}All {total} tests passed!{R} in {elapsed:.2f}s')
 
 def test_files():
     print(f'{CYAN}Compiling...{R}')

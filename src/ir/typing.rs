@@ -1,4 +1,4 @@
-use std::ops::Index;
+use std::{ops::Index, borrow::Cow};
 
 use crate::{error::*, ast::ModuleId, span::{TSpan, Span}};
 use super::{*, gen::TypingCtx};
@@ -95,8 +95,11 @@ impl TypeTable {
     pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span, ctx: &TypingCtx) {
         let prev = self.get_type(idx);
         ty_dbg("Specifying", (prev, idx, other));
-        let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|err| {
-            errors.emit_span(err, span);
+        let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|| {
+            errors.emit_span(Error::MismatchedType {
+                expected: prev.to_string(self, ctx).into_owned(),
+                found: other.to_string(self, ctx).into_owned()
+            }, span);
             TypeInfo::Invalid
         });
         self.update_type(idx, ty);
@@ -129,10 +132,13 @@ impl TypeTable {
 
         // merge b's previous type into a
         self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self, ctx) {
-            Ok(ty) => ty_dbg("\t... merged", ty),
-            Err(err) => {
-                ty_dbg("\t... failed to merge", &err);
-                errors.emit_span(err, span.in_mod(module));
+            Some(ty) => ty_dbg("\t... merged", ty),
+            None => {
+                ty_dbg("\t... failed to merge", span);
+                errors.emit_span(Error::MismatchedType {
+                    expected: a_ty.to_string(self, ctx).into_owned(),
+                    found: prev_b_ty.to_string(self, ctx).into_owned()
+                }, span.in_mod(module));
                 TypeInfo::Invalid
             }
         }
@@ -156,7 +162,7 @@ impl TypeTable {
         let insert_at = idx.idx as usize + idx.count as usize;
         self.names.splice(insert_at..insert_at, names);
         TypeTableNames { idx: idx.idx, count: idx.count + (self.names.len() - prev_len) as u32 }
-    } 
+    }
 
     pub fn finalize(self) -> FinalTypeTable {
         let types = self.indices.iter()
@@ -239,7 +245,7 @@ impl TypeIdx {
 }
 
 
-/// A type that may not be (completely) known yet. 
+/// A type that may not be (completely) known yet.
 #[derive(Clone, Copy, Debug)]
 pub enum TypeInfo {
     Unknown,
@@ -252,11 +258,55 @@ pub enum TypeInfo {
     Enum(TypeTableNames),
     Tuple(TypeTableIndices),
     Symbol, // compile time Symbol like a function, type or trait
+    Generic(u8), // a type that is not instanciated to a specific type yet.
     Invalid,
 }
 impl TypeInfo {
     pub const UNIT: Self = Self::Primitive(Primitive::Unit);
     
+    fn to_string(&self, types: &TypeTable, ctx: &TypingCtx) -> Cow<'static, str> {
+        match self {
+            TypeInfo::Unknown => "<unknown>".into(),
+            TypeInfo::Int => "<integer>".into(),
+            TypeInfo::Float => "<float>".into(),
+            TypeInfo::Primitive(p) => Into::<&'static str>::into(*p).into(),
+            TypeInfo::Resolved(id, generics) => {
+                let mut generics_string = String::new();
+                if generics.count > 0 {
+                    generics_string.push('<');
+                    for (i, generic) in generics.iter().enumerate() {
+                        let generic = types[generic];
+                        generics_string += &*generic.to_string(types, ctx);
+                        if i != generics.len() - 1 {
+                            generics_string += ", ";
+                        }
+                    }
+                    generics_string.push('>');
+                }
+                format!("{}{}", ctx.get_type(*id), generics_string).into()
+            }
+            TypeInfo::Pointer(inner) => format!("*{}", types[*inner].to_string(types, ctx)).into(),
+            TypeInfo::Array(count, inner) => format!("[{}; {}]",
+                types[*inner].to_string(types, ctx),
+                count.map_or("_".to_owned(), |c| c.to_string())
+            ).into(),
+            TypeInfo::Enum(variants) => {
+                let mut s = "[".to_owned();
+                for (i, t) in types.get_names(*variants).iter().enumerate() {
+                    s += t;
+                    if i != variants.count as usize - 1 {
+                        s += ", ";
+                    }
+                }
+                s.push(']');
+                s.into()
+            }
+            TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::Symbol => todo!(),
+            TypeInfo::Generic(_) => todo!(),
+            TypeInfo::Invalid => todo!(),
+        }
+    }
     pub fn is_invalid(&self) -> bool {
         matches!(self, TypeInfo::Invalid)
     }
@@ -289,37 +339,38 @@ impl TypeInfo {
             Self::Symbol => {
                 Type::Symbol
             }
+            Self::Generic(i) => Type::Generic(i),
         }
     }
 }
 
-fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Result<TypeInfo, Error> {
+fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Option<TypeInfo> {
     match merge_onesided(ty, other, types, ctx) {
-        Ok(t) => Ok(t),
-        Err(_) => merge_onesided(other, ty, types, ctx)
+        Some(t) => Some(t),
+        None => merge_onesided(other, ty, types, ctx)
     }
 }
 
 /// merge the types and return the merged type
-fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Result<TypeInfo, Error> {
+fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Option<TypeInfo> {
     use TypeInfo::*;
     match ty {
-        Unknown => Ok(other),
-        Primitive(crate::types::Primitive::Never) => Ok(other),
+        Unknown => Some(other),
+        Primitive(crate::types::Primitive::Never) => Some(other),
         Int => {
             match other {
-                Int => Ok(other),
-                Primitive(p) if p.as_int().is_some() => Ok(other),
-                Unknown => Ok(Int),
-                _ => Err(Error::MismatchedType)
+                Int => Some(other),
+                Primitive(p) if p.as_int().is_some() => Some(other),
+                Unknown => Some(Int),
+                _ => None
             }
         }
         Float => {
             match other {
-                Float => Ok(other),
-                Primitive(p) if p.as_float().is_some() => Ok(other),
-                Unknown => Ok(Float),
-                _ => Err(Error::MismatchedType)
+                Float => Some(other),
+                Primitive(p) if p.as_float().is_some() => Some(other),
+                Unknown => Some(Float),
+                _ => None
             }
         }
         Primitive(prim) => {
@@ -327,11 +378,10 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                 prim == other
             } else { false }
                 .then_some(ty)
-                .ok_or(Error::MismatchedType)
         }
         Resolved(id, generics) => {
             if let Resolved(other, other_generics) = other {
-                (id == other).then(|| {
+                id == other && {
                     debug_assert_eq!(generics.count, other_generics.count);
                     generics.iter()
                         .zip(other_generics.iter())
@@ -339,12 +389,10 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                             let new = merge_onesided(types[a], types[b], types, ctx)?;
                             types.update_type(a, new);
                             types.point_to(b, a);
-                            Ok(())
+                            Some(())
                         })
-                        .collect::<Result<Vec<()>, _>>()
-                        .and(Ok(()))
-                }).transpose()?
-                .is_some()
+                        .all(|v| v.is_some())
+                }
             } else if let TypeDef::Enum(def) = ctx.get_type(id) {
                 if let Enum(names) = other {
                     !types.get_names(names).iter()
@@ -352,17 +400,16 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                 } else { false }
             } else { false }
                 .then_some(ty)
-                .ok_or(Error::MismatchedType)
         }
         Pointer(inner) => {
-            let Pointer(other_inner) = other else { return Err(Error::MismatchedType) };
+            let Pointer(other_inner) = other else { return None };
             let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
             types.update_type(inner, new_inner);
             types.point_to(other_inner, inner);
-            Ok(Pointer(inner))
+            Some(Pointer(inner))
         }
         Array(size, inner) => {
-            let Array(other_size, other_inner) = other else { return Err(Error::MismatchedType) };
+            let Array(other_size, other_inner) = other else { return None };
     
             let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
             types.update_type(inner, new_inner);
@@ -372,36 +419,45 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                 (Some(a), Some(b)) if a == b => Some(a),
                 (Some(size), None) | (None, Some(size)) => Some(size),
                 (None, None) => None,
-                _ => return Err(Error::MismatchedType)
+                _ => return None
             };
-            Ok(Array(new_size, inner))
+            Some(Array(new_size, inner))
                 
         }
         Enum(names) => {
-            let Enum(other_names) = other else { return Err(Error::MismatchedType) };
+            let Enum(other_names) = other else { return None };
             let a = types.get_names(names);
             let b = types.get_names(other_names);
             let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
             ty_dbg("New variants after merging", (&new_variants, a, b));
             let merged_variants = types.extend_names(names, new_variants);
-            Ok(Enum(merged_variants))
+            Some(Enum(merged_variants))
         }
         Tuple(elems) => {
-            let Tuple(other_elems) = other else { return Err(Error::MismatchedType) };
-            if elems.count != other_elems.count { return Err(Error::MismatchedType) }
+            let Tuple(other_elems) = other else { return None };
+            if elems.count != other_elems.count { return None }
             for (a, b) in elems.iter().zip(other_elems.iter()) {
                 let new_a = merge_onesided(types.get_type(a), types.get_type(b), types, ctx)?;
                 types.update_type(a, new_a);
                 types.point_to(b, a);
             }
-            Ok(ty)
+            Some(ty)
         
         }
         Symbol => if let Symbol = other {
-            Ok(ty)
+            Some(ty)
         } else {
-            Err(Error::MismatchedType)
+            None
         }
-        Invalid => Ok(Invalid), // invalid type 'spreading'
+        Generic(i) => if let Generic(j) = other {
+            if i == j {
+                Some(ty)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        Invalid => Some(Invalid), // invalid type 'spreading'
     }
 }

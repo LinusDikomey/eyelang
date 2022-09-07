@@ -85,7 +85,7 @@ pub enum Backend {
     X86
 }
 impl Default for Backend {
-    fn default() -> Self {    
+    fn default() -> Self {
         #[cfg(feature = "llvm-backend")]
         { Self::LLVM }
 

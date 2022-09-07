@@ -290,9 +290,9 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
         let mut builder = IrBuilder::new(ctx.module);
         let mut scope_symbols = dmap::with_capacity(header.params.len() + def.generics.len());
         
-        for generic in &def.generics {
+        for (i, generic) in def.generics.iter().enumerate() {
             let name = &ctx.ast.src(ctx.module).0[generic.range()];
-            let generic_ty = builder.types.add(TypeInfo::Unknown);
+            let generic_ty = builder.types.add(TypeInfo::Generic(i as u8));
             scope_symbols.insert(name.to_owned(), Symbol::LocalType(generic_ty));
         }
         for (i, (name, ty)) in header.params.iter().enumerate() {
