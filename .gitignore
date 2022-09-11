@@ -1,4 +1,5 @@
 /target
+/eye-derive/target
 /.idea
 .DS_Store
 /eyebuild

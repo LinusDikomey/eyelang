@@ -826,6 +826,7 @@ impl<'s> Scope<'s> {
         }
     }
 
+    // fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx) -> Type { panic!() }
     fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx)
     -> Type {
         match unresolved {
@@ -897,14 +898,22 @@ impl<'s> Scope<'s> {
                                 Type::Invalid
                             }
                             Some(&Symbol::Type(ty)) => {
-                                let Ok(generics) = resolve_generics(ctx, self, ty) else { return Type::Invalid };
-                                Type::Id(ty, generics)
+                                if let Ok(generics) = resolve_generics(ctx, self, ty) {
+                                    Type::Id(ty, generics)
+                                } else {
+                                    Type::Invalid
+                                }
+                                // let Ok(generics) = resolve_generics(ctx, self, ty) else { return Type::Invalid };
+                                // Type::Id(ty, generics)
                             }
                             Some(Symbol::LocalType(_ty)) => todo!(), // what to do here, what was LocalType again?
                             Some(Symbol::Const(key)) => {
                                 if let &ConstVal::Symbol(ConstSymbol::Type(key)) = ctx.ctx.get_const(*key) {
-                                    let Ok(generics) = resolve_generics(ctx, self, key) else { return Type::Invalid };
-                                    Type::Id(key, generics)
+                                    if let Ok(generics) = resolve_generics(ctx, self, key) {
+                                        Type::Id(key, generics)
+                                    } else {
+                                        Type::Invalid
+                                    }
                                 } else {
                                     ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
                                     Type::Invalid
@@ -917,8 +926,11 @@ impl<'s> Scope<'s> {
                         },
                     ModuleOrLocal::Local => match self.resolve(last.0, ctx) {
                         Some(Symbol::Type(ty)) => {
-                            let Ok(generics) = resolve_generics(ctx, self, ty) else { return Type::Invalid };
-                            Type::Id(ty, generics)
+                            if let Ok(generics) = resolve_generics(ctx, self, ty) {
+                                Type::Id(ty, generics)
+                            } else {
+                                Type::Invalid
+                            }
                         }
                         Some(Symbol::Generic(i)) => Type::Generic(i),
                         //TODO: local generics?
@@ -1078,6 +1090,7 @@ impl<'s> Scope<'s> {
         mut info: ExprInfo,
         get_var: impl Fn(&mut IrBuilder) -> Ref,
     ) -> (ExprResult, bool) {
+        crate::log!("reducing expr {expr:?}");
         let (r, should_use) = match expr {
             ast::Expr::Block { span, items, defs } => {
                 let defs = &ctx.ast.expr_builder[*defs];
