@@ -599,13 +599,14 @@ unsafe fn build_func(
                 inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &asm_values, &mut asm_types)
             }
         };
-        if val.is_null() {
-            crate::log!("null");
-        } else {
-            let cstr = val_str(val);
-            crate::log!("{cstr:?}");
+        if crate::LOG.load(Ordering::Relaxed) {
+            if val.is_null() {
+                println!("null");
+            } else {
+                let cstr = val_str(val);
+                println!("{cstr:?}");
+            }
         }
-
         instructions.push(val);
     }
 }
