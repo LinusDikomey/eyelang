@@ -110,9 +110,16 @@ impl Ast {
         id
     }
 
-    pub fn add_empty_module(&mut self, src: String, path: PathBuf) -> ModuleId {
-        let empty = Module::empty(self);
-        self.add_module(empty, src, path)
+    pub fn add_empty_module(&mut self, path: PathBuf, root_module: ModuleId) -> ModuleId {
+        let empty = Module::empty(self, root_module);
+        self.add_module(empty, String::new(), path)
+    }
+
+    pub fn add_empty_root_module(&mut self, path: PathBuf) -> ModuleId {
+        let empty = Module::empty(self, ModuleId(0)); // the zero id is replaced right below
+        let id = self.add_module(empty, String::new(), path);
+        self[id].root_module = id;
+        id
     }
 
     pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
@@ -144,7 +151,7 @@ impl ModuleId {
     pub fn new(id: u32) -> Self {
         Self(id)
     }
-    pub const ROOT: Self = Self(0);
+    //pub const ROOT: Self = Self(0);
     pub fn idx(self) -> usize { self.0 as usize }
     pub fn inner(self) -> u32 { self.0 }
 }
@@ -152,11 +159,12 @@ impl ModuleId {
 #[derive(Debug, Clone)]
 pub struct Module {
     pub definitions: Defs,
-    pub uses: Vec<IdentPath>
+    pub uses: Vec<IdentPath>,
+    pub root_module: ModuleId,
 }
 impl Module {
-    pub fn empty(ast: &mut Ast) -> Self {
-        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new() }
+    pub fn empty(ast: &mut Ast, root_module: ModuleId) -> Self {
+        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new(), root_module }
     }
 }
 

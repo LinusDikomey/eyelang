@@ -1,5 +1,4 @@
 #![feature(
-    let_else,
     variant_count,
     fs_try_exists,
     int_log,

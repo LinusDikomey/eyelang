@@ -22,8 +22,8 @@ impl<'a> Parser<'a> {
         Self { src, toks: TokenReader::new(tokens, module), ast }
     }
 
-    pub fn parse(&mut self) -> Result<Module, CompileError> {
-        self.parse_module()
+    pub fn parse(&mut self, root_module: ModuleId) -> Result<Module, CompileError> {
+        self.parse_module(root_module)
     }
 
     /// Parses a delimited list. The `item` function parses an item and is supposed to handle the result itself.
@@ -55,7 +55,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_module(&mut self) -> Result<Module, CompileError> {
+    fn parse_module(&mut self, root_module: ModuleId) -> Result<Module, CompileError> {
         let mut definitions = dmap::new();
         let mut uses = Vec::new();
         
@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
             }
         }
         uses.shrink_to_fit();
-        Ok(Module { definitions: self.ast.expr_builder.defs(definitions), uses })
+        Ok(Module { definitions: self.ast.expr_builder.defs(definitions), uses, root_module })
     }
 
     fn parse_block_or_expr(&mut self) -> EyeResult<ExprRef> {

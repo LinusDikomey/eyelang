@@ -74,7 +74,7 @@ impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
 }
 
 
-pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool) 
+pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require_main_func: bool) 
 -> (Result<(Module, Globals), ()>, Errors) {
     let mut ctx = TypingCtx::new();
     //let mut globals = types2::gen_globals(ast, &mut ctx, &mut errors);
@@ -114,11 +114,11 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
         .collect::<Vec<_>>();
 
     if require_main_func {
-        if let Some(Symbol::Func(func)) = globals[ModuleId::ROOT].get("main") {
+        if let Some(Symbol::Func(func)) = globals[main_module].get("main") {
             let eye_main = &mut funcs[func.idx()];
             debug_assert_eq!(eye_main.name, "main");
             eye_main.name = "eyemain".to_owned();
-            match main_wrapper(*func, &eye_main.header.return_type) {
+            match main_wrapper(*func, main_module, &eye_main.header.return_type) {
                 Ok(main) => funcs.push(main),
                 Err(err) => {
                     errors.emit_err(err);
@@ -126,7 +126,7 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
                 }
             }
         } else {
-            errors.emit(Error::MissingMain, 0, 0, ModuleId::ROOT);
+            errors.emit(Error::MissingMain, 0, 0, main_module);
             return (Err(()), errors);
         }
     }
@@ -149,14 +149,14 @@ pub fn reduce(ast: &ast::Ast, mut errors: Errors, require_main_func: bool)
 /// Add hidden function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
-fn main_wrapper(eye_main: SymbolKey, main_return_ty: &Type) -> EyeResult<Function> {
-    let mut builder = IrBuilder::new(ModuleId::ROOT);
+fn main_wrapper(eye_main: SymbolKey, main_module: ModuleId, main_return_ty: &Type) -> EyeResult<Function> {
+    let mut builder = IrBuilder::new(main_module);
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {
         Type::Prim(Primitive::Unit) => None,
         Type::Prim(p) if p.is_int() => Some(p.as_int().unwrap()),
-        _ => return Err(Error::InvalidMainReturnType(main_return_ty.clone()).at_span(Span::_todo(ModuleId::ROOT)))
+        _ => return Err(Error::InvalidMainReturnType(main_return_ty.clone()).at_span(Span::_todo(main_module)))
     };
 
     let main_ret_ty = builder.types.add(
@@ -422,7 +422,7 @@ fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol
         Module(ModuleId)
     }
     let (root, segments, last) = path.segments(ctx.ast.src(ctx.module).0);
-    let mut state = if root.is_some() { State::Module(ModuleId::ROOT) } else { State::Local };
+    let mut state = if root.is_some() { State::Module(ctx.ast[ctx.module].root_module) } else { State::Local };
     
     for (segment, segment_span) in segments {
         let symbol = match state {
@@ -724,6 +724,7 @@ impl<'s> Scope<'s> {
 
     fn resolve_type(&mut self, unresolved: &UnresolvedType, types: &mut TypeTable, ctx: &mut GenCtx)
     -> Result<TypeInfo, Error> {
+        // TODO: using ctx.module might lead to bugs in multiple places here
         match unresolved {
             ast::UnresolvedType::Primitive(p, _) => Ok(TypeInfo::Primitive(*p)),
             ast::UnresolvedType::Unresolved(path, generics) => {
@@ -737,7 +738,7 @@ impl<'s> Scope<'s> {
                 }
                 
                 let mut current_module = if root.is_some() {
-                    ModuleOrLocal::Module(ModuleId::ROOT)
+                    ModuleOrLocal::Module(ctx.ast[ctx.module].root_module)
                 } else {
                     ModuleOrLocal::Local
                 };
@@ -845,7 +846,7 @@ impl<'s> Scope<'s> {
                 }
                 
                 let mut current_module = if root.is_some() {
-                    ModuleOrLocal::Module(ModuleId::ROOT)
+                    ModuleOrLocal::Module(ctx.ast[ctx.module].root_module)
                 } else {
                     ModuleOrLocal::Local
                 };
@@ -1860,7 +1861,7 @@ impl<'s> Scope<'s> {
                 (ir.build_cast(val, info.expected), true)
             }
             ast::Expr::Root(_) => {
-                return (ExprResult::Symbol(ConstSymbol::Module(ModuleId::ROOT)), true)
+                return (ExprResult::Symbol(ConstSymbol::Module(ctx.ast[ctx.module].root_module)), true)
             }
             ast::Expr::Asm { span: _, asm_str_span, args } => {
                 let expr_refs = ctx.ast.get_extra(*args).iter()
