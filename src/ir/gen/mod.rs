@@ -776,37 +776,31 @@ impl<'s> Scope<'s> {
                         )
                     })
                 };
-                match current_module {
-                    ModuleOrLocal::Module(m) => match ctx.globals[m]
+                let resolved = match current_module {
+                    ModuleOrLocal::Module(m) => *ctx.globals[m]
                         .get(last.0)
-                        .ok_or(Error::UnknownIdent)? {
-                            &Symbol::Type(ty) => {
-                                let generics = resolve_generics(ctx, self, ty)?;
-                                Ok(TypeInfo::Resolved(ty, generics))
-                            }
-                            // TODO: might require a new solution to allow inference of local types
-                            Symbol::LocalType(ty) => Ok(types.get_type(*ty)),
-                            Symbol::Const(key) => {
-                                match ctx.ctx.get_const(*key) {
-                                    &ConstVal::Symbol(ConstSymbol::Type(key)) => {
-                                        let generics = resolve_generics(ctx, self, key)?;
-                                        Ok(TypeInfo::Resolved(key, generics))
-                                    }
-                                    _ => Err(Error::TypeExpected)
-                                }
+                        .ok_or(Error::UnknownIdent)?,
+                    ModuleOrLocal::Local => self.resolve(last.0, ctx).ok_or(Error::UnknownIdent)?
+                };
+
+                match resolved  {
+                    Symbol::Type(ty) => {
+                        let generics = resolve_generics(ctx, self, ty)?;
+                        Ok(TypeInfo::Resolved(ty, generics))
+                    }
+                    // TODO: might require a new solution to allow inference of local types
+                    Symbol::LocalType(ty) => Ok(types.get_type(ty)),
+                    Symbol::Const(key) => {
+                        match ctx.ctx.get_const(key) {
+                            &ConstVal::Symbol(ConstSymbol::Type(key)) => {
+                                let generics = resolve_generics(ctx, self, key)?;
+                                Ok(TypeInfo::Resolved(key, generics))
                             }
                             _ => Err(Error::TypeExpected)
-                        },
-                    ModuleOrLocal::Local => match self.resolve(last.0, ctx).ok_or(Error::UnknownIdent)? {
-                        Symbol::Type(ty) => {
-                            let generics = resolve_generics(ctx, self, ty)?;
-                            Ok(TypeInfo::Resolved(ty, generics))
                         }
-                        //TODO: local generics?
-                        Symbol::LocalType(ty) => Ok(types.get_type(ty)),
-                        _ => Err(Error::TypeExpected)
                     }
-                }
+                    _ => Err(Error::TypeExpected)
+                } 
             }
             ast::UnresolvedType::Pointer(ptr) => {
                 let (inner, _) = &**ptr;
