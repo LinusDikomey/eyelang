@@ -13,11 +13,13 @@ mod compile;
 mod dmap;
 mod error;
 mod ir;
+mod irgen;
 mod lexer;
 mod link;
 #[cfg(feature = "lsp")]
 mod lsp;
 mod parser;
+mod token;
 mod types;
 mod span;
 mod help;

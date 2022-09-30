@@ -1,10 +1,10 @@
 use crate::{
     ast::ModuleId,
     ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex, SymbolKey},
-    error::Errors, span::TSpan, types::Primitive
+    error::Errors, span::TSpan, types::Primitive,
 };
 
-use super::{TypingCtx, GenCtx, exhaust::Exhaustion};
+use super::{TypingCtx, exhaust::Exhaustion};
 
 pub enum BinOp {
     Add,
@@ -225,10 +225,9 @@ impl IrBuilder {
     ) {
         self.types.specify(idx, info, errors, span.in_mod(self.module), ctx);
     }
-    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name_span: TSpan, ctx: &mut GenCtx) {
-        
-        let name = ctx.src(name_span);
-        
+    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: TSpan,
+        ctx: &TypingCtx, errors: &mut Errors
+    ) {
         // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
         if let TypeInfo::Enum(names) = self.types.get_type(idx) {
             if !self.types.get_names(names).iter().any(|s| *s == name) {
@@ -240,9 +239,9 @@ impl IrBuilder {
             self.types.specify(
                 idx,
                 TypeInfo::Enum(variant),
-                &mut ctx.errors,
+                errors,
                 name_span.in_mod(self.module),
-                &ctx.ctx,
+                ctx,
             );
         }
     }
@@ -337,7 +336,9 @@ impl IrBuilder {
     pub fn build_string(&mut self, string: &[u8], null_terminate: bool, ty: TypeTableIndex) -> Ref {
         #[cfg(debug_assertions)]
         {
-            let TypeInfo::Pointer(pointee_ty) = self.types[ty] else { panic!("'*i8' type expected") };
+            let TypeInfo::Pointer(pointee_ty) = self.types[ty] else {
+                panic!("'*i8' type expected but found {:?}", self.types[ty])
+            };
             if !matches!(self.types[pointee_ty], TypeInfo::Primitive(Primitive::I8)) {
                 panic!("'*i8' type expected");
             }

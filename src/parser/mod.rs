@@ -2,7 +2,7 @@ use crate::{
     ast::*,
     dmap,
     error::{CompileError, EyeResult, Error, ExpectedTokens},
-    lexer::tokens::{Keyword, Token, TokenType, Operator},
+    token::{Keyword, Token, TokenType, Operator},
     types::Primitive, span::{TSpan, Span},
 };
 

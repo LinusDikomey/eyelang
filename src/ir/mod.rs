@@ -1,21 +1,90 @@
 use std::fmt;
 use color_format::*;
+use crate::ast::ModuleId;
 use crate::dmap::DHashMap;
+use crate::error::Errors;
 use crate::help::{write_delimited, write_delimited_with};
+use crate::span::{TSpan, Span};
 use crate::types::{Primitive, IntType, FloatType};
 use typing::{TypeTable, TypeInfo, FinalTypeTable};
 
-mod gen;
-mod typing;
-mod eval;
+pub mod builder;
+pub mod eval;
+pub mod exhaust;
+pub mod typing;
 
-pub use gen::Symbol;
-pub use gen::reduce;
-pub use gen::IrBuilder;
-use self::gen::ConstSymbol;
+use self::builder::IrBuilder;
 pub use self::typing::TypeTableIndex;
 use self::typing::TypeTableIndices;
 
+
+pub struct TypingCtx {
+    pub funcs: Vec<FunctionOrHeader>,
+    pub types: Vec<(String, TypeDef)>,
+    pub traits: Vec<TraitDef>,
+    pub consts: Vec<ConstVal>,
+    pub globals: Vec<(Type, Option<ConstVal>)>,
+}
+impl TypingCtx {
+    pub fn new() -> Self {
+        Self {
+            funcs: Vec::new(),
+            types: Vec::new(),
+            traits: Vec::new(),
+            consts: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+    pub fn add_func(&mut self, func: FunctionOrHeader) -> SymbolKey {
+        let key = SymbolKey(self.funcs.len() as u64);
+        self.funcs.push(func);
+        key
+    }
+    pub fn add_type(&mut self, name: String, ty: TypeDef) -> SymbolKey {
+        let key = SymbolKey(self.types.len() as u64);
+        self.types.push((name, ty));
+        key
+    }
+    pub fn add_proto_ty(&mut self, name: String, generic_count: u8) -> SymbolKey {
+        self.add_type(name, TypeDef::NotGenerated { generic_count, generating: false })
+    }
+    pub fn add_trait(&mut self, t: TraitDef) -> SymbolKey {
+        let key = SymbolKey(self.traits.len() as u64);
+        self.traits.push(t);
+        key
+    }
+    pub fn add_const(&mut self, c: ConstVal) -> SymbolKey {
+        let key = SymbolKey(self.consts.len() as u64);
+        self.consts.push(c);
+        key
+    }
+    pub fn add_global(&mut self, ty: Type, val: Option<ConstVal>) -> SymbolKey {
+        let key = SymbolKey(self.globals.len() as u64);
+        self.globals.push((ty, val));
+        key
+    }
+    pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()].1 }
+    pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()].1 }
+    //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
+    //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
+    pub fn get_trait(&self, key: SymbolKey) -> &TraitDef { &self.traits[key.idx()] }
+    pub fn get_const(&self, key: SymbolKey) -> &ConstVal { &self.consts[key.idx()] }
+    pub fn get_global(&self, key: SymbolKey) -> &(Type, Option<ConstVal>) { &self.globals[key.idx()] }
+    pub fn get_const_mut(&mut self, key: SymbolKey) -> &mut ConstVal { &mut self.consts[key.idx()] }
+}
+
+pub enum FunctionOrHeader {
+    Func(Function),
+    Header(FunctionHeader),
+}
+impl FunctionOrHeader {
+    pub fn header(&self) -> &FunctionHeader {
+        match self {
+            Self::Func(f) => &f.header,
+            Self::Header(h) => h,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -32,7 +101,7 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn layout(&self, ctx: &gen::TypingCtx, generics: &[Type]) -> Layout {
+    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             Type::Prim(p) => p.layout(),
             Type::Id(key, generics) => ctx.get_type(*key).layout(ctx, generics),
@@ -63,6 +132,104 @@ impl Type {
             Type::Symbol => true,
             Type::Generic(idx) => generics[*idx as usize].is_zero_sized(types, generics),
             Type::Invalid => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ConstVal {
+    Invalid,
+    Unit,
+    // FIXME: storing the value as an i128 is a problem for large values
+    Int(Option<IntType>, i128),
+    Float(Option<FloatType>, f64),
+    String(Vec<u8>),
+    EnumVariant(String),
+    Bool(bool),
+    Symbol(ConstSymbol),
+    NotGenerated,
+}
+impl ConstVal {
+    pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
+        match self {
+            ConstVal::Invalid => TypeInfo::Invalid,
+            ConstVal::Unit => TypeInfo::Primitive(Primitive::Unit),
+            ConstVal::Int(ty, _) => ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into())),
+            ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
+            ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
+            ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
+            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
+            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
+            ConstVal::NotGenerated { .. } => panic!()
+        }
+    }
+
+    fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
+        match (self, other) {
+            (Self::Unit, Self::Unit) => true,
+            (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
+            (Self::Float(_, l0), Self::Float(_, r0)) => l0 == r0,
+            (Self::String(l0), Self::String(r0)) => l0 == r0,
+            (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
+            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
+            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
+            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
+            _ => false
+        }
+    }
+}
+impl fmt::Display for ConstVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConstVal::Invalid => write!(f, "[invalid]"),
+            ConstVal::Unit => write!(f, "()"),
+            ConstVal::Int(_, int) => write!(f, "{int}"),
+            ConstVal::Float(_, float) => write!(f, "{float}"),
+            ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
+            ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
+            ConstVal::Bool(b) => write!(f, "{b}"),
+            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
+            ConstVal::NotGenerated => write!(f, "[not generated]"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ConstSymbol {
+    Func(SymbolKey),
+    TraitFunc(SymbolKey, u32),
+    Type(SymbolKey),
+    Trait(SymbolKey),
+    LocalType(TypeTableIndex),
+    Module(ModuleId),
+}
+impl ConstSymbol {
+    pub fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
+        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
+        match *self {
+            ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
+            ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+                ir.build_trait_func(trait_symbol, func_idx, ty)
+            }
+            ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
+            ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
+            ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
+            ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
+        }
+    }
+    pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
+        match (self, other) {
+            (Self::Func(l), Self::Func(r))
+            | (Self::Type(l), Self::Type(r))
+            | (Self::Trait(l), Self::Trait(r)) => l == r,
+            (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
+            (Self::LocalType(l), Self::LocalType(r)) => {
+                let TypeInfo::Resolved(_l_id, _l_generics) = types[*l] else { unreachable!() };
+                let TypeInfo::Resolved(_r_id, _r_generics) = types[*r] else { unreachable!() };
+                todo!()
+            }
+            (Self::Module(l), Self::Module(r)) => l == r,
+            _ => false,
         }
     }
 }
@@ -276,7 +443,7 @@ impl TypeDef {
             Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
-    pub fn layout(&self, ctx: &gen::TypingCtx, generics: &[Type]) -> Layout {
+    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             TypeDef::Struct(struct_) => {
                 let mut alignment = 1;
@@ -367,64 +534,6 @@ impl fmt::Display for Enum {
 #[derive(Debug, Clone)]
 pub struct TraitDef {
     pub functions: DHashMap<String, (u32, FunctionHeader)>
-}
-
-#[derive(Debug, Clone)]
-pub enum ConstVal {
-    Invalid,
-    Unit,
-    // FIXME: storing the value as an i128 is a problem for large values
-    Int(Option<IntType>, i128),
-    Float(Option<FloatType>, f64),
-    String(Vec<u8>),
-    EnumVariant(String),
-    Bool(bool),
-    Symbol(ConstSymbol),
-    NotGenerated,
-}
-impl ConstVal {
-    pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
-        match self {
-            ConstVal::Invalid => TypeInfo::Invalid,
-            ConstVal::Unit => TypeInfo::Primitive(Primitive::Unit),
-            ConstVal::Int(ty, _) => ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into())),
-            ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
-            ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
-            ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
-            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
-            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
-            ConstVal::NotGenerated { .. } => panic!()
-        }
-    }
-
-    fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
-        match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
-            (Self::Float(_, l0), Self::Float(_, r0)) => l0 == r0,
-            (Self::String(l0), Self::String(r0)) => l0 == r0,
-            (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
-            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
-            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
-            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
-            _ => false
-        }
-    }
-}
-impl fmt::Display for ConstVal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConstVal::Invalid => write!(f, "[invalid]"),
-            ConstVal::Unit => write!(f, "()"),
-            ConstVal::Int(_, int) => write!(f, "{int}"),
-            ConstVal::Float(_, float) => write!(f, "{float}"),
-            ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
-            ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
-            ConstVal::Bool(b) => write!(f, "{b}"),
-            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
-            ConstVal::NotGenerated => write!(f, "[not generated]"),
-        }
-    }
 }
 
 pub struct Module {

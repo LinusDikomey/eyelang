@@ -1,4 +1,4 @@
-use crate::{lexer::tokens::{TokenType, Token}, ast::ModuleId, error::{CompileError, Error}, span::Span};
+use crate::{token::{TokenType, Token}, ast::ModuleId, error::{CompileError, Error}, span::Span};
 
 
 pub struct TokenReader {

@@ -1,8 +1,5 @@
-pub mod tokens;
-
-use tokens::Token;
+use crate::token::{Token, TokenType};
 use crate::{error::{Errors, Error}, ast::ModuleId};
-use self::tokens::TokenType;
 
 pub fn parse(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
     if src.len() > u32::MAX as usize {

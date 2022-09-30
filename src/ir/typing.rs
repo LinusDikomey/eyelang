@@ -1,7 +1,8 @@
 use std::{ops::Index, borrow::Cow};
 
-use crate::{error::*, ast::ModuleId, span::{TSpan, Span}};
-use super::{*, gen::TypingCtx};
+use crate::{error::*, ast::ModuleId, span::{TSpan, Span}, types::Primitive, ir::TypeDef};
+
+use super::{TypeInfoOrIndex, SymbolKey, TypingCtx, Type};
 
 /// Type inference debugging
 fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {

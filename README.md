@@ -108,7 +108,7 @@ main :: fn {
 
 ## Build Instructions
 
-You will need LLVM 14 to build this project. The environment variable `LLVM_SYS_140_PREFIX` should be set to the path of your LLVM installation. Look at the [llvm-sys](https://crates.io/crates/llvm-sys) crate
+You will need LLVM 15 to build this project. The environment variable `LLVM_SYS_150_PREFIX` should be set to the path of your LLVM installation. Look at the [llvm-sys](https://crates.io/crates/llvm-sys) crate
 for detailed instructions on how to build llvm.
 
 Nightly rust will also be required. I will try to stay mostly up to date with the newest nightly version.

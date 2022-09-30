@@ -1,5 +1,5 @@
 use std::{ops::{Index, IndexMut}, path::{PathBuf, Path}};
-use crate::{lexer::tokens::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}};
+use crate::{token::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}};
 
 pub mod repr;
 
@@ -29,6 +29,35 @@ impl Ast {
     pub fn get_extra(&self, idx: ExprExtra) -> &[ExprRef] {
         &self.expr_builder.extra[idx.idx as usize .. idx.idx as usize + idx.count as usize]
     }
+
+    pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
+        let id = ModuleId(self.modules.len() as u32);
+        self.modules.push(module);
+        self.sources.push((src, path));
+        id
+    }
+
+    pub fn add_empty_module(&mut self, path: PathBuf, root_module: ModuleId) -> ModuleId {
+        let empty = Module::empty(self, root_module);
+        self.add_module(empty, String::new(), path)
+    }
+
+    pub fn add_empty_root_module(&mut self, path: PathBuf) -> ModuleId {
+        let empty = Module::empty(self, ModuleId(0)); // the zero id is replaced right below
+        let id = self.add_module(empty, String::new(), path);
+        self[id].root_module = id;
+        id
+    }
+
+    pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
+        self.modules[id.0 as usize] = module;
+        self.sources[id.0 as usize] = (src, path);
+    }
+    
+    pub fn src(&self, id: ModuleId) -> (&str, &Path) {
+        let t = &self.sources[id.0 as usize];
+        (&t.0, &t.1)
+    }
 }
 impl Index<ExprRef> for Ast {
     type Output = Expr;
@@ -49,6 +78,42 @@ impl IndexMut<Defs> for Ast {
         &mut self.expr_builder.defs[index.0 as usize]
     }
 }
+impl Index<ModuleId> for Ast {
+    type Output = Module;
+
+    fn index(&self, index: ModuleId) -> &Self::Output {
+        &self.modules[index.0 as usize]
+    }
+}
+impl IndexMut<ModuleId> for Ast {
+    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
+        &mut self.modules[index.0 as usize]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModuleId(u32);
+impl ModuleId {
+    pub fn new(id: u32) -> Self {
+        Self(id)
+    }
+    //pub const ROOT: Self = Self(0);
+    pub fn idx(self) -> usize { self.0 as usize }
+    pub fn inner(self) -> u32 { self.0 }
+}
+
+#[derive(Debug, Clone)]
+pub struct Module {
+    pub definitions: Defs,
+    pub uses: Vec<IdentPath>,
+    pub root_module: ModuleId,
+}
+impl Module {
+    pub fn empty(ast: &mut Ast, root_module: ModuleId) -> Self {
+        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new(), root_module }
+    }
+}
+
 
 pub struct ExprBuilder {
     exprs: Vec<Expr>,
@@ -102,71 +167,6 @@ pub struct ExprExtraSpans(u32, u32);
 #[derive(Debug, Clone, Copy)]
 pub struct Defs(u32);
 
-impl Ast {
-    pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
-        let id = ModuleId(self.modules.len() as u32);
-        self.modules.push(module);
-        self.sources.push((src, path));
-        id
-    }
-
-    pub fn add_empty_module(&mut self, path: PathBuf, root_module: ModuleId) -> ModuleId {
-        let empty = Module::empty(self, root_module);
-        self.add_module(empty, String::new(), path)
-    }
-
-    pub fn add_empty_root_module(&mut self, path: PathBuf) -> ModuleId {
-        let empty = Module::empty(self, ModuleId(0)); // the zero id is replaced right below
-        let id = self.add_module(empty, String::new(), path);
-        self[id].root_module = id;
-        id
-    }
-
-    pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
-        self.modules[id.0 as usize] = module;
-        self.sources[id.0 as usize] = (src, path);
-    }
-    
-    pub fn src(&self, id: ModuleId) -> (&str, &Path) {
-        let t = &self.sources[id.0 as usize];
-        (&t.0, &t.1)
-    }
-}
-impl Index<ModuleId> for Ast {
-    type Output = Module;
-
-    fn index(&self, index: ModuleId) -> &Self::Output {
-        &self.modules[index.0 as usize]
-    }
-}
-impl IndexMut<ModuleId> for Ast {
-    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
-        &mut self.modules[index.0 as usize]
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ModuleId(u32);
-impl ModuleId {
-    pub fn new(id: u32) -> Self {
-        Self(id)
-    }
-    //pub const ROOT: Self = Self(0);
-    pub fn idx(self) -> usize { self.0 as usize }
-    pub fn inner(self) -> u32 { self.0 }
-}
-
-#[derive(Debug, Clone)]
-pub struct Module {
-    pub definitions: Defs,
-    pub uses: Vec<IdentPath>,
-    pub root_module: ModuleId,
-}
-impl Module {
-    pub fn empty(ast: &mut Ast, root_module: ModuleId) -> Self {
-        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new(), root_module }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum Item {

@@ -5,7 +5,7 @@ use color_format::cwrite;
 use crate::{types::{Primitive, IntType, FloatType}, parser::TokenTypes, span::TSpan};
 
 #[derive(Debug, Clone, Copy)]
-pub struct  Token {
+pub struct Token {
     pub start: u32,
     pub end: u32,
     pub ty: TokenType,

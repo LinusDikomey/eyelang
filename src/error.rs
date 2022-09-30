@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::{ast::{Ast, ModuleId}, span::Span, lexer::tokens::TokenType, ir::Type};
+use crate::{ast::{Ast, ModuleId}, span::Span, token::TokenType, ir::Type};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]

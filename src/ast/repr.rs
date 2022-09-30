@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use crate::{types::*, lexer::tokens::AssignType};
+use crate::{types::*, token::AssignType};
 
 use super::*;
 

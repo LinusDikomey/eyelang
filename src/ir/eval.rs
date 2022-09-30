@@ -1,4 +1,4 @@
-use crate::{ir::{Ref, gen::ConstSymbol, SymbolKey, TypeTableIndex, BlockIndex}, error::Error, ast::ModuleId};
+use crate::{ir::{Ref, SymbolKey, TypeTableIndex, BlockIndex, ConstSymbol}, error::Error, ast::ModuleId};
 
 use super::{ConstVal, TypeInfo};
 

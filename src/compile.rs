@@ -48,7 +48,7 @@ pub fn project(
         );
     }
     let reduce_start_time = Instant::now();
-    let (reduce_res, errors) = crate::ir::reduce(&ast, main_module, errors, require_main_func);
+    let (reduce_res, errors) = crate::irgen::reduce(&ast, main_module, errors, require_main_func);
     stats.irgen += reduce_start_time.elapsed();
     (match reduce_res {
         Ok((ir, _globals)) => Ok(ir),
