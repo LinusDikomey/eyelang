@@ -20,6 +20,7 @@ mod link;
 mod lsp;
 mod parser;
 mod token;
+mod typecheck;
 mod types;
 mod span;
 mod help;

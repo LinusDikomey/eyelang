@@ -1,5 +1,5 @@
 use std::{ops::{Index, IndexMut}, path::{PathBuf, Path}};
-use crate::{token::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}};
+use crate::{token::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}, ir::{TypeInfo, TypeTableIndex, TypeTable}};
 
 pub mod repr;
 
@@ -7,6 +7,8 @@ pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
     exprs: Vec<Expr>,
+    expr_types: Vec<TypeTableIndex>,
+    type_table: TypeTable,
     extra: Vec<ExprRef>,
     defs: Vec<DHashMap<String, Definition>>
 }
@@ -16,6 +18,8 @@ impl Ast {
             modules: Vec::new(),
             sources: Vec::new(),
             exprs: Vec::new(),
+            expr_types: Vec::new(),
+            type_table: TypeTable::new(),
             extra: Vec::new(),
             defs: Vec::new(),
         }
