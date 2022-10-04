@@ -4,14 +4,8 @@ use crate::{
     ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
     lexer,
-    parser::Parser, Stats
+    parser::Parser, Stats, span::Span, dmap::DHashMap
 };
-
-//TODO: proper dependencies / project handling
-pub struct Dependency<'a> {
-    _name: String,
-    _path: &'a Path
-}
 
 #[derive(Clone, Copy, Default)]
 pub struct Debug {
@@ -22,8 +16,7 @@ pub struct Debug {
 pub fn project(
     module_path: &Path,
     debug: Debug,
-    std: bool,
-    _deps: &[Dependency],
+    dependencies: DHashMap<String, PathBuf>,
     require_main_func: bool,
     stats: &mut Stats
 ) -> (Result<crate::ir::Module, ()>, Ast, Errors) {
@@ -31,22 +24,27 @@ pub fn project(
     let mut ast = Ast::new();
 
     let main_module = ast.add_empty_root_module(module_path.to_owned());
-
     if module_path.is_dir() {
         tree(module_path, &mut ast, &mut errors, main_module, main_module, TreeType::Main, debug, stats);
     } else {
         file(module_path, &mut ast, &mut errors, main_module, main_module, debug, stats);
-    };
-    
-    if let Some(std) = (std).then(std_path) {
-        let std_mod = ast.add_empty_root_module(std.to_owned());
-        tree(&std, &mut ast, &mut errors, std_mod, std_mod, TreeType::Main, debug, stats);
-        let defs = ast[main_module].definitions;
-        ast[defs].insert(
-            "std".to_owned(),
-            ast::Definition::Module(std_mod)    
-        );
     }
+    
+    for (name, path) in dependencies {
+        let root = ast.add_empty_root_module(path.clone());
+        if path.is_dir() {
+            tree(&path, &mut ast, &mut errors, root, root, TreeType::Main, debug, stats);
+        } else {
+            file(&path, &mut ast, &mut errors, root, root, debug, stats)
+        }
+        let defs = ast[main_module].definitions;
+        let prev = ast[defs].insert(name.clone(), ast::Definition::Module(root));
+
+        if prev.is_some() {
+            errors.emit_span(Error::DuplicateDependency(name), Span::new(0, 0, main_module));
+        }
+    }
+
     let reduce_start_time = Instant::now();
     let (reduce_res, errors) = crate::irgen::reduce(&ast, main_module, errors, require_main_func);
     stats.irgen += reduce_start_time.elapsed();
@@ -54,18 +52,6 @@ pub fn project(
         Ok((ir, _globals)) => Ok(ir),
         Err(()) => Err(())
     }, ast, errors)
-}
-
-fn std_path() -> PathBuf {
-    match std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| Path::join(p, "std"))) {
-            Some(path) => match std::fs::try_exists(&path) {
-                Ok(true) => path,
-                _ => "std".into()
-            }
-            _ => "std".into()
-        }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -68,6 +68,6 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
 }
 
 panic :: fn(msg *i8) -> ! {
-    root.c.printf("PANIC: %s\n", msg)
-    root.c.exit(1)
+    c.printf("PANIC: %s\n", msg)
+    c.exit(1)
 }

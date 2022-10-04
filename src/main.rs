@@ -264,8 +264,12 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             tokens: args.tokens,
             reconstruct_src: args.reconstruct_src,
         };
+        let mut dependencies = dmap::new();
+        if !args.nostd {
+            dependencies.insert("std".to_owned(), std_path());
+        }
         let (res, ast, errors) =
-            compile::project(path, debug_options, !args.nostd, &[], !args.emit_obj, &mut stats); 
+            compile::project(path, debug_options, dependencies, !args.emit_obj, &mut stats); 
         errors.print(&ast);
         match res {
             Ok(val) => val,
@@ -379,4 +383,16 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         (Cmd::Lsp, _) => unreachable!(),
     }
     false
+}
+
+fn std_path() -> PathBuf {
+    match std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|p| Path::join(p, "std"))) {
+            Some(path) => match std::fs::try_exists(&path) {
+                Ok(true) => path,
+                _ => "std".into()
+            }
+            _ => "std".into()
+        }
 }

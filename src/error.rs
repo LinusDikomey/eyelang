@@ -204,6 +204,7 @@ pub enum Error {
     InfiniteLoop,
     NotAPattern,
     Inexhaustive,
+    DuplicateDependency(String),
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -266,6 +267,7 @@ impl Error {
             Error::InfiniteLoop => "possibly detected infinite loop",
             Error::NotAPattern => "not a pattern",
             Error::Inexhaustive => "not all possible values were covered",
+            Error::DuplicateDependency(_) => "duplicate dependency",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -290,6 +292,10 @@ impl Error {
             ),
             Error::NotAPattern => cformat!(
                 "this expression is not a valid pattern"
+            ),
+            Error::DuplicateDependency(name) => cformat!(
+                "multiple dependencies named '#m<{}>'",
+                name
             ),
             _ => return None
         })
