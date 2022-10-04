@@ -171,7 +171,7 @@ unsafe fn build_func(
         if let Some(val) = r.into_val() {
             match val {
                 ir::RefVal::True | ir::RefVal::False => (
-                    LLVMConstInt(LLVMInt1TypeInContext(ctx), if val == ir::RefVal::True { 1 } else { 0 }, FALSE),
+                    LLVMConstInt(LLVMInt1TypeInContext(ctx), (val == ir::RefVal::True) as _, FALSE),
                     Type::Prim(Primitive::Bool)
                 ),
                 ir::RefVal::Unit => (
@@ -197,7 +197,7 @@ unsafe fn build_func(
         if let Some(val) = r.into_val() {
             match val {
                 ir::RefVal::True | ir::RefVal::False =>
-                    LLVMConstInt(LLVMInt1TypeInContext(ctx), if val == ir::RefVal::True { 1 } else { 0 }, FALSE),
+                    LLVMConstInt(LLVMInt1TypeInContext(ctx), (val == ir::RefVal::True) as _, FALSE),
                 ir::RefVal::Unit =>
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
                 ir::RefVal::Undef => panic!("Tried to use an undefined IR value. This is an internal compiler error."),
@@ -770,7 +770,7 @@ unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ir::ConstVal) ->
         ir::ConstVal::Float(_, _float) => todo!("Float globals"),
         ir::ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
         ir::ConstVal::EnumVariant(_val) => todo!("static enum values"),
-        &ir::ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), if b {1} else {0}, FALSE),
+        &ir::ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
         ir::ConstVal::Symbol(_) | ir::ConstVal::NotGenerated { .. }
             => unreachable!("This shouldn't reach codegen"),
     })

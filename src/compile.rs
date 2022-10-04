@@ -97,10 +97,8 @@ fn tree(
         .unwrap_or_else(|err| panic!("Failed to access file {base_file:?}: {err}"));
     if base_exists {
         file(&base_file, ast, errors, root_module, dir_module, debug, stats);
-    } else {
-        if let TreeType::Main = t {
-            errors.emit(Error::MissingMainFile, 0, 0, dir_module);
-        }
+    } else if let TreeType::Main = t {
+        errors.emit(Error::MissingMainFile, 0, 0, dir_module);
     };
 
     for entry in std::fs::read_dir(path).expect("Failed to read directory") {

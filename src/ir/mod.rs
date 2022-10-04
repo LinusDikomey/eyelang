@@ -1,21 +1,22 @@
 use std::fmt;
 use color_format::*;
-use crate::ast::ModuleId;
 use crate::dmap::DHashMap;
-use crate::error::Errors;
 use crate::help::{write_delimited, write_delimited_with};
-use crate::span::{TSpan, Span};
-use crate::types::{Primitive, IntType, FloatType};
-use typing::{TypeTable, TypeInfo, FinalTypeTable};
+use crate::types::Primitive;
+use builder::IrBuilder;
 
 pub mod builder;
 pub mod eval;
 pub mod exhaust;
-pub mod typing;
 
-use self::builder::IrBuilder;
-pub use self::typing::TypeTableIndex;
-use self::typing::TypeTableIndices;
+mod const_val;
+pub use const_val::{ConstVal, ConstSymbol};
+
+mod instruction;
+pub use instruction::{Instruction, Tag, Data};
+
+mod typing;
+pub use typing::{TypeTable, FinalTypeTable, TypeInfo, TypeTableIndex, TypeTableIndices};
 
 
 pub struct TypingCtx {
@@ -134,125 +135,7 @@ impl Type {
             Type::Invalid => true,
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum ConstVal {
-    Invalid,
-    Unit,
-    // FIXME: storing the value as an i128 is a problem for large values
-    Int(Option<IntType>, i128),
-    Float(Option<FloatType>, f64),
-    String(Vec<u8>),
-    EnumVariant(String),
-    Bool(bool),
-    Symbol(ConstSymbol),
-    NotGenerated,
-}
-impl ConstVal {
-    pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
-        match self {
-            ConstVal::Invalid => TypeInfo::Invalid,
-            ConstVal::Unit => TypeInfo::Primitive(Primitive::Unit),
-            ConstVal::Int(ty, _) => ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into())),
-            ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
-            ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
-            ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
-            ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
-            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
-            ConstVal::NotGenerated { .. } => panic!()
-        }
-    }
-
-    fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
-        match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
-            (Self::Float(_, l0), Self::Float(_, r0)) => l0 == r0,
-            (Self::String(l0), Self::String(r0)) => l0 == r0,
-            (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
-            (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
-            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
-            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
-            _ => false
-        }
-    }
-}
-impl fmt::Display for ConstVal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ConstVal::Invalid => write!(f, "[invalid]"),
-            ConstVal::Unit => write!(f, "()"),
-            ConstVal::Int(_, int) => write!(f, "{int}"),
-            ConstVal::Float(_, float) => write!(f, "{float}"),
-            ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
-            ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
-            ConstVal::Bool(b) => write!(f, "{b}"),
-            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
-            ConstVal::NotGenerated => write!(f, "[not generated]"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ConstSymbol {
-    Func(SymbolKey),
-    TraitFunc(SymbolKey, u32),
-    Type(SymbolKey),
-    Trait(SymbolKey),
-    LocalType(TypeTableIndex),
-    Module(ModuleId),
-}
-impl ConstSymbol {
-    pub fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
-        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
-        match *self {
-            ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
-            ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
-                ir.build_trait_func(trait_symbol, func_idx, ty)
-            }
-            ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
-            ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
-            ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
-            ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
-        }
-    }
-    pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
-        match (self, other) {
-            (Self::Func(l), Self::Func(r))
-            | (Self::Type(l), Self::Type(r))
-            | (Self::Trait(l), Self::Trait(r)) => l == r,
-            (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
-            (Self::LocalType(l), Self::LocalType(r)) => {
-                let TypeInfo::Resolved(_l_id, _l_generics) = types[*l] else { unreachable!() };
-                let TypeInfo::Resolved(_r_id, _r_generics) = types[*r] else { unreachable!() };
-                todo!()
-            }
-            (Self::Module(l), Self::Module(r)) => l == r,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum TypeInfoOrIndex {
-    Info(TypeInfo),
-    Index(TypeTableIndex)
-}
-impl From<TypeInfo> for TypeInfoOrIndex {
-    fn from(info: TypeInfo) -> Self {
-        Self::Info(info)
-    }
-}
-impl TypeInfoOrIndex {
-    pub fn into_info(self, types: &TypeTable) -> TypeInfo {
-        match self {
-            TypeInfoOrIndex::Info(info) => info,
-            TypeInfoOrIndex::Index(idx) => types.get_type(idx),
-        }
-    }
-}
-impl Type {
     pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
         self.as_info_generic(types, TypeTableIndices::EMPTY).into_info(types)
     }
@@ -335,6 +218,25 @@ impl fmt::Display for Type {
     }
 }
 
+    
+#[derive(Clone, Copy)]
+pub enum TypeInfoOrIndex {
+    Info(TypeInfo),
+    Index(TypeTableIndex),
+}
+impl TypeInfoOrIndex {
+    pub fn into_info(self, types: &TypeTable) -> TypeInfo {
+        match self {
+            TypeInfoOrIndex::Info(info) => info,
+            TypeInfoOrIndex::Index(idx) => types.get_type(idx),
+        }
+    }
+}
+impl From<TypeInfo> for TypeInfoOrIndex {
+    fn from(info: TypeInfo) -> Self {
+        Self::Info(info)
+    }
+}
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
@@ -570,255 +472,6 @@ impl fmt::Display for Module {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Instruction {
-    pub data: Data,
-    pub tag: Tag,
-    pub ty: TypeTableIndex,
-    pub used: bool
-}
-pub struct InstructionDisplay<'a> {
-    inst: &'a Instruction,
-    extra: &'a [u8],
-    types: &'a FinalTypeTable,
-}
-impl Instruction {
-    pub fn display<'a>(&'a self, extra: &'a [u8], types: &'a FinalTypeTable) -> InstructionDisplay<'a> {
-        InstructionDisplay { inst: self, extra, types }
-    }
-
-    fn display_data(&self, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &FinalTypeTable) -> fmt::Result {
-        let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
-            if let Some(val) = r.into_val() {
-                cwrite!(f, "#y<{}>", val)
-            } else {
-                cwrite!(f, "#c<%{}>", r.into_ref().unwrap())
-            }
-        };
-        unsafe { match self.tag.union_data_type() {
-            DataVariant::Int => cwrite!(f, "#y<{}>", self.data.int),
-            DataVariant::Int32 => cwrite!(f, "#y<{}>", self.data.int32),
-            DataVariant::Block => cwrite!(f, "{}", self.data.block),
-            DataVariant::LargeInt => {
-                let bytes = &extra[
-                    self.data.extra as usize
-                    .. (self.data.extra + 16) as usize
-                ];
-                let mut bytes_arr = [0; 16];
-                bytes_arr.copy_from_slice(bytes);
-                cwrite!(f, "#y<{}>", u128::from_le_bytes(bytes_arr))
-            }
-            DataVariant::String => {
-                let string = String::from_utf8_lossy(&extra[
-                    self.data.extra_len.0 as usize
-                    .. (self.data.extra_len.0 + self.data.extra_len.1) as usize
-                ]);
-                cwrite!(f, "#y<{:?}>", string)
-            }
-            DataVariant::Call => {
-                let start = self.data.extra_len.0 as usize;
-                let mut bytes = [0; 8];
-                bytes.copy_from_slice(&extra[start..start+8]);
-                let func = SymbolKey(u64::from_le_bytes(bytes));
-                let refs = (0..self.data.extra_len.1).map(|i| {
-                    let mut ref_bytes = [0; 4];
-                    let begin = 8 + start + (4 * i) as usize;
-                    ref_bytes.copy_from_slice(&extra[begin..begin+4]);
-                    Ref::from_bytes(ref_bytes)
-                });
-                cwrite!(f, "#r<f{}>(", func.0)?;
-                write_delimited_with(f, refs, |f, r| write_ref(f, r), ", ")?;
-                cwrite!(f, ")")
-            }
-            DataVariant::ExtraBranchRefs => {
-                for i in 0..self.data.extra_len.1 {
-                    if i != 0 {
-                        cwrite!(f, ", ")?;
-                    }
-                    let mut current_bytes = [0; 4];
-                    let begin = (self.data.extra_len.0 + i * 8) as usize;
-                    current_bytes.copy_from_slice(&extra[begin..begin + 4]);
-                    let block = u32::from_le_bytes(current_bytes);
-                    current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
-                    current_bytes.copy_from_slice(&extra[begin + 4 .. begin + 8]);
-                    let r = Ref::from_bytes(current_bytes);
-                    cwrite!(f, "[")?;
-                    cwrite!(f, "#b!<b{}>, ", block)?;
-                    write_ref(f, r)?;
-                    cwrite!(f, "]")?;
-                }
-                Ok(())
-            }
-            DataVariant::Float => cwrite!(f, "#y<{}>", self.data.float),
-            DataVariant::Symbol => cwrite!(f, "f#m<{}>", self.data.symbol.0),
-            DataVariant::TraitFunc => {
-                let mut buf = [0; 8];
-                buf.copy_from_slice(&extra[self.data.trait_func.0 as usize ..self.data.trait_func.0 as usize + 8]);
-                
-                cwrite!(f, "#m<t{}>.#m<f{}>", SymbolKey::from_bytes(buf).0, self.data.trait_func.1)
-            }
-            DataVariant::TypeTableIdx => {
-                cwrite!(f, "#m<{}>", types[self.data.ty])
-            }
-            DataVariant::UnOp => write_ref(f, self.data.un_op),
-            DataVariant::BinOp => {
-                write_ref(f, self.data.bin_op.0)?;
-                write!(f, ", ")?;
-                write_ref(f, self.data.bin_op.1)
-            }
-            DataVariant::Branch => {
-                let i = self.data.branch.1 as usize;
-                let mut bytes = [0; 4];
-                bytes.copy_from_slice(&extra[i..i+4]);
-                let a = u32::from_le_bytes(bytes);
-                bytes.copy_from_slice(&extra[i+4..i+8]);
-                let b = u32::from_le_bytes(bytes);
-                write_ref(f, self.data.branch.0)?;
-                cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
-            }
-            DataVariant::Asm => {
-                let Data { asm: (extra_idx, str_len, arg_count) } = self.data;
-                let str_bytes = &extra[extra_idx as usize .. extra_idx as usize + str_len as usize];
-                cwrite!(f, "#y<\"{}\">", std::str::from_utf8_unchecked(str_bytes))?;
-                let expr_base = extra_idx as usize + str_len as usize;
-                for i in 0..arg_count as usize {
-                    write!(f, ", ")?;
-                    let mut arg_bytes = [0; 4];
-                    arg_bytes.copy_from_slice(&extra[expr_base + 4*i .. expr_base + 4*(i+1) ]);
-                    write_ref(f, Ref::from_bytes(arg_bytes))?;
-                }
-                Ok(())
-            }
-            DataVariant::Global => cwrite!(f, "#c<##{}>", self.data.symbol.0),
-            DataVariant::None => Ok(())
-        }}
-    }
-}
-impl<'a> fmt::Display for InstructionDisplay<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let InstructionDisplay { inst, extra, types } = self;
-        write!(f, "{} ", inst.tag)?;
-        inst.display_data(f, extra, self.types)?;
-        if inst.ty.is_present() {
-            match inst.tag {
-                Tag::Cast => cwrite!(f, "#m!< as >")?,
-                _ => cwrite!(f, " :: ")?
-            };
-            cwrite!(f, "#m!<{}>", types.get(inst.ty))?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Tag {
-    BlockBegin,
-    Ret,
-    RetUndef,
-    Param,
-
-    Uninit,
-
-    Int,
-    LargeInt,
-    Float,
-    EnumLit,
-
-    Func,
-    TraitFunc,
-    Type,
-    Trait,
-    LocalType,
-    Module,
-
-    Decl,
-    Load,
-    Store,
-    String,
-    Call,
-    Neg,
-    Not,
-
-    Global,
-
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-
-    Or,
-    And,
-
-    Eq,
-    NE,
-    LT,
-    GT,
-    LE,
-    GE,
-
-    Member,
-    Cast,
-
-    Goto,
-    Branch,
-    Phi,
-
-    Asm,
-}
-impl Tag {
-    fn union_data_type(self) -> DataVariant {
-        use DataVariant::*;
-        match self {
-            Tag::BlockBegin | Tag::Param => Int32,
-            Tag::Uninit => None,
-            Tag::Ret | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => UnOp,
-            Tag::Int => Int,
-            Tag::LargeInt => LargeInt,
-            Tag::Float => Float,
-            Tag::EnumLit | Tag::String => String,
-            
-            Tag::Func | Tag::Type | Tag::Trait => Symbol,
-            Tag::TraitFunc => TraitFunc,
-            Tag::LocalType | Tag::Decl => TypeTableIdx,
-            Tag::Module => Int,
-
-            Tag::RetUndef => None,
-            Tag::Call => Call,
-            Tag::Global => Global,
-            Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
-            | Tag::Or | Tag::And    
-            | Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
-            Tag::Goto => Block,
-            Tag::Branch => Branch,
-            Tag::Phi => ExtraBranchRefs,
-            Tag::Asm => Asm,
-        }
-    }
-
-    pub fn is_untyped(self) -> bool {
-        matches!(self,
-            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
-            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
-        )
-    }
-    pub fn is_usable(self) -> bool {
-        !matches!(self,
-            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
-            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
-        )
-    }
-    pub fn is_terminator(self) -> bool {
-        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret | Tag::RetUndef)
-    }
-}
-impl fmt::Display for Tag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cwrite!(f, "#b!<{:?}>", self)
-    }
-}
-
 const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -882,32 +535,6 @@ impl fmt::Display for RefVal {
     }
 }
 
-/// forces size of data to be 8 bytes
-const _FORCE_DATA_SIZE: u64 = unsafe { std::mem::transmute(Data { int: 0 }) };
-
-#[derive(Clone, Copy)]
-pub union Data {
-    pub int32: u32,
-    pub int: u64,
-    pub extra: u32,
-    pub extra_len: (u32, u32),
-    pub ty: TypeTableIndex,
-    pub float: f64,
-    pub un_op: Ref,
-    pub bin_op: (Ref, Ref),
-    pub branch: (Ref, u32),
-    pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
-    pub symbol: SymbolKey,
-    pub trait_func: (u32, u32), // extra_index for SymbolKey, func index in trait
-    pub none: (),
-    pub block: BlockIndex
-}
-impl fmt::Debug for Data {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", unsafe { self.int })
-    }
-}
-
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct BlockIndex(u32);
@@ -920,25 +547,4 @@ impl fmt::Display for BlockIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         cwrite!(f, "#b<b{}>", self.0)
     }
-}
-
-#[derive(Clone, Copy)]
-enum DataVariant {
-    Int,
-    Int32,
-    LargeInt,
-    TypeTableIdx,
-    Symbol,
-    TraitFunc,
-    Block,
-    Branch,
-    String,
-    Call,
-    ExtraBranchRefs,
-    Float,
-    UnOp,
-    BinOp,
-    Asm,
-    Global,
-    None,
 }

@@ -4,7 +4,28 @@ use crate::{
     ast::{self, Expr, ModuleId, ExprRef, IdentPath, UnresolvedType},
     error::{Error, Errors, EyeResult},
     token::IntLiteral,
-    types::{Primitive, IntType}, span::{Span, TSpan}, dmap::{self, DHashMap}, ir::{TypeTableIndex, Ref, TypingCtx, ConstSymbol, SymbolKey, self, FunctionOrHeader, Type, Function, typing::{TypeInfo, TypeTable}, FunctionHeader, ConstVal, TypeDef, Struct, Enum, TraitDef},
+    types::{Primitive, IntType},
+    span::{Span, TSpan},
+    dmap::{self, DHashMap},
+    ir::{
+        TypeTableIndex,
+        Ref,
+        TypingCtx,
+        ConstSymbol,
+        SymbolKey,
+        self,
+        FunctionOrHeader,
+        Type,
+        Function,
+        TypeInfo,
+        TypeTable,
+        FunctionHeader,
+        ConstVal,
+        TypeDef,
+        Struct,
+        Enum,
+        TraitDef
+    },
 }; 
 
 mod const_eval;

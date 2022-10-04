@@ -91,7 +91,7 @@ impl Definition {
         }
         match self {
             Self::Function(func) => func.repr(c, false),
-            Self::Struct(struc) => struc.repr(c),
+            Self::Struct(struct_) => struct_.repr(c),
             Self::Enum(def) => def.repr(c),
             Self::Trait(t) => t.repr(c),
             Self::Module(_) => {}
@@ -202,10 +202,10 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Block { span: _, items, defs } => {
                 c.write_add("{\n");
                 let child = c.child();
-                for (name, def) in &ast.expr_builder[*defs] {
+                for (name, def) in &ast[*defs] {
                     def.repr(&child, name);
                 }
-                for item in ast.get_extra(*items) {
+                for item in &ast[*items] {
                     child.write_start("");
                     ast[*item].repr(&child);
                     child.writeln("");
@@ -248,7 +248,7 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Unit(_) => c.write_add("()"),
             Self::Variable(span) => c.write_add(c.src(*span)),
             Self::Array(_, elems) => {
-                let elems = &ast.expr_builder[*elems];
+                let elems = &ast[*elems];
                 c.char('[');
                 let mut elems = elems.iter().copied();
                 if let Some(first) = elems.next() {
@@ -261,7 +261,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char(']');
             }
             Self::Tuple(_, elems) => {
-                let elems = &ast.expr_builder[*elems];
+                let elems = &ast[*elems];
                 c.char('(');
                 let mut it = elems.iter().copied();
                 if let Some(f) = it.next() { ast[f].repr(c) };
@@ -302,7 +302,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(" {\n");
                 let extra = ExprExtra { idx: *extra_branches, count: *branch_count * 2 };
                 let match_c = c.child();
-                for [pat, branch] in ast.expr_builder[extra].array_chunks() {
+                for [pat, branch] in ast[extra].array_chunks() {
                     c.begin_line();
                     ast[*pat].repr(&match_c);
                     let branch = &ast[*branch];
@@ -326,7 +326,7 @@ impl<C: Representer> Repr<C> for Expr {
                 body.repr(c);
             }
             Self::FunctionCall { func, args, end: _ } => {
-                let args = &ast.expr_builder[*args];
+                let args = &ast[*args];
                 let func = &ast[*func];
                 func.repr(c);
                 c.write_add("(");
@@ -385,7 +385,7 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Asm { span: _, asm_str_span, args } => {
                 c.write_add("asm(");
                 c.write_add(c.src(*asm_str_span));
-                for arg in ast.get_extra(*args) {
+                for arg in &ast[*args] {
                     c.write_add(", ");
                     ast[*arg].repr(c);
                 }

@@ -4,7 +4,8 @@ use crate::{
         Ref,
         SymbolKey,
         TypeTableIndex,
-        typing::{TypeInfo, TypeTableIndices},
+        TypeInfo,
+        TypeTableIndices,
         RefVal,
         TypeDef,
         BlockIndex, builder::BinOp,
@@ -140,7 +141,7 @@ fn reduce_expr_any(
     crate::log!("reducing expr {expr:?}");
     let (r, should_use) = match expr {
         Expr::Block { span, items, defs } => {
-            let defs = &ctx.ast.expr_builder[*defs];
+            let defs = &ctx.ast[*defs];
             let mut block_symbols = dmap::new();
             let mut block_scope = scope.child(&mut block_symbols, defs);
             //types2::gen_locals(&mut block_scope, errors);
@@ -148,7 +149,7 @@ fn reduce_expr_any(
             super::generate_bodies(&mut block_scope, defs, ctx);
             let prev_emit = ir.emit;
             let mut block_noreturn = false;
-            for item in ctx.ast.get_extra(*items) {
+            for item in &ctx.ast[*items] {
                 let item_ty = ir.types.add(TypeInfo::Unknown);
                 reduce_unused_expr(&mut block_scope, ctx, ir, &ctx.ast[*item],
                     info.with_expected(item_ty).with_noreturn(&mut block_noreturn));
@@ -274,7 +275,7 @@ fn reduce_expr_any(
             }
         }
         Expr::Array(span, elems) => {
-            let elems = &ctx.ast.expr_builder[*elems];
+            let elems = &ctx.ast[*elems];
             let elem_ty = ir.types.add(TypeInfo::Unknown);
             let elem_ty_ptr = ir.types.add(TypeInfo::Pointer(elem_ty));
             let arr_ty = TypeInfo::Array(Some(elems.len() as u32), elem_ty);
@@ -288,7 +289,7 @@ fn reduce_expr_any(
             return (ExprResult::Stored(arr), true)
         }
         Expr::Tuple(span, elems) => {
-            let elems = ctx.ast.get_extra(*elems);
+            let elems = &ctx.ast[*elems];
             let var = get_var(ir);
             let types = ir.types.add_multiple(std::iter::repeat(TypeInfo::Unknown).take(elems.len()));
             ir.types.specify(info.expected, TypeInfo::Tuple(types), &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
@@ -364,7 +365,7 @@ fn reduce_expr_any(
             let val_ty = ir.types.add_unknown();
             let val_span = expr.span(ctx.ast);
             let val = val_expr(scope, ctx, ir, *val, info.with_expected(val_ty));
-            let extra = ctx.ast.get_extra(ExprExtra { idx: *extra_branches, count: *branch_count * 2 });
+            let extra = &ctx.ast[ExprExtra { idx: *extra_branches, count: *branch_count * 2 }];
 
             let else_block = ir.create_block();
             let after_block = ir.create_block();
@@ -446,7 +447,7 @@ fn reduce_expr_any(
             (Ref::UNIT, false)
         }
         Expr::FunctionCall { func, args, end: _ } => {
-            let args = &ctx.ast.expr_builder[*args];
+            let args = &ctx.ast[*args];
             let called_ty = ir.types.add(TypeInfo::Unknown);
             fn gen_call(
                 scope: &mut Scope,
@@ -458,7 +459,7 @@ fn reduce_expr_any(
                 ir: &mut IrBuilder,
                 mut info: ExprInfo,
             ) -> Ref {
-                let arg_count = args.len() + if this_arg.is_some() { 1 } else { 0 };
+                let arg_count = args.len() + this_arg.is_some() as usize;
                 
                 let header = ctx.ctx.funcs[func.idx()].header();
                 let return_type = header.return_type.as_info(&mut ir.types);
@@ -486,7 +487,7 @@ fn reduce_expr_any(
                     } else {
                         params.collect::<Vec<_>>()
                     };
-                    let mut arg_refs = Vec::with_capacity(arg_count + if this_arg.is_some() { 1 } else { 0 });
+                    let mut arg_refs = Vec::with_capacity(arg_count + this_arg.is_some() as usize);
                     let mut param_iter = params.iter();
                     if let Some((this, this_ty, this_span)) = this_arg {
                         let ty = param_iter.next().unwrap(); // argument count was checked above, this can't fail
@@ -904,7 +905,7 @@ fn reduce_expr_any(
             return (ExprResult::Symbol(ConstSymbol::Module(ctx.ast[ctx.module].root_module)), true)
         }
         Expr::Asm { span: _, asm_str_span, args } => {
-            let expr_refs = ctx.ast.get_extra(*args).iter()
+            let expr_refs = ctx.ast[*args].iter()
             .map(|arg| {
                 let info = info.with_expected(ir.types.add_unknown());
                 val_expr(scope, ctx, ir, *arg, info)

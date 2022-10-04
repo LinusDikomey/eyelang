@@ -6,30 +6,37 @@ pub mod repr;
 pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
-    pub expr_builder: ExprBuilder,
+    exprs: Vec<Expr>,
+    extra: Vec<ExprRef>,
+    defs: Vec<DHashMap<String, Definition>>
 }
 impl Ast {
     pub fn new() -> Self {
         Self {
             modules: Vec::new(),
             sources: Vec::new(),
-            expr_builder: ExprBuilder {
-                exprs: Vec::new(),
-                extra: Vec::new(),
-                defs: Vec::new(),
-            }
+            exprs: Vec::new(),
+            extra: Vec::new(),
+            defs: Vec::new(),
         }
     }
     pub fn add_expr(&mut self, expr: Expr) -> ExprRef {
-        self.expr_builder.add(expr)
+        let r = ExprRef(self.exprs.len() as u32);
+        self.exprs.push(expr);
+        r
     }
-    pub fn extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
-        self.expr_builder.extra(extra)
-    }
-    pub fn get_extra(&self, idx: ExprExtra) -> &[ExprRef] {
-        &self.expr_builder.extra[idx.idx as usize .. idx.idx as usize + idx.count as usize]
+    pub fn add_defs(&mut self, defs: DHashMap<String, Definition>) -> Defs {
+        //defs.shrink_to_fit(); //PERF: test performance gains/losses of this
+        let idx = self.defs.len();
+        self.defs.push(defs);
+        Defs(idx as u32)
     }
 
+    pub fn add_extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
+        let idx = ExprExtra { idx: self.extra.len() as u32, count: extra.len() as u32 };
+        self.extra.extend(extra);
+        idx
+    }
     pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
         let id = ModuleId(self.modules.len() as u32);
         self.modules.push(module);
@@ -63,19 +70,19 @@ impl Index<ExprRef> for Ast {
     type Output = Expr;
 
     fn index(&self, index: ExprRef) -> &Self::Output {
-        &self.expr_builder.exprs[index.0 as usize]    
+        &self.exprs[index.0 as usize]    
     }   
 }
 impl Index<Defs> for Ast {
     type Output = DHashMap<String, Definition>;
 
     fn index(&self, index: Defs) -> &Self::Output {
-        &self.expr_builder.defs[index.0 as usize]
+        &self.defs[index.0 as usize]
     }
 }
 impl IndexMut<Defs> for Ast {
     fn index_mut(&mut self, index: Defs) -> &mut Self::Output {
-        &mut self.expr_builder.defs[index.0 as usize]
+        &mut self.defs[index.0 as usize]
     }
 }
 impl Index<ModuleId> for Ast {
@@ -90,14 +97,18 @@ impl IndexMut<ModuleId> for Ast {
         &mut self.modules[index.0 as usize]
     }
 }
+impl Index<ExprExtra> for Ast {
+    type Output = [ExprRef];
+
+    fn index(&self, index: ExprExtra) -> &Self::Output {
+        &self.extra[index.idx as usize .. index.idx as usize + index.count as usize]
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModuleId(u32);
 impl ModuleId {
-    pub fn new(id: u32) -> Self {
-        Self(id)
-    }
-    //pub const ROOT: Self = Self(0);
+    pub fn new(id: u32) -> Self { Self(id) }
     pub fn idx(self) -> usize { self.0 as usize }
     pub fn inner(self) -> u32 { self.0 }
 }
@@ -110,49 +121,9 @@ pub struct Module {
 }
 impl Module {
     pub fn empty(ast: &mut Ast, root_module: ModuleId) -> Self {
-        Self { definitions: ast.expr_builder.defs(dmap::new()), uses: Vec::new(), root_module }
+        Self { definitions: ast.add_defs(dmap::new()), uses: Vec::new(), root_module }
     }
 }
-
-
-pub struct ExprBuilder {
-    exprs: Vec<Expr>,
-    extra: Vec<ExprRef>,
-    defs: Vec<DHashMap<String, Definition>>
-}
-impl ExprBuilder {
-    pub fn add(&mut self, expr: Expr) -> ExprRef {
-        let r = ExprRef(self.exprs.len() as u32);
-        self.exprs.push(expr);
-        r
-    }
-    pub fn extra(&mut self, extra: &[ExprRef]) -> ExprExtra {
-        let idx = ExprExtra { idx: self.extra.len() as u32, count: extra.len() as u32 };
-        self.extra.extend(extra);
-        idx
-    }
-    pub fn defs(&mut self, defs: DHashMap<String, Definition>) -> Defs {
-        //defs.shrink_to_fit(); //PERF: test performance gains/losses of this
-        let idx = self.defs.len();
-        self.defs.push(defs);
-        Defs(idx as u32)
-    }
-}
-impl Index<Defs> for ExprBuilder {
-    type Output = DHashMap<String, Definition>;
-
-    fn index(&self, index: Defs) -> &Self::Output {
-        &self.defs[index.0 as usize]
-    }
-}
-impl Index<ExprExtra> for ExprBuilder {
-    type Output = [ExprRef];
-
-    fn index(&self, index: ExprExtra) -> &Self::Output {
-        &self.extra[index.idx as usize .. index.idx as usize + index.count as usize]
-    }
-}
-
 
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
@@ -274,7 +245,6 @@ pub enum Expr {
     TupleIdx { expr: ExprRef, idx: u32, end: u32 },
     Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32),
-
     Asm {
         span: TSpan,
         asm_str_span: TSpan,

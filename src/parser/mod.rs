@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
             }
         }
         uses.shrink_to_fit();
-        Ok(Module { definitions: self.ast.expr_builder.defs(definitions), uses, root_module })
+        Ok(Module { definitions: self.ast.add_defs(definitions), uses, root_module })
     }
 
     fn parse_block_or_expr(&mut self) -> EyeResult<ExprRef> {
@@ -137,8 +137,8 @@ impl<'a> Parser<'a> {
             }
         }
         let rbrace = self.toks.step_expect(TokenType::RBrace)?;
-        let items = self.ast.extra(&items);
-        let defs = self.ast.expr_builder.defs(defs);
+        let items = self.ast.add_extra(&items);
+        let defs = self.ast.add_defs(defs);
         
         Ok(self.ast.add_expr(Expr::Block { span: TSpan::new(lbrace.start, rbrace.end), items, defs }))
     }
@@ -415,7 +415,7 @@ impl<'a> Parser<'a> {
                     elems.push(p.parse_expr()?);
                     Ok(())
                 })?;
-                Expr::Array(TSpan::new(start, closing.end), self.ast.extra(&elems))
+                Expr::Array(TSpan::new(start, closing.end), self.ast.add_extra(&elems))
             },
             TokenType::LParen => {
                 if let Some(closing) = self.toks.step_if(TokenType::RParen) {
@@ -433,7 +433,7 @@ impl<'a> Parser<'a> {
                                 elems.push(p.parse_expr()?);
                                 Ok(())
                             })?.end;
-                            Expr::Tuple(TSpan::new(start, end), self.ast.extra(&elems))
+                            Expr::Tuple(TSpan::new(start, end), self.ast.add_extra(&elems))
                         }
                     }
                 }
@@ -494,7 +494,7 @@ impl<'a> Parser<'a> {
                     branches.extend([pat, branch]);
                     Ok(delimit)
                 })?;
-                let extra_branches = self.ast.extra(&branches).idx;
+                let extra_branches = self.ast.add_extra(&branches).idx;
                 debug_assert_eq!(branches.len() % 2, 0);
                 let branch_count = (branches.len() / 2) as u32;
                 Expr::Match { start: lbrace.start, end: rbrace.end, val, extra_branches, branch_count }
@@ -529,7 +529,7 @@ impl<'a> Parser<'a> {
                     }
                     args.push(self.parse_expr()?);
                 };
-                Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.extra(&args) }
+                Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.add_extra(&args) }
             }
         );
         let expr = self.ast.add_expr(expr);
@@ -552,7 +552,7 @@ impl<'a> Parser<'a> {
                         args.push(p.parse_expr()?);
                         Ok(())
                     })?.end;
-                    Expr::FunctionCall { func: expr, args: self.ast.extra(&args), end }
+                    Expr::FunctionCall { func: expr, args: self.ast.add_extra(&args), end }
                 }
                 Some(TokenType::LBracket) => {
                     if !self.toks.more_on_line() {

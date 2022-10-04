@@ -98,8 +98,8 @@ impl TypeTable {
         ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|| {
             errors.emit_span(Error::MismatchedType {
-                expected: prev.to_string(self, ctx).into_owned(),
-                found: other.to_string(self, ctx).into_owned()
+                expected: prev.as_string(self, ctx).into_owned(),
+                found: other.as_string(self, ctx).into_owned()
             }, span);
             TypeInfo::Invalid
         });
@@ -137,8 +137,8 @@ impl TypeTable {
             None => {
                 ty_dbg("\t... failed to merge", span);
                 errors.emit_span(Error::MismatchedType {
-                    expected: a_ty.to_string(self, ctx).into_owned(),
-                    found: prev_b_ty.to_string(self, ctx).into_owned()
+                    expected: a_ty.as_string(self, ctx).into_owned(),
+                    found: prev_b_ty.as_string(self, ctx).into_owned()
                 }, span.in_mod(module));
                 TypeInfo::Invalid
             }
@@ -265,7 +265,7 @@ pub enum TypeInfo {
 impl TypeInfo {
     pub const UNIT: Self = Self::Primitive(Primitive::Unit);
     
-    fn to_string(&self, types: &TypeTable, ctx: &TypingCtx) -> Cow<'static, str> {
+    fn as_string(&self, types: &TypeTable, ctx: &TypingCtx) -> Cow<'static, str> {
         match self {
             TypeInfo::Unknown => "<unknown>".into(),
             TypeInfo::Int => "<integer>".into(),
@@ -277,7 +277,7 @@ impl TypeInfo {
                     generics_string.push('<');
                     for (i, generic) in generics.iter().enumerate() {
                         let generic = types[generic];
-                        generics_string += &*generic.to_string(types, ctx);
+                        generics_string += &*generic.as_string(types, ctx);
                         if i != generics.len() - 1 {
                             generics_string += ", ";
                         }
@@ -286,9 +286,9 @@ impl TypeInfo {
                 }
                 format!("{}{}", ctx.get_type(*id), generics_string).into()
             }
-            TypeInfo::Pointer(inner) => format!("*{}", types[*inner].to_string(types, ctx)).into(),
+            TypeInfo::Pointer(inner) => format!("*{}", types[*inner].as_string(types, ctx)).into(),
             TypeInfo::Array(count, inner) => format!("[{}; {}]",
-                types[*inner].to_string(types, ctx),
+                types[*inner].as_string(types, ctx),
                 count.map_or("_".to_owned(), |c| c.to_string())
             ).into(),
             TypeInfo::Enum(variants) => {
