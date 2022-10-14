@@ -284,7 +284,7 @@ impl TypeInfo {
                     }
                     generics_string.push('>');
                 }
-                format!("{}{}", ctx.get_type(*id), generics_string).into()
+                format!("{}{}", ctx.get_type(*id).name(), generics_string).into()
             }
             TypeInfo::Pointer(inner) => format!("*{}", types[*inner].as_string(types, ctx)).into(),
             TypeInfo::Array(count, inner) => format!("[{}; {}]",

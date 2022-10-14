@@ -47,7 +47,7 @@ impl TypingCtx {
         key
     }
     pub fn add_proto_ty(&mut self, name: String, generic_count: u8) -> SymbolKey {
-        self.add_type(name, TypeDef::NotGenerated { generic_count, generating: false })
+        self.add_type(name.clone(), TypeDef::NotGenerated { name, generic_count, generating: false })
     }
     pub fn add_trait(&mut self, t: TraitDef) -> SymbolKey {
         let key = SymbolKey(self.traits.len() as u64);
@@ -64,6 +64,7 @@ impl TypingCtx {
         self.globals.push((ty, val));
         key
     }
+    pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()].1 }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()].1 }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
@@ -335,9 +336,16 @@ impl Layout {
 pub enum TypeDef {
     Struct(Struct),
     Enum(Enum),
-    NotGenerated { generic_count: u8, generating: bool },
+    NotGenerated { name: String, generic_count: u8, generating: bool },
 }
 impl TypeDef {
+    pub fn name(&self) -> &str {
+        match self {
+            TypeDef::Struct(s) => &s.name,
+            TypeDef::Enum(e) => &e.name,
+            TypeDef::NotGenerated { name, .. } => &name,
+        }
+    }
     pub fn generic_count(&self) -> u8 {
         match self {
             TypeDef::Struct(struct_) => struct_.generic_count,
@@ -385,8 +393,9 @@ impl fmt::Display for TypeDef {
 }
 #[derive(Debug, Clone)]
 pub struct Struct {
+    pub name: String,
     pub members: Vec<(String, Type)>,
-    pub methods: DHashMap<String, SymbolKey>,
+    pub functions: DHashMap<String, SymbolKey>,
     pub generic_count: u8,
 }
 impl fmt::Display for Struct {
@@ -400,6 +409,7 @@ impl fmt::Display for Struct {
 
 #[derive(Debug, Clone)]
 pub struct Enum {
+    pub name: String,
     pub variants: DHashMap<String, u32>,
     pub generic_count: u8,
 }

@@ -28,7 +28,7 @@ impl Errors {
     pub fn emit_err(&mut self, err: CompileError) {
         let list = match err.err.severity() {
             Severity::Error => &mut self.errors,
-            Severity::Warn => &mut self.warnings,      
+            Severity::Warn => &mut self.warnings,
         };
         list.push(err);
     }

@@ -1,4 +1,4 @@
-use std::ptr::NonNull;
+use std::{ptr::NonNull, mem};
 
 use crate::{
     ast::{self, Expr, ModuleId, ExprRef, IdentPath, UnresolvedType},
@@ -423,22 +423,26 @@ fn gen_struct(
         )
     }).collect::<Vec<_>>();
 
-    *ctx.ctx.get_type_mut(key) = TypeDef::Struct(Struct {
+    let loc = ctx.ctx.get_type_mut(key);
+    let TypeDef::NotGenerated { name, .. } = loc else { unreachable!() };
+    let name = mem::take(name);
+    *loc = TypeDef::Struct(Struct {
+        name,
         members,
-        methods: dmap::with_capacity(def.members.len()),
+        functions: dmap::with_capacity(def.members.len()),
         generic_count: def.generics.len() as u8,
     });
 
     for (method_name, method) in &def.methods {
         let header = gen_func_header(method, &mut scope, ctx);
         let method_key = ctx.ctx.add_func(FunctionOrHeader::Header(header));
-        let TypeDef::Struct(Struct { methods, .. }) = ctx.ctx.get_type_mut(key) else { unreachable!() };
+        let TypeDef::Struct(Struct { functions: methods, .. }) = ctx.ctx.get_type_mut(key) else { unreachable!() };
         methods.insert(method_name.clone(), method_key);
     }
     for (method_name, method) in &def.methods {
         // type is set to Struct above
         let TypeDef::Struct(struct_) = ctx.ctx.get_type_mut(key) else { unreachable!() };
-        gen_func_body(method_name, method, struct_.methods[method_name], &mut scope, ctx);
+        gen_func_body(method_name, method, struct_.functions[method_name], &mut scope, ctx);
     }
 }
 
@@ -446,7 +450,7 @@ fn gen_enum(
     def: &ast::EnumDefinition,
     ctx: &mut GenCtx,
     scope: &mut Scope,
-    key: SymbolKey,  
+    key: SymbolKey,
 ) {
     let mut generic_symbols = def.generics.iter()
     .enumerate()
@@ -460,7 +464,11 @@ fn gen_enum(
         .map(|(idx, (_span, name))| (name.clone(), idx as u32))
         .collect();
 
-    *ctx.ctx.get_type_mut(key) = TypeDef::Enum(Enum {
+    let loc = ctx.ctx.get_type_mut(key);
+    let TypeDef::NotGenerated { name, .. } = loc else { unreachable!() };
+    let name = mem::take(name);
+    *loc = TypeDef::Enum(Enum {
+        name,
         variants,
         generic_count: def.generics.len() as u8,
     });

@@ -8,12 +8,12 @@ use crate::{
         TypeTableIndices,
         RefVal,
         TypeDef,
-        BlockIndex, builder::BinOp,
+        BlockIndex, builder::BinOp, self,
     },
     error::Error,
     span::TSpan,
     ast::{Expr, ExprRef, UnOp, ExprExtra, ModuleId},
-    token::{IntLiteral, Operator, FloatLiteral, AssignType},    
+    token::{IntLiteral, Operator, FloatLiteral, AssignType},
     dmap,
     types::Primitive, irgen::{string_literal, gen_string, const_eval}
 };
@@ -718,6 +718,7 @@ fn reduce_expr_any(
             let left_val = match reduce_expr(scope, ctx, ir, left, info.with_expected(left_ty)) {
                 ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
                 ExprResult::Val(val) => {
+                    // TODO: don't store automatically when finding a val. Methods can take a value sometimes.
                     let var = ir.build_decl(info.expected);
                     ir.build_store(var, val);
                     MemberAccessType::Var(var)
@@ -737,8 +738,21 @@ fn reduce_expr_any(
                         TypeInfo::Resolved(key, generics) => {
                             match &ctx.ctx.types[key.idx()].1 {
                                 TypeDef::Struct(struct_) => {
-                                    if let Some(method) = struct_.methods.get(member) {
-                                        return (ExprResult::Method(var, *method), true);
+                                    if let Some(func_id) = struct_.functions.get(member) {
+                                        let func = ctx.ctx.get_func(*func_id);
+                                        let var = if let Some(first_arg) = func.header().params.first() {
+                                            let info = first_arg.1.as_info(&mut ir.types);
+                                            // TODO: auto ref/deref
+                                            ir.specify(left_ty, info, &mut ctx.errors, left.span(ctx.ast), &ctx.ctx);
+                                            var
+                                        } else {
+                                            ctx.errors.emit_span(
+                                                Error::NotAnInstanceMethod,
+                                                name_span.in_mod(ctx.module)
+                                            );
+                                            Ref::UNDEF
+                                        };
+                                        return (ExprResult::Method(var, *func_id), true);
                                     } else if let Some((i, (_, ty))) = struct_
                                         .members
                                         .iter()
@@ -808,7 +822,7 @@ fn reduce_expr_any(
                 MemberAccessType::Associated(key) => {
                     match ctx.ctx.get_type(key) {
                         TypeDef::Struct(def) => {
-                            if let Some(method) = def.methods.get(member) {
+                            if let Some(method) = def.functions.get(member) {
                                 return (ExprResult::Symbol(ConstSymbol::Func(*method)), true);
                             } else {
                                 ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));

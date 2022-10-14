@@ -295,7 +295,7 @@ impl IrBuilder {
     }
     
     pub fn build_func(&mut self, func_symbol: SymbolKey, ty: TypeTableIndex) -> Ref {
-        self.add(Data { symbol: func_symbol }, Tag::TraitFunc, ty)
+        self.add(Data { symbol: func_symbol }, Tag::Func, ty)
     }
 
     pub fn build_trait_func(&mut self, trait_symbol: SymbolKey, func_idx: u32, ty: TypeTableIndex) -> Ref {
