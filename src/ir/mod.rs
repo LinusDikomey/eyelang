@@ -142,15 +142,15 @@ impl Type {
     }
 
     pub fn as_info_generic(&self, types: &mut TypeTable, generics: TypeTableIndices) -> TypeInfoOrIndex {
-        TypeInfoOrIndex::Info(match self {
+        TypeInfoOrIndex::Type(match self {
             Self::Prim(p) => TypeInfo::Primitive(*p),
             Self::Id(id, ty_generics) => {
                 // unfortunately this has to be allocated for borrowing reasons
                 let generics = types.add_multiple(ty_generics.iter().map(|_| TypeInfo::Unknown));
                 for (generic, ty) in generics.iter().zip(ty_generics) {
                     match ty.as_info_generic(types, generics) {
-                        TypeInfoOrIndex::Info(info) => types.update_type(generic, info), //TODO: this might need a proper merge?
-                        TypeInfoOrIndex::Index(idx) => types.point_to(generic, idx),
+                        TypeInfoOrIndex::Type(info) => types.update_type(generic, info), //TODO: this might need a proper merge?
+                        TypeInfoOrIndex::Idx(idx) => types.point_to(generic, idx),
                     }
                 }
                 let generics = ty_generics.iter()
@@ -178,7 +178,7 @@ impl Type {
                     *idx < generics.len() as u8,
                     "Not enough generics provided: index {} >= provided {}", idx, generics.len()
                 );
-                return TypeInfoOrIndex::Index(generics.nth(*idx as usize));
+                return TypeInfoOrIndex::Idx(generics.nth(*idx as usize));
             }
             Self::Symbol => TypeInfo::Symbol,
             Self::Invalid => TypeInfo::Invalid
@@ -220,22 +220,22 @@ impl fmt::Display for Type {
 }
 
     
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum TypeInfoOrIndex {
-    Info(TypeInfo),
-    Index(TypeTableIndex),
+    Type(TypeInfo),
+    Idx(TypeTableIndex),
 }
 impl TypeInfoOrIndex {
     pub fn into_info(self, types: &TypeTable) -> TypeInfo {
         match self {
-            TypeInfoOrIndex::Info(info) => info,
-            TypeInfoOrIndex::Index(idx) => types.get_type(idx),
+            TypeInfoOrIndex::Type(info) => info,
+            TypeInfoOrIndex::Idx(idx) => types.get_type(idx),
         }
     }
 }
 impl From<TypeInfo> for TypeInfoOrIndex {
     fn from(info: TypeInfo) -> Self {
-        Self::Info(info)
+        Self::Type(info)
     }
 }
 

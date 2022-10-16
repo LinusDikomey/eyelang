@@ -14,8 +14,7 @@ fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
-    types: Vec<TypeInfo>,
-    indices: Vec<TypeIdx>,
+    types: Vec<TypeInfoOrIndex>,
     names: Vec<String>,
 }
 impl TypeTable {
@@ -23,69 +22,61 @@ impl TypeTable {
         ty_dbg("Creating type table", ());
         Self {
             types: Vec::new(),
-            indices: Vec::new(),
             names: Vec::new(),
         }
     }
 
     pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
-        let type_idx = self.indices[idx.idx()];
-        self.types[type_idx.get()]
+        let mut current = self.types[idx.idx()];
+        loop {
+            match current {
+                TypeInfoOrIndex::Type(ty) => return ty,
+                TypeInfoOrIndex::Idx(idx) => current = self.types[idx.idx()],
+            }
+        }
     }
     
     pub fn update_type(&mut self, idx: TypeTableIndex, info: TypeInfo) {
-        self.types[self.indices[idx.idx()].get()] = info;
+        let mut curr_idx = idx;
+        while let TypeInfoOrIndex::Idx(idx) = self.types[curr_idx.idx()] {
+            curr_idx = idx;
+        }
+        self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(info);
     }
 
     // Points a to the index that b is pointing to
     pub fn point_to(&mut self, a: TypeTableIndex, b: TypeTableIndex) {
-        self.indices[a.idx()] = self.indices[b.idx()];
+        if a.idx() == b.idx() { return; }
+        self.types[a.idx()] = TypeInfoOrIndex::Idx(b);
     }
 
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
-        let type_idx = TypeIdx(self.types.len() as u32);
-        self.types.push(info);
-        let table_idx = TypeTableIndex(self.indices.len() as u32);
-        self.indices.push(type_idx);
+        let type_idx = TypeTableIndex(self.types.len() as u32);
+        self.types.push(TypeInfoOrIndex::Type(info));
         ty_dbg("Adding", &(info, type_idx));
-        table_idx
+        type_idx
     }
 
     pub fn add_info_or_idx(&mut self, ty: TypeInfoOrIndex) -> TypeTableIndex {
         match ty {
-            TypeInfoOrIndex::Info(info) => self.add(info),
-            TypeInfoOrIndex::Index(idx) => idx
+            TypeInfoOrIndex::Type(info) => self.add(info),
+            TypeInfoOrIndex::Idx(idx) => idx
         }
     }
 
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> TypeTableIndices {
         let infos = infos.into_iter();
-        let start_ty_idx = self.types.len() as u32;
-        self.types.extend(infos);
-        let count = (self.types.len() - start_ty_idx as usize) as u32;
-        let idx = self.indices.len() as u32;
-        self.indices.extend((start_ty_idx .. start_ty_idx+count).map(TypeIdx));
+        let idx = self.types.len() as u32;
+        self.types.extend(infos.map(TypeInfoOrIndex::Type));
+        let count = (self.types.len() - idx as usize) as u32;
         TypeTableIndices { idx, count }
     }
     pub fn add_multiple_info_or_index(&mut self, types: impl IntoIterator<Item = TypeInfoOrIndex>)
     -> TypeTableIndices {
         let types = types.into_iter();
-        let idx = self.indices.len() as u32;
-        let mut count = 0;
-        for ty in types {
-            count += 1;
-            let idx = match ty {
-                TypeInfoOrIndex::Info(info) => {
-                    let idx = TypeIdx(self.types.len() as u32);
-                    self.types.push(info);
-                    idx
-                }
-                TypeInfoOrIndex::Index(idx) => {
-                    self.indices[idx.idx()]
-                }
-            };
-            self.indices.push(idx);
-        }
+        let idx = self.types.len() as u32;
+        self.types.extend(types);
+        let count = (self.types.len() - idx as usize) as u32;
         TypeTableIndices { idx, count }
     }
 
@@ -94,7 +85,13 @@ impl TypeTable {
     }
 
     pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span, ctx: &TypingCtx) {
-        let prev = self.get_type(idx);
+        let mut curr_idx = idx;
+        let prev = loop {
+            match self.types[curr_idx.idx()] {
+                TypeInfoOrIndex::Type(ty) => break ty,
+                TypeInfoOrIndex::Idx(idx) => curr_idx = idx,
+            }
+        };
         ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|| {
             errors.emit_span(Error::MismatchedType {
@@ -103,7 +100,8 @@ impl TypeTable {
             }, span);
             TypeInfo::Invalid
         });
-        self.update_type(idx, ty);
+
+        self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(ty);
     }
     pub fn specify_or_merge(
         &mut self,
@@ -115,33 +113,46 @@ impl TypeTable {
         ctx: &TypingCtx,
     ) {
         match other {
-            TypeInfoOrIndex::Info(info) => self.specify(idx, info, errors, span.in_mod(module), ctx),
-            TypeInfoOrIndex::Index(other_idx) => self.merge(idx, other_idx, errors, module, span, ctx),
+            TypeInfoOrIndex::Type(info) => self.specify(idx, info, errors, span.in_mod(module), ctx),
+            TypeInfoOrIndex::Idx(other_idx) => self.merge(idx, other_idx, errors, module, span, ctx),
         }
     }
 
     pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex,
         errors: &mut Errors, module: ModuleId, span: TSpan, ctx: &TypingCtx
     ) {
-        let a_idx = self.indices[a.idx()];
-        let a_ty = self.types[a_idx.get()];
-        let b_idx = &mut self.indices[b.idx()];
-        let prev_b_ty = self.types[b_idx.get()];
-        ty_dbg("Merging ...", ((a_ty, a_idx, a), (prev_b_ty, *b_idx, b)));
-        *b_idx = a_idx; // make b point to a's type
+        if a.idx() == b.idx() { return; }
+        let mut curr_a_idx = a;
+        let a_ty = loop {
+            match self.types[curr_a_idx.idx()] {
+                TypeInfoOrIndex::Type(ty) => break ty,
+                TypeInfoOrIndex::Idx(new_idx) => curr_a_idx = new_idx,
+            }
+        };
+        let b_ty = self.get_type(b);
+        ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
 
 
         // merge b's previous type into a
-        self.types[a_idx.get()] = match merge_twosided(a_ty, prev_b_ty, self, ctx) {
+        let new_ty = match merge_twosided(a_ty, b_ty, self, ctx) {
             Some(ty) => ty_dbg("\t... merged", ty),
             None => {
                 ty_dbg("\t... failed to merge", span);
                 errors.emit_span(Error::MismatchedType {
                     expected: a_ty.as_string(self, ctx).into_owned(),
-                    found: prev_b_ty.as_string(self, ctx).into_owned()
+                    found: b_ty.as_string(self, ctx).into_owned()
                 }, span.in_mod(module));
                 TypeInfo::Invalid
             }
+        };
+        self.types[curr_a_idx.idx()] = TypeInfoOrIndex::Type(new_ty);
+
+        // make b point to a
+        self.types[b.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
+
+        // potentially shorten path of a
+        if a.idx() != curr_a_idx.idx() {
+            self.types[a.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
         }
     }
 
@@ -166,8 +177,11 @@ impl TypeTable {
     }
 
     pub fn finalize(self) -> FinalTypeTable {
-        let types = self.indices.iter()
-            .map(|&i| self.types[i.0 as usize].finalize(&self))
+        let types = self.types.iter()
+            .map(|ty| match *ty {
+                TypeInfoOrIndex::Type(ty) => ty,
+                TypeInfoOrIndex::Idx(idx) => self.get_type(idx),
+            }.finalize(&self))
             .collect();
         FinalTypeTable { types }
     }
@@ -175,8 +189,13 @@ impl TypeTable {
 impl Index<TypeTableIndex> for TypeTable {
     type Output = TypeInfo;
 
-    fn index(&self, index: TypeTableIndex) -> &Self::Output {
-        &self.types[self.indices[index.idx()].0 as usize]
+    fn index(&self, mut index: TypeTableIndex) -> &Self::Output {
+        loop {
+            match &self.types[index.idx()] {
+                TypeInfoOrIndex::Type(ty) => return ty,
+                TypeInfoOrIndex::Idx(new_idx) => index = *new_idx,
+            }
+        }
     }
 }
 impl Drop for TypeTable {
@@ -236,15 +255,6 @@ impl Index<TypeTableIndex> for FinalTypeTable {
         &self.types[index.idx()]
     }
 }
-
-#[derive(Clone, Copy, Debug)]
-struct TypeIdx(u32);
-impl TypeIdx {
-    fn get(self) -> usize {
-        self.0 as usize
-    }
-}
-
 
 /// A type that may not be (completely) known yet.
 #[derive(Clone, Copy, Debug)]
