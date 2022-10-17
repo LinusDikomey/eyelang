@@ -205,6 +205,7 @@ pub enum Error {
     NotAPattern,
     Inexhaustive,
     DuplicateDependency(String),
+    TooManyGenerics(usize),
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -268,6 +269,7 @@ impl Error {
             Error::NotAPattern => "not a pattern",
             Error::Inexhaustive => "not all possible values were covered",
             Error::DuplicateDependency(_) => "duplicate dependency",
+            Error::TooManyGenerics(_) => "too many generics",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -296,6 +298,10 @@ impl Error {
             Error::DuplicateDependency(name) => cformat!(
                 "multiple dependencies named '#m<{}>'",
                 name
+            ),
+            Error::TooManyGenerics(count) => cformat!(
+                "the maximum number of generics allowed is #g<255> but found #r<{}>",
+                count
             ),
             _ => return None
         })

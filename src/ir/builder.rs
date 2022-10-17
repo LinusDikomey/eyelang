@@ -1,7 +1,7 @@
 use crate::{
     ast::ModuleId,
-    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex, SymbolKey},
-    error::Errors, span::TSpan, types::Primitive,
+    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex, SymbolKey, FunctionHeader},
+    error::Errors, span::TSpan, types::Primitive, irgen::{GenCtx, Scope},
 };
 
 use super::{TypingCtx, exhaust::Exhaustion};
@@ -57,6 +57,7 @@ pub struct IrBuilder {
 
     // exhaustion checks are deferred until the end of the IR generation for the type is known.
     exhaustion_checks: Vec<(Exhaustion, TypeTableIndex, TSpan)>,
+    generic_instantiations: Vec<(u32, super::TypeTableIndices, Ref)>,
 }
 impl IrBuilder {
     pub fn new(module: ModuleId) -> Self {
@@ -76,6 +77,7 @@ impl IrBuilder {
             extra: Vec::new(),
 
             exhaustion_checks: Vec::new(),
+            generic_instantiations: Vec::new(),
         }
     }
 
@@ -190,7 +192,7 @@ impl IrBuilder {
         BlockIndex(self.current_block)
     }
 
-    pub fn finish(self, ctx: &TypingCtx, errors: &mut Errors) -> FunctionIr {
+    pub fn finish(mut self, ctx: &mut GenCtx) -> FunctionIr {
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
@@ -198,14 +200,57 @@ impl IrBuilder {
         let types = self.types.finalize();
         for (exhaustion, ty, span) in self.exhaustion_checks {
             let ty = &types[ty];
-            match exhaustion.is_exhausted(ty, ctx) {
+            match exhaustion.is_exhausted(ty, &ctx.ctx) {
                 Some(true) => {}
                 Some(false) => {
-                    errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));
+                    ctx.errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));
                 }
-                None => debug_assert!(errors.has_errors(),
+                None => debug_assert!(ctx.errors.has_errors(),
                     "there should have been at least one error if this exhaustion is invalid")
             }
+        }
+        for (idx, generics, call_ref) in self.generic_instantiations {
+            let func = &mut ctx.ctx.generic_funcs[idx as usize];
+            let generics = types[generics].to_vec();
+            let func_key = match func.instantiations.get(&generics) {
+                Some(key) => *key,
+                None => {
+                    let mut name = func.name.to_owned();
+                    for t in &generics {
+                        use std::fmt::Write;
+                        write!(name, ".{t}").unwrap();
+                    }
+                    let params = func.header.params  
+                        .iter()
+                        .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generics)))
+                        .collect();
+                    let varargs = func.header.varargs;
+                    let return_type = func.header.return_type.instantiate_generics(&generics);
+
+                    crate::log!("instantiating generic function {name}");
+                    let new_key = ctx.ctx.add_func(crate::ir::FunctionOrHeader::Header(FunctionHeader {
+                        params,
+                        varargs,
+                        return_type,
+                    }));
+                    let func = &mut ctx.ctx.generic_funcs[idx as usize];
+
+                    func.instantiations.insert(generics, new_key);
+                    let mut scope = Scope::Module(ctx.module);
+
+                    // PERF: again: store definitions seperately to avoid cloning
+                    // this isn't even the single place this needs to be cloned
+                    let def = func.def.clone();
+                    crate::irgen::gen_func_body(&name, &def, new_key, &mut scope, ctx);
+
+                    new_key
+                }
+            };
+            let call_ref = call_ref.into_ref().expect("Ref to call inst expected");
+            let inst = &mut self.inst[call_ref as usize];
+            debug_assert_eq!(inst.tag, Tag::Call);
+            let data = unsafe { inst.data.extra_len };
+            self.extra[data.0 as usize .. data.0 as usize + 8].copy_from_slice(&func_key.bytes());
         }
         FunctionIr {
             inst: self.inst,
@@ -252,6 +297,11 @@ impl IrBuilder {
 
     pub fn add_exhaustion_check(&mut self, exhaustion: Exhaustion, idx: TypeTableIndex, span: TSpan) {
         self.exhaustion_checks.push((exhaustion, idx, span));
+    }
+
+    pub fn add_generic_instantiation(&mut self, generic_idx: u32, generics: super::TypeTableIndices, call_ref: Ref) {
+        println!("generic instantiation: {:?}", generics);
+        self.generic_instantiations.push((generic_idx, generics, call_ref));
     }
 
     /// --------------------------------------------------------------

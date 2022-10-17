@@ -8,6 +8,7 @@ pub(super) fn to_expr_result(val: &ConstVal, ir: &mut IrBuilder, info: ExprInfo)
         &ConstVal::Symbol(symbol) => {
             return match symbol {
                 ConstSymbol::Func(key) => ExprResult::Symbol(ConstSymbol::Func(key)),
+                ConstSymbol::GenericFunc(key) => ExprResult::Symbol(ConstSymbol::GenericFunc(key)),
                 ConstSymbol::Type(key) => ExprResult::Symbol(ConstSymbol::Type(key)),
                 ConstSymbol::Trait(key) => ExprResult::Symbol(ConstSymbol::Trait(key)),
                 ConstSymbol::LocalType(..) => unreachable!(),

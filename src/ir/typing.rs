@@ -69,12 +69,17 @@ impl TypeTable {
         let idx = self.types.len() as u32;
         self.types.extend(infos.map(TypeInfoOrIndex::Type));
         let count = (self.types.len() - idx as usize) as u32;
-        TypeTableIndices { idx, count }
+        ty_dbg("Adding multiple", TypeTableIndices { idx, count })
     }
     pub fn add_multiple_info_or_index(&mut self, types: impl IntoIterator<Item = TypeInfoOrIndex>)
     -> TypeTableIndices {
-        let types = types.into_iter();
         let idx = self.types.len() as u32;
+        let types = types.into_iter().map(|ty| {
+            if let TypeInfoOrIndex::Idx(the_idx) = ty {
+                debug_assert!(the_idx.idx() < idx as _);
+            }
+            ty
+        });
         self.types.extend(types);
         let count = (self.types.len() - idx as usize) as u32;
         TypeTableIndices { idx, count }
@@ -114,12 +119,12 @@ impl TypeTable {
     ) {
         match other {
             TypeInfoOrIndex::Type(info) => self.specify(idx, info, errors, span.in_mod(module), ctx),
-            TypeInfoOrIndex::Idx(other_idx) => self.merge(idx, other_idx, errors, module, span, ctx),
+            TypeInfoOrIndex::Idx(other_idx) => self.merge(idx, other_idx, errors, span.in_mod(module), ctx),
         }
     }
 
     pub fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex,
-        errors: &mut Errors, module: ModuleId, span: TSpan, ctx: &TypingCtx
+        errors: &mut Errors, span: Span, ctx: &TypingCtx
     ) {
         if a.idx() == b.idx() { return; }
         let mut curr_a_idx = a;
@@ -130,28 +135,30 @@ impl TypeTable {
             }
         };
         let b_ty = self.get_type(b);
-        ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
+        ty_dbg("Merging ...", ((a_ty, a), (b_ty, b), &self));
 
 
         // merge b's previous type into a
         let new_ty = match merge_twosided(a_ty, b_ty, self, ctx) {
-            Some(ty) => ty_dbg("\t... merged", ty),
+            Some(ty) => ty_dbg("\t... merged", (ty, &self)).0,
             None => {
                 ty_dbg("\t... failed to merge", span);
                 errors.emit_span(Error::MismatchedType {
                     expected: a_ty.as_string(self, ctx).into_owned(),
                     found: b_ty.as_string(self, ctx).into_owned()
-                }, span.in_mod(module));
+                }, span);
                 TypeInfo::Invalid
             }
         };
         self.types[curr_a_idx.idx()] = TypeInfoOrIndex::Type(new_ty);
 
         // make b point to a
+        debug_assert_ne!(b.idx(), curr_a_idx.idx());
         self.types[b.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
 
         // potentially shorten path of a
         if a.idx() != curr_a_idx.idx() {
+            ty_dbg("shortening", (a, curr_a_idx));
             self.types[a.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
         }
     }
@@ -253,6 +260,13 @@ impl Index<TypeTableIndex> for FinalTypeTable {
 
     fn index(&self, index: TypeTableIndex) -> &Self::Output {
         &self.types[index.idx()]
+    }
+}
+impl Index<TypeTableIndices> for FinalTypeTable {
+    type Output = [Type];
+
+    fn index(&self, index: TypeTableIndices) -> &Self::Output {
+        &self.types[index.idx as usize .. index.idx as usize + index.count as usize]
     }
 }
 

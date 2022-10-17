@@ -150,7 +150,7 @@ def test(eye_file) -> str:
 
 def run(eye_file, input = ''):
     res = subprocess.run(run_cmd + [eye_file], stdout = subprocess.PIPE, input=input)
-    return res.stdout.decode('utf-8'), res.returncode
+    return res.stdout.decode('utf-8', 'replace'), res.returncode
 
 
     

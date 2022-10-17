@@ -356,7 +356,7 @@ impl<'a> Parser<'a> {
     /// Will just return a function with the body always set to `None`
     fn parse_function_header(&mut self, fn_tok: Token) -> EyeResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
-
+        let start = fn_tok.start;
         let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
 
         let mut params = Vec::new();
@@ -391,12 +391,15 @@ impl<'a> Parser<'a> {
             UnresolvedType::Primitive(Primitive::Unit, self.toks.previous().unwrap().span())
         };
 
+        let end = self.toks.last_src_pos();
+
         Ok(Function {
             params,
             generics,
             varargs,
             return_type,
             body: None,
+            span: TSpan { start, end },
         })
     }
 

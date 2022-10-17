@@ -24,7 +24,7 @@ use crate::{
         TypeDef,
         Struct,
         Enum,
-        TraitDef
+        TraitDef, GenericFunc
     },
 }; 
 
@@ -165,7 +165,35 @@ pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require
     if errors.has_errors() {
         return (Err(()), errors);
     }
+
     
+    let main = if require_main_func {
+        if let Some(&Symbol::Func(func)) = globals[main_module].get("main") {
+            let mut gen_ctx = GenCtx { ctx, globals, ast, module: main_module, errors };
+
+            let FunctionOrHeader::Func(eye_main) = &mut gen_ctx.ctx.funcs[func.idx()] else { unreachable!() };
+            debug_assert_eq!(eye_main.name, "main");
+            eye_main.name = "eyemain".to_owned();
+            
+            let return_type = eye_main.header.return_type.clone();
+            let res = main_wrapper(func, &mut gen_ctx, return_type);
+
+            errors = gen_ctx.errors;
+            globals = gen_ctx.globals;
+            ctx = gen_ctx.ctx;
+
+            match res {
+                Ok(main) => Some(main),
+                Err(err) => {
+                    errors.emit_err(err);
+                    return (Err(()), errors)
+                }
+            }
+        } else {
+            return (Err(()), errors);
+        }
+    } else { None };
+
     let global_vars: Vec<_> = globals.iter().filter_map(|(name, symbol)| {
         match symbol {
             Symbol::GlobalVar(key) => {
@@ -176,34 +204,19 @@ pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require
         }
     }).collect();
 
-    let mut funcs = ctx
+    let funcs = ctx
         .funcs
         .into_iter()
         .map(|func| match func {
             FunctionOrHeader::Header(_) => panic!("Function was not generated"),
             FunctionOrHeader::Func(func) => func,
-        })
-        .collect::<Vec<_>>();
+        });
 
-    if require_main_func {
-        if let Some(Symbol::Func(func)) = globals[main_module].get("main") {
-            let eye_main = &mut funcs[func.idx()];
-            debug_assert_eq!(eye_main.name, "main");
-            eye_main.name = "eyemain".to_owned();
-            match main_wrapper(*func, main_module, &eye_main.header.return_type) {
-                Ok(main) => funcs.push(main),
-                Err(err) => {
-                    errors.emit_err(err);
-                    return (Err(()), errors)
-                }
-            }
-        } else {
-            errors.emit(Error::MissingMain, 0, 0, main_module);
-            return (Err(()), errors);
-        }
-    }
-
-
+    let funcs = if let Some(main) = main {
+        funcs.chain(std::iter::once(main)).collect()
+    } else {
+        funcs.collect()
+    };
     (
         Ok((
             ir::Module {
@@ -221,14 +234,14 @@ pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require
 /// Add hidden function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
-fn main_wrapper(eye_main: SymbolKey, main_module: ModuleId, main_return_ty: &Type) -> EyeResult<Function> {
-    let mut builder = IrBuilder::new(main_module);
+fn main_wrapper(eye_main: SymbolKey, ctx: &mut GenCtx, main_return_ty: Type) -> EyeResult<Function> {
+    let mut builder = IrBuilder::new(ctx.module);
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {
         Type::Prim(Primitive::Unit) => None,
         Type::Prim(p) if p.is_int() => Some(p.as_int().unwrap()),
-        _ => return Err(Error::InvalidMainReturnType(main_return_ty.clone()).at_span(Span::_todo(main_module)))
+        _ => return Err(Error::InvalidMainReturnType(main_return_ty).at_span(Span::_todo(ctx.module)))
     };
 
     let main_ret_ty = builder.types.add(
@@ -244,10 +257,7 @@ fn main_wrapper(eye_main: SymbolKey, main_module: ModuleId, main_return_ty: &Typ
     };
     builder.build_ret(exit_code);
     
-    let mut no_errors = Errors::new();
-    // new empty TypingCtx can be used here as no type ids are referenced in this outer main function.
-    let ir = builder.finish(&TypingCtx::new(), &mut no_errors);
-    assert!(!no_errors.has_errors());
+    let ir = builder.finish(ctx);
 
     Ok(Function {
         name: "main".to_owned(),
@@ -277,11 +287,38 @@ fn gen_definition(
 ) -> Symbol {
     match def {
         ast::Definition::Function(func) => {
-            let header = gen_func_header(func, scope, ctx);
-            let key = ctx.ctx.add_func(FunctionOrHeader::Header(header));
-            add_symbol(scope, name.to_owned(), Symbol::Func(key), &mut ctx.globals);
-            gen_func_body(name, func, key, scope, ctx);
-            Symbol::Func(key)
+            if func.generics.is_empty() {
+                let func_info = gen_func_header(func, scope, ctx);
+                let header = FunctionOrHeader::Header(func_info);
+                let key = ctx.ctx.add_func(header);
+                add_symbol(scope, name.to_owned(), Symbol::Func(key), &mut ctx.globals);
+                gen_func_body(name, func, key, scope, ctx);
+                Symbol::Func(key)
+            } else {
+                if func.generics.len() > u8::MAX as usize {
+                    ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
+                }
+                let mut symbols = dmap::new();
+                for (i, name) in func.generics.iter().enumerate() {
+                    let name = ctx.src(*name);
+                    symbols.insert(name.to_owned(), Symbol::Generic(i as u8));
+                }
+                let defs = dmap::new();
+
+                let mut func_scope = scope.child(&mut symbols, &defs);
+                let header = gen_func_header(func, &mut func_scope, ctx);
+                crate::log!("Header of {}: {:?}", name, header);
+                // TODO: PERF: cloning here is kind of ugly
+
+                Symbol::GenericFunc(ctx.ctx.add_generic_func(GenericFunc {
+                    name: name.to_owned(),
+                    header, 
+                    def: func.clone(), // PERF: cloning is suboptimal here
+                    generic_count: func.generics.len() as _,
+                    instantiations: dmap::new(),
+                    module: ctx.module,
+                }))
+            }
         }
         ast::Definition::Struct(def) => {
             let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
@@ -349,7 +386,7 @@ fn gen_func_header(func: &ast::Function, scope: &mut Scope, ctx: &mut GenCtx)
         return_type,
     }
 }
-fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx) {
+pub fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx) {
     let func_idx = key.idx();
     let header = match &ctx.ctx.funcs[func_idx] {
         FunctionOrHeader::Func(_) => {
@@ -392,7 +429,7 @@ fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Sc
         } else if !builder.currently_terminated() {
             builder.build_ret_undef();
         }
-        builder.finish(&ctx.ctx, &mut ctx.errors)
+        builder.finish(ctx)
     });
 
     ctx.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
@@ -541,6 +578,7 @@ fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol
 #[derive(Clone, Copy, Debug)]
 pub enum Symbol {
     Func(SymbolKey),
+    GenericFunc(u32),
     Type(SymbolKey),
     Trait(SymbolKey),
     LocalType(TypeTableIndex),

@@ -1,5 +1,6 @@
 use std::fmt;
 use color_format::*;
+use crate::ast::{self, ModuleId};
 use crate::dmap::DHashMap;
 use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
@@ -21,6 +22,7 @@ pub use typing::{TypeTable, FinalTypeTable, TypeInfo, TypeTableIndex, TypeTableI
 
 pub struct TypingCtx {
     pub funcs: Vec<FunctionOrHeader>,
+    pub generic_funcs: Vec<GenericFunc>,
     pub types: Vec<(String, TypeDef)>,
     pub traits: Vec<TraitDef>,
     pub consts: Vec<ConstVal>,
@@ -30,6 +32,7 @@ impl TypingCtx {
     pub fn new() -> Self {
         Self {
             funcs: Vec::new(),
+            generic_funcs: Vec::new(),
             types: Vec::new(),
             traits: Vec::new(),
             consts: Vec::new(),
@@ -40,6 +43,11 @@ impl TypingCtx {
         let key = SymbolKey(self.funcs.len() as u64);
         self.funcs.push(func);
         key
+    }
+    pub fn add_generic_func(&mut self, func: GenericFunc) -> u32 {
+        let idx = self.generic_funcs.len() as u32;
+        self.generic_funcs.push(func);
+        idx
     }
     pub fn add_type(&mut self, name: String, ty: TypeDef) -> SymbolKey {
         let key = SymbolKey(self.types.len() as u64);
@@ -83,9 +91,18 @@ impl FunctionOrHeader {
     pub fn header(&self) -> &FunctionHeader {
         match self {
             Self::Func(f) => &f.header,
-            Self::Header(h) => h,
+            Self::Header(header) => header,
         }
     }
+}
+
+pub struct GenericFunc {
+    pub name: String,
+    pub header: FunctionHeader,
+    pub def: ast::Function,
+    pub generic_count: u8,
+    pub instantiations: DHashMap<Vec<Type>, SymbolKey>,
+    pub module: ModuleId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -103,20 +120,20 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
+    pub fn _layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             Type::Prim(p) => p.layout(),
-            Type::Id(key, generics) => ctx.get_type(*key).layout(ctx, generics),
+            Type::Id(key, generics) => ctx.get_type(*key)._layout(ctx, generics),
             Type::Pointer(_) => Layout::PTR,
             Type::Array(b) => {
                 let (ty, size) = &**b;
-                ty.layout(ctx, generics).mul_size(*size as u64)
+                ty._layout(ctx, generics).mul_size(*size as u64)
             }
-            Type::Enum(variants) => Enum::layout_from_variant_count(variants.len()),
+            Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
-                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
+                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty._layout(ctx, generics)))
             }
-            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
+            Type::Generic(idx) => generics[*idx as usize]._layout(ctx, generics),
             Type::Symbol | Type::Invalid => Layout::ZERO,
         }
     }
@@ -184,6 +201,28 @@ impl Type {
             Self::Invalid => TypeInfo::Invalid
         })
     }
+
+    pub fn instantiate_generics(&self, generics: &[Type]) -> Self {
+        match self {
+            Type::Prim(_) => todo!(),
+            Type::Id(_, _) => todo!(),
+            Type::Pointer(_) => todo!(),
+            Type::Array(b) => {
+                let (inner, count) = &**b;
+                Type::Array(Box::new((inner.instantiate_generics(generics), *count)))
+            }
+            Type::Enum(variants) => Type::Enum(variants.clone()),
+            Type::Tuple(types) => Type::Tuple(
+                types
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect()
+            ),
+            Type::Symbol => Type::Symbol,
+            Type::Generic(idx) => generics[*idx as usize].clone(),
+            Type::Invalid => Type::Invalid,
+        }
+    }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -242,6 +281,8 @@ impl From<TypeInfo> for TypeInfoOrIndex {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct SymbolKey(u64);
 impl SymbolKey {
+    pub const MISSING: Self = Self(u64::MAX);
+
     pub fn idx(self) -> usize { self.0 as usize }
     pub fn bytes(self) -> [u8; 8] { self.0.to_le_bytes() }
     pub fn from_bytes(bytes: [u8; 8]) -> Self { Self(u64::from_le_bytes(bytes)) }
@@ -353,13 +394,13 @@ impl TypeDef {
             Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
-    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
+    pub fn _layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             TypeDef::Struct(struct_) => {
                 let mut alignment = 1;
                 let size = struct_.members.iter()
                     .map(|(_, ty)| {
-                        let layout = ty.layout(ctx, generics);
+                        let layout = ty._layout(ctx, generics);
                         alignment = alignment.max(layout.alignment);
                         layout.size
                     })
@@ -368,7 +409,7 @@ impl TypeDef {
                 Layout { size, alignment }
             }
             TypeDef::Enum(enum_) => {
-                enum_.layout()
+                enum_._layout()
             }
             TypeDef::NotGenerated { .. }
                 => panic!("layout of NotGenerated types should not be requested"),
@@ -414,7 +455,7 @@ pub struct Enum {
     pub generic_count: u8,
 }
 impl Enum {
-    pub fn layout_from_variant_count(count: usize) -> Layout {
+    pub fn _layout_from_variant_count(count: usize) -> Layout {
         let size = ((count as u64 - 1).ilog2() as u64 + 1).div_ceil(8);
         let alignment = match size {
             0 | 1 => 1,
@@ -424,8 +465,8 @@ impl Enum {
         };
         Layout { size, alignment }
     }
-    pub fn layout(&self) -> Layout {
-        Self::layout_from_variant_count(self.variants.len())
+    pub fn _layout(&self) -> Layout {
+        Self::_layout_from_variant_count(self.variants.len())
     }
     pub fn _bit_size(&self) -> u64 {
         (self.variants.len() as u64 - 1).ilog2() as u64 + 1

@@ -65,6 +65,7 @@ impl fmt::Display for ConstVal {
 #[derive(Debug, Clone, Copy)]
 pub enum ConstSymbol {
     Func(SymbolKey),
+    GenericFunc(u32),
     TraitFunc(SymbolKey, u32),
     Type(SymbolKey),
     Trait(SymbolKey),
@@ -76,6 +77,7 @@ impl ConstSymbol {
         ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
         match *self {
             ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
+            ConstSymbol::GenericFunc(_) => todo!(),
             ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
                 ir.build_trait_func(trait_symbol, func_idx, ty)
             }

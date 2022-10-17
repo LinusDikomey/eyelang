@@ -4,6 +4,7 @@
     int_log,
     int_roundings,
     array_chunks,
+    iter_intersperse,
 )]
 #![warn(unused_qualifications)]
 

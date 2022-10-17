@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-/// Use to make `HashMaps` across the compiler deterministic.
+/// Use to make `HashMaps` and `HashSets` across the compiler deterministic.
 pub type DHashMap<K, V> = HashMap<K, V, DeterministicState>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

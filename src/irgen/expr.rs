@@ -8,7 +8,7 @@ use crate::{
         TypeTableIndices,
         RefVal,
         TypeDef,
-        BlockIndex, builder::BinOp, self,
+        BlockIndex, builder::BinOp, FunctionHeader,
     },
     error::Error,
     span::TSpan,
@@ -240,7 +240,7 @@ fn reduce_expr_any(
             if let Some(resolved) = scope.resolve(name, ctx) {
                 return (match resolved {
                     Symbol::Var { ty, var } => {
-                        ir.types.merge(ty, info.expected, &mut ctx.errors, ctx.module, *span, &ctx.ctx);
+                        ir.types.merge(ty, info.expected, &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
                         ExprResult::VarRef(var)
                     }
                     Symbol::GlobalVar(key) => {
@@ -251,6 +251,7 @@ fn reduce_expr_any(
                         ExprResult::VarRef(ir.build_global(key, ptr))
                     }
                     Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
+                    Symbol::GenericFunc(idx) => ExprResult::Symbol(ConstSymbol::GenericFunc(idx)),
                     Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
                     Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
                     Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
@@ -447,84 +448,108 @@ fn reduce_expr_any(
             (Ref::UNIT, false)
         }
         Expr::FunctionCall { func, args, end: _ } => {
-            let args = &ctx.ast[*args];
-            let called_ty = ir.types.add(TypeInfo::Unknown);
+            struct FuncInfo {
+                params: TypeTableIndices,
+                ret: TypeTableIndex,
+                varargs: bool,
+                key: SymbolKey,
+            }
             fn gen_call(
                 scope: &mut Scope,
                 ctx: &mut GenCtx,
                 expr: &Expr,
-                func: SymbolKey,
+                f: FuncInfo,
                 this_arg: Option<(Ref, TypeTableIndex, TSpan)>,
                 args: impl ExactSizeIterator<Item = ExprRef>,
                 ir: &mut IrBuilder,
                 mut info: ExprInfo,
             ) -> Ref {
                 let arg_count = args.len() + this_arg.is_some() as usize;
-                
-                let header = ctx.ctx.funcs[func.idx()].header();
-                let return_type = header.return_type.as_info(&mut ir.types);
+                /*let mut get_header_types = |header: &crate::ir::FunctionHeader| {
+                    let params = header.params
+                        .iter()
+                        .map(|(_, ty)| ty.as_info(&mut ir.types))
+                        .collect::<Vec<_>>();
+                    (
+                        ir.types.add_multiple(params),
+                        header.return_type.as_info(&mut ir.types),
+                        header.varargs,
+                        None,
+                    )
+                };*/
 
-                ir.specify(info.expected, return_type, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
-                if let TypeInfo::Primitive(Primitive::Never) = return_type {
+                ir.types.merge(info.expected, f.ret, &mut ctx.errors, expr.span_in(ctx.ast, ctx.module), &ctx.ctx);
+                if let TypeInfo::Primitive(Primitive::Never) = ir.types.get_type(f.ret) {
                     *info.noreturn = true;
                 }
 
-                let invalid_arg_count = if header.varargs {
-                    arg_count < header.params.len()
+                let invalid_arg_count = if f.varargs {
+                    arg_count < f.params.len()
                 } else {
-                    arg_count != header.params.len()
+                    arg_count != f.params.len()
                 };
                 if invalid_arg_count {
                     ctx.errors.emit_span(Error::InvalidArgCount, expr.span(ctx.ast).in_mod(ctx.module));
                     Ref::UNDEF
                 } else {
-                    let params = header.params.iter().map(|(_, ty)| Some(ty.clone()));
-                    let params = if header.varargs {
-                        params
-                            .chain(std::iter::repeat(None))
-                            .take(arg_count)
-                            .collect::<Vec<_>>()
-                    } else {
-                        params.collect::<Vec<_>>()
-                    };
                     let mut arg_refs = Vec::with_capacity(arg_count + this_arg.is_some() as usize);
-                    let mut param_iter = params.iter();
+                    let mut param_iter = f.params.iter();
                     if let Some((this, this_ty, this_span)) = this_arg {
-                        let ty = param_iter.next().unwrap(); // argument count was checked above, this can't fail
-                        match ty {
-                            Some(ty) => {
-                                let info = ty.as_info(&mut ir.types);
-                                ir.types.specify(this_ty, info, &mut ctx.errors,
-                                    this_span.in_mod(ctx.module), &ctx.ctx
-                                );
-                                arg_refs.push(this);
-                            }
-                            None => {
-                                ctx.errors.emit_span(Error::NotAnInstanceMethod, this_span.in_mod(ctx.module));
-                            }
-                        }
+                        // argument count was checked above so the iterator will only be empty if varargs are used.
+                        let ty = param_iter.next().unwrap_or_else(|| ir.types.add_unknown());
+                        ir.types.merge(this_ty, ty, &mut ctx.errors,
+                            this_span.in_mod(ctx.module), &ctx.ctx
+                        );
+                        arg_refs.push(this);
                     }
                     for (arg, ty) in args.zip(param_iter) {
-                        let type_info = ty.as_ref().map_or(TypeInfo::Unknown, |ty| ty.as_info(&mut ir.types));
-                        let ty = ir
-                            .types
-                            .add(type_info);
                         let expr = val_expr(scope, ctx, ir, arg, info.with_expected(ty));
                         arg_refs.push(expr);
                     }
-                    ir.build_call(func, arg_refs, info.expected)
+                    let call_ref = ir.build_call(f.key, arg_refs, info.expected);
+                    call_ref
                 }
             }
+            let args = &ctx.ast[*args];
+            let called_ty = ir.types.add(TypeInfo::Unknown);
             let called = &ctx.ast[*func];
+            let func_info = |header: &FunctionHeader, generics, key, ir: &mut IrBuilder| {
+                let params = header.params.iter().map(|(_, ty)| ty.as_info_generic(&mut ir.types, generics)).collect::<Vec<_>>();
+                let ret = header.return_type.as_info_generic(&mut ir.types, generics);
+                
+                FuncInfo {
+                    params: ir.types.add_multiple_info_or_index(params),
+                    ret: match ret {
+                        crate::ir::TypeInfoOrIndex::Type(ty) => ir.types.add(ty),
+                        crate::ir::TypeInfoOrIndex::Idx(idx) => idx,
+                    },
+                    varargs: header.varargs,
+                    key,
+                }
+            };
             (match reduce_expr(scope, ctx, ir, called, info.with_expected(called_ty)) {
+                // TODO: THESE NEXT TWO CASES CAN BE CLEANED UP/COMBINED
                 ExprResult::Symbol(ConstSymbol::Func(key)) => {
-                    gen_call(scope, ctx, expr, key, None, args.iter().copied(), ir, info)
+                    let header = ctx.ctx.get_func(key).header();
+                    let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
+                    gen_call(scope, ctx, expr, f, None, args.iter().copied(), ir, info)
+                }
+                ExprResult::Symbol(ConstSymbol::GenericFunc(idx)) => {
+                    let func = &ctx.ctx.generic_funcs[idx as usize];
+                    let generics = std::iter::repeat(TypeInfo::Unknown).take(func.generic_count as usize);
+                    let generics = ir.types.add_multiple(generics);
+                    let f = func_info(&func.header, generics, SymbolKey::MISSING, ir);
+                    let val = gen_call(scope, ctx, expr, f, None, args.iter().copied(), ir, info);
+                    ir.add_generic_instantiation(idx, generics, val);
+                    val
                 }
                 //TODO: Trait function calls
                 ExprResult::Method(self_var, key) => {
                     let called_span = called.span(ctx.ast);
                     let this = Some((self_var, called_ty, called_span));
-                    gen_call(scope, ctx, expr, key, this, args.iter().copied(), ir, info)
+                    let header = ctx.ctx.get_func(key).header();
+                    let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
+                    gen_call(scope, ctx, expr, f, this, args.iter().copied(), ir, info)
                 }
                 ExprResult::Symbol(ConstSymbol::Type(ty)) => {
                     let (_, TypeDef::Struct(struct_)) = &ctx.ctx.types[ty.idx()] else {
@@ -740,7 +765,8 @@ fn reduce_expr_any(
                                 TypeDef::Struct(struct_) => {
                                     if let Some(func_id) = struct_.functions.get(member) {
                                         let func = ctx.ctx.get_func(*func_id);
-                                        let var = if let Some(first_arg) = func.header().params.first() {
+                                        let header = func.header();
+                                        let var = if let Some(first_arg) = header.params.first() {
                                             let info = first_arg.1.as_info(&mut ir.types);
                                             // TODO: auto ref/deref
                                             ir.specify(left_ty, info, &mut ctx.errors, left.span(ctx.ast), &ctx.ctx);
@@ -791,6 +817,7 @@ fn reduce_expr_any(
                     if let Some(symbol) = ctx.resolve_module_symbol(id, member) {
                         return (match symbol {
                             Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
+                            Symbol::GenericFunc(f) => ExprResult::Symbol(ConstSymbol::GenericFunc(f)),
                             Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
                             Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
                             Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
@@ -895,7 +922,7 @@ fn reduce_expr_any(
                 ctx.errors.emit_span(Error::TupleIndexOutOfRange, ctx.span(expr));
                 return (ExprResult::Val(Ref::UNDEF), true)
             };
-            ir.types.merge(info.expected, elem_ty, &mut ctx.errors, ctx.module, expr.span(ctx.ast), &ctx.ctx);
+            ir.types.merge(info.expected, elem_ty, &mut ctx.errors, expr.span_in(ctx.ast, ctx.module), &ctx.ctx);
             let elem_ty_ptr = ir.types.add(TypeInfo::Pointer(elem_ty));
             let member = ir.build_member_int(expr_var, *idx as u32, elem_ty_ptr);
             return (ExprResult::VarRef(member), true);

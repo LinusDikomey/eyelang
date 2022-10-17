@@ -1,5 +1,10 @@
 use std::{ops::{Index, IndexMut}, path::{PathBuf, Path}};
-use crate::{token::Operator, types::Primitive, span::{TSpan, Span}, dmap::{self, DHashMap}, ir::{TypeInfo, TypeTableIndex, TypeTable}};
+use crate::{
+    token::Operator,
+    types::Primitive,
+    span::{TSpan, Span},
+    dmap::{self, DHashMap},
+};
 
 pub mod repr;
 
@@ -7,8 +12,8 @@ pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
     exprs: Vec<Expr>,
-    expr_types: Vec<TypeTableIndex>,
-    type_table: TypeTable,
+    //expr_types: Vec<TypeTableIndex>,
+    //type_table: TypeTable,
     extra: Vec<ExprRef>,
     defs: Vec<DHashMap<String, Definition>>
 }
@@ -18,8 +23,8 @@ impl Ast {
             modules: Vec::new(),
             sources: Vec::new(),
             exprs: Vec::new(),
-            expr_types: Vec::new(),
-            type_table: TypeTable::new(),
+            //expr_types: Vec::new(),
+            //type_table: TypeTable::new(),
             extra: Vec::new(),
             defs: Vec::new(),
         }
@@ -188,6 +193,7 @@ pub struct Function {
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprRef>,
+    pub span: TSpan,
 }
 
 #[derive(Debug, Clone, eye_derive::EnumSizeDebug)]

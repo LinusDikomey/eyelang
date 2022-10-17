@@ -4,7 +4,6 @@ use std.c.printf
 Fruit :: enum { Apple Banana Pineapple }
 
 main :: fn {
-    # TODO: exhaustiveness checks (all matches will be exhaustive)
     # when no arm is matched, undefined values will be returned from the match expression right now
     f := Fruit.Banana
     text := match f {
