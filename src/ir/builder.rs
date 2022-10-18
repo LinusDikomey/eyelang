@@ -203,6 +203,7 @@ impl IrBuilder {
             match exhaustion.is_exhausted(ty, &ctx.ctx) {
                 Some(true) => {}
                 Some(false) => {
+                    crate::log!("Inexhaustive: {:?}", exhaustion);
                     ctx.errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));
                 }
                 None => debug_assert!(ctx.errors.has_errors(),

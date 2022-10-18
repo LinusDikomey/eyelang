@@ -478,10 +478,10 @@ fn reduce_expr_any(
                     )
                 };*/
 
-                ir.types.merge(info.expected, f.ret, &mut ctx.errors, expr.span_in(ctx.ast, ctx.module), &ctx.ctx);
                 if let TypeInfo::Primitive(Primitive::Never) = ir.types.get_type(f.ret) {
                     *info.noreturn = true;
                 }
+                ir.types.merge(info.expected, f.ret, &mut ctx.errors, expr.span_in(ctx.ast, ctx.module), &ctx.ctx);
 
                 let invalid_arg_count = if f.varargs {
                     arg_count < f.params.len()
@@ -916,7 +916,9 @@ fn reduce_expr_any(
                 }
             };
             let TypeInfo::Tuple(elems) = ir.types.get_type(indexed_ty) else {
-                ctx.errors.emit_span(Error::TypeMustBeKnownHere, ctx.span(expr));
+                if !matches!(ir.types.get_type(indexed_ty), TypeInfo::Invalid) {
+                    ctx.errors.emit_span(Error::TypeMustBeKnownHere, ctx.span(expr));
+                }
                 return (ExprResult::Val(Ref::UNDEF), true)
             };
             let Some(elem_ty) = elems.iter().nth(*idx as usize) else {
@@ -1045,16 +1047,62 @@ fn reduce_pat(
         }
         &Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => {
             // TODO: float literals, negated literals
-            let Expr::IntLiteral(l) = ctx.ast[l] else { todo!() };
-            let Expr::IntLiteral(r) = ctx.ast[r] else { todo!() };
-            let l_lit = IntLiteral::parse(ctx.src(l));
-            let r_lit = IntLiteral::parse(ctx.src(r));
-            exhaustion.exhaust_int_range(
-                exhaust::SignedInt(l_lit.val, false),
-                exhaust::SignedInt(r_lit.val, false)
-            );
-            let l_ref = int_literal(l_lit, l, ir, expected, ctx);
-            let r_ref = int_literal(r_lit, r, ir, expected, ctx);
+            enum Kind {
+                Int(exhaust::SignedInt),
+                Float,
+                Invalid,
+            }
+            let mut range_side = |expr_ref| {
+                let expr = &ctx.ast[expr_ref];
+                match expr {
+                    &Expr::IntLiteral(l) => {
+                        let lit = IntLiteral::parse(ctx.src(l));
+                        (
+                            Kind::Int(exhaust::SignedInt(lit.val, false)),
+                            int_literal(lit, l, ir, expected, ctx),
+                        )
+                    }
+                    &Expr::FloatLiteral(l) => {
+                        let lit = FloatLiteral::parse(ctx.src(l));
+                        ir.specify(expected, TypeInfo::Float, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                        (
+                            Kind::Float,
+                            ir.build_float(lit.val, expected)
+                        )
+                    }
+                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::IntLiteral(l) = ctx.ast[inner] => {
+                        let lit = IntLiteral::parse(ctx.src(l));
+                        let unsigned_val = int_literal(lit, l, ir, expected, ctx);
+                        (
+                            Kind::Int(exhaust::SignedInt(lit.val, true)),
+                            ir.build_neg(unsigned_val, expected),
+                        )
+                    }
+                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(l) = ctx.ast[inner] => {
+                        let lit = FloatLiteral::parse(ctx.src(l));
+                        ir.specify(expected, TypeInfo::Float, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                        (
+                            Kind::Float,
+                            ir.build_float(-lit.val, expected)
+                        )
+                    }
+                    _ => {
+                        ctx.errors.emit_span(Error::NotAPatternRangeValue, ctx.span(expr));
+                        ir.invalidate(expected);
+                        (
+                            Kind::Invalid,
+                            Ref::UNDEF
+                        )
+                    }
+                }
+            };
+            let (l, l_ref) = range_side(l);
+            let (r, r_ref) = range_side(r);
+            match (l, r) {
+                (Kind::Int(l), Kind::Int(r)) => _ = exhaustion.exhaust_int_range(l, r),
+                _ => ()
+            }
+
             let left_check = ir.build_bin_op(BinOp::GE, val, l_ref, bool_ty);
             let right_check = ir.build_bin_op(BinOp::LE, val, r_ref, bool_ty);
 

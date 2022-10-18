@@ -147,16 +147,16 @@ impl IntType {
     }
     pub fn min(self) -> u128 {
         match self {
-            IntType::I8
-            | IntType::I16
-            | IntType::I32
-            | IntType::I64
-            | IntType::I128 => 0,
-            IntType::U8 => 2u128.pow(7),
-            IntType::U16 => 2u128.pow(15),
-            IntType::U32 => 2u128.pow(31),
-            IntType::U64 => 2u128.pow(63),
-            IntType::U128 => 2u128.pow(127),
+            IntType::U8
+            | IntType::U16
+            | IntType::U32
+            | IntType::U64
+            | IntType::U128 => 0,
+            IntType::I8 => 2u128.pow(7),
+            IntType::I16 => 2u128.pow(15),
+            IntType::I32 => 2u128.pow(31),
+            IntType::I64 => 2u128.pow(63),
+            IntType::I128 => 2u128.pow(127),
         }
     }
 }
