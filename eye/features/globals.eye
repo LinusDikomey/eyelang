@@ -27,7 +27,7 @@ Vec2 :: struct {
     x i32,
     y i32,
 
-    print :: fn(self *Vec2) {
-        std.c.printf("[%d, %d]\n", self^.x, self^.y)
+    print :: fn(self Vec2) {
+        std.c.printf("[%d, %d]\n", self.x, self.y)
     }
 }

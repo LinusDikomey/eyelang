@@ -7,6 +7,7 @@ main :: fn {
     # x := exit(5)
 
     printf("%d\n", x)
+    match_never(3)
 }
 
 SomeType :: struct { x i32, y i32 }
@@ -41,4 +42,15 @@ block_never :: fn -> i16 {
     }
     x := exit(8)
     x = "Also not in the IR"
+}
+
+match_never :: fn(x i64) -> *i8: match i8 x {
+    -128..20: "A",
+    21: {
+        x := 3
+        exit(x)
+        printf("not in the IR")
+    },
+    22: "B",
+    23..127: "C",
 }

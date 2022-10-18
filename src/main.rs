@@ -5,6 +5,7 @@
     int_roundings,
     array_chunks,
     iter_intersperse,
+    if_let_guard,
 )]
 #![warn(unused_qualifications)]
 
