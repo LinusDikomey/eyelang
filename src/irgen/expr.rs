@@ -502,7 +502,8 @@ fn reduce_expr_any(
                         );
                         arg_refs.push(this);
                     }
-                    for (arg, ty) in args.zip(param_iter) {
+                    for arg in args {
+                        let ty = param_iter.next().unwrap_or_else(|| ir.types.add_unknown());
                         let expr = val_expr(scope, ctx, ir, arg, info.with_expected(ty));
                         arg_refs.push(expr);
                     }

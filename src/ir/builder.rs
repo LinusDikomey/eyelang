@@ -300,7 +300,7 @@ impl IrBuilder {
     }
 
     pub fn add_generic_instantiation(&mut self, generic_idx: u32, generics: super::TypeTableIndices, call_ref: Ref) {
-        println!("generic instantiation: {:?}", generics);
+        crate::log!("Registering generic instantiation: {:?}", generics);
         self.generic_instantiations.push((generic_idx, generics, call_ref));
     }
 
