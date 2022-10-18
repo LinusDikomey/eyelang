@@ -90,7 +90,6 @@ def walk(walkdir):
                     total += 1
                     errors += 1
                 else: assert res is SKIP
-                if not test(entry.path): errors += 1
             elif entry.is_dir():
                 if os.path.exists(entry.path + "/main.eye"):
                     res = test(entry.path)
