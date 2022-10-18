@@ -4,8 +4,6 @@ import subprocess
 import time
 from sys import stdout
 
-from requests import patch
-
 build = ['cargo', 'build']
 run_cmd = ['./target/debug/eyelang', 'run']
 tmp_file = 'tmp_test.eye'
@@ -57,11 +55,12 @@ def test_readme():
                 temp_code_file.close()
                 
                 print(f'Testing README block #{block_count}', end = '')
-                out, exit_code = run(tmp_file)
+                out, stderr, exit_code = run(tmp_file)
                 padding = ' ' * max(0, 32 - len(f'{block_count}'))
                 if exit_code != 0:
                     print(f'{padding}{RED}[ERR]{R}')
                     print(f'{RED}Output{R}:\n{out}')
+                    print(f'{RED}Stderr{R}:\n{stderr}')
                     errors += 1
                 else:
                     print(f'{padding}{GREEN}[OK]{R}')
@@ -132,7 +131,7 @@ def test(eye_file) -> str:
         with open(no_ext + '.in') as file:
             input = memoryview(bytes(file.read(), 'utf-8'))
 
-    out, exit_code = run(eye_file, input)
+    out, stderr, exit_code = run(eye_file, input)
     
     padding = ' ' * max(0, 50 - len(eye_file))
     
@@ -140,16 +139,17 @@ def test(eye_file) -> str:
         print(f'{padding}{GREEN}[OK]{R}')
         return OK
     else:
-        print(f'{padding}{RED}[ERR]{R}\nFailed with status: {exit_code}, output:')
+        print(f'{padding}{RED}[ERR]{R}\nFailed with status: {exit_code}, Output:')
         print(f'--------------------\n{out}\n--------------------')
         print('... but expected:')
         print(f'--------------------\n{expected_output}\n--------------------')
+        print(f'Stderr:\n--------------------\n{stderr}\n--------------------')
         return ERR
 
 
 def run(eye_file, input = ''):
-    res = subprocess.run(run_cmd + [eye_file], stdout = subprocess.PIPE, input=input)
-    return res.stdout.decode('utf-8', 'replace'), res.returncode
+    res = subprocess.run(run_cmd + [eye_file], capture_output=True, input=input)
+    return res.stdout.decode('utf-8', 'replace'), res.stderr.decode('utf-8', 'replace'), res.returncode
 
 
     

@@ -4,7 +4,7 @@ use crate::{
     ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
     lexer,
-    parser::Parser, Stats, span::Span, dmap::DHashMap
+    parser::Parser, Stats, span::Span, dmap::DHashMap,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -48,10 +48,7 @@ pub fn project(
     let reduce_start_time = Instant::now();
     let (reduce_res, errors) = crate::irgen::reduce(&ast, main_module, errors, require_main_func);
     stats.irgen += reduce_start_time.elapsed();
-    (match reduce_res {
-        Ok((ir, _globals)) => Ok(ir),
-        Err(()) => Err(())
-    }, ast, errors)
+    (reduce_res.map(|(ir, _globals)| ir), ast, errors)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -98,7 +98,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             
             let varargs = if func.header.varargs {TRUE} else {FALSE};
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
-            let name = ffi::CString::new(func.name.as_bytes()).unwrap();
+            let name = ffi::CString::new(func.header.name.as_bytes()).unwrap();
             (LLVMAddFunction(llvm_module, name.as_ptr(), func_ty), func_ty)
         })
         .collect::<Vec<_>>();
@@ -160,7 +160,7 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
 ) {
-    crate::log!("-------------------- Building LLVM IR for func {}", func.name);
+    crate::log!("-------------------- Building LLVM IR for func {}", func.header.name);
     let blocks = ir.blocks.iter()
         .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
         .collect::<Vec<_>>();
@@ -235,14 +235,14 @@ unsafe fn build_func(
     let info_to_num = |info: &Type| {
         match info {
             ir::Type::Prim(p) => prim_to_num(*p),
-            t => panic!("Invalid type for int/float operation: {t}")
+            t => panic!("Invalid type for int/float operation: {t:?}")
         }
     };
     let float_or_int = |ty: ir::TypeTableIndex| info_to_num(ir.types.get(ty));
 
     for (i, inst) in ir.inst.iter().enumerate() {
         if crate::LOG.load(Ordering::Relaxed) {
-            print!("Generating %{i} = {} ->", inst.display(&ir.extra, &ir.types));
+            print!("Generating %{i} = {:?} ->", inst);
             std::io::stdout().flush().unwrap();
         }
         let &ir::Instruction { tag, data, ty, used: _ } = inst;
@@ -333,7 +333,7 @@ unsafe fn build_func(
             }
             ir::Tag::Load => {
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
-                let Type::Pointer(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty}"); };
+                let Type::Pointer(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty:?}"); };
                 let pointee_ty = llvm_ty(ctx, module, types, &inner);
                 LLVMBuildLoad2(builder, pointee_ty, val, NONE)
             }
@@ -536,7 +536,7 @@ unsafe fn build_func(
                             Type::Pointer(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
                             // int to ptr
                             Type::Prim(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
-                            t => panic!("Can't cast from non-pointer type {t} to pointer")
+                            t => panic!("Can't cast from non-pointer type {t:?} to pointer")
                         }
                     }
                     Type::Enum(_) => {
@@ -694,7 +694,7 @@ unsafe fn llvm_ty_recursive(
                     if i != 0 {
                         name.push_str(", ");
                     }
-                    name.write_fmt(format_args!("{ty}")).unwrap();
+                    name.write_fmt(format_args!("{ty:?}")).unwrap();
                 }
                 name.push(']');
                 let name = ffi::CString::new(name).unwrap();

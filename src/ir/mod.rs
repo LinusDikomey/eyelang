@@ -2,7 +2,6 @@ use std::fmt;
 use color_format::*;
 use crate::ast::{self, ModuleId};
 use crate::dmap::DHashMap;
-use crate::help::{write_delimited, write_delimited_with};
 use crate::types::Primitive;
 use builder::IrBuilder;
 
@@ -12,6 +11,8 @@ pub mod exhaust;
 
 mod const_val;
 pub use const_val::{ConstVal, ConstSymbol};
+
+pub mod display;
 
 mod instruction;
 pub use instruction::{Instruction, Tag, Data};
@@ -224,40 +225,6 @@ impl Type {
         }
     }
 }
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Prim(p) => write!(f, "{p}"),
-            Self::Id(id, generics) => {
-                write!(f, "t{}", id.idx())?;
-                if !generics.is_empty() {
-                    write!(f, "[")?;
-                    write_delimited(f, generics, ", ")?;
-                    write!(f, "]")?;
-                }
-                Ok(())
-            }
-            Self::Pointer(inner) => write!(f, "*{inner}"),
-            Self::Array(array) => {
-                let (ty, count) = &**array;
-                write!(f, "[{}; {}]", ty, count)
-            }
-            Self::Enum(variants) => {
-                write_delimited(f, variants, " | ")?;
-                Ok(())
-            }
-            Self::Tuple(elems) => {
-                write!(f, "(")?;
-                write_delimited(f, elems, ", ")?;
-                write!(f, ")")
-            }
-            Self::Generic(idx) => write!(f, "Generic #{idx}"),
-            Self::Symbol => write!(f, "[symbol]"),
-            Self::Invalid => write!(f, "[invalid]"),
-        }
-    }
-}
-
     
 #[derive(Clone, Copy, Debug)]
 pub enum TypeInfoOrIndex {
@@ -289,22 +256,8 @@ impl SymbolKey {
 }
 
 pub struct Function {
-    pub name: String,
     pub header: FunctionHeader,
     pub ir: Option<FunctionIr>
-}
-impl fmt::Display for Function {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "(")?;
-        write_delimited_with(f, &self.header.params,
-            |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param), ", ")?;
-        cwriteln!(f, ") -#> #m<{}>", self.header.return_type)?;
-
-        if let Some(ir) = &self.ir {
-            write!(f, "{ir}")?;
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -314,27 +267,10 @@ pub struct FunctionIr {
     pub types: FinalTypeTable,
     pub blocks: Vec<u32>,
 }
-impl fmt::Display for FunctionIr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, inst) in self.inst.iter().enumerate() {
-            if inst.tag == Tag::BlockBegin {
-                //TODO: make this purple
-                cwriteln!(f, "  #m<block> #b!<b{}>:", unsafe { inst.data.int32 })?;
-                continue;
-            }
-            if inst.used {
-                cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
-            } else {
-                write!(f, "           ")?;
-            }
-            cwriteln!(f, "{}", inst.display(&self.extra, &self.types))?;
-        }
-        Ok(())
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct FunctionHeader {
+    pub name: String,
     pub params: Vec<(String, Type)>,
     pub varargs: bool,
     pub return_type: Type
@@ -423,29 +359,13 @@ impl TypeDef {
         }
     }
 }
-impl fmt::Display for TypeDef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeDef::Struct(s) => write!(f, "{s}"),
-            TypeDef::Enum(e) => write!(f, "{e}"),
-            Self::NotGenerated { .. } => write!(f, "not generated")
-        }
-    }
-}
+
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub name: String,
     pub members: Vec<(String, Type)>,
     pub functions: DHashMap<String, SymbolKey>,
     pub generic_count: u8,
-}
-impl fmt::Display for Struct {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (name, member) in &self.members {
-            cwriteln!(f, "  #g<{}> #m<{}>", name, member)?;
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -494,33 +414,6 @@ pub struct Module {
     pub funcs: Vec<Function>,
     pub globals: Vec<(String, Type, Option<ConstVal>)>,
     pub types: Vec<(String, TypeDef)>,
-}
-impl fmt::Display for Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (name, ty) in &self.types {
-            cwriteln!(f, "#b<begin> #r<{name}>\n{}#b<end> #r<{name}>\n",
-                ty,
-                name = name,
-            )?;
-        }
-        for (name, ty, val) in &self.globals {
-            cwriteln!(f, "#b<global> #r<{}> : #m<{}>\n", name, ty)?;
-            if let Some(val) = val {
-                cwriteln!(f, " = {}", val)?;
-            }
-        }
-        for func in &self.funcs {
-            if func.ir.is_none() {
-                cwriteln!(f, "#m<extern> #r<{}>{}", func.name, func)?;
-            } else {
-                cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
-                    func,
-                    name = func.name
-                )?;
-            }
-        }
-        Ok(())
-    }
 }
 
 const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;

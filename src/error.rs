@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::{ast::{Ast, ModuleId}, span::Span, token::TokenType, ir::Type};
+use crate::{ast::{Ast, ModuleId}, span::Span, token::TokenType};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
@@ -156,7 +156,7 @@ pub enum Error {
     UnknownVariable,
     UnknownModule,
     MissingMain,
-    InvalidMainReturnType(Type),
+    InvalidMainReturnType(String),
     UnexpectedType,
     IntLiteralOutOfRange,
     FloatLiteralOutOfRange,

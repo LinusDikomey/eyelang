@@ -219,7 +219,7 @@ impl IrBuilder {
                     let mut name = func.name.to_owned();
                     for t in &generics {
                         use std::fmt::Write;
-                        write!(name, ".{t}").unwrap();
+                        write!(name, ".{}", t.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name)).unwrap();
                     }
                     let params = func.header.params  
                         .iter()
@@ -230,6 +230,7 @@ impl IrBuilder {
 
                     crate::log!("instantiating generic function {name}");
                     let new_key = ctx.ctx.add_func(crate::ir::FunctionOrHeader::Header(FunctionHeader {
+                        name,
                         params,
                         varargs,
                         return_type,
@@ -242,7 +243,7 @@ impl IrBuilder {
                     // PERF: again: store definitions seperately to avoid cloning
                     // this isn't even the single place this needs to be cloned
                     let def = func.def.clone();
-                    crate::irgen::gen_func_body(&name, &def, new_key, &mut scope, ctx);
+                    crate::irgen::gen_func_body(&def, new_key, &mut scope, ctx);
 
                     new_key
                 }

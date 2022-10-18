@@ -281,9 +281,10 @@ impl Drop for AsmWriter {
 
 pub unsafe fn emit(module: &ir::Module, file: File) {
     let mut w = AsmWriter::new(file);
+    let display_info = ir::display::Info { types: &module.types, funcs: &module.funcs };
 
     for (index, func) in module.funcs.iter().enumerate() {
-        gen_func(index as u32, func, &module.funcs, &mut w);
+        gen_func(index as u32, func, &module.funcs, display_info, &mut w);
     }
 }
 
@@ -303,9 +304,9 @@ const CALL_REGS: [Val; 6] = [rdi, rsi, rdx, rcx, r8, r9];
 
 const CALL_STACK_ALIGNMENT: u64 = 16;
 
-unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &mut AsmWriter) {
+unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], info: ir::display::Info, w: &mut AsmWriter) {
     if let Some(ir) = &func.ir {
-        w.begin_func(&func.name);
+        w.begin_func(&func.header.name);
         w.inst(push(rbp));
         w.inst(mov(rbp, rsp));
         let mut r = Vec::with_capacity(ir.inst.len());
@@ -354,7 +355,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                                 .expect("Unsupported int size");
                             Int(ty, data.int)
                         }
-                        other => panic!("Invalid type for const int: {other}"),
+                        other => panic!("Invalid type for const int: {}", other.display(info)),
                     }
 
                 }
@@ -407,7 +408,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
                         Ref::from_bytes(ref_bytes)
                     });
                     let func = &funcs[func.idx()];
-                    let call_name = &func.name;
+                    let call_name = &func.header.name;
                     let arg_count = refs.len();
                     assert!(arg_count <= 6, "More than 6 arguments not supported right now");
                     for (ref_val, reg) in refs.take(6).zip(CALL_REGS) {
@@ -478,6 +479,6 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], w: &
             }
         }
     } else {
-        w.add_extern(&func.name);
+        w.add_extern(&func.header.name);
     }
 }

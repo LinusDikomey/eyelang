@@ -30,6 +30,7 @@ use crate::{
 
 mod const_eval;
 mod expr;
+mod pat;
 
 pub use crate::ir::builder::IrBuilder;
 
@@ -172,8 +173,8 @@ pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require
             let mut gen_ctx = GenCtx { ctx, globals, ast, module: main_module, errors };
 
             let FunctionOrHeader::Func(eye_main) = &mut gen_ctx.ctx.funcs[func.idx()] else { unreachable!() };
-            debug_assert_eq!(eye_main.name, "main");
-            eye_main.name = "eyemain".to_owned();
+            debug_assert_eq!(eye_main.header.name, "main");
+            eye_main.header.name = "eyemain".to_owned();
             
             let return_type = eye_main.header.return_type.clone();
             let res = main_wrapper(func, &mut gen_ctx, return_type);
@@ -241,7 +242,10 @@ fn main_wrapper(eye_main: SymbolKey, ctx: &mut GenCtx, main_return_ty: Type) -> 
     let main_return = match main_return_ty {
         Type::Prim(Primitive::Unit) => None,
         Type::Prim(p) if p.is_int() => Some(p.as_int().unwrap()),
-        _ => return Err(Error::InvalidMainReturnType(main_return_ty).at_span(Span::_todo(ctx.module)))
+        _ => {
+            let ty_string = main_return_ty.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name).to_string();
+            return Err(Error::InvalidMainReturnType(ty_string).at_span(Span::_todo(ctx.module)))
+        }
     };
 
     let main_ret_ty = builder.types.add(
@@ -260,8 +264,12 @@ fn main_wrapper(eye_main: SymbolKey, ctx: &mut GenCtx, main_return_ty: Type) -> 
     let ir = builder.finish(ctx);
 
     Ok(Function {
-        name: "main".to_owned(),
-        header: FunctionHeader { params: vec![], varargs: false, return_type: Type::Prim(Primitive::I32) },
+        header: FunctionHeader {
+            name: "main".to_owned(),
+            params: vec![],
+            varargs: false,
+            return_type: Type::Prim(Primitive::I32)
+        },
         ir: Some(ir)
     })
 }
@@ -288,11 +296,11 @@ fn gen_definition(
     match def {
         ast::Definition::Function(func) => {
             if func.generics.is_empty() {
-                let func_info = gen_func_header(func, scope, ctx);
+                let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
                 let header = FunctionOrHeader::Header(func_info);
                 let key = ctx.ctx.add_func(header);
                 add_symbol(scope, name.to_owned(), Symbol::Func(key), &mut ctx.globals);
-                gen_func_body(name, func, key, scope, ctx);
+                gen_func_body(func, key, scope, ctx);
                 Symbol::Func(key)
             } else {
                 if func.generics.len() > u8::MAX as usize {
@@ -306,7 +314,7 @@ fn gen_definition(
                 let defs = dmap::new();
 
                 let mut func_scope = scope.child(&mut symbols, &defs);
-                let header = gen_func_header(func, &mut func_scope, ctx);
+                let header = gen_func_header(name.to_owned(), func, &mut func_scope, ctx);
                 crate::log!("Header of {}: {:?}", name, header);
                 // TODO: PERF: cloning here is kind of ugly
 
@@ -370,7 +378,7 @@ fn gen_definition(
     }
 }
 
-fn gen_func_header(func: &ast::Function, scope: &mut Scope, ctx: &mut GenCtx)
+fn gen_func_header(name: String, func: &ast::Function, scope: &mut Scope, ctx: &mut GenCtx)
 -> FunctionHeader {
     let params = func.params.iter()
         .map(|(name, unresolved, _, _)| {
@@ -381,12 +389,13 @@ fn gen_func_header(func: &ast::Function, scope: &mut Scope, ctx: &mut GenCtx)
     let return_type = scope.resolve_uninferred_type(&func.return_type, ctx);
 
     FunctionHeader {
+        name,
         params,
         varargs: func.varargs,
         return_type,
     }
 }
-pub fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx) {
+pub fn gen_func_body(def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx) {
     let func_idx = key.idx();
     let header = match &ctx.ctx.funcs[func_idx] {
         FunctionOrHeader::Func(_) => {
@@ -433,7 +442,6 @@ pub fn gen_func_body(name: &str, def: &ast::Function, key: SymbolKey, scope: &mu
     });
 
     ctx.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
-        name: name.to_owned(),
         header,
         ir,
     });
@@ -471,7 +479,7 @@ fn gen_struct(
     });
 
     for (method_name, method) in &def.methods {
-        let header = gen_func_header(method, &mut scope, ctx);
+        let header = gen_func_header(method_name.clone(), method, &mut scope, ctx);
         let method_key = ctx.ctx.add_func(FunctionOrHeader::Header(header));
         let TypeDef::Struct(Struct { functions: methods, .. }) = ctx.ctx.get_type_mut(key) else { unreachable!() };
         methods.insert(method_name.clone(), method_key);
@@ -479,7 +487,7 @@ fn gen_struct(
     for (method_name, method) in &def.methods {
         // type is set to Struct above
         let TypeDef::Struct(struct_) = ctx.ctx.get_type_mut(key) else { unreachable!() };
-        gen_func_body(method_name, method, struct_.functions[method_name], &mut scope, ctx);
+        gen_func_body(method, struct_.functions[method_name], &mut scope, ctx);
     }
 }
 
@@ -526,7 +534,10 @@ fn gen_trait(
 
     let functions = def.functions.iter()
         .enumerate()
-        .map(|(i, (name, (_span, func)))| (name.clone(), (i as u32, gen_func_header(func, &mut scope, ctx))))
+        .map(|(i, (name, (_span, func)))| (
+            name.clone(),
+            (i as u32, gen_func_header(name.to_owned(), func, &mut scope, ctx))
+        ))
         .collect();
     TraitDef { functions }
 }
