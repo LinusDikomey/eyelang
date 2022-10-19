@@ -714,10 +714,7 @@ impl<'s> Scope<'s> {
                             generics
                         )
                     } else {
-                        types.add_multiple(
-                            (0..generic_count)
-                                .map(|_| TypeInfo::Unknown)
-                        )
+                        types.add_multiple_unknown(generic_count as _)
                     })
                 };
                 let resolved = match current_module {
@@ -759,7 +756,7 @@ impl<'s> Scope<'s> {
             }
             ast::UnresolvedType::Tuple(elems, _) => {
                 let elems = elems.iter().map(|ty| self.resolve_type(ty, types, ctx)).collect::<Result<Vec<_>, _>>()?;
-                Ok(TypeInfo::Tuple(types.add_multiple(elems)))
+                Ok(TypeInfo::Tuple(types.add_multiple(elems), ir::TupleCountMode::Exact))
             }
             ast::UnresolvedType::Infer(_) => Ok(TypeInfo::Unknown)
         }

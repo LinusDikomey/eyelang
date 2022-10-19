@@ -4,13 +4,6 @@ use crate::{error::*, ast::ModuleId, span::{TSpan, Span}, types::Primitive, ir::
 
 use super::{TypeInfoOrIndex, SymbolKey, TypingCtx, Type};
 
-/// Type inference debugging
-fn ty_dbg<D: std::fmt::Debug>(msg: &str, d: D) -> D {
-    if crate::DEBUG_INFER.load(std::sync::atomic::Ordering::Relaxed) {
-        println!("[TypeInfer] {msg}: {d:?}");
-    }
-    d
-}
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
@@ -19,11 +12,12 @@ pub struct TypeTable {
 }
 impl TypeTable {
     pub fn new() -> Self {
-        ty_dbg("Creating type table", ());
-        Self {
+        let s =Self {
             types: Vec::new(),
             names: Vec::new(),
-        }
+        };
+        s.ty_dbg("Creating type table", ());
+        s
     }
 
     pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
@@ -53,7 +47,7 @@ impl TypeTable {
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
         let type_idx = TypeTableIndex(self.types.len() as u32);
         self.types.push(TypeInfoOrIndex::Type(info));
-        ty_dbg("Adding", &(info, type_idx));
+        self.ty_dbg("Adding", &(info, type_idx));
         type_idx
     }
 
@@ -69,7 +63,7 @@ impl TypeTable {
         let idx = self.types.len() as u32;
         self.types.extend(infos.map(TypeInfoOrIndex::Type));
         let count = (self.types.len() - idx as usize) as u32;
-        ty_dbg("Adding multiple", TypeTableIndices { idx, count })
+        self.ty_dbg("Adding multiple", TypeTableIndices { idx, count })
     }
     pub fn add_multiple_info_or_index(&mut self, types: impl IntoIterator<Item = TypeInfoOrIndex>)
     -> TypeTableIndices {
@@ -82,11 +76,15 @@ impl TypeTable {
         });
         self.types.extend(types);
         let count = (self.types.len() - idx as usize) as u32;
-        TypeTableIndices { idx, count }
+        self.ty_dbg("adding multiple (info_or_idx)", TypeTableIndices { idx, count })
     }
 
     pub fn add_unknown(&mut self) -> TypeTableIndex {
         self.add(TypeInfo::Unknown)
+    }
+
+    pub fn add_multiple_unknown(&mut self, n: u32) -> TypeTableIndices {
+        self.add_multiple((0..n).map(|_| TypeInfo::Unknown))
     }
 
     pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span, ctx: &TypingCtx) {
@@ -97,7 +95,7 @@ impl TypeTable {
                 TypeInfoOrIndex::Idx(idx) => curr_idx = idx,
             }
         };
-        ty_dbg("Specifying", (prev, idx, other));
+        self.ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|| {
             errors.emit_span(Error::MismatchedType {
                 expected: prev.as_string(self, ctx).into_owned(),
@@ -135,14 +133,14 @@ impl TypeTable {
             }
         };
         let b_ty = self.get_type(b);
-        ty_dbg("Merging ...", ((a_ty, a), (b_ty, b), &self));
+        self.ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
 
 
         // merge b's previous type into a
         let new_ty = match merge_twosided(a_ty, b_ty, self, ctx) {
-            Some(ty) => ty_dbg("\t... merged", (ty, &self)).0,
+            Some(ty) => self.ty_dbg("\t... merged", (ty, &self)).0,
             None => {
-                ty_dbg("\t... failed to merge", span);
+                self.ty_dbg("\t... failed to merge", span);
                 errors.emit_span(Error::MismatchedType {
                     expected: a_ty.as_string(self, ctx).into_owned(),
                     found: b_ty.as_string(self, ctx).into_owned()
@@ -158,7 +156,7 @@ impl TypeTable {
 
         // potentially shorten path of a
         if a.idx() != curr_a_idx.idx() {
-            ty_dbg("shortening", (a, curr_a_idx));
+            self.ty_dbg("shortening", (a, curr_a_idx));
             self.types[a.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
         }
     }
@@ -192,6 +190,72 @@ impl TypeTable {
             .collect();
         FinalTypeTable { types }
     }
+
+    /// Type inference debugging
+    fn ty_dbg<D: std::fmt::Debug>(&self, msg: &str, d: D) -> D {
+        if crate::DEBUG_INFER.load(std::sync::atomic::Ordering::Relaxed) {
+            println!("[TypeInfer] {msg}: {d:?}");
+        }
+        #[cfg(feature = "infer-graph")]
+        {
+            let mut graph = petgraph::graph::Graph::new();
+            let mut nodes = vec![None; self.types.len()];
+
+            fn get_node(
+                graph: &mut petgraph::graph::Graph<String, String, petgraph::Directed, u32>,
+                nodes: &mut [Option<petgraph::prelude::NodeIndex>],
+                ty: TypeInfoOrIndex,
+                i: usize
+            ) -> petgraph::prelude::NodeIndex {
+                if let Some(node) = nodes[i] {
+                    node
+                } else {
+                    let node = match ty {
+                        TypeInfoOrIndex::Type(ty) => {
+                            graph.add_node(format!("{i}: {ty:?}"))
+                        }
+                        TypeInfoOrIndex::Idx(_) => {
+                            graph.add_node(i.to_string())
+                        }
+                    };
+                    nodes[i] = Some(node);
+
+                    node
+                }
+            }
+
+            for (i, ty) in self.types.iter().enumerate() {
+                let node = get_node(&mut graph, &mut nodes, *ty, i);
+
+                // add edges to parents
+                match ty {
+                    TypeInfoOrIndex::Type(ty) => {
+                        let elems = match *ty {
+                            TypeInfo::Tuple(elems, _) => Some(elems),
+                            TypeInfo::Pointer(elem)
+                            | TypeInfo::Array(_, elem)
+                                => Some(TypeTableIndices { idx: elem.0, count: 1 }),
+                            
+                            _ => None
+                        };
+                        if let Some(elems) = elems {
+                            for (i, elem) in elems.iter().enumerate() {
+                                let elem = get_node(&mut graph, &mut nodes, self.types[elem.idx()], elem.idx());
+                                graph.add_edge(node, elem, format!("elem {i}"));
+                            }
+                        }
+                    }
+                    TypeInfoOrIndex::Idx(idx) => {
+                        let to = get_node(&mut graph, &mut nodes, self.types[idx.idx()], idx.idx());
+                        graph.add_edge(node, to, "Idx".to_string());
+                    }
+                }
+            }
+
+            eprintln!("GRAPH: {}", petgraph::dot::Dot::new(&graph));
+        }
+        d
+    }
 }
 impl Index<TypeTableIndex> for TypeTable {
     type Output = TypeInfo;
@@ -207,7 +271,7 @@ impl Index<TypeTableIndex> for TypeTable {
 }
 impl Drop for TypeTable {
     fn drop(&mut self) {
-        ty_dbg("Dropping Type Table: ", self);
+        self.ty_dbg("Dropping Type Table: ", &*self);
     }
 }
 
@@ -281,7 +345,7 @@ pub enum TypeInfo {
     Pointer(TypeTableIndex),
     Array(Option<u32>, TypeTableIndex),
     Enum(TypeTableNames),
-    Tuple(TypeTableIndices),
+    Tuple(TypeTableIndices, TupleCountMode),
     Symbol, // compile time Symbol like a function, type or trait
     Generic(u8), // a type that is not instanciated to a specific type yet.
     Invalid,
@@ -290,11 +354,11 @@ impl TypeInfo {
     pub const UNIT: Self = Self::Primitive(Primitive::Unit);
     
     fn as_string(&self, types: &TypeTable, ctx: &TypingCtx) -> Cow<'static, str> {
-        match self {
+        match *self {
             TypeInfo::Unknown => "<unknown>".into(),
             TypeInfo::Int => "<integer>".into(),
             TypeInfo::Float => "<float>".into(),
-            TypeInfo::Primitive(p) => Into::<&'static str>::into(*p).into(),
+            TypeInfo::Primitive(p) => Into::<&'static str>::into(p).into(),
             TypeInfo::Resolved(id, generics) => {
                 let mut generics_string = String::new();
                 if generics.count > 0 {
@@ -308,16 +372,16 @@ impl TypeInfo {
                     }
                     generics_string.push('>');
                 }
-                format!("{}{}", ctx.get_type(*id).name(), generics_string).into()
+                format!("{}{}", ctx.get_type(id).name(), generics_string).into()
             }
-            TypeInfo::Pointer(inner) => format!("*{}", types[*inner].as_string(types, ctx)).into(),
+            TypeInfo::Pointer(inner) => format!("*{}", types[inner].as_string(types, ctx)).into(),
             TypeInfo::Array(count, inner) => format!("[{}; {}]",
-                types[*inner].as_string(types, ctx),
+                types[inner].as_string(types, ctx),
                 count.map_or("_".to_owned(), |c| c.to_string())
             ).into(),
             TypeInfo::Enum(variants) => {
                 let mut s = "[".to_owned();
-                for (i, t) in types.get_names(*variants).iter().enumerate() {
+                for (i, t) in types.get_names(variants).iter().enumerate() {
                     s += t;
                     if i != variants.count as usize - 1 {
                         s += ", ";
@@ -326,10 +390,33 @@ impl TypeInfo {
                 s.push(']');
                 s.into()
             }
-            TypeInfo::Tuple(_) => todo!(),
-            TypeInfo::Symbol => todo!(),
+            TypeInfo::Tuple(elems, mode)  => {
+                let mut s = "(".to_owned();
+                let mut first = true;
+                for elem in elems.iter() {
+                    if first {
+                        first = false;
+                    } else {
+                        s.push_str(", ");
+                    }
+                    s.push_str(&types.get_type(elem).as_string(types, ctx));
+
+                }
+                match mode {
+                    TupleCountMode::Exact => {}
+                    TupleCountMode::AtLeast => {
+                        if !first {
+                            s.push_str(", ");
+                        }
+                        s.push_str("..");
+                    }
+                }
+                s.push(')');
+                s.into()
+            }
+            TypeInfo::Symbol =>  "symbol".into(),
             TypeInfo::Generic(_) => todo!(),
-            TypeInfo::Invalid => todo!(),
+            TypeInfo::Invalid => "<invalid>".into(),
         }
     }
     pub fn is_invalid(&self) -> bool {
@@ -358,8 +445,12 @@ impl TypeInfo {
             Self::Enum(idx) => {
                 Type::Enum(types.get_names(idx).to_vec())
             }
-            Self::Tuple(indices) => {
-                Type::Tuple(indices.iter().map(|ty| types.get_type(ty).finalize(types)).collect())
+            Self::Tuple(inners, _) => {
+                Type::Tuple(inners
+                    .iter()
+                    .map(|ty| types.get_type(ty).finalize(types))
+                    .collect()
+                )
             }
             Self::Symbol => {
                 Type::Symbol
@@ -368,6 +459,9 @@ impl TypeInfo {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TupleCountMode { Exact, AtLeast }
 
 fn merge_twosided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &TypingCtx) -> Option<TypeInfo> {
     match merge_onesided(ty, other, types, ctx) {
@@ -454,19 +548,34 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
             let a = types.get_names(names);
             let b = types.get_names(other_names);
             let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
-            ty_dbg("New variants after merging", (&new_variants, a, b));
+            types.ty_dbg("New variants after merging", (&new_variants, a, b));
             let merged_variants = types.extend_names(names, new_variants);
             Some(Enum(merged_variants))
         }
-        Tuple(elems) => {
-            let Tuple(other_elems) = other else { return None };
-            if elems.count != other_elems.count { return None }
-            for (a, b) in elems.iter().zip(other_elems.iter()) {
-                let new_a = merge_onesided(types.get_type(a), types.get_type(b), types, ctx)?;
-                types.update_type(a, new_a);
+        Tuple(a_elems, a_count_mode) => {
+            use TupleCountMode::{Exact, AtLeast};
+
+            let Tuple(b_elems, b_count_mode) = other else { return None };
+            let (res_ty, other_ty, mode) = match (a_count_mode, b_count_mode) {
+                (Exact, Exact) =>
+                    if a_elems.len() == b_elems.len() { (a_elems, b_elems, Exact) } else { return None },
+                (Exact, AtLeast) =>
+                    if a_elems.len() >= b_elems.len() { (a_elems, b_elems, Exact) } else { return None },
+                (AtLeast, Exact) =>
+                    if a_elems.len() <= b_elems.len() { (b_elems, a_elems, Exact) } else { return None }
+                (AtLeast, AtLeast) => if a_elems.len() >= b_elems.len() {
+                    (a_elems, b_elems, AtLeast)
+                 } else {
+                    (b_elems, a_elems, AtLeast)
+                },
+            };
+
+            for (a, b) in res_ty.iter().zip(other_ty.iter()) {
+                let new = merge_twosided(types.get_type(a), types.get_type(b), types, ctx)?;
+                types.update_type(a, new);
                 types.point_to(b, a);
             }
-            Some(ty)
+            Some(Tuple(res_ty, mode))
         
         }
         Symbol => if let Symbol = other {

@@ -149,6 +149,12 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
         write!(f, "(")?;
         write_delimited_with(f, &func.header.params,
             |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param.display(*info)), ", ")?;
+        if func.header.varargs {
+            if !func.header.params.is_empty() {
+                write!(f, ", ")?;
+            }
+            write!(f, "...")?;
+        }
         cwriteln!(f, ") -#> #m<{}>", func.header.return_type.display(*info))?;
 
         if let Some(ir) = &func.ir {

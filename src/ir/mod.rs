@@ -18,7 +18,7 @@ mod instruction;
 pub use instruction::{Instruction, Tag, Data};
 
 mod typing;
-pub use typing::{TypeTable, FinalTypeTable, TypeInfo, TypeTableIndex, TypeTableIndices};
+pub use typing::{TypeTable, FinalTypeTable, TypeInfo, TupleCountMode, TypeTableIndex, TypeTableIndices};
 
 
 pub struct TypingCtx {
@@ -156,15 +156,14 @@ impl Type {
     }
 
     pub fn as_info(&self, types: &mut TypeTable) -> TypeInfo {
-        self.as_info_generic(types, TypeTableIndices::EMPTY).into_info(types)
+        self.as_info_instanced(types, TypeTableIndices::EMPTY).into_info(types)
     }
 
-    pub fn as_info_generic(&self, types: &mut TypeTable, generics: TypeTableIndices) -> TypeInfoOrIndex {
+    pub fn as_info_instanced(&self, types: &mut TypeTable, generics: TypeTableIndices) -> TypeInfoOrIndex {
         TypeInfoOrIndex::Type(match self {
             Self::Prim(p) => TypeInfo::Primitive(*p),
             Self::Id(id, ty_generics) => {
-                // unfortunately this has to be allocated for borrowing reasons
-                let generics = types.add_multiple(ty_generics.iter().map(|_| TypeInfo::Unknown));
+                /*let generics = types.add_multiple_unknown(ty_generics.len() as _);
                 for (generic, ty) in generics.iter().zip(ty_generics) {
                     match ty.as_info_generic(types, generics) {
                         TypeInfoOrIndex::Type(info) => types.update_type(generic, info), //TODO: this might need a proper merge?
@@ -175,21 +174,28 @@ impl Type {
                     .map(|ty| ty.as_info_generic(types, generics))
                     .collect::<Vec<_>>();
                 TypeInfo::Resolved(*id, types.add_multiple_info_or_index(generics))
+                */
+                let ty_generics: Vec<_> = ty_generics
+                    .iter()
+                    .map(|ty| ty.as_info_instanced(types, generics))
+                    .collect();
+                let ty_generics = types.add_multiple_info_or_index(ty_generics);
+                TypeInfo::Resolved(*id, ty_generics)
             }
             Self::Pointer(inner) => {
-                let inner = inner.as_info_generic(types, generics);
+                let inner = inner.as_info_instanced(types, generics);
                 TypeInfo::Pointer(types.add_info_or_idx(inner))
             }
             Self::Array(array) => {
                 let (ty, count) = &**array;
-                let inner = ty.as_info_generic(types, generics);
+                let inner = ty.as_info_instanced(types, generics);
                 TypeInfo::Array(Some(*count), types.add_info_or_idx(inner))
             }
             Self::Enum(variants) =>
                 TypeInfo::Enum(types.add_names(variants.as_slice().iter().cloned())),
             Self::Tuple(elems) => {
-                let infos = elems.iter().map(|ty| ty.as_info_generic(types, generics)).collect::<Vec<_>>();
-                TypeInfo::Tuple(types.add_multiple_info_or_index(infos))
+                let infos = elems.iter().map(|ty| ty.as_info_instanced(types, generics)).collect::<Vec<_>>();
+                TypeInfo::Tuple(types.add_multiple_info_or_index(infos), typing::TupleCountMode::Exact)
             }
             Self::Generic(idx) => {
                 assert!(
@@ -225,7 +231,7 @@ impl Type {
         }
     }
 }
-    
+
 #[derive(Clone, Copy, Debug)]
 pub enum TypeInfoOrIndex {
     Type(TypeInfo),

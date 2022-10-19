@@ -8,7 +8,7 @@ use crate::{
         TypeTableIndices,
         RefVal,
         TypeDef,
-        BlockIndex, builder::BinOp, FunctionHeader,
+        BlockIndex, builder::BinOp, FunctionHeader, TupleCountMode, TypeInfoOrIndex,
     },
     error::Error,
     span::TSpan,
@@ -292,8 +292,12 @@ fn reduce_expr_any(
         Expr::Tuple(span, elems) => {
             let elems = &ctx.ast[*elems];
             let var = get_var(ir);
-            let types = ir.types.add_multiple(std::iter::repeat(TypeInfo::Unknown).take(elems.len()));
-            ir.types.specify(info.expected, TypeInfo::Tuple(types), &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
+            let types = ir.types.add_multiple_unknown(elems.len() as _);
+            ir.types.specify(
+                info.expected,
+                TypeInfo::Tuple(types, TupleCountMode::Exact),
+                &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx
+            );
             for (i, elem) in elems.iter().enumerate() {
                 let member_ty = types.iter().nth(i).unwrap();
                 let member_ty_ptr = ir.types.add(TypeInfo::Pointer(member_ty));
@@ -638,7 +642,7 @@ fn reduce_expr_any(
                                         .enumerate()
                                         .find(|(_, (name, _))| name == member)
                                     {
-                                        (ty.as_info_generic(&mut ir.types, generics), i)
+                                        (ty.as_info_instanced(&mut ir.types, generics), i)
                                     } else {
                                         ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
                                         (TypeInfo::Invalid.into(), 0)
@@ -752,7 +756,12 @@ fn reduce_expr_any(
             return (ExprResult::VarRef(ir.build_member(val, idx, ptr_ty)), true)
         }
         Expr::TupleIdx { expr: indexed, idx, end: _ } => {
-            let indexed_ty = ir.types.add(TypeInfo::Unknown);
+            let elem_types = ir.types.add_multiple_info_or_index(
+                (0..if *idx == 0 { 0 } else { *idx - 1 }).map(|_| TypeInfoOrIndex::Type(TypeInfo::Unknown))
+                .chain(std::iter::once(TypeInfoOrIndex::Idx(info.expected)))
+            );
+
+            let indexed_ty = ir.types.add(TypeInfo::Tuple(elem_types, TupleCountMode::AtLeast));
             let res = reduce_expr(scope, ctx, ir, &ctx.ast[*indexed], info.with_expected(indexed_ty));
             let expr_var = match res {
                 ExprResult::VarRef(r) | ExprResult::Stored(r) => r,
@@ -767,18 +776,8 @@ fn reduce_expr_any(
                     return (ExprResult::Val(Ref::UNDEF), true)
                 }
             };
-            let TypeInfo::Tuple(elems) = ir.types.get_type(indexed_ty) else {
-                if !matches!(ir.types.get_type(indexed_ty), TypeInfo::Invalid) {
-                    ctx.errors.emit_span(Error::TypeMustBeKnownHere, ctx.span(expr));
-                }
-                return (ExprResult::Val(Ref::UNDEF), true)
-            };
-            let Some(elem_ty) = elems.iter().nth(*idx as usize) else {
-                ctx.errors.emit_span(Error::TupleIndexOutOfRange, ctx.span(expr));
-                return (ExprResult::Val(Ref::UNDEF), true)
-            };
-            ir.types.merge(info.expected, elem_ty, &mut ctx.errors, expr.span_in(ctx.ast, ctx.module), &ctx.ctx);
-            let elem_ty_ptr = ir.types.add(TypeInfo::Pointer(elem_ty));
+            
+            let elem_ty_ptr = ir.types.add(TypeInfo::Pointer(info.expected));
             let member = ir.build_member_int(expr_var, *idx as u32, elem_ty_ptr);
             return (ExprResult::VarRef(member), true);
         }
@@ -888,8 +887,8 @@ fn call(
     let called_ty = ir.types.add(TypeInfo::Unknown);
     let called = &ctx.ast[func];
     let func_info = |header: &FunctionHeader, generics, key, ir: &mut IrBuilder| {
-        let params = header.params.iter().map(|(_, ty)| ty.as_info_generic(&mut ir.types, generics)).collect::<Vec<_>>();
-        let ret = header.return_type.as_info_generic(&mut ir.types, generics);
+        let params = header.params.iter().map(|(_, ty)| ty.as_info_instanced(&mut ir.types, generics)).collect::<Vec<_>>();
+        let ret = header.return_type.as_info_instanced(&mut ir.types, generics);
         
         FuncInfo {
             params: ir.types.add_multiple_info_or_index(params),
@@ -902,7 +901,6 @@ fn call(
         }
     };
     let r = match reduce_expr(scope, ctx, ir, called, info.with_expected(called_ty)) {
-        // TODO: THESE NEXT TWO CASES CAN BE CLEANED UP/COMBINED
         ExprResult::Symbol(ConstSymbol::Func(key)) => {
             let header = ctx.ctx.get_func(key).header();
             let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
@@ -910,8 +908,7 @@ fn call(
         }
         ExprResult::Symbol(ConstSymbol::GenericFunc(idx)) => {
             let func = &ctx.ctx.generic_funcs[idx as usize];
-            let generics = std::iter::repeat(TypeInfo::Unknown).take(func.generic_count as usize);
-            let generics = ir.types.add_multiple(generics);
+            let generics = ir.types.add_multiple_unknown(func.generic_count as _);
             let f = func_info(&func.header, generics, SymbolKey::MISSING, ir);
             let val = gen_call(scope, ctx, call_expr, f, None, args.iter().copied(), ir, info);
             ir.add_generic_instantiation(idx, generics, val);
@@ -930,7 +927,7 @@ fn call(
                 ctx.errors.emit_span(Error::FunctionOrStructTypeExpected, ctx.span(called));
                 return (ExprResult::Val(Ref::UNDEF), false)
             };
-            let generics = ir.types.add_multiple((0..struct_.generic_count).map(|_| TypeInfo::Unknown));
+            let generics = ir.types.add_multiple_unknown(struct_.generic_count as _);
             ir.specify(info.expected, TypeInfo::Resolved(ty, generics), &mut ctx.errors, call_expr.span(ctx.ast),
                 &ctx.ctx);
 
@@ -938,7 +935,7 @@ fn call(
                 let var = get_var(ir);
                 let member_types: Vec<_> =
                     struct_.members.iter()
-                        .map(|(_, ty)| ty.as_info_generic(&mut ir.types, generics))
+                        .map(|(_, ty)| ty.as_info_instanced(&mut ir.types, generics))
                         .collect();
                 for (i, (member_val, member_ty)) in
                     args.iter().zip(member_types).enumerate()
