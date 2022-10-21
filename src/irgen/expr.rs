@@ -398,8 +398,12 @@ fn reduce_expr_any(
                 let mut branch_noreturn = false;
                 let val = val_expr(&mut branch_block, ctx, ir, *branch, info.with_noreturn(&mut branch_noreturn));
 
-                branches.push((on_match, val));
-                ir.build_goto(after_block);
+                if branch_noreturn {
+                    ir.build_ret_undef();
+                } else {
+                    branches.push((on_match, val));
+                    ir.build_goto(after_block);
+                }
                 ir.begin_block(otherwise);
 
                 all_branches_noreturn |= branch_noreturn;

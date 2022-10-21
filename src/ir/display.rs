@@ -176,10 +176,10 @@ pub struct StructDisplay<'a> {
 }
 impl fmt::Display for StructDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cwrite!(f, "{{")?;
         let Self { s, info } = self;
-        write_delimited_with(f, &s.members, |f, (name, m)| cwrite!(f, "#g<{}> #m<{}>", name, m.display(*info)), ", ")?;
-        cwrite!(f, "}}")?;
+        for (name, m) in &s.members {
+            cwrite!(f, "  #g<{}> #m<{}>\n", name, m.display(*info))?;
+        }
         Ok(())
     }
 }
