@@ -593,6 +593,8 @@ fn reduce_expr_any(
         Expr::MemberAccess { left, name: name_span } => {
             let member = &ctx.ast.src(ctx.module).0[name_span.range()];
             let left_ty = ir.types.add(TypeInfo::Unknown);
+
+            #[derive(Debug)]
             enum MemberAccessType {
                 Var(Ref),
                 Module(ModuleId),
@@ -610,6 +612,7 @@ fn reduce_expr_any(
                     MemberAccessType::Var(var)
                 }
                 ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::Associated(ty),
+                ExprResult::Symbol(ConstSymbol::LocalType(_)) => todo!(), // TODO: might have to defer member access here
                 ExprResult::Symbol(ConstSymbol::Trait(t)) => MemberAccessType::TraitFunction(t),
                 ExprResult::Symbol(ConstSymbol::Module(id)) => MemberAccessType::Module(id),
                 ExprResult::Symbol(_) | ExprResult::Method(_, _) => {
@@ -708,30 +711,42 @@ fn reduce_expr_any(
                     }
                 }
                 MemberAccessType::Associated(key) => {
-                    match ctx.ctx.get_type(key) {
-                        TypeDef::Struct(def) => {
-                            if let Some(method) = def.functions.get(member) {
-                                return (ExprResult::Symbol(ConstSymbol::Func(*method)), true);
-                            } else {
-                                ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
-                                ir.invalidate(info.expected);
-                                Ref::UNDEF
+                    if member == "size" {
+                        // this is all very temporary and not platform independent
+                        let size = ctx.ctx.get_type(key)._layout(&ctx.ctx, &[]).size;
+                        let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+                        ir.build_int(size, u64_ty)
+                    } else if member == "align" {
+                        // this too
+                        let align = ctx.ctx.get_type(key)._layout(&ctx.ctx, &[]).alignment;
+                        let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+                        ir.build_int(align, u64_ty)
+                    } else {
+                        match ctx.ctx.get_type(key) {
+                            TypeDef::Struct(def) => {
+                                if let Some(method) = def.functions.get(member) {
+                                    return (ExprResult::Symbol(ConstSymbol::Func(*method)), true);
+                                } else {
+                                    ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
+                                    ir.invalidate(info.expected);
+                                    Ref::UNDEF
+                                }
                             }
+                            TypeDef::Enum(def) => {
+                                let expr_span = ctx.span(expr);
+                                return (if let Some(&variant) = def.variants.get(member) {
+                                    ir.types.specify(info.expected, TypeInfo::Resolved(key, TypeTableIndices::EMPTY),
+                                        &mut ctx.errors, expr_span, &ctx.ctx);
+                                    let r = ir.build_int(variant as u64, info.expected);
+                                    ExprResult::Val(r)
+                                } else {
+                                    ctx.errors.emit_span(Error::NonexistantEnumVariant, name_span.in_mod(ctx.module));
+                                    ir.invalidate(info.expected);
+                                    ExprResult::Val(Ref::UNDEF)
+                                }, true)
+                            }
+                            TypeDef::NotGenerated { .. } => unreachable!()
                         }
-                        TypeDef::Enum(def) => {
-                            let expr_span = ctx.span(expr);
-                            return (if let Some(&variant) = def.variants.get(member) {
-                                ir.types.specify(info.expected, TypeInfo::Resolved(key, TypeTableIndices::EMPTY),
-                                    &mut ctx.errors, expr_span, &ctx.ctx);
-                                let r = ir.build_int(variant as u64, info.expected);
-                                ExprResult::Val(r)
-                            } else {
-                                ctx.errors.emit_span(Error::NonexistantEnumVariant, name_span.in_mod(ctx.module));
-                                ir.invalidate(info.expected);
-                                ExprResult::Val(Ref::UNDEF)
-                            }, true)
-                        }
-                        TypeDef::NotGenerated { .. } => unreachable!()
                     }
                 }
                 MemberAccessType::TraitFunction(t) => {
