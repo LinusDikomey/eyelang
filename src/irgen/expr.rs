@@ -800,7 +800,7 @@ fn reduce_expr_any(
         }
         Expr::TupleIdx { expr: indexed, idx, end: _ } => {
             let elem_types = ir.types.add_multiple_info_or_index(
-                (0..if *idx == 0 { 0 } else { *idx - 1 }).map(|_| TypeInfoOrIndex::Type(TypeInfo::Unknown))
+                (0..*idx).map(|_| TypeInfoOrIndex::Type(TypeInfo::Unknown))
                 .chain(std::iter::once(TypeInfoOrIndex::Idx(info.expected)))
             );
 

@@ -39,8 +39,11 @@ impl TypeTable {
     }
 
     // Points a to the index that b is pointing to
-    pub fn point_to(&mut self, a: TypeTableIndex, b: TypeTableIndex) {
+    pub fn point_to(&mut self, mut a: TypeTableIndex, b: TypeTableIndex) {
         if a.idx() == b.idx() { return; }
+        while let TypeInfoOrIndex::Idx(new_idx) = self.types[a.idx()] {
+            a = new_idx;
+        }
         self.types[a.idx()] = TypeInfoOrIndex::Idx(b);
     }
 
