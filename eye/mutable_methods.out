@@ -1,0 +1,10 @@
+Compiling mutable_methods ...
+Running mutable_methods...
+[2, 3]
+[4, 6]
+[4, 6]
+[8, 12]
+[4, 6]
+[8, 12]
+[8, 12]
+[8, 12]

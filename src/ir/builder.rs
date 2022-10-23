@@ -276,18 +276,19 @@ impl IrBuilder {
         ctx: &TypingCtx, errors: &mut Errors
     ) {
         // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
-        if let TypeInfo::Enum(names) = self.types.get_type(idx) {
+        let (idx, ty) = self.types.find(idx);
+        if let TypeInfo::Enum(names) = ty {
             if !self.types.get_names(names).iter().any(|s| *s == name) {
                 let new_names = self.types.extend_names(names, std::iter::once(name.to_owned()));
                 self.types.update_type(idx, TypeInfo::Enum(new_names));
             }
         } else {
             let variant = self.types.add_names(std::iter::once(name.to_owned()));
-            self.types.specify(
+            self.specify(
                 idx,
                 TypeInfo::Enum(variant),
                 errors,
-                name_span.in_mod(self.module),
+                name_span,
                 ctx,
             );
         }

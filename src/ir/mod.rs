@@ -212,7 +212,10 @@ impl Type {
     pub fn instantiate_generics(&self, generics: &[Type]) -> Self {
         match self {
             Type::Prim(p) => Type::Prim(*p),
-            Type::Id(_, _) => todo!(),
+            Type::Id(key, ty_generics) => Type::Id(
+                *key,
+                ty_generics.iter().map(|ty| ty.instantiate_generics(generics)).collect()
+            ),
             Type::Pointer(inner) => Type::Pointer(Box::new(inner.instantiate_generics(generics))),
             Type::Array(b) => {
                 let (inner, count) = &**b;

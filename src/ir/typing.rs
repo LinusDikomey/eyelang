@@ -20,31 +20,32 @@ impl TypeTable {
         s
     }
 
-    pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
-        let mut current = self.types[idx.idx()];
+    pub fn find(&self, mut idx: TypeTableIndex) -> (TypeTableIndex, TypeInfo) {
         loop {
-            match current {
-                TypeInfoOrIndex::Type(ty) => return ty,
-                TypeInfoOrIndex::Idx(idx) => current = self.types[idx.idx()],
+            match self.types[idx.idx()] {
+                TypeInfoOrIndex::Type(ty) => return (idx, ty),
+                TypeInfoOrIndex::Idx(new_idx) => idx = new_idx,
             }
         }
     }
-    
-    pub fn update_type(&mut self, idx: TypeTableIndex, info: TypeInfo) {
-        let mut curr_idx = idx;
-        while let TypeInfoOrIndex::Idx(idx) = self.types[curr_idx.idx()] {
-            curr_idx = idx;
-        }
-        self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(info);
+
+    pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
+        self.find(idx).1
     }
 
-    // Points a to the index that b is pointing to
-    pub fn point_to(&mut self, mut a: TypeTableIndex, b: TypeTableIndex) {
-        if a.idx() == b.idx() { return; }
-        while let TypeInfoOrIndex::Idx(new_idx) = self.types[a.idx()] {
-            a = new_idx;
+    pub fn update_type(&mut self, idx: TypeTableIndex, ty: TypeInfo) {
+        let idx = self.find(idx).0;
+        self.types[idx.idx()] = TypeInfoOrIndex::Type(ty);
+    }
+
+    fn update_type_and_point(&mut self, idx: TypeTableIndex, info: TypeInfo, b: TypeTableIndex) {
+        let idx = self.find(idx).0;
+
+        self.types[idx.idx()] = TypeInfoOrIndex::Type(info);
+        let b = self.find(b).0;
+        if b.idx() != idx.idx() {
+            self.types[b.idx()] = TypeInfoOrIndex::Idx(idx);
         }
-        self.types[a.idx()] = TypeInfoOrIndex::Idx(b);
     }
 
     pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
@@ -91,13 +92,8 @@ impl TypeTable {
     }
 
     pub fn specify(&mut self, idx: TypeTableIndex, other: TypeInfo, errors: &mut Errors, span: Span, ctx: &TypingCtx) {
-        let mut curr_idx = idx;
-        let prev = loop {
-            match self.types[curr_idx.idx()] {
-                TypeInfoOrIndex::Type(ty) => break ty,
-                TypeInfoOrIndex::Idx(idx) => curr_idx = idx,
-            }
-        };
+        let (curr_idx, prev) = self.find(idx);
+
         self.ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self, ctx).unwrap_or_else(|| {
             errors.emit_span(Error::MismatchedType {
@@ -128,13 +124,7 @@ impl TypeTable {
         errors: &mut Errors, span: Span, ctx: &TypingCtx
     ) {
         if a.idx() == b.idx() { return; }
-        let mut curr_a_idx = a;
-        let a_ty = loop {
-            match self.types[curr_a_idx.idx()] {
-                TypeInfoOrIndex::Type(ty) => break ty,
-                TypeInfoOrIndex::Idx(new_idx) => curr_a_idx = new_idx,
-            }
-        };
+        let (curr_a_idx, a_ty) = self.find(a);
         let b_ty = self.get_type(b);
         self.ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
 
@@ -267,7 +257,10 @@ impl Index<TypeTableIndex> for TypeTable {
         loop {
             match &self.types[index.idx()] {
                 TypeInfoOrIndex::Type(ty) => return ty,
-                TypeInfoOrIndex::Idx(new_idx) => index = *new_idx,
+                TypeInfoOrIndex::Idx(new_idx) => {
+                    debug_assert_ne!(new_idx.idx(), index.idx());
+                    index = *new_idx;
+                }
             }
         }
     }
@@ -509,8 +502,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
                         .zip(other_generics.iter())
                         .map(|(a, b)| {
                             let new = merge_onesided(types[a], types[b], types, ctx)?;
-                            types.update_type(a, new);
-                            types.point_to(b, a);
+                            types.update_type_and_point(a, new, b);
                             Some(())
                         })
                         .all(|v| v.is_some())
@@ -526,16 +518,14 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
         Pointer(inner) => {
             let Pointer(other_inner) = other else { return None };
             let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
-            types.update_type(inner, new_inner);
-            types.point_to(other_inner, inner);
+            types.update_type_and_point(inner, new_inner, other_inner);
             Some(Pointer(inner))
         }
         Array(size, inner) => {
             let Array(other_size, other_inner) = other else { return None };
     
             let new_inner = merge_onesided(types.get_type(inner), types.get_type(other_inner), types, ctx)?;
-            types.update_type(inner, new_inner);
-            types.point_to(other_inner, inner);
+            types.update_type_and_point(inner, new_inner, other_inner);
             
             let new_size = match (size, other_size) {
                 (Some(a), Some(b)) if a == b => Some(a),
@@ -575,8 +565,7 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
 
             for (a, b) in res_ty.iter().zip(other_ty.iter()) {
                 let new = merge_twosided(types.get_type(a), types.get_type(b), types, ctx)?;
-                types.update_type(a, new);
-                types.point_to(b, a);
+                types.update_type_and_point(a, new, b);
             }
             Some(Tuple(res_ty, mode))
         
