@@ -8,7 +8,7 @@ use crate::{
         TypeTableIndices,
         RefVal,
         TypeDef,
-        BlockIndex, builder::BinOp, FunctionHeader, TupleCountMode, TypeInfoOrIndex,
+        BlockIndex, builder::BinOp, FunctionHeader, TupleCountMode, TypeInfoOrIndex, Type,
     },
     error::Error,
     span::TSpan,
@@ -594,7 +594,7 @@ fn reduce_expr_any(
             let member = &ctx.ast.src(ctx.module).0[name_span.range()];
             let left_ty = ir.types.add(TypeInfo::Unknown);
             enum MemberAccessType {
-                Var(Ref),
+                Val { val: Ref, is_ptr: bool },
                 Module(ModuleId),
                 Associated(SymbolKey),
                 TraitFunction(SymbolKey),
@@ -602,13 +602,8 @@ fn reduce_expr_any(
             }
             let left = &ctx.ast[*left];
             let left_val = match reduce_expr(scope, ctx, ir, left, info.with_expected(left_ty)) {
-                ExprResult::VarRef(r) | ExprResult::Stored(r) => MemberAccessType::Var(r),
-                ExprResult::Val(val) => {
-                    // TODO: don't store automatically when finding a val. Methods can take a value sometimes.
-                    let var = ir.build_decl(info.expected);
-                    ir.build_store(var, val);
-                    MemberAccessType::Var(var)
-                }
+                ExprResult::VarRef(val) | ExprResult::Stored(val) => MemberAccessType::Val { val, is_ptr: true },
+                ExprResult::Val(val) => MemberAccessType::Val { val, is_ptr: false },
                 ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::Associated(ty),
                 ExprResult::Symbol(ConstSymbol::Trait(t)) => MemberAccessType::TraitFunction(t),
                 ExprResult::Symbol(ConstSymbol::Module(id)) => MemberAccessType::Module(id),
@@ -619,8 +614,9 @@ fn reduce_expr_any(
             };
 
             (match left_val {
-                MemberAccessType::Var(var) => {
+                MemberAccessType::Val { val, is_ptr } => {
                     let (ty, idx) = match ir.types.get_type(left_ty) {
+                        TypeInfo::Pointer(_) => todo!("auto deref"),
                         TypeInfo::Resolved(key, generics) => {
                             match &ctx.ctx.types[key.idx()].1 {
                                 TypeDef::Struct(struct_) => {
@@ -628,15 +624,38 @@ fn reduce_expr_any(
                                         let func = ctx.ctx.get_func(*func_id);
                                         let header = func.header();
                                         let var = if let Some(first_arg) = header.params.first() {
-                                            let info = first_arg.1.as_info(&mut ir.types);
-                                            // TODO: auto ref/deref
-                                            ir.specify(left_ty, info, &mut ctx.errors, left.span(ctx.ast), &ctx.ctx);
-                                            var
+                                            let this_ty = &first_arg.1;
+                                            // TODO: this is a very primitive auto deref and can probably be made
+                                            // more flexible
+                                            let (val, this_info) = match this_ty {
+                                                Type::Pointer(inner) => {
+
+                                                    let val = if is_ptr {
+                                                        val
+                                                    } else {
+                                                        let var = ir.build_decl(left_ty);
+                                                        ir.build_store(var, val);
+                                                        var
+                                                    };
+                                                    (val, inner.as_info(&mut ir.types))
+                                                }
+                                                _ => {
+                                                    let val = if is_ptr {
+                                                        ir.build_load(val, left_ty)
+                                                    } else {
+                                                        val
+                                                    };
+                                                    (val, this_ty.as_info(&mut ir.types))
+                                                }
+                                            };
+                                            ir.specify(left_ty, this_info, &mut ctx.errors, left.span(ctx.ast), &ctx.ctx);
+                                            val
                                         } else {
                                             ctx.errors.emit_span(
                                                 Error::NotAnInstanceMethod,
                                                 name_span.in_mod(ctx.module)
                                             );
+                                            ir.invalidate(info.expected);
                                             Ref::UNDEF
                                         };
                                         return (ExprResult::Method(var, *func_id), true);
@@ -671,7 +690,12 @@ fn reduce_expr_any(
                     ir.types.specify_or_merge(info.expected, ty, &mut ctx.errors, ctx.module, expr.span(ctx.ast),
                         &ctx.ctx);
                     let ptr = ir.types.add(TypeInfo::Pointer(info.expected));
-                    let member = ir.build_member_int(var, idx as u32, ptr);
+                    let member = if is_ptr {
+                        ir.build_member_int(val, idx as u32, ptr)
+                    } else {
+                        eprintln!("TODO: this member will probably not work because we need a ptr");
+                        ir.build_member_int(val, idx as u32, ptr)
+                    };
                     return (ExprResult::VarRef(member), true);
                 }
                 MemberAccessType::Module(id) => {
@@ -918,7 +942,6 @@ fn call(
             ir.add_generic_instantiation(idx, generics, val);
             val
         }
-        //TODO: Trait function calls
         ExprResult::Method(self_var, key) => {
             let called_span = called.span(ctx.ast);
             let this = Some((self_var, called_ty, called_span));
