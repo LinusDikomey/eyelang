@@ -99,12 +99,21 @@ fn reduce_expr_store_into_var(
             let span = ctx.span(expr);
             symbol.add_instruction(ir, &ctx.ctx, info.expected, &mut ctx.errors, span)
         }
-        _ => {
-            ctx.errors.emit_span(Error::ExpectedValueFoundDefinition, expr.span(ctx.ast).in_mod(ctx.module));
+        ExprResult::Hole => {
+            ctx.errors.emit_span(Error::ExpectedValueFoundHole, expr.span(ctx.ast).in_mod(ctx.module));
+            Ref::UNDEF
+        }
+        ExprResult::Method(_, _) => {
+            ctx.errors.emit_span(Error::ExpectedValueFoundFunction, expr.span(ctx.ast).in_mod(ctx.module));
             Ref::UNDEF
         }
     };
     ir.build_store(var, val);
+}
+
+enum LVal {
+    Var(Ref),
+    Hole,
 }
 
 fn reduce_lval_expr(
@@ -114,18 +123,19 @@ fn reduce_lval_expr(
     expr: &Expr,
     mut info: ExprInfo,
     error: Error,
-) -> Ref {
+) -> LVal {
     let expected = info.expected;
     match reduce_expr_any(
         scope, ctx, ir, expr, info.reborrow(),
         |ir| ir.build_decl(expected)
     ).0 {
-        ExprResult::VarRef(var) | ExprResult::Stored(var) => var,
+        ExprResult::VarRef(var) | ExprResult::Stored(var) => LVal::Var(var),
+        ExprResult::Hole => LVal::Hole,
         ExprResult::Val(_) | ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
             if !ir.types.get_type(info.expected).is_invalid() {
                 ctx.errors.emit_span(error, expr.span(ctx.ast).in_mod(ctx.module));
             }
-            Ref::UNDEF
+            LVal::Var(Ref::UNDEF)
         }
     }
 }
@@ -275,6 +285,7 @@ fn reduce_expr_any(
                 (Ref::UNDEF, true)
             }
         }
+        Expr::Hole(_) => return (ExprResult::Hole, true),
         Expr::Array(span, elems) => {
             let elems = &ctx.ast[*elems];
             let elem_ty = ir.types.add(TypeInfo::Unknown);
@@ -536,6 +547,16 @@ fn reduce_expr_any(
                     Error::CantAssignTo);
                 let r = val_expr(scope, ctx, ir, *r, info.with_expected(var_ty));
 
+                let lval = match lval {
+                    LVal::Var(var) => var,
+                    LVal::Hole => {
+                        if *assignment != AssignType::Assign {
+                            ctx.errors.emit_err(Error::CantMutateHole.at_span(ctx.span(expr)));
+                        }
+                        return (ExprResult::Val(Ref::UNDEF), false)
+                    }
+                };
+
                 let val = if *assignment == AssignType::Assign {
                     r
                 } else {
@@ -610,7 +631,7 @@ fn reduce_expr_any(
                 ExprResult::Symbol(ConstSymbol::LocalType(_)) => todo!(), // TODO: might have to defer member access here
                 ExprResult::Symbol(ConstSymbol::Trait(t)) => MemberAccessType::TraitFunction(t),
                 ExprResult::Symbol(ConstSymbol::Module(id)) => MemberAccessType::Module(id),
-                ExprResult::Symbol(_) | ExprResult::Method(_, _) => {
+                ExprResult::Symbol(_) | ExprResult::Method(_, _) | ExprResult::Hole => {
                     ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
                     MemberAccessType::Invalid
                 }
@@ -798,11 +819,17 @@ fn reduce_expr_any(
             let array_ty = ir.types.add(TypeInfo::Array(None, info.expected));
             let ptr_ty = ir.types.add(TypeInfo::Pointer(info.expected));
             let indexed = &ctx.ast[*indexed];
-            let val = reduce_lval_expr(scope, ctx, ir, indexed, info.with_expected(array_ty), Error::CantIndex);
-            
+            let var = reduce_lval_expr(scope, ctx, ir, indexed, info.with_expected(array_ty), Error::CantIndex);
+            let var = match var {
+                LVal::Var(var) => var,
+                LVal::Hole => {
+                    ctx.errors.emit_span(Error::CantIndex, ctx.span(indexed));
+                    return (ExprResult::Val(Ref::UNDEF), true)
+                }
+            };
             let idx_ty = ir.types.add(TypeInfo::Int);
             let idx = val_expr(scope, ctx, ir, *idx, info.with_expected(idx_ty));
-            return (ExprResult::VarRef(ir.build_member(val, idx, ptr_ty)), true)
+            return (ExprResult::VarRef(ir.build_member(var, idx, ptr_ty)), true)
         }
         Expr::TupleIdx { expr: indexed, idx, end: _ } => {
             let elem_types = ir.types.add_multiple_info_or_index(
@@ -819,7 +846,7 @@ fn reduce_expr_any(
                     ir.build_store(var, val);
                     var
                 }
-                ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
+                ExprResult::Hole | ExprResult::Method(_, _) | ExprResult::Symbol(_) => {
                     ctx.errors.emit_span(Error::TupleIndexingOnNonValue, ctx.span(expr));
                     ir.invalidate(info.expected);
                     return (ExprResult::Val(Ref::UNDEF), true)

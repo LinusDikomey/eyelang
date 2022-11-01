@@ -116,7 +116,10 @@ enum ExprResult {
     VarRef(Ref),
     Val(Ref),
     Stored(Ref),
-    
+
+    // Ignore the result (underscore token: _). Used mostly in lhs.
+    Hole,
+
     /// method call on a variable: x.method
     Method(Ref, StructMemberSymbol),
     
@@ -136,6 +139,10 @@ impl ExprResult {
                 ir.build_load(var, ty)
             }
             ExprResult::Val(val) => val,
+            ExprResult::Hole => {
+                errors.emit_span(Error::ExpectedValueFoundHole, span);
+                Ref::UNDEF
+            }
             ExprResult::Method(_, _) => {
                 errors.emit_span(Error::ExpectedValueFoundFunction, span);
                 Ref::UNDEF

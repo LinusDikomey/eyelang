@@ -222,6 +222,7 @@ pub enum Expr {
     Nested(TSpan, ExprRef),
     Unit(TSpan),
     Variable(TSpan),
+    Hole(u32), // underscore: _
     Array(TSpan, ExprExtra),
     Tuple(TSpan, ExprExtra),
     If {
@@ -285,6 +286,7 @@ impl Expr {
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
             Expr::EnumLiteral { dot, ident } => TSpan::new(*dot, ident.end),
+            &Expr::Hole(start) => TSpan::new(start, start),
             Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
             Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
             Expr::Match { start, end, .. } => TSpan::new(*start, *end),

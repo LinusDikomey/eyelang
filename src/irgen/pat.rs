@@ -65,7 +65,7 @@ pub fn reduce_pat(
         }
         Expr::Unit(span) => {
             ir.specify(expected, TypeInfo::UNIT, &mut ctx.errors, *span, &ctx.ctx);
-            *exhaustion = Exhaustion::Full;
+            exhaustion.exhaust_full();
             Ref::val(RefVal::True)
         }
         Expr::Nested(_, expr) => reduce_pat(scope, ctx, ir, val, *expr, expected, bool_ty, exhaustion),    
@@ -74,11 +74,14 @@ pub fn reduce_pat(
             let var = ir.build_decl(expected);
             ir.build_store(var, val);
             scope.add_symbol(name.to_owned(), Symbol::Var { ty: expected, var }, &mut ctx.globals);
-            *exhaustion = Exhaustion::Full;
+            exhaustion.exhaust_full();
+            Ref::val(RefVal::True)
+        }
+        Expr::Hole(_) => {
+            exhaustion.exhaust_full();
             Ref::val(RefVal::True)
         }
         &Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => {
-            // TODO: float literals, negated literals
             enum Kind {
                 Int(exhaust::SignedInt),
                 Float,

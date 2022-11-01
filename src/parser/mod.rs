@@ -518,6 +518,7 @@ impl<'a> Parser<'a> {
             TokenType::Keyword(Keyword::True) => Expr::BoolLiteral { start, val: true },
             TokenType::Keyword(Keyword::False) => Expr::BoolLiteral { start, val: false },
             TokenType::Ident => Expr::Variable(first.span()),
+            TokenType::Underscore => Expr::Hole(first.start),
             TokenType::Keyword(Keyword::If) => {
                 let cond = self.parse_expr()?;
                 let then = self.parse_block_or_expr()?;

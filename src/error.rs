@@ -176,6 +176,7 @@ pub enum Error {
     ExpectedValueFoundDefinition,
     ExpectedValueFoundFunction,
     ExpectedValueOrModuleFoundDefiniton,
+    ExpectedValueFoundHole,
     InvalidArgCount,
     CantNegateType,
     NonexistantMember,
@@ -207,6 +208,8 @@ pub enum Error {
     Inexhaustive,
     DuplicateDependency(String),
     TooManyGenerics(usize),
+    HoleLHSOnly,
+    CantMutateHole,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -241,6 +244,7 @@ impl Error {
             Error::ExpectedValueFoundDefinition => "expected value but found a definition",
             Error::ExpectedValueFoundFunction => "expected value but found a function",
             Error::ExpectedValueOrModuleFoundDefiniton => "expected value or module but found a definition",
+            Error::ExpectedValueFoundHole => "expected a value but found a hole",
             Error::InvalidArgCount => "invalid argument count",
             Error::CantNegateType => "can't negate this value",
             Error::NonexistantMember => "member doesn't exist",
@@ -272,6 +276,8 @@ impl Error {
             Error::Inexhaustive => "not all possible values were covered",
             Error::DuplicateDependency(_) => "duplicate dependency",
             Error::TooManyGenerics(_) => "too many generics",
+            Error::HoleLHSOnly => "hole can only used on left-hand side of an assignment",
+            Error::CantMutateHole => "can't mutate hole",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -279,6 +285,9 @@ impl Error {
             Error::UnexpectedToken { expected, found } => cformat!(
                 "expected {} but found {}",
                 expected, found
+            ),
+            Error::ExpectedValueFoundHole => cformat!(
+                "the name #r<_> is reserved for values that are thrown away"
             ),
             Error::InvalidMainReturnType(ty) => cformat!(
                 "the main function should return either an integer or the unit type #m<()> but returns {}",
@@ -305,12 +314,19 @@ impl Error {
                 "the maximum number of generics allowed is #g<255> but found #r<{}>",
                 count
             ),
+            Error::HoleLHSOnly => cformat!(
+                "#r<_> is not a value and can only be used to ignore the value"
+            ),
+            Error::CantMutateHole => cformat!(
+                "#r<_> can only be assigned to"
+            ),
             _ => return None
         })
     }
     pub fn severity(&self) -> Severity {
         match self {
             Self::UnusedStatementValue
+            | Self::CantMutateHole
                 => Severity::Warn,
             _ => Severity::Error
         }

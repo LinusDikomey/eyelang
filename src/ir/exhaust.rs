@@ -69,6 +69,10 @@ impl Exhaustion {
         })
     }
 
+    pub fn exhaust_full(&mut self) {
+        *self = Exhaustion::Full;
+    }
+
     /// exhaust an integer value and return true if it wasn't covered yet
     pub fn exhaust_int(&mut self, x: SignedInt) -> bool {
         self.exhaust_int_range(x, x)
