@@ -74,6 +74,8 @@ impl TypingCtx {
         key
     }
     pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
+    pub fn get_generic_func(&self, key: u32) -> &GenericFunc { &self.generic_funcs[key as usize] }
+
     pub fn get_type(&self, key: SymbolKey) -> &TypeDef { &self.types[key.idx()].1 }
     pub fn get_type_mut(&mut self, key: SymbolKey) -> &mut TypeDef { &mut self.types[key.idx()].1 }
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
@@ -373,8 +375,14 @@ impl TypeDef {
 pub struct Struct {
     pub name: String,
     pub members: Vec<(String, Type)>,
-    pub functions: DHashMap<String, SymbolKey>,
+    pub symbols: DHashMap<String, StructMemberSymbol>,
     pub generic_count: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum StructMemberSymbol {
+    Func(SymbolKey),
+    GenericFunc(u32),
 }
 
 #[derive(Debug, Clone)]

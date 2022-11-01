@@ -24,7 +24,7 @@ use crate::{
         TypeDef,
         Struct,
         Enum,
-        TraitDef, GenericFunc
+        TraitDef, GenericFunc, StructMemberSymbol
     },
 }; 
 
@@ -58,8 +58,8 @@ impl<'s> GenCtx<'s> {
         let symbol = self.globals[id].get(name).copied().or_else(|| {
             self.ast[self.ast[id].definitions].get(name).map(|def|
                 gen_definition(name, def, &mut Scope::Module(id), self,
-                    |_scope, name, symbol, globals| {
-                        let prev = globals[id].insert(name, symbol);
+                    |_scope, name, symbol, ctx| {
+                        let prev = ctx.globals[id].insert(name, symbol);
                         debug_assert!(prev.is_none());
                     }
                 )
@@ -118,7 +118,7 @@ enum ExprResult {
     Stored(Ref),
     
     /// method call on a variable: x.method
-    Method(Ref, SymbolKey),
+    Method(Ref, StructMemberSymbol),
     
     Symbol(ConstSymbol),
 }
@@ -282,7 +282,7 @@ fn generate_bodies(
     for (name, def) in defs {
         if scope.get_scope_symbol(gen_ctx.globals.get_ref(), name).is_some() { continue }
         gen_definition(name, def, scope, gen_ctx,
-            |scope, name, symbol, globals| scope.add_symbol(name, symbol, globals));
+            |scope, name, symbol, ctx| scope.add_symbol(name, symbol, &mut ctx.globals));
     }
 }
 
@@ -291,73 +291,40 @@ fn gen_definition(
     def: &ast::Definition,
     scope: &mut Scope,
     ctx: &mut GenCtx,
-    add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut Globals)
+    add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
 ) -> Symbol {
     match def {
-        ast::Definition::Function(func) => {
-            if func.generics.is_empty() {
-                let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
-                let header = FunctionOrHeader::Header(func_info);
-                let key = ctx.ctx.add_func(header);
-                add_symbol(scope, name.to_owned(), Symbol::Func(key), &mut ctx.globals);
-                gen_func_body(func, key, scope, ctx);
-                Symbol::Func(key)
-            } else {
-                if func.generics.len() > u8::MAX as usize {
-                    ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
-                }
-                let mut symbols = dmap::new();
-                for (i, name) in func.generics.iter().enumerate() {
-                    let name = ctx.src(*name);
-                    symbols.insert(name.to_owned(), Symbol::Generic(i as u8));
-                }
-                let defs = dmap::new();
-
-                let mut func_scope = scope.child(&mut symbols, &defs);
-                let header = gen_func_header(name.to_owned(), func, &mut func_scope, ctx);
-                crate::log!("Header of {}: {:?}", name, header);
-                // TODO: PERF: cloning here is kind of ugly
-
-                Symbol::GenericFunc(ctx.ctx.add_generic_func(GenericFunc {
-                    name: name.to_owned(),
-                    header, 
-                    def: func.clone(), // PERF: cloning is suboptimal here
-                    generic_count: func.generics.len() as _,
-                    instantiations: dmap::new(),
-                    module: ctx.module,
-                }))
-            }
-        }
+        ast::Definition::Function(func) => func_def(func, name, scope, ctx, add_symbol),
         ast::Definition::Struct(def) => {
             let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
-            add_symbol(scope, name.to_owned(), Symbol::Type(key), &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
             gen_struct(def, ctx, scope, key);
             Symbol::Type(key)
         }
         ast::Definition::Enum(def) => {
             let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
-            add_symbol(scope, name.to_owned(), Symbol::Type(key), &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
             gen_enum(def, ctx, scope, key);
             Symbol::Type(key)
         }
         ast::Definition::Trait(def) => {
             let trait_ = gen_trait(def, ctx, scope);
             let symbol = Symbol::Trait(ctx.ctx.add_trait(trait_));
-            add_symbol(scope, name.to_owned(), symbol, &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), symbol, ctx);
             symbol
         }
         ast::Definition::Module(id) => {
-            add_symbol(scope, name.to_owned(), Symbol::Module(*id), &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), Symbol::Module(*id), ctx);
             Symbol::Module(*id)
         }
         ast::Definition::Use(path) => {
             let symbol = resolve_path(path, ctx, scope);
-            add_symbol(scope, name.to_owned(), symbol, &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), symbol, ctx);
             symbol
         },
         ast::Definition::Const(ty, expr) => {
             let key = ctx.ctx.add_const(ConstVal::NotGenerated);
-            add_symbol(scope, name.to_owned(), Symbol::Const(key), &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), Symbol::Const(key), ctx);
             let val = match scope.eval_const(ctx, Some(ty), *expr) {
                 Ok(val) => val,
                 Err(err) => {
@@ -372,9 +339,48 @@ fn gen_definition(
             let ty = scope.resolve_uninferred_type(ty, ctx);
             assert!(val.is_none(), "TODO: Globals with initial values are unsupported right now");
             let symbol = Symbol::GlobalVar(ctx.ctx.add_global(ty, None));
-            add_symbol(scope, name.to_owned(), symbol, &mut ctx.globals);
+            add_symbol(scope, name.to_owned(), symbol, ctx);
             symbol
         }
+    }
+}
+
+fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx,
+    add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
+) -> Symbol {
+    if func.generics.is_empty() {
+        let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
+        let header = FunctionOrHeader::Header(func_info);
+        let key = ctx.ctx.add_func(header);
+        add_symbol(scope, name.to_owned(), Symbol::Func(key), ctx);
+        gen_func_body(func, key, scope, ctx);
+        Symbol::Func(key)
+    } else {
+        if func.generics.len() > u8::MAX as usize {
+            ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
+        }
+        let mut symbols = dmap::new();
+        for (i, name) in func.generics.iter().enumerate() {
+            let name = ctx.src(*name);
+            symbols.insert(name.to_owned(), Symbol::Generic(i as u8));
+        }
+        let defs = dmap::new();
+
+        let mut func_scope = scope.child(&mut symbols, &defs);
+        let header = gen_func_header(name.to_owned(), func, &mut func_scope, ctx);
+        crate::log!("Header of {}: {:?}", name, header);
+        // TODO: PERF: cloning here is kind of ugly
+
+        let symbol = Symbol::GenericFunc(ctx.ctx.add_generic_func(GenericFunc {
+            name: name.to_owned(),
+            header, 
+            def: func.clone(), // PERF: cloning is suboptimal here
+            generic_count: func.generics.len() as _,
+            instantiations: dmap::new(),
+            module: ctx.module,
+        }));
+        add_symbol(scope, name.to_owned(), symbol, ctx);
+        symbol
     }
 }
 
@@ -474,20 +480,25 @@ fn gen_struct(
     *loc = TypeDef::Struct(Struct {
         name,
         members,
-        functions: dmap::with_capacity(def.members.len()),
+        symbols: dmap::with_capacity(def.members.len()),
         generic_count: def.generics.len() as u8,
     });
 
     for (method_name, method) in &def.methods {
-        let header = gen_func_header(method_name.clone(), method, &mut scope, ctx);
-        let method_key = ctx.ctx.add_func(FunctionOrHeader::Header(header));
-        let TypeDef::Struct(Struct { functions: methods, .. }) = ctx.ctx.get_type_mut(key) else { unreachable!() };
-        methods.insert(method_name.clone(), method_key);
-    }
-    for (method_name, method) in &def.methods {
-        // type is set to Struct above
-        let TypeDef::Struct(struct_) = ctx.ctx.get_type_mut(key) else { unreachable!() };
-        gen_func_body(method, struct_.functions[method_name], &mut scope, ctx);
+        func_def(method, &method_name, &mut scope, ctx,
+            |scope, name, symbol, ctx| {
+                scope.add_symbol(name, symbol, &mut ctx.globals);
+                let TypeDef::Struct(Struct { symbols, .. }) = ctx.ctx.get_type_mut(key) else {
+                    unreachable!()
+                };
+
+                let symbol = match symbol {
+                    Symbol::Func(s) => StructMemberSymbol::Func(s),
+                    Symbol::GenericFunc(s) => StructMemberSymbol::GenericFunc(s),
+                    _ => unreachable!()
+                };
+                symbols.insert(method_name.clone(), symbol);
+        });
     }
 }
 
@@ -652,7 +663,7 @@ impl<'s> Scope<'s> {
                 Scope::Local { parent: _, symbols, defs } => {
                     if let Some(symbol) = symbols.get(name).copied()
                     .or_else(|| defs.get(name).map(|def| gen_definition(name, def, current, ctx,
-                        |scope, name, symbol, globals| scope.add_symbol(name, symbol, globals)
+                        |scope, name, symbol, ctx| scope.add_symbol(name, symbol, &mut ctx.globals)
                     )))
                     {
                         return Some(symbol);

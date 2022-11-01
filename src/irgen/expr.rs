@@ -8,7 +8,7 @@ use crate::{
         TypeTableIndices,
         RefVal,
         TypeDef,
-        BlockIndex, builder::BinOp, FunctionHeader, TupleCountMode, TypeInfoOrIndex, Type,
+        BlockIndex, builder::BinOp, FunctionHeader, TupleCountMode, TypeInfoOrIndex, Type, StructMemberSymbol,
     },
     error::Error,
     span::TSpan,
@@ -623,9 +623,11 @@ fn reduce_expr_any(
                         TypeInfo::Resolved(key, generics) => {
                             match &ctx.ctx.types[key.idx()].1 {
                                 TypeDef::Struct(struct_) => {
-                                    if let Some(func_id) = struct_.functions.get(member) {
-                                        let func = ctx.ctx.get_func(*func_id);
-                                        let header = func.header();
+                                    if let Some(symbol) = struct_.symbols.get(member) {
+                                        let header = match symbol {
+                                            StructMemberSymbol::Func(s) => ctx.ctx.get_func(*s).header(),
+                                            StructMemberSymbol::GenericFunc(s) => &ctx.ctx.get_generic_func(*s).header,
+                                        };
                                         let var = if let Some(first_arg) = header.params.first() {
                                             let this_ty = &first_arg.1;
                                             // TODO: this is a very primitive auto deref and can probably be made
@@ -661,7 +663,7 @@ fn reduce_expr_any(
                                             ir.invalidate(info.expected);
                                             Ref::UNDEF
                                         };
-                                        return (ExprResult::Method(var, *func_id), true);
+                                        return (ExprResult::Method(var, *symbol), true);
                                     } else if let Some((i, (_, ty))) = struct_
                                         .members
                                         .iter()
@@ -748,8 +750,12 @@ fn reduce_expr_any(
                     } else {
                         match ctx.ctx.get_type(key) {
                             TypeDef::Struct(def) => {
-                                if let Some(method) = def.functions.get(member) {
-                                    return (ExprResult::Symbol(ConstSymbol::Func(*method)), true);
+                                if let Some(method) = def.symbols.get(member) {
+                                    let const_symbol = match *method {
+                                        StructMemberSymbol::Func(key) => ConstSymbol::Func(key),
+                                        StructMemberSymbol::GenericFunc(key) => ConstSymbol::GenericFunc(key),
+                                    };
+                                    return (ExprResult::Symbol(const_symbol), true);
                                 } else {
                                     ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
                                     ir.invalidate(info.expected);
@@ -929,7 +935,7 @@ fn call(
     let args = &ctx.ast[args];
     let called_ty = ir.types.add(TypeInfo::Unknown);
     let called = &ctx.ast[func];
-    let func_info = |header: &FunctionHeader, generics, key, ir: &mut IrBuilder| {
+    fn func_info(header: &FunctionHeader, generics: TypeTableIndices, key: SymbolKey, ir: &mut IrBuilder) -> FuncInfo {
         let params = header.params.iter().map(|(_, ty)| ty.as_info_instanced(&mut ir.types, generics)).collect::<Vec<_>>();
         let ret = header.return_type.as_info_instanced(&mut ir.types, generics);
         
@@ -942,27 +948,41 @@ fn call(
             varargs: header.varargs,
             key,
         }
-    };
+    }
+    fn generic_call(
+        key: u32, args: &[ExprRef], call_expr: &Expr, info: ExprInfo,
+        scope: &mut Scope, ctx: &mut GenCtx, ir: &mut IrBuilder
+    ) -> Ref {
+        let func = ctx.ctx.get_generic_func(key);
+        let generics = ir.types.add_multiple_unknown(func.generic_count as _);
+        let f = func_info(&func.header, generics, SymbolKey::MISSING, ir);
+        let val = gen_call(scope, ctx, call_expr, f, None, args.iter().copied(), ir, info);
+        ir.add_generic_instantiation(key, generics, val);
+        val
+    }
+
     let r = match reduce_expr(scope, ctx, ir, called, info.with_expected(called_ty)) {
         ExprResult::Symbol(ConstSymbol::Func(key)) => {
             let header = ctx.ctx.get_func(key).header();
             let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
             gen_call(scope, ctx, call_expr, f, None, args.iter().copied(), ir, info)
         }
-        ExprResult::Symbol(ConstSymbol::GenericFunc(idx)) => {
-            let func = &ctx.ctx.generic_funcs[idx as usize];
-            let generics = ir.types.add_multiple_unknown(func.generic_count as _);
-            let f = func_info(&func.header, generics, SymbolKey::MISSING, ir);
-            let val = gen_call(scope, ctx, call_expr, f, None, args.iter().copied(), ir, info);
-            ir.add_generic_instantiation(idx, generics, val);
-            val
+        ExprResult::Symbol(ConstSymbol::GenericFunc(key)) => {
+            generic_call(key, args, call_expr, info, scope, ctx, ir)
         }
         ExprResult::Method(self_var, key) => {
             let called_span = called.span(ctx.ast);
             let this = Some((self_var, called_ty, called_span));
-            let header = ctx.ctx.get_func(key).header();
-            let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
-            gen_call(scope, ctx, call_expr, f, this, args.iter().copied(), ir, info)
+
+            match key {
+                StructMemberSymbol::Func(key) => {
+                    let header = ctx.ctx.get_func(key).header();
+                    let f = func_info(header, TypeTableIndices::EMPTY, key, ir);
+                    gen_call(scope, ctx, call_expr, f, this, args.iter().copied(), ir, info)
+                }
+                StructMemberSymbol::GenericFunc(key) => generic_call(key, args, call_expr, info, scope, ctx, ir),
+            }
+            
         }
         ExprResult::Symbol(ConstSymbol::Type(ty)) => {
             let (_, TypeDef::Struct(struct_)) = &ctx.ctx.types[ty.idx()] else {
