@@ -1,6 +1,6 @@
 use std::{ops::Index, borrow::Cow};
 
-use crate::{error::*, ast::ModuleId, span::{TSpan, Span}, types::Primitive, ir::TypeDef};
+use crate::{error::*, span::Span, types::Primitive, ir::TypeDef};
 
 use super::{TypeInfoOrIndex, SymbolKey, TypingCtx, Type};
 
@@ -72,12 +72,6 @@ impl TypeTable {
     pub fn add_multiple_info_or_index(&mut self, types: impl IntoIterator<Item = TypeInfoOrIndex>)
     -> TypeTableIndices {
         let idx = self.types.len() as u32;
-        let types = types.into_iter().map(|ty| {
-            if let TypeInfoOrIndex::Idx(the_idx) = ty {
-                debug_assert!(the_idx.idx() < idx as _);
-            }
-            ty
-        });
         self.types.extend(types);
         let count = (self.types.len() - idx as usize) as u32;
         self.ty_dbg("adding multiple (info_or_idx)", TypeTableIndices { idx, count })
@@ -110,13 +104,12 @@ impl TypeTable {
         idx: TypeTableIndex,
         other: TypeInfoOrIndex,
         errors: &mut Errors,
-        module: ModuleId,
-        span: TSpan,
+        span: Span,
         ctx: &TypingCtx,
     ) {
         match other {
-            TypeInfoOrIndex::Type(info) => self.specify(idx, info, errors, span.in_mod(module), ctx),
-            TypeInfoOrIndex::Idx(other_idx) => self.merge(idx, other_idx, errors, span.in_mod(module), ctx),
+            TypeInfoOrIndex::Type(info) => self.specify(idx, info, errors, span, ctx),
+            TypeInfoOrIndex::Idx(other_idx) => self.merge(idx, other_idx, errors, span, ctx),
         }
     }
 

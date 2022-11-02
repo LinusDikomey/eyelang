@@ -28,6 +28,7 @@ use crate::{
     },
 }; 
 
+mod call;
 mod const_eval;
 mod expr;
 mod pat;
@@ -121,7 +122,11 @@ enum ExprResult {
     Hole,
 
     /// method call on a variable: x.method
-    Method(Ref, StructMemberSymbol),
+    Method {
+        self_val: Ref,
+        self_ty: TypeTableIndex,
+        method_symbol: StructMemberSymbol
+    },
     
     Symbol(ConstSymbol),
 }
@@ -143,7 +148,7 @@ impl ExprResult {
                 errors.emit_span(Error::ExpectedValueFoundHole, span);
                 Ref::UNDEF
             }
-            ExprResult::Method(_, _) => {
+            ExprResult::Method { .. } => {
                 errors.emit_span(Error::ExpectedValueFoundFunction, span);
                 Ref::UNDEF
             }
@@ -301,7 +306,8 @@ fn gen_definition(
     add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
 ) -> Symbol {
     match def {
-        ast::Definition::Function(func) => func_def(func, name, scope, ctx, add_symbol),
+        // TODO: extra_generics should be passed to func_def for generic functions in generic functions
+        ast::Definition::Function(func) => func_def(func, name, scope, ctx, 0, add_symbol),
         ast::Definition::Struct(def) => {
             let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
             add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
@@ -352,10 +358,10 @@ fn gen_definition(
     }
 }
 
-fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx,
+fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx, extra_generics: u8,
     add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
 ) -> Symbol {
-    if func.generics.is_empty() {
+    if func.generics.is_empty() && extra_generics == 0 {
         let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
         let header = FunctionOrHeader::Header(func_info);
         let key = ctx.ctx.add_func(header);
@@ -363,13 +369,13 @@ fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCt
         gen_func_body(func, key, scope, ctx);
         Symbol::Func(key)
     } else {
-        if func.generics.len() > u8::MAX as usize {
+        if func.generics.len() + extra_generics as usize > u8::MAX as usize {
             ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
         }
         let mut symbols = dmap::new();
         for (i, name) in func.generics.iter().enumerate() {
             let name = ctx.src(*name);
-            symbols.insert(name.to_owned(), Symbol::Generic(i as u8));
+            symbols.insert(name.to_owned(), Symbol::Generic(extra_generics + i as u8));
         }
         let defs = dmap::new();
 
@@ -382,7 +388,7 @@ fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCt
             name: name.to_owned(),
             header, 
             def: func.clone(), // PERF: cloning is suboptimal here
-            generic_count: func.generics.len() as _,
+            generic_count: extra_generics + func.generics.len() as u8,
             instantiations: dmap::new(),
             module: ctx.module,
         }));
@@ -466,12 +472,15 @@ fn gen_struct(
     scope: &mut Scope,
     key: SymbolKey,
 ) {
-    let mut generic_symbols = def.generics.iter()
-    .enumerate()
-    .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
-    .collect();
+    if def.generics.len() > u8::MAX as _ {
+        ctx.errors.emit_span(Error::TooManyGenerics(def.generics.len()), Span::_todo(ctx.module));
+    }
+    let mut symbols = def.generics.iter()
+        .enumerate()
+        .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
+        .collect();
     let scope_defs = dmap::new();
-    let mut scope = scope.child(&mut generic_symbols, &scope_defs);
+    let mut scope = scope.child(&mut symbols, &scope_defs);
 
     let members = def.members.iter().map(|(name, unresolved, _start, _end)| {
         let ty = scope.resolve_uninferred_type(unresolved, ctx);
@@ -492,7 +501,7 @@ fn gen_struct(
     });
 
     for (method_name, method) in &def.methods {
-        func_def(method, &method_name, &mut scope, ctx,
+        func_def(method, &method_name, &mut scope, ctx, def.generics.len() as u8,
             |scope, name, symbol, ctx| {
                 scope.add_symbol(name, symbol, &mut ctx.globals);
                 let TypeDef::Struct(Struct { symbols, .. }) = ctx.ctx.get_type_mut(key) else {

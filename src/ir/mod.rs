@@ -266,6 +266,7 @@ impl SymbolKey {
     pub fn from_bytes(bytes: [u8; 8]) -> Self { Self(u64::from_le_bytes(bytes)) }
 }
 
+#[derive(Debug)]
 pub struct Function {
     pub header: FunctionHeader,
     pub ir: Option<FunctionIr>
@@ -453,7 +454,7 @@ impl Ref {
     }
     pub fn is_ref(self) -> bool { !self.is_val() }
     pub fn into_ref(self) -> Option<u32> {
-        self.is_ref().then_some(self.0 - INDEX_OFFSET)
+        self.is_ref().then(|| self.0 - INDEX_OFFSET)
     }
 
     pub fn to_bytes(self) -> [u8; 4] {

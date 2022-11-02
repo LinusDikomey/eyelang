@@ -26,6 +26,9 @@ impl Errors {
     }
 
     pub fn emit_err(&mut self, err: CompileError) {
+        if crate::CRASH_ON_ERROR.load(std::sync::atomic::Ordering::Relaxed) {
+            panic!("Error encountered and --crash-on-error is enabled. The error is: {err:?}");
+        }
         let list = match err.err.severity() {
             Severity::Error => &mut self.errors,
             Severity::Warn => &mut self.warnings,

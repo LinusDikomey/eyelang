@@ -96,7 +96,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                 .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
                 .collect::<Vec<_>>();
             
-            let varargs = if func.header.varargs {TRUE} else {FALSE};
+            let varargs = llvm_bool(func.header.varargs);
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
             let name = ffi::CString::new(func.header.name.as_bytes()).unwrap();
             (LLVMAddFunction(llvm_module, name.as_ptr(), func_ty), func_ty)

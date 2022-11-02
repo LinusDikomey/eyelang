@@ -217,10 +217,17 @@ impl IrBuilder {
                 Some(key) => *key,
                 None => {
                     let mut name = func.name.to_owned();
-                    for t in &generics {
+                    name.push('[');
+                    for (i, t) in generics.iter().enumerate() {
                         use std::fmt::Write;
-                        write!(name, ".{}", t.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name)).unwrap();
+
+                        if i != 0 {
+                            name.push(',');
+                        }
+                        write!(name, "{}", t.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name)).unwrap();
                     }
+                    name.push(']');
+                    
                     let params = func.header.params  
                         .iter()
                         .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generics)))
@@ -303,6 +310,7 @@ impl IrBuilder {
     }
 
     pub fn add_generic_instantiation(&mut self, generic_idx: u32, generics: super::TypeTableIndices, call_ref: Ref) {
+        debug_assert!(call_ref.is_ref(), "Reference to call expression expected");
         crate::log!("Registering generic instantiation: {:?}", generics);
         self.generic_instantiations.push((generic_idx, generics, call_ref));
     }

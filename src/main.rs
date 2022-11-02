@@ -38,6 +38,7 @@ use std::{
 
 static LOG: AtomicBool = AtomicBool::new(false);
 static DEBUG_INFER: AtomicBool = AtomicBool::new(false);
+static CRASH_ON_ERROR: AtomicBool = AtomicBool::new(false);
 
 macro_rules! log {
     () => {
@@ -152,6 +153,10 @@ pub struct Args {
     /// This will still normally execute the subcommand.
     #[clap(long)]
     llvm_ir: bool,
+
+    /// Crash once a single error is encountered. Mostly used for debugging the compiler.
+    #[clap(long)]
+    crash_on_error: bool,
     
     #[cfg_attr(
         feature = "llvm-backend",
@@ -168,6 +173,8 @@ fn main() {
     let args = Args::parse();
     DEBUG_INFER.store(args.debug_infer, std::sync::atomic::Ordering::Relaxed);
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
+    CRASH_ON_ERROR.store(args.crash_on_error, std::sync::atomic::Ordering::Relaxed);
+
     if args.log {
         ast::Expr::debug_sizes();
         ast::UnresolvedType::debug_sizes();
