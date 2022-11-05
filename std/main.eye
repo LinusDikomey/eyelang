@@ -71,3 +71,7 @@ panic :: fn(msg *i8) -> ! {
     c.printf("PANIC: %s\n", msg)
     c.exit(1)
 }
+
+## Adds an offset to the pointer and returns the offset pointer.
+## The offset is element-wise, so the number of bytes added will be multiplied by the size of T.
+ptr_add :: fn[T](ptr *T, offset u64) -> *T: (ptr as u64 + offset * T.size) as *T

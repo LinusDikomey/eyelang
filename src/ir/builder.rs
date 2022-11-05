@@ -246,7 +246,7 @@ impl IrBuilder {
                     let func = &mut ctx.ctx.generic_funcs[idx as usize];
 
                     func.instantiations.insert(generic_types.clone(), new_key);
-                    let mut scope = Scope::Module(ctx.module);
+                    let mut scope = Scope::Module(func.module);
 
                     // PERF: again: store definitions seperately to avoid cloning
                     // this isn't even the single place this needs to be cloned
@@ -254,7 +254,12 @@ impl IrBuilder {
                     // PERF: also cloning here
                     let generic_names = func.generics.clone();
                     let generics = generic_names.iter().map(String::as_str).zip(generic_types);
+                    
+                    let prev_module = ctx.module;
+                    ctx.module = func.module;
+
                     crate::irgen::gen_func_body(&def, new_key, &mut scope, ctx, generics);
+                    ctx.module = prev_module;
 
                     new_key
                 }
