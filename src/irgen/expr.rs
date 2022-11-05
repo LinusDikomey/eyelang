@@ -268,8 +268,8 @@ fn reduce_expr_any(
                     Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
                     Symbol::GenericFunc(idx) => ExprResult::Symbol(ConstSymbol::GenericFunc(idx)),
                     Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
+                    Symbol::TypeValue(ty) => ExprResult::Symbol(ConstSymbol::TypeValue(ty.clone())),
                     Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
-                    Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
                     Symbol::Module(m) => ExprResult::Symbol(ConstSymbol::Module(m)),
                     Symbol::Const(c) => {
                         let const_val = Scope::get_or_gen_const(ctx, c, *span);
@@ -616,15 +616,16 @@ fn reduce_expr_any(
                 (ir.build_bin_op(op, l, r, info.expected), true)
             }
         }
-        Expr::MemberAccess { left, name: name_span } => {
-            let member = &ctx.ast.src(ctx.module).0[name_span.range()];
+        Expr::MemberAccess { left, name: member_span } => {
+            let member = &ctx.ast.src(ctx.module).0[member_span.range()];
             let left_ty = ir.types.add(TypeInfo::Unknown);
 
             #[derive(Debug)]
             enum MemberAccessType {
                 Val { val: Ref, is_ptr: bool },
                 Module(ModuleId),
-                Associated(SymbolKey),
+                StructAssociated(SymbolKey),
+                TypeAssociated(Type),
                 TraitFunction(SymbolKey),
                 Invalid
             }
@@ -632,16 +633,58 @@ fn reduce_expr_any(
             let left_val = match reduce_expr(scope, ctx, ir, left, info.with_expected(left_ty)) {
                 ExprResult::VarRef(val) | ExprResult::Stored(val) => MemberAccessType::Val { val, is_ptr: true },
                 ExprResult::Val(val) => MemberAccessType::Val { val, is_ptr: false },
-                ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::Associated(ty),
-                ExprResult::Symbol(ConstSymbol::LocalType(_)) => todo!(), // TODO: might have to defer member access here
+                ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::StructAssociated(ty),
+                ExprResult::Symbol(ConstSymbol::TypeValue(ty)) => MemberAccessType::TypeAssociated(ty),
+                ExprResult::Symbol(ConstSymbol::LocalType(_)) => todo!("members of local types"),
                 ExprResult::Symbol(ConstSymbol::Trait(t)) => MemberAccessType::TraitFunction(t),
                 ExprResult::Symbol(ConstSymbol::Module(id)) => MemberAccessType::Module(id),
                 ExprResult::Symbol(_) | ExprResult::Method { .. } | ExprResult::Hole => {
-                    ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
+                    ctx.errors.emit_span(Error::NonexistantMember, member_span.in_mod(ctx.module));
                     MemberAccessType::Invalid
                 }
             };
 
+            let mut type_id_member = |key: SymbolKey, member: &str, generics: &[Type]| -> ExprResult {
+                if member == "size" {
+                    let size = ctx.ctx.get_type(key).layout(&ctx.ctx, generics).size;
+                    ir.specify(info.expected, TypeInfo::Primitive(Primitive::U64), &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                    ExprResult::Val(ir.build_int(size, info.expected))
+                } else if member == "align" {
+                    let align = ctx.ctx.get_type(key).layout(&ctx.ctx, generics).alignment;
+                    ir.specify(info.expected, TypeInfo::Primitive(Primitive::U64), &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                    ExprResult::Val(ir.build_int(align, info.expected))
+                } else {
+                    match ctx.ctx.get_type(key) {
+                        TypeDef::Struct(def) => {
+                            if let Some(method) = def.symbols.get(member) {
+                                let const_symbol = match *method {
+                                    StructMemberSymbol::Func(key) => ConstSymbol::Func(key),
+                                    StructMemberSymbol::GenericFunc(key) => ConstSymbol::GenericFunc(key),
+                                };
+                                return ExprResult::Symbol(const_symbol);
+                            } else {
+                                ctx.errors.emit_span(Error::UnknownFunction, member_span.in_mod(ctx.module));
+                                ir.invalidate(info.expected);
+                                return ExprResult::UNDEF
+                            }
+                        }
+                        TypeDef::Enum(def) => {
+                            let expr_span = ctx.span(expr);
+                            if let Some(&variant) = def.variants.get(member) {
+                                ir.types.specify(info.expected, TypeInfo::Resolved(key, TypeTableIndices::EMPTY),
+                                    &mut ctx.errors, expr_span, &ctx.ctx);
+                                let r = ir.build_int(variant as u64, info.expected);
+                                ExprResult::Val(r)
+                            } else {
+                                ctx.errors.emit_span(Error::NonexistantEnumVariant, member_span.in_mod(ctx.module));
+                                ir.invalidate(info.expected);
+                                ExprResult::UNDEF
+                            }
+                        }
+                        TypeDef::NotGenerated { .. } => unreachable!()
+                    }
+                }
+            };
             let accessed_val = match left_val {
                 MemberAccessType::Val { val, is_ptr } => {
                     // TODO: for auto ref/deref maybe count number of refs before the struct type?
@@ -701,7 +744,7 @@ fn reduce_expr_any(
                                         } else {
                                             ctx.errors.emit_span(
                                                 Error::NotAnInstanceMethod,
-                                                name_span.in_mod(ctx.module)
+                                                member_span.in_mod(ctx.module)
                                             );
                                             ir.invalidate(info.expected);
                                             (Ref::UNDEF, ir.types.add(TypeInfo::Invalid))
@@ -719,7 +762,7 @@ fn reduce_expr_any(
                                     {
                                         (ty.as_info_instanced(&mut ir.types, generics), i)
                                     } else {
-                                        ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
+                                        ctx.errors.emit_span(Error::NonexistantMember, member_span.in_mod(ctx.module));
                                         (TypeInfo::Invalid.into(), 0)
                                     }
                                 }
@@ -735,7 +778,7 @@ fn reduce_expr_any(
                             (TypeInfo::Invalid.into(), 0)
                         }
                         _ => {
-                            ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.module));
+                            ctx.errors.emit_span(Error::NonexistantMember, member_span.in_mod(ctx.module));
                             (TypeInfo::Invalid.into(), 0)
                         }
                     };
@@ -757,15 +800,15 @@ fn reduce_expr_any(
                             Symbol::Func(f) => ExprResult::Symbol(ConstSymbol::Func(f)),
                             Symbol::GenericFunc(f) => ExprResult::Symbol(ConstSymbol::GenericFunc(f)),
                             Symbol::Type(t) => ExprResult::Symbol(ConstSymbol::Type(t)),
+                            Symbol::TypeValue(t) => ExprResult::Symbol(ConstSymbol::TypeValue(t.clone())),
                             Symbol::Trait(t) => ExprResult::Symbol(ConstSymbol::Trait(t)),
-                            Symbol::LocalType(t) => ExprResult::Symbol(ConstSymbol::LocalType(t)),
                             Symbol::Generic(_) => todo!(), // is this a possibility
                             Symbol::Module(m) => ExprResult::Symbol(ConstSymbol::Module(m)),
                             Symbol::Var { .. } => unreachable!("vars in module shouldn't exist"),
                             Symbol::GlobalVar(key) => {
                                 let (ty, _) = ctx.ctx.get_global(key);
                                 let ty_info = ty.as_info(&mut ir.types);
-                                let span = name_span.in_mod(ctx.module);
+                                let span = member_span.in_mod(ctx.module);
                                 ir.types.specify(info.expected, ty_info, &mut ctx.errors, span, &ctx.ctx);
                                 ExprResult::VarRef(ir.build_global(key, info.expected))
                             }
@@ -779,51 +822,47 @@ fn reduce_expr_any(
                             }
                         }, true);
                     } else {
-                        ctx.errors.emit_span(Error::UnknownIdent, name_span.in_mod(ctx.module));
+                        ctx.errors.emit_span(Error::UnknownIdent, member_span.in_mod(ctx.module));
                         ir.invalidate(info.expected);
                         Ref::UNDEF
                     }
                 }
-                MemberAccessType::Associated(key) => {
-                    if member == "size" {
-                        // this is all very temporary and not platform independent
-                        let size = ctx.ctx.get_type(key)._layout(&ctx.ctx, &[]).size;
-                        let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
-                        ir.build_int(size, u64_ty)
-                    } else if member == "align" {
-                        // this too
-                        let align = ctx.ctx.get_type(key)._layout(&ctx.ctx, &[]).alignment;
-                        let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
-                        ir.build_int(align, u64_ty)
-                    } else {
-                        match ctx.ctx.get_type(key) {
-                            TypeDef::Struct(def) => {
-                                if let Some(method) = def.symbols.get(member) {
-                                    let const_symbol = match *method {
-                                        StructMemberSymbol::Func(key) => ConstSymbol::Func(key),
-                                        StructMemberSymbol::GenericFunc(key) => ConstSymbol::GenericFunc(key),
-                                    };
-                                    return (ExprResult::Symbol(const_symbol), true);
-                                } else {
-                                    ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
-                                    ir.invalidate(info.expected);
+                MemberAccessType::StructAssociated(key) => {
+                    return (type_id_member(key, member, &[]), true)
+                }
+                MemberAccessType::TypeAssociated(ty) => {
+                    match &ty {
+                        Type::Id(key, generics) => return (type_id_member(*key, member, &generics), true),
+                        Type::Enum(variants) => {
+                            let ty = ty.as_info(&mut ir.types);
+                            ir.specify(info.expected, ty, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                            match variants.iter().find(|m| m.as_str() == member) {
+                                Some(variant) => ir.build_enum_lit(variant, info.expected),
+                                None => {
+                                    ctx.errors.emit_span(Error::NonexistantEnumVariant, member_span.in_mod(ctx.module));
                                     Ref::UNDEF
                                 }
                             }
-                            TypeDef::Enum(def) => {
-                                let expr_span = ctx.span(expr);
-                                return (if let Some(&variant) = def.variants.get(member) {
-                                    ir.types.specify(info.expected, TypeInfo::Resolved(key, TypeTableIndices::EMPTY),
-                                        &mut ctx.errors, expr_span, &ctx.ctx);
-                                    let r = ir.build_int(variant as u64, info.expected);
-                                    ExprResult::Val(r)
-                                } else {
-                                    ctx.errors.emit_span(Error::NonexistantEnumVariant, name_span.in_mod(ctx.module));
-                                    ir.invalidate(info.expected);
-                                    ExprResult::Val(Ref::UNDEF)
-                                }, true)
-                            }
-                            TypeDef::NotGenerated { .. } => unreachable!()
+                        }
+                        Type::Prim(_)
+                        | Type::Pointer(_)
+                        | Type::Array(_)
+                        | Type::Tuple(_) => {
+                            let size_or_align = match member {
+                                "size" => ty.layout(&ctx.ctx, &[]).size,
+                                "align" => ty.layout(&ctx.ctx, &[]).alignment,
+                                _ => {
+                                    ctx.errors.emit_span(Error::NonexistantMember, member_span.in_mod(ctx.module));
+                                    return (ExprResult::UNDEF, true)
+                                }
+                            };
+                            ir.specify(info.expected, TypeInfo::Primitive(Primitive::U64), &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
+                            ir.build_int(size_or_align, info.expected)
+                        }
+                        Type::Symbol => todo!(),
+                        Type::Generic(_) => unreachable!(),
+                        Type::Invalid => {
+                            return (ExprResult::UNDEF, true)
                         }
                     }
                 }
@@ -831,7 +870,7 @@ fn reduce_expr_any(
                     if let Some((idx, _)) = ctx.ctx.get_trait(t).functions.get(member) {
                         return (ExprResult::Symbol(ConstSymbol::TraitFunc(t, *idx)), true);
                     } else {
-                        ctx.errors.emit_span(Error::UnknownFunction, name_span.in_mod(ctx.module));
+                        ctx.errors.emit_span(Error::UnknownFunction, member_span.in_mod(ctx.module));
                         ir.invalidate(info.expected);
                         Ref::UNDEF
                     }
@@ -885,11 +924,11 @@ fn reduce_expr_any(
             let member = ir.build_member_int(expr_var, *idx as u32, elem_ty_ptr);
             return (ExprResult::VarRef(member), true);
         }
-        Expr::Cast(span, target, val) => {
+        Expr::Cast(_, target, val) => {
             let target = match scope.resolve_type(target, &mut ir.types, ctx) {
                 Ok(target) => target,
                 Err(err) => {
-                    ctx.errors.emit_span(err, span.in_mod(ctx.module));
+                    ctx.errors.emit_span(err, target.span().in_mod(ctx.module));
                     TypeInfo::Invalid
                 }
             };

@@ -118,13 +118,15 @@ impl TypeTable {
     ) {
         if a.idx() == b.idx() { return; }
         let (curr_a_idx, a_ty) = self.find(a);
-        let b_ty = self.get_type(b);
+        let (curr_b_idx, b_ty) = self.find(b);
+        if curr_a_idx.idx() == curr_b_idx.idx() { return; }
         self.ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
+
 
 
         // merge b's previous type into a
         let new_ty = match merge_twosided(a_ty, b_ty, self, ctx) {
-            Some(ty) => self.ty_dbg("\t... merged", (ty, &self)).0,
+            Some(ty) => self.ty_dbg("\t... merged", ty),
             None => {
                 self.ty_dbg("\t... failed to merge", span);
                 errors.emit_span(Error::MismatchedType {
@@ -139,6 +141,8 @@ impl TypeTable {
         // make b point to a
         debug_assert_ne!(b.idx(), curr_a_idx.idx());
         self.types[b.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
+        debug_assert_ne!(curr_b_idx.idx(), curr_a_idx.idx());
+        self.types[curr_b_idx.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
 
         // potentially shorten path of a
         if a.idx() != curr_a_idx.idx() {
@@ -336,7 +340,6 @@ pub enum TypeInfo {
     Enum(TypeTableNames),
     Tuple(TypeTableIndices, TupleCountMode),
     Symbol, // compile time Symbol like a function, type or trait
-    Generic(u8), // a type that is not instanciated to a specific type yet.
     Invalid,
 }
 impl TypeInfo {
@@ -404,7 +407,6 @@ impl TypeInfo {
                 s.into()
             }
             TypeInfo::Symbol =>  "symbol".into(),
-            TypeInfo::Generic(_) => todo!(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
     }
@@ -444,7 +446,6 @@ impl TypeInfo {
             Self::Symbol => {
                 Type::Symbol
             }
-            Self::Generic(i) => Type::Generic(i),
         }
     }
 }
@@ -565,15 +566,6 @@ fn merge_onesided(ty: TypeInfo, other: TypeInfo, types: &mut TypeTable, ctx: &Ty
         }
         Symbol => if let Symbol = other {
             Some(ty)
-        } else {
-            None
-        }
-        Generic(i) => if let Generic(j) = other {
-            if i == j {
-                Some(ty)
-            } else {
-                None
-            }
         } else {
             None
         }

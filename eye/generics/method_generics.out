@@ -1,0 +1,11 @@
+Compiling method_generics ...
+Running method_generics...
+55, 55
+1 = 1, 1.500000 = 1.500000
+Instantiating with size 8
+[1, 2]
+[3, 4]
+[5, 6]
+[2, 4]
+[9, 12]
+[20, 24]

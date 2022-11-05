@@ -167,7 +167,8 @@ fn generic_call(
     scope: &mut Scope, ctx: &mut GenCtx, ir: &mut IrBuilder
 ) -> Ref {
     let func = ctx.ctx.get_generic_func(key);
-    let generics = ir.types.add_multiple_unknown(func.generic_count as _);
+    let generics = ir.types.add_multiple_unknown(func.generic_count() as _);
+    crate::log!("generic call with generics {generics:?}");
     let f = func_info(&func.header, generics, SymbolKey::MISSING, ir);
     let val = gen_call(scope, ctx, call_expr, f, this_arg, args.iter().copied(), ir, info);
     if val != Ref::UNDEF {

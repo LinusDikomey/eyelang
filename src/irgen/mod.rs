@@ -56,7 +56,7 @@ impl<'s> GenCtx<'s> {
     fn resolve_module_symbol(&mut self, id: ModuleId, name: &str) -> Option<Symbol> {
         let prev_id = self.module;
         self.module = id;
-        let symbol = self.globals[id].get(name).copied().or_else(|| {
+        let symbol = self.globals[id].get(name).cloned().or_else(|| {
             self.ast[self.ast[id].definitions].get(name).map(|def|
                 gen_definition(name, def, &mut Scope::Module(id), self,
                     |_scope, name, symbol, ctx| {
@@ -131,6 +131,8 @@ enum ExprResult {
     Symbol(ConstSymbol),
 }
 impl ExprResult {
+    const UNDEF: Self = Self::Val(Ref::UNDEF);
+
     pub fn get_or_load(
         self,
         ir: &mut IrBuilder,
@@ -307,7 +309,7 @@ fn gen_definition(
 ) -> Symbol {
     match def {
         // TODO: extra_generics should be passed to func_def for generic functions in generic functions
-        ast::Definition::Function(func) => func_def(func, name, scope, ctx, 0, add_symbol),
+        ast::Definition::Function(func) => func_def(func, name, scope, ctx, vec![], add_symbol),
         ast::Definition::Struct(def) => {
             let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
             add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
@@ -323,7 +325,7 @@ fn gen_definition(
         ast::Definition::Trait(def) => {
             let trait_ = gen_trait(def, ctx, scope);
             let symbol = Symbol::Trait(ctx.ctx.add_trait(trait_));
-            add_symbol(scope, name.to_owned(), symbol, ctx);
+            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
             symbol
         }
         ast::Definition::Module(id) => {
@@ -332,7 +334,7 @@ fn gen_definition(
         }
         ast::Definition::Use(path) => {
             let symbol = resolve_path(path, ctx, scope);
-            add_symbol(scope, name.to_owned(), symbol, ctx);
+            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
             symbol
         },
         ast::Definition::Const(ty, expr) => {
@@ -352,30 +354,31 @@ fn gen_definition(
             let ty = scope.resolve_uninferred_type(ty, ctx);
             assert!(val.is_none(), "TODO: Globals with initial values are unsupported right now");
             let symbol = Symbol::GlobalVar(ctx.ctx.add_global(ty, None));
-            add_symbol(scope, name.to_owned(), symbol, ctx);
+            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
             symbol
         }
     }
 }
 
-fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx, extra_generics: u8,
+fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx,
+    extra_generics: Vec<String>,
     add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
 ) -> Symbol {
-    if func.generics.is_empty() && extra_generics == 0 {
+    if func.generics.is_empty() && extra_generics.len() == 0 {
         let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
         let header = FunctionOrHeader::Header(func_info);
         let key = ctx.ctx.add_func(header);
         add_symbol(scope, name.to_owned(), Symbol::Func(key), ctx);
-        gen_func_body(func, key, scope, ctx);
+        gen_func_body(func, key, scope, ctx, []);
         Symbol::Func(key)
     } else {
-        if func.generics.len() + extra_generics as usize > u8::MAX as usize {
+        if func.generics.len() + extra_generics.len() > u8::MAX as usize {
             ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
         }
         let mut symbols = dmap::new();
         for (i, name) in func.generics.iter().enumerate() {
             let name = ctx.src(*name);
-            symbols.insert(name.to_owned(), Symbol::Generic(extra_generics + i as u8));
+            symbols.insert(name.to_owned(), Symbol::Generic((extra_generics.len() + i) as u8));
         }
         let defs = dmap::new();
 
@@ -384,15 +387,20 @@ fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCt
         crate::log!("Header of {}: {:?}", name, header);
         // TODO: PERF: cloning here is kind of ugly
 
+        let mut generics = extra_generics;
+        for name in &func.generics {
+            generics.push(ctx.src(*name).to_owned());
+        }
+
         let symbol = Symbol::GenericFunc(ctx.ctx.add_generic_func(GenericFunc {
             name: name.to_owned(),
             header, 
             def: func.clone(), // PERF: cloning is suboptimal here
-            generic_count: extra_generics + func.generics.len() as u8,
+            generics,
             instantiations: dmap::new(),
             module: ctx.module,
         }));
-        add_symbol(scope, name.to_owned(), symbol, ctx);
+        add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
         symbol
     }
 }
@@ -414,7 +422,9 @@ fn gen_func_header(name: String, func: &ast::Function, scope: &mut Scope, ctx: &
         return_type,
     }
 }
-pub fn gen_func_body(def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx) {
+pub fn gen_func_body<'a>(def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx,
+    generics: impl IntoIterator<Item = (&'a str, Type)>
+) {
     let func_idx = key.idx();
     let header = match &ctx.ctx.funcs[func_idx] {
         FunctionOrHeader::Func(_) => {
@@ -427,10 +437,8 @@ pub fn gen_func_body(def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx
         let mut builder = IrBuilder::new(ctx.module);
         let mut scope_symbols = dmap::with_capacity(header.params.len() + def.generics.len());
         
-        for (i, generic) in def.generics.iter().enumerate() {
-            let name = &ctx.ast.src(ctx.module).0[generic.range()];
-            let generic_ty = builder.types.add(TypeInfo::Generic(i as u8));
-            scope_symbols.insert(name.to_owned(), Symbol::LocalType(generic_ty));
+        for (name, generic) in generics.into_iter() {
+            scope_symbols.insert(name.to_owned(), Symbol::TypeValue(generic));
         }
         for (i, (name, ty)) in header.params.iter().enumerate() {
             let info = ty.as_info(&mut builder.types);
@@ -501,9 +509,13 @@ fn gen_struct(
     });
 
     for (method_name, method) in &def.methods {
-        func_def(method, &method_name, &mut scope, ctx, def.generics.len() as u8,
+        let generics = def.generics
+            .iter()
+            .map(|span| ctx.src(*span).to_owned())
+            .collect();
+        func_def(method, &method_name, &mut scope, ctx, generics,
             |scope, name, symbol, ctx| {
-                scope.add_symbol(name, symbol, &mut ctx.globals);
+                scope.add_symbol(name, symbol.clone(), &mut ctx.globals);
                 let TypeDef::Struct(Struct { symbols, .. }) = ctx.ctx.get_type_mut(key) else {
                     unreachable!()
                 };
@@ -613,13 +625,13 @@ fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Symbol {
     Func(SymbolKey),
     GenericFunc(u32),
     Type(SymbolKey),
+    TypeValue(Type),
     Trait(SymbolKey),
-    LocalType(TypeTableIndex),
     Generic(u8),
     Module(ModuleId),
     Var { ty: TypeTableIndex, var: Ref },
@@ -662,7 +674,7 @@ impl<'s> Scope<'s> {
         match self {
             Self::Module(id) => &globals[*id],
             Self::Local { symbols, .. } => *symbols
-        }.get(name).copied()
+        }.get(name).cloned()
     }
     fn add_symbol(&mut self, name: String, symbol: Symbol, globals: &mut Globals) {
         let prev = match self {
@@ -677,7 +689,7 @@ impl<'s> Scope<'s> {
             match current {
                 &mut Scope::Module(id) => return ctx.resolve_module_symbol(id, name),
                 Scope::Local { parent: _, symbols, defs } => {
-                    if let Some(symbol) = symbols.get(name).copied()
+                    if let Some(symbol) = symbols.get(name).cloned()
                     .or_else(|| defs.get(name).map(|def| gen_definition(name, def, current, ctx,
                         |scope, name, symbol, ctx| scope.add_symbol(name, symbol, &mut ctx.globals)
                     )))
@@ -745,9 +757,9 @@ impl<'s> Scope<'s> {
                     })
                 };
                 let resolved = match current_module {
-                    ModuleOrLocal::Module(m) => *ctx.globals[m]
+                    ModuleOrLocal::Module(m) => ctx.globals[m]
                         .get(last.0)
-                        .ok_or(Error::UnknownIdent)?,
+                        .ok_or(Error::UnknownIdent)?.clone(),
                     ModuleOrLocal::Local => self.resolve(last.0, ctx).ok_or(Error::UnknownIdent)?
                 };
 
@@ -756,8 +768,6 @@ impl<'s> Scope<'s> {
                         let generics = resolve_generics(ctx, self, ty)?;
                         Ok(TypeInfo::Resolved(ty, generics))
                     }
-                    // TODO: might require a new solution to allow inference of local types
-                    Symbol::LocalType(ty) => Ok(types.get_type(ty)),
                     Symbol::Const(key) => {
                         match ctx.ctx.get_const(key) {
                             &ConstVal::Symbol(ConstSymbol::Type(key)) => {
@@ -766,6 +776,9 @@ impl<'s> Scope<'s> {
                             }
                             _ => Err(Error::TypeExpected)
                         }
+                    }
+                    Symbol::TypeValue(ty) => {
+                        Ok(ty.as_info(types))
                     }
                     _ => Err(Error::TypeExpected)
                 } 
@@ -869,7 +882,6 @@ impl<'s> Scope<'s> {
                                 // let Ok(generics) = resolve_generics(ctx, self, ty) else { return Type::Invalid };
                                 // Type::Id(ty, generics)
                             }
-                            Some(Symbol::LocalType(_ty)) => todo!(), // what to do here, what was LocalType again?
                             Some(Symbol::Const(key)) => {
                                 if let &ConstVal::Symbol(ConstSymbol::Type(key)) = ctx.ctx.get_const(*key) {
                                     if let Ok(generics) = resolve_generics(ctx, self, key) {
@@ -896,8 +908,6 @@ impl<'s> Scope<'s> {
                             }
                         }
                         Some(Symbol::Generic(i)) => Type::Generic(i),
-                        //TODO: local generics?
-                        Some(Symbol::LocalType(_ty)) => todo!(), // what to do here, what was LocalType again?
                         None => {
                             ctx.errors.emit_span(Error::UnknownIdent, last.1.in_mod(ctx.module));
                             Type::Invalid

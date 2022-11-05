@@ -5,15 +5,16 @@ use super::{IrBuilder, expr::ExprInfo, ConstSymbol, ExprResult};
 pub(super) fn to_expr_result(val: &ConstVal, ir: &mut IrBuilder, info: ExprInfo) -> ExprResult {
     // TODO: specify types here
     ExprResult::Val(match val {
-        &ConstVal::Symbol(symbol) => {
+        ConstVal::Symbol(symbol) => {
             return match symbol {
-                ConstSymbol::Func(key) => ExprResult::Symbol(ConstSymbol::Func(key)),
-                ConstSymbol::GenericFunc(key) => ExprResult::Symbol(ConstSymbol::GenericFunc(key)),
-                ConstSymbol::Type(key) => ExprResult::Symbol(ConstSymbol::Type(key)),
-                ConstSymbol::Trait(key) => ExprResult::Symbol(ConstSymbol::Trait(key)),
-                ConstSymbol::LocalType(..) => unreachable!(),
-                ConstSymbol::Module(key) => ExprResult::Symbol(ConstSymbol::Module(key)),
-                ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+                &ConstSymbol::Func(key) => ExprResult::Symbol(ConstSymbol::Func(key)),
+                &ConstSymbol::GenericFunc(key) => ExprResult::Symbol(ConstSymbol::GenericFunc(key)),
+                &ConstSymbol::Type(key) => ExprResult::Symbol(ConstSymbol::Type(key)),
+                ConstSymbol::TypeValue(ty) => ExprResult::Symbol(ConstSymbol::TypeValue(ty.clone())),
+                &ConstSymbol::Trait(key) => ExprResult::Symbol(ConstSymbol::Trait(key)),
+                &ConstSymbol::LocalType(..) => unreachable!(),
+                &ConstSymbol::Module(key) => ExprResult::Symbol(ConstSymbol::Module(key)),
+                &ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
                     ExprResult::Symbol(ConstSymbol::TraitFunc(trait_symbol, func_idx))
                 }
             }

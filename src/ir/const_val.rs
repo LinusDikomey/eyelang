@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{types::{IntType, FloatType, Primitive}, irgen::IrBuilder, ast::ModuleId, span::{TSpan, Span}, error::Errors};
 
-use super::{TypeTable, TypeInfo, SymbolKey, TypeTableIndex, TypingCtx, Ref};
+use super::{TypeTable, TypeInfo, SymbolKey, TypeTableIndex, TypingCtx, Ref, Type};
 
 #[derive(Debug, Clone)]
 pub enum ConstVal {
@@ -62,12 +62,13 @@ impl fmt::Display for ConstVal {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ConstSymbol {
     Func(SymbolKey),
     GenericFunc(u32),
     TraitFunc(SymbolKey, u32),
     Type(SymbolKey),
+    TypeValue(Type),
     Trait(SymbolKey),
     LocalType(TypeTableIndex),
     Module(ModuleId),
@@ -75,16 +76,17 @@ pub enum ConstSymbol {
 impl ConstSymbol {
     pub fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
         ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
-        match *self {
-            ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
+        match self {
+            &ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
             ConstSymbol::GenericFunc(_) => todo!(),
-            ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
+            &ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
                 ir.build_trait_func(trait_symbol, func_idx, ty)
             }
-            ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
-            ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
-            ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
-            ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
+            &ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
+            ConstSymbol::TypeValue(_ty) => todo!(),
+            &ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
+            &ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
+            &ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
         }
     }
     pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {

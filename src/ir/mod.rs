@@ -103,9 +103,14 @@ pub struct GenericFunc {
     pub name: String,
     pub header: FunctionHeader,
     pub def: ast::Function,
-    pub generic_count: u8,
+    pub generics: Vec<String>,
     pub instantiations: DHashMap<Vec<Type>, SymbolKey>,
     pub module: ModuleId,
+}
+impl GenericFunc {
+    pub fn generic_count(&self) -> u8 {
+        self.generics.len() as u8
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -123,20 +128,20 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn _layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
+    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             Type::Prim(p) => p.layout(),
-            Type::Id(key, generics) => ctx.get_type(*key)._layout(ctx, generics),
+            Type::Id(key, generics) => ctx.get_type(*key).layout(ctx, generics),
             Type::Pointer(_) => Layout::PTR,
             Type::Array(b) => {
                 let (ty, size) = &**b;
-                ty._layout(ctx, generics).mul_size(*size as u64)
+                ty.layout(ctx, generics).mul_size(*size as u64)
             }
             Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
-                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty._layout(ctx, generics)))
+                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
             }
-            Type::Generic(idx) => generics[*idx as usize]._layout(ctx, generics),
+            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
             Type::Symbol | Type::Invalid => Layout::ZERO,
         }
     }
@@ -342,13 +347,13 @@ impl TypeDef {
             Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
-    pub fn _layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
+    pub fn layout(&self, ctx: &TypingCtx, generics: &[Type]) -> Layout {
         match self {
             TypeDef::Struct(struct_) => {
                 let mut alignment = 1;
                 let size = struct_.members.iter()
                     .map(|(_, ty)| {
-                        let layout = ty._layout(ctx, generics);
+                        let layout = ty.layout(ctx, generics);
                         alignment = alignment.max(layout.alignment);
                         layout.size
                     })

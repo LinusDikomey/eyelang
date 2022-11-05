@@ -210,15 +210,16 @@ impl IrBuilder {
                     "there should have been at least one error if this exhaustion is invalid")
             }
         }
-        for (idx, generics, call_ref) in self.generic_instantiations {
+        for (idx, generic_types, call_ref) in self.generic_instantiations {
             let func = &mut ctx.ctx.generic_funcs[idx as usize];
-            let generics = types[generics].to_vec();
-            let func_key = match func.instantiations.get(&generics) {
+            debug_assert_eq!(func.generic_count() as usize, generic_types.len());
+            let generic_types = types[generic_types].to_vec();
+            let func_key = match func.instantiations.get(&generic_types) {
                 Some(key) => *key,
                 None => {
                     let mut name = func.name.to_owned();
                     name.push('[');
-                    for (i, t) in generics.iter().enumerate() {
+                    for (i, t) in generic_types.iter().enumerate() {
                         use std::fmt::Write;
 
                         if i != 0 {
@@ -230,10 +231,10 @@ impl IrBuilder {
                     
                     let params = func.header.params  
                         .iter()
-                        .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generics)))
+                        .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_types)))
                         .collect();
                     let varargs = func.header.varargs;
-                    let return_type = func.header.return_type.instantiate_generics(&generics);
+                    let return_type = func.header.return_type.instantiate_generics(&generic_types);
 
                     crate::log!("instantiating generic function {name}");
                     let new_key = ctx.ctx.add_func(crate::ir::FunctionOrHeader::Header(FunctionHeader {
@@ -244,13 +245,16 @@ impl IrBuilder {
                     }));
                     let func = &mut ctx.ctx.generic_funcs[idx as usize];
 
-                    func.instantiations.insert(generics, new_key);
+                    func.instantiations.insert(generic_types.clone(), new_key);
                     let mut scope = Scope::Module(ctx.module);
 
                     // PERF: again: store definitions seperately to avoid cloning
                     // this isn't even the single place this needs to be cloned
                     let def = func.def.clone();
-                    crate::irgen::gen_func_body(&def, new_key, &mut scope, ctx);
+                    // PERF: also cloning here
+                    let generic_names = func.generics.clone();
+                    let generics = generic_names.iter().map(String::as_str).zip(generic_types);
+                    crate::irgen::gen_func_body(&def, new_key, &mut scope, ctx, generics);
 
                     new_key
                 }
