@@ -54,6 +54,10 @@ impl TokenReader {
         }
     }
 
+    pub fn step_back(&mut self) {
+        self.index -= 1;
+    }
+
     /// steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
@@ -154,7 +158,10 @@ pub enum Delimit {
     No,
     /// The delimiter may be omitted
     #[allow(unused)]
-    Optional
+    Optional,
+
+    /// delimiter may be omitted if the next entry starts on a new line
+    OptionalIfNewLine,
 }
 impl From<()> for Delimit {
     fn from((): ()) -> Self { Self::Yes }

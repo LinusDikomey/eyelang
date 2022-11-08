@@ -218,6 +218,11 @@ pub enum Expr {
     StringLiteral(TSpan),
     BoolLiteral { start: u32, val: bool },
     EnumLiteral { dot: u32, ident: TSpan },
+    Record {
+        span: TSpan,
+        names: Vec<TSpan>,
+        values: u32, // multiple values: expr extra (count of names)
+    },
     Nested(TSpan, ExprRef),
     Unit(TSpan),
     Variable(TSpan),
@@ -273,6 +278,7 @@ impl Expr {
         match self {
             Expr::Block { span, .. }
                 | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
+                | Expr::Record { span, .. }
                 | Expr::Nested(span, _) 
                 | Expr::Unit(span)
                 | Expr::Variable(span)

@@ -67,6 +67,19 @@ impl<'a> Parser<'a> {
                 Delimit::Optional => {
                     self.toks.step_if(delim);
                 }
+                Delimit::OptionalIfNewLine => {
+                    if self.toks.step_if(delim).is_none() {
+                        if let Some(after) = self.toks.peek() {
+                            if !after.new_line && after.ty != end {
+                                return Err(Error::UnexpectedToken {
+                                    expected: ExpectedTokens::AnyOf(vec![delim, end]),
+                                    found: after.ty
+                                }.at_span(after.span().in_mod(self.toks.module)));
+                            }
+                        }
+                    }
+
+                }
             }
         }
     }
@@ -626,8 +639,16 @@ impl<'a> Parser<'a> {
                 Expr::Root(start)
             },
             TokenType::Dot => {
-                let ident = self.toks.step_expect(TokenType::Ident)?.span();
-                Expr::EnumLiteral { dot: start, ident }
+                let tok = self.toks.step()?;
+                match_or_unexpected! {tok, self.toks.module,
+                    TokenType::Ident = TokenType::Ident => {
+                        Expr::EnumLiteral { dot: start, ident: tok.span() }
+                    },
+                    TokenType::LBrace = TokenType::LBrace => {
+                        self.parse_record(tok)?
+                    }
+                }
+                
             },
             TokenType::Keyword(Keyword::Asm) => {
                 self.toks.step_expect(TokenType::LParen)?;
@@ -688,7 +709,7 @@ impl<'a> Parser<'a> {
                     Expr::Index { expr, idx, end }
                 }
                 Some(TokenType::Dot) => {
-                    self.toks.step_assert(TokenType::Dot);
+                    let dot = self.toks.step_assert(TokenType::Dot);
                     let tok = self.toks.step()?;
                     match_or_unexpected! {tok, self.toks.module,
                         TokenType::Ident = TokenType::Ident => {
@@ -697,6 +718,20 @@ impl<'a> Parser<'a> {
                         TokenType::IntLiteral = TokenType::IntLiteral => {
                             let idx = self.src[tok.span().range()].parse().unwrap();
                             Expr::TupleIdx { expr, idx, end: tok.end }
+                        },
+                        TokenType::LBrace = TokenType::LBrace => {
+                            if dot.new_line {
+                                // record literal on new line, ignore
+                                self.toks.step_back();
+                                self.toks.step_back();
+                                break Ok(expr);
+                            }
+                            /*Expr::Record {
+                                span,
+                                names,
+                                values,
+                            }*/
+                            todo!("record parsing")
                         }
                     }
                 }
@@ -771,6 +806,27 @@ impl<'a> Parser<'a> {
             end = self.toks.step_expect(TokenType::Ident)?.end;
         }
         Ok(IdentPath::new(TSpan::new(start, end)))
+    }
+
+    fn parse_record(&mut self, lbrace: Token) -> EyeResult<Expr> {
+        debug_assert_eq!(lbrace.ty, TokenType::LBrace);
+        let start = lbrace.start;
+        let mut names = vec![];
+        let mut values = vec![];
+        let end = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+            let name = p.toks.step_expect(TokenType::Ident)?.span();
+            let val = p.parse_expr()?;
+            names.push(name);
+            values.push(val);
+            Ok(Delimit::OptionalIfNewLine)
+        })?.end;
+        debug_assert_eq!(names.len(), values.len());
+        let values = self.ast.add_extra(&values);
+        Ok(Expr::Record {
+            span: TSpan::new(start, end),
+            values: values.idx,
+            names
+        })
     }
 
     fn parse_type(&mut self) -> EyeResult<UnresolvedType> {

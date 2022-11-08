@@ -181,6 +181,8 @@ pub fn reduce_pat(
             prev_exhausted_ref.unwrap_or(Ref::val(RefVal::True))
         }
         Expr::StringLiteral(_) // TODO definitely very important
+        | Expr::Record { .. } // very useful to match on records
+        | Expr::StringLiteral(_) // TODO definitely very important
         | Expr::Block { .. }
         | Expr::Declare { .. }
         | Expr::DeclareWithVal { .. }

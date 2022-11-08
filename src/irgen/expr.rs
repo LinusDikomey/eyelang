@@ -234,6 +234,7 @@ fn reduce_expr_any(
             let variant_name = ctx.src(*ident);
             (ir.build_enum_lit(variant_name, info.expected), true)
         }
+        Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => {
             return reduce_expr_any(scope, ctx, ir, &ctx.ast[*inner], info, get_var);
         }
