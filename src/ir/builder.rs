@@ -4,7 +4,7 @@ use crate::{
     error::Errors, span::TSpan, types::Primitive, irgen::{GenCtx, Scope},
 };
 
-use super::{TypingCtx, exhaust::Exhaustion};
+use super::{TypingCtx, exhaust::Exhaustion, RefVal};
 
 pub enum BinOp {
     Add,
@@ -23,25 +23,6 @@ pub enum BinOp {
     GT,
     LE,
     GE,
-}
-impl From<BinOp> for Tag {
-    fn from(op: BinOp) -> Self {
-        match op {
-            BinOp::Add => Tag::Add,
-            BinOp::Sub => Tag::Sub,
-            BinOp::Mul => Tag::Mul,
-            BinOp::Div => Tag::Div,
-            BinOp::Mod => Tag::Mod,
-            BinOp::Or => Tag::Or,
-            BinOp::And => Tag::And,
-            BinOp::Eq => Tag::Eq,
-            BinOp::NE => Tag::NE,
-            BinOp::LT => Tag::LT,
-            BinOp::GT => Tag::GT,
-            BinOp::LE => Tag::LE,
-            BinOp::GE => Tag::GE,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -200,7 +181,7 @@ impl IrBuilder {
         let types = self.types.finalize();
         for (exhaustion, ty, span) in self.exhaustion_checks {
             let ty = &types[ty];
-            match exhaustion.is_exhausted(ty, &ctx.ctx) {
+            match exhaustion.is_exhausted(Some(ty), &ctx.ctx) {
                 Some(true) => {}
                 Some(false) => {
                     crate::log!("Inexhaustive: {:?}", exhaustion);
@@ -446,7 +427,36 @@ impl IrBuilder {
 
     
     pub fn build_bin_op(&mut self, bin_op: BinOp, l: Ref, r: Ref, ty: TypeTableIndex) -> Ref {
-        self.add(Data { bin_op: (l, r) }, bin_op.into(), ty)
+        let tag = match bin_op {
+            BinOp::Add => Tag::Add,
+            BinOp::Sub => Tag::Sub,
+            BinOp::Mul => Tag::Mul,
+            BinOp::Div => Tag::Div,
+            BinOp::Mod => Tag::Mod,
+            BinOp::Or => {
+                if l.into_val() == Some(RefVal::True) || r.into_val() == Some(RefVal::True) {
+                    return Ref::val(RefVal::True);
+                } else if l.into_val() == Some(RefVal::False) && r.into_val() == Some(RefVal::False) {
+                    return Ref::val(RefVal::False);
+                }
+                Tag::Or
+            }
+            BinOp::And => {
+                if l.into_val() == Some(RefVal::True) && r.into_val() == Some(RefVal::True) {
+                    return Ref::val(RefVal::True);
+                } else if l.into_val() == Some(RefVal::False) || r.into_val() == Some(RefVal::False) {
+                    return Ref::val(RefVal::False);
+                }
+                Tag::And
+            }
+            BinOp::Eq => Tag::Eq,
+            BinOp::NE => Tag::NE,
+            BinOp::LT => Tag::LT,
+            BinOp::GT => Tag::GT,
+            BinOp::LE => Tag::LE,
+            BinOp::GE => Tag::GE,
+        };
+        self.add(Data { bin_op: (l, r) }, tag, ty)
     }
 
     pub fn build_member(&mut self, var: Ref, member_idx: Ref, ty: TypeTableIndex) -> Ref {
@@ -456,6 +466,10 @@ impl IrBuilder {
         let u32_ty = self.types.add(TypeInfo::Primitive(Primitive::U32));
         let idx = self.build_int(idx as u64, u32_ty);
         self.build_member(var, idx, ty)
+    }
+
+    pub fn build_value(&mut self, val: Ref, idx: u32, ty: TypeTableIndex) -> Ref {
+        self.add(Data { ref_int: (val, idx) }, Tag::Value, ty)
     }
 
     pub fn build_cast(&mut self, val: Ref, target_ty: TypeTableIndex) -> Ref {
@@ -469,7 +483,7 @@ impl IrBuilder {
     pub fn build_branch(&mut self, cond: Ref, on_true: BlockIndex, on_false: BlockIndex) {
         let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
         self.extra_data(&on_false.0.to_le_bytes());
-        self.add_unused_untyped(Tag::Branch, Data { branch: (cond, branch_extra) });
+        self.add_unused_untyped(Tag::Branch, Data { ref_int: (cond, branch_extra) });
     }
 
     pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: TypeTableIndex)

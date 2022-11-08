@@ -18,19 +18,20 @@ pub enum Exhaustion {
         false_: bool,
     },
     Enum(HashSet<String, dmap::DeterministicState>),
+    Tuple(Vec<Exhaustion>),
     Invalid,
 }
 impl Default for Exhaustion {
     fn default() -> Self { Self::None }
 }
 impl Exhaustion {
-    pub fn is_exhausted(&self, ty: &Type, ctx: &super::TypingCtx) -> Option<bool> {
+    pub fn is_exhausted(&self, ty: Option<&Type>, ctx: &super::TypingCtx) -> Option<bool> {
         Some(match self {
             Exhaustion::None => false,
             Exhaustion::Full => true,
             Exhaustion::UnsignedInt(ranges) => {
                 match ty {
-                    Type::Prim(p) if p.is_int() => {
+                    Some(Type::Prim(p)) if p.is_int() => {
                         let int = p.as_int().unwrap();
                         if int.is_signed() { return Some(false) }
 
@@ -41,7 +42,7 @@ impl Exhaustion {
             },
             Exhaustion::SignedInt { neg, pos } => {
                 match ty {
-                    Type::Prim(p) if p.is_int() => {
+                    Some(Type::Prim(p)) if p.is_int() => {
                         let int = p.as_int().unwrap();
 
                         pos.first().map_or(false, |r| r.start == 0 && r.end >= int.max()) &&
@@ -52,8 +53,8 @@ impl Exhaustion {
             }
             Exhaustion::Enum(exhausted_variants) => {
                 match ty {
-                    Type::Enum(variants) => variants.iter().all(|v| exhausted_variants.contains(v)),
-                    Type::Id(symbol, _generics) => {
+                    Some(Type::Enum(variants)) => variants.iter().all(|v| exhausted_variants.contains(v)),
+                    Some(Type::Id(symbol, _generics)) => {
                         match &ctx.get_type(*symbol) {
                             crate::ir::TypeDef::Enum(enum_def) => {
                                 enum_def.variants.iter().all(|(v, _)| exhausted_variants.contains(v))
@@ -65,6 +66,31 @@ impl Exhaustion {
                 }
             }
             &Exhaustion::Bool { true_, false_ } => true_ && false_,
+            Exhaustion::Tuple(members) => {
+                let mut member_types = match ty {
+                    Some(Type::Tuple(member_types)) => {
+                        if member_types.len() != members.len() { return None };
+                        Some(member_types.iter())
+                    }
+                    None => None,
+                    _ => return None
+                };
+                
+                let mut exhausted = true;
+                for member in members {
+                    let ty = match &mut member_types {
+                        Some(member_types) => Some(member_types.next().unwrap()),
+                        None => None
+                    };
+                    match member.is_exhausted(ty, ctx) {
+                        Some(true) => {}
+                        Some(false) => exhausted = false,
+                        None => return None
+                    }
+                    
+                }
+                exhausted
+            }
             Exhaustion::Invalid => return None,
         })
     }
@@ -109,7 +135,7 @@ impl Exhaustion {
                 }
                 let last = ranges.last_mut().unwrap();
                 if let Some(merged) = merge_ranges(Range { start, end }, *last) {
-                    debug_assert!(merged.start < last.start || merged.end > last.end);
+                    debug_assert!(merged.start < last.start || merged.end > last.end || (merged == *last));
                     *last = merged;
                     true
                 } else {
@@ -223,12 +249,12 @@ impl Range {
 }
 fn merge_ranges(a: Range, b: Range) -> Option<Range> {
     if a.start < b.start {
-        if a.end < b.start-1 {
+        if a.end < b.start.saturating_sub(1) {
             None
         } else {
             Some(Range::new(a.start, a.end.max(b.end)))
         }
-    } else if b.end < a.start-1 {
+    } else if b.end < a.start.saturating_sub(1) {
         None
     } else {
         Some(Range::new(b.start, b.end.max(a.end)))

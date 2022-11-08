@@ -314,14 +314,18 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             write_ref(f, inst.data.bin_op.1)
         }
         DataVariant::Branch => {
-            let i = inst.data.branch.1 as usize;
+            let i = inst.data.ref_int.1 as usize;
             let mut bytes = [0; 4];
             bytes.copy_from_slice(&extra[i..i+4]);
             let a = u32::from_le_bytes(bytes);
             bytes.copy_from_slice(&extra[i+4..i+8]);
             let b = u32::from_le_bytes(bytes);
-            write_ref(f, inst.data.branch.0)?;
+            write_ref(f, inst.data.ref_int.0)?;
             cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
+        }
+        DataVariant::RefInt => {
+            write_ref(f, inst.data.ref_int.0)?;
+            cwrite!(f, ", #y<{}>", inst.data.ref_int.1)
         }
         DataVariant::Asm => {
             let Data { asm: (extra_idx, str_len, arg_count) } = inst.data;

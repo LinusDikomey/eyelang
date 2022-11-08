@@ -204,12 +204,11 @@ pub enum Expr {
         defs: Defs
     },
     Declare {
-        name: TSpan,
+        pat: ExprRef,
         annotated_ty: UnresolvedType,
-        end: u32
     },
     DeclareWithVal {
-        name: TSpan,
+        pat: ExprRef,
         annotated_ty: UnresolvedType,
         val: ExprRef
     },
@@ -281,8 +280,8 @@ impl Expr {
                 | Expr::Tuple(span, _)
                 | Expr::Cast(span, _, _)
                 => *span,
-            Expr::Declare { name, end, .. } => TSpan::new(name.start, *end),
-            Expr::DeclareWithVal { name, val, .. } => TSpan::new(name.start, e(val)),
+            Expr::Declare { pat, annotated_ty } => TSpan::new(s(pat), annotated_ty.span().end),
+            Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
             Expr::EnumLiteral { dot, ident } => TSpan::new(*dot, ident.end),

@@ -14,6 +14,7 @@ mod backend;
 mod compile;
 mod dmap;
 mod error;
+mod help;
 mod ir;
 mod irgen;
 mod lexer;
@@ -21,10 +22,9 @@ mod link;
 #[cfg(feature = "lsp")]
 mod lsp;
 mod parser;
+mod span;
 mod token;
 mod types;
-mod span;
-mod help;
 
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
@@ -32,8 +32,10 @@ extern crate llvm_sys as llvm;
 use clap::StructOpt;
 use color_format::*;
 use std::{
+    fmt,
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool, time::Duration, fmt,
+    sync::atomic::AtomicBool,
+    time::Duration,
 };
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -71,12 +73,14 @@ impl Cmd {
             Cmd::Check => false,
             #[cfg(feature = "lsp")]
             Cmd::Lsp => false,
-            _ => true
+            _ => true,
         }
     }
 }
 impl Default for Cmd {
-    fn default() -> Self { Self::Check }
+    fn default() -> Self {
+        Self::Check
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
@@ -86,15 +90,19 @@ pub enum Backend {
     LLVM,
     /// W.I.P.! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
     /// This backend is primarily used for fast compilations. It is mostly unfinished right now.
-    X86
+    X86,
 }
 impl Default for Backend {
     fn default() -> Self {
         #[cfg(feature = "llvm-backend")]
-        { Self::LLVM }
+        {
+            Self::LLVM
+        }
 
         #[cfg(not(feature = "llvm-backend"))]
-        { Self::X86 }
+        {
+            Self::X86
+        }
     }
 }
 
@@ -157,7 +165,7 @@ pub struct Args {
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
     #[clap(long)]
     crash_on_error: bool,
-    
+
     #[cfg_attr(
         feature = "llvm-backend",
         clap(short, long, arg_enum, default_value_t = Backend::LLVM)
@@ -166,7 +174,7 @@ pub struct Args {
         not(feature = "llvm-backend"),
         clap(short, long, arg_enum, default_value_t = Backend::X86)
     )]
-    backend: Backend
+    backend: Backend,
 }
 
 fn main() {
@@ -215,27 +223,39 @@ fn run(args: &Args) -> bool {
 #[derive(Default)]
 pub struct Stats {
     file_times: Vec<FileStats>,
-    irgen: Duration
+    irgen: Duration,
 }
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, 
+        writeln!(
+            f,
             "----------------------------------------\n\
-            Timings of {} files:", self.file_times.len())?;
+            Timings of {} files:",
+            self.file_times.len()
+        )?;
         let mut overall_lex = Duration::ZERO;
         let mut overall_parse = Duration::ZERO;
 
         for file in &self.file_times {
-            writeln!(f, "\t{}: {:?} (lex: {:?}, parse: {:?})",
-                file.name, file.lex + file.parse, file.lex, file.parse
+            writeln!(
+                f,
+                "\t{}: {:?} (lex: {:?}, parse: {:?})",
+                file.name,
+                file.lex + file.parse,
+                file.lex,
+                file.parse
             )?;
             overall_lex += file.lex;
             overall_parse += file.parse;
         }
-        writeln!(f, "Overall: {:?} (lex: {:?}, parse: {:?}, irgen: {:?})\n\
+        writeln!(
+            f,
+            "Overall: {:?} (lex: {:?}, parse: {:?}, irgen: {:?})\n\
             ----------------------------------------",
             overall_lex + overall_parse + self.irgen,
-            overall_lex, overall_parse, self.irgen,
+            overall_lex,
+            overall_parse,
+            self.irgen,
         )
     }
 }
@@ -251,16 +271,26 @@ pub struct BackendStats {
     init: Duration,
     type_creation: Duration,
     func_header_creation: Duration,
-    emit: Duration
+    emit: Duration,
 }
 impl fmt::Display for BackendStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "----------------------------------------\nBackend Timings ({}):", self.name)?;
+        writeln!(
+            f,
+            "----------------------------------------\nBackend Timings ({}):",
+            self.name
+        )?;
         writeln!(f, "\tInit: {:?}", self.init)?;
         writeln!(f, "\tType creation: {:?}", self.type_creation)?;
-        writeln!(f, "\tFunction header creation: {:?}", self.func_header_creation)?;
+        writeln!(
+            f,
+            "\tFunction header creation: {:?}",
+            self.func_header_creation
+        )?;
         writeln!(f, "\tEmit: {:?}", self.emit)?;
-        writeln!(f, "Overall: {:?}\n----------------------------------------",
+        writeln!(
+            f,
+            "Overall: {:?}\n----------------------------------------",
             self.init + self.type_creation + self.func_header_creation + self.emit
         )
     }
@@ -277,12 +307,17 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         if !args.nostd {
             dependencies.insert("std".to_owned(), std_path());
         }
-        let (res, ast, errors) =
-            compile::project(path, debug_options, dependencies, !args.emit_obj, &mut stats); 
+        let (res, ast, errors) = compile::project(
+            path,
+            debug_options,
+            dependencies,
+            !args.emit_obj,
+            &mut stats,
+        );
         errors.print(&ast);
         match res {
             Ok(val) => val,
-            Err(()) => return true
+            Err(()) => return true,
         }
     };
 
@@ -299,7 +334,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let exec = || {
         cprintln!("#g<Running {}>...", output_name);
         let mut command = std::process::Command::new(&exe_file);
-        // use the exec() syscall on unix systems or just spawn a child process and pass on it's exit code otherwise. 
+        // use the exec() syscall on unix systems or just spawn a child process and pass on it's exit code otherwise.
         #[cfg(unix)]
         {
             let error = std::os::unix::prelude::CommandExt::exec(&mut command);
@@ -308,21 +343,23 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         #[cfg(not(unix))]
         {
             let status = command
-            .spawn()
-            .expect("Failed to run the executable command")
-            .wait()
-            .expect("Running process failed");
+                .spawn()
+                .expect("Failed to run the executable command")
+                .wait()
+                .expect("Running process failed");
             std::process::exit(status.code().unwrap_or(0));
         }
     };
 
     if args.cmd.is_compiled() {
         // create eyebuild directory
-        if !std::fs::try_exists("eyebuild").expect("Failed to check availability of eyebuild directory") {
+        if !std::fs::try_exists("eyebuild")
+            .expect("Failed to check availability of eyebuild directory")
+        {
             match std::fs::create_dir("eyebuild") {
                 Ok(()) => (),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
-                Err(err) => panic!("Failed to create eyebuild directory: {}", err)
+                Err(err) => panic!("Failed to create eyebuild directory: {}", err),
             }
         }
     }
@@ -349,7 +386,10 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                 let bitcode_emit_start_time = std::time::Instant::now();
                 backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
                 if args.timings {
-                    println!("LLVM backend bitcode emit time: {:?}", bitcode_emit_start_time.elapsed());
+                    println!(
+                        "LLVM backend bitcode emit time: {:?}",
+                        bitcode_emit_start_time.elapsed()
+                    );
                 }
                 llvm::core::LLVMContextDispose(context);
 
@@ -367,7 +407,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                     cprintln!("#g<Built #u<{}>>", output_name);
                 }
             }
-        }
+        },
         (Cmd::Jit, Backend::X86) => panic!("JIT compilation is not supported with the x86 backend"),
         (Cmd::Run | Cmd::Build, Backend::X86) => {
             let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
@@ -397,11 +437,12 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
 fn std_path() -> PathBuf {
     match std::env::current_exe()
         .ok()
-        .and_then(|path| path.parent().map(|p| Path::join(p, "std"))) {
-            Some(path) => match std::fs::try_exists(&path) {
-                Ok(true) => path,
-                _ => "std".into()
-            }
-            _ => "std".into()
-        }
+        .and_then(|path| path.parent().map(|p| Path::join(p, "std")))
+    {
+        Some(path) => match std::fs::try_exists(&path) {
+            Ok(true) => path,
+            _ => "std".into(),
+        },
+        _ => "std".into(),
+    }
 }

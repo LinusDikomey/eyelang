@@ -77,6 +77,13 @@ impl<'a> Parser<'a> {
 
         while !self.toks.is_at_end() {
             let start = self.toks.current().unwrap().start;
+            let name_pat = |pat: ExprRef, s: &Self|  match &s.ast[pat] {
+                Expr::Variable(span) => Ok(*span),
+                expr => {
+                    Err(Error::InvalidGlobalVarPattern.at_span(expr.span_in(&s.ast, s.toks.module)))
+                }
+            };
+            
             let (name, name_span, def) = match self.parse_item()? {
                 Item::Definition {
                     name,
@@ -85,23 +92,28 @@ impl<'a> Parser<'a> {
                 } => (name, name_span, def),
                 Item::Expr(r) => match &self.ast[r] {
                     Expr::Declare {
-                        name,
+                        pat,
                         annotated_ty,
-                        end: _,
-                    } => (
-                        self.src[name.range()].to_owned(),
-                        *name,
-                        Definition::Global(annotated_ty.clone(), None),
-                    ),
+                    } => {
+                        let name = name_pat(*pat, &self)?;
+                        (
+                            self.src[name.range()].to_owned(),
+                            name,
+                            Definition::Global(annotated_ty.clone(), None),
+                        )
+                    },
                     Expr::DeclareWithVal {
-                        name,
+                        pat,
                         annotated_ty,
                         val,
-                    } => (
-                        self.src[name.range()].to_owned(),
-                        *name,
-                        Definition::Global(annotated_ty.clone(), Some(*val)),
-                    ),
+                    } => {
+                        let name = name_pat(*pat, &self)?;
+                        (
+                            self.src[name.range()].to_owned(),
+                            name,
+                            Definition::Global(annotated_ty.clone(), Some(*val)),
+                        )
+                    },
                     _ => {
                         return Err(CompileError {
                             err: Error::InvalidTopLevelBlockItem,
@@ -264,10 +276,10 @@ impl<'a> Parser<'a> {
                         let ty = self.parse_type()?;
                         if self.toks.step_if(TokenType::Equals).is_some() {
                             // typed variable with initial value
-
+                            let pat = self.ast.add_expr(Expr::Variable(ident_span));
                             let val = self.parse_expr()?;
                             Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
-                                name: ident_span,
+                                pat,
                                 annotated_ty: ty,
                                 val,
                             }))
@@ -280,32 +292,33 @@ impl<'a> Parser<'a> {
                             }
                         } else {
                             // typed variable without initial value
+                            let pat = self.ast.add_expr(Expr::Variable(ident_span));
                             Item::Expr(self.ast.add_expr(Expr::Declare {
-                                name: ident_span,
+                                pat,
                                 annotated_ty: ty,
-                                end: self.toks.previous().unwrap().end,
                             }))
                         }
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
                         let decl_start = self.toks.step_assert(TokenType::Declare).start;
+                        let pat = self.ast.add_expr(Expr::Variable(ident_span));
                         let val = self.parse_expr()?;
 
                         Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
-                            name: ident_span,
+                            pat,
                             annotated_ty: UnresolvedType::Infer(decl_start),
                             val,
                         }))
                     }
                     _ => {
                         let var = self.ast.add_expr(Expr::Variable(ident_span));
-                        let expr = self.parse_expr_starting_with(var)?;
+                        let expr = self.parse_stmt_starting_with(var)?;
                         Item::Expr(expr)
                     }
                 }
             }
-            _ => Item::Expr(self.parse_expr()?),
+            _ => Item::Expr(self.parse_stmt()?),
         })
     }
 
@@ -454,15 +467,50 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_stmt(&mut self) -> EyeResult<ExprRef> {
+        let expr = self.parse_expr()?;
+        self.stmt_postfix(expr)
+    }
+
+    fn parse_stmt_starting_with(&mut self, expr: ExprRef) -> Result<ExprRef, CompileError> {
+        let lhs = self.parse_factor_postfix(expr, true)?;
+        let expr = self.parse_bin_op_rhs(0, lhs)?;
+        self.stmt_postfix(expr)
+    }
+
+    fn stmt_postfix(&mut self, expr: ExprRef) -> EyeResult<ExprRef> {
+        let expr = if self.toks.step_if(TokenType::Colon).is_some() {
+            let annotated_ty = self.parse_type()?;
+            match self.toks.step_if(TokenType::Equals) {
+                Some(_) => Expr::DeclareWithVal {
+                    pat: expr,
+                    annotated_ty,
+                    val: self.parse_expr()?,
+                },
+                None => Expr::Declare {
+                    pat: expr,
+                    annotated_ty,
+                }
+            }
+            
+        } else if let Some(declare) = self.toks.step_if(TokenType::Declare) {
+            Expr::DeclareWithVal {
+                pat: expr,
+                annotated_ty: UnresolvedType::Infer(declare.start),
+                val: self.parse_expr()?
+            }
+        } else {
+            return Ok(expr);
+        };
+        Ok(self.ast.add_expr(expr))
+    }
+
     fn parse_expr(&mut self) -> EyeResult<ExprRef> {
         let lhs = self.parse_factor(true)?;
         self.parse_bin_op_rhs(0, lhs)
     }
 
-    fn parse_expr_starting_with(&mut self, expr: ExprRef) -> Result<ExprRef, CompileError> {
-        let lhs = self.parse_factor_postfix(expr, true)?;
-        self.parse_bin_op_rhs(0, lhs)
-    }
+    
 
     fn parse_factor(&mut self, include_as: bool) -> Result<ExprRef, CompileError> {
         let first = self.toks.step()?;

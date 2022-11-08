@@ -61,6 +61,7 @@ pub enum Tag {
     GE,
 
     Member,
+    Value,
     Cast,
 
     Goto,
@@ -92,6 +93,7 @@ impl Tag {
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE | Tag::Member => BinOp,
+            Tag::Value => RefInt,
             Tag::Goto => Block,
             Tag::Branch => Branch,
             Tag::Phi => ExtraBranchRefs,
@@ -134,7 +136,7 @@ pub union Data {
     pub float: f64,
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),
-    pub branch: (Ref, u32),
+    pub ref_int: (Ref, u32),
     pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
     pub symbol: SymbolKey,
     pub trait_func: (u32, u32), // extra_index for SymbolKey, func index in trait
@@ -163,6 +165,7 @@ pub enum DataVariant {
     Float,
     UnOp,
     BinOp,
+    RefInt,
     Asm,
     Global,
     None,

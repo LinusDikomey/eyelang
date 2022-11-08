@@ -114,9 +114,10 @@ impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
 
 #[derive(Debug)]
 enum ExprResult {
+    // not actually a value of the specified type but a pointer.
+    // Necessary for assignments/patterns etc and to save loads/stores.
     VarRef(Ref),
     Val(Ref),
-    Stored(Ref),
 
     // Ignore the result (underscore token: _). Used mostly in lhs.
     Hole,
@@ -142,7 +143,7 @@ impl ExprResult {
         span: Span,
     ) -> Ref {
         match self {
-            ExprResult::VarRef(var) | ExprResult::Stored(var) => {
+            ExprResult::VarRef(var) => {
                 ir.build_load(var, ty)
             }
             ExprResult::Val(val) => val,
@@ -944,7 +945,7 @@ impl<'s> Scope<'s> {
         }
     }
 
-    fn declare_var(&mut self, ir: &mut IrBuilder, name: String, ty: TypeTableIndex) -> Ref {
+    pub fn declare_var(&mut self, ir: &mut IrBuilder, name: String, ty: TypeTableIndex) -> Ref {
         let var = ir.build_decl(ty);
         match self {
             Scope::Module(_) => unreachable!("There shouldn't be variables defined in the global scope"),

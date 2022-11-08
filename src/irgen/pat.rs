@@ -1,5 +1,5 @@
 use crate::{
-    ir::{Ref, TypeTableIndex, exhaust::{Exhaustion, self}, TypeInfo, builder::BinOp, RefVal},
+    ir::{Ref, TypeTableIndex, exhaust::{Exhaustion, self}, TypeInfo, builder::BinOp, RefVal, TupleCountMode},
     ast::{ExprRef, Expr, UnOp},
     token::{IntLiteral, Operator, FloatLiteral},
     error::Error,
@@ -7,7 +7,7 @@ use crate::{
     span::TSpan
 };
 
-use super::{Scope, GenCtx, IrBuilder, int_literal, Symbol};
+use super::{Scope, GenCtx, IrBuilder, int_literal};
 
 /// builds code to check if `pat` matches on `val` and gives back a boolean `Ref`
 pub fn reduce_pat(
@@ -71,9 +71,8 @@ pub fn reduce_pat(
         Expr::Nested(_, expr) => reduce_pat(scope, ctx, ir, val, *expr, expected, bool_ty, exhaustion),    
         Expr::Variable(span) => {
             let name = ctx.src(*span);
-            let var = ir.build_decl(expected);
+            let var = scope.declare_var(ir, name.to_owned(), expected);
             ir.build_store(var, val);
-            scope.add_symbol(name.to_owned(), Symbol::Var { ty: expected, var }, &mut ctx.globals);
             exhaustion.exhaust_full();
             Ref::val(RefVal::True)
         }
@@ -143,13 +142,50 @@ pub fn reduce_pat(
 
             ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty)
         }
+        Expr::Tuple(span, members) => {
+            let member_types = ir.types.add_multiple_unknown(members.count);
+            ir.types.specify(expected, TypeInfo::Tuple(member_types, TupleCountMode::Exact), &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
+            let mut prev_exhausted_ref = None;
+            let do_exhaust_checks = match exhaustion {
+                Exhaustion::Full | Exhaustion::Invalid => true,
+                Exhaustion::None => {
+                    *exhaustion = Exhaustion::Tuple(vec![Exhaustion::None; members.count as usize]);
+                    true
+                }
+                Exhaustion::Tuple(_) => true,
+                _ => {
+                    *exhaustion = Exhaustion::Invalid;
+                    false
+                }
+            };
+            for (i, (&item_pat, ty)) in ctx.ast[*members].into_iter().zip(member_types.iter()).enumerate() {
+                let item_val = ir.build_value(val, i as u32, ty);
+                
+                let exhausted_ref = if do_exhaust_checks {
+                    let Exhaustion::Tuple(members) = exhaustion else { unreachable!() };
+                    reduce_pat(scope, ctx, ir, item_val, item_pat, ty, bool_ty, &mut members[i])
+                } else {
+                    reduce_pat(scope, ctx, ir, item_val, item_pat, ty, bool_ty, &mut Exhaustion::Full)
+                };
+
+                
+                
+                match prev_exhausted_ref {
+                    Some(prev) => {
+                        prev_exhausted_ref = Some(ir.build_bin_op(BinOp::And, prev, exhausted_ref, bool_ty));
+                    }
+                    None => prev_exhausted_ref = Some(exhausted_ref)
+                }
+
+            }
+            prev_exhausted_ref.unwrap_or(Ref::val(RefVal::True))
+        }
         Expr::StringLiteral(_) // TODO definitely very important
         | Expr::Block { .. }
         | Expr::Declare { .. }
         | Expr::DeclareWithVal { .. }
         | Expr::Return { .. }
-        | Expr::Array(_, _) 
-        | Expr::Tuple(_, _) 
+        | Expr::Array(_, _)
         | Expr::If { .. } 
         | Expr::IfElse { .. } 
         | Expr::Match { .. } 

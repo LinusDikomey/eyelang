@@ -42,8 +42,6 @@ impl<'a> ExprInfo<'a> {
     pub fn reborrow(&mut self) -> ExprInfo<'_> {
         ExprInfo { expected: self.expected, ret: self.ret, noreturn: &mut *self.noreturn }
     }
-
-
 }
 
 pub fn val_expr(
@@ -87,35 +85,6 @@ fn reduce_unused_expr(
     }
 }
 
-fn reduce_expr_store_into_var(
-    scope: &mut Scope,
-    ctx: &mut GenCtx,
-    ir: &mut IrBuilder,
-    expr: &Expr,
-    var: Ref,
-    mut info: ExprInfo,
-) {
-    let val = match reduce_expr_any(scope, ctx, ir, expr, info.reborrow(), |_| var).0 {
-        ExprResult::Stored(_) => return,
-        ExprResult::VarRef(other_var) => ir.build_load(other_var, info.expected),
-        ExprResult::Val(val) => val,
-        ExprResult::Symbol(symbol) => {
-            // TODO: this should only happen in compile time code
-            let span = ctx.span(expr);
-            symbol.add_instruction(ir, &ctx.ctx, info.expected, &mut ctx.errors, span)
-        }
-        ExprResult::Hole => {
-            ctx.errors.emit_span(Error::ExpectedValueFoundHole, expr.span(ctx.ast).in_mod(ctx.module));
-            Ref::UNDEF
-        }
-        ExprResult::Method { .. } => {
-            ctx.errors.emit_span(Error::ExpectedValueFoundFunction, expr.span(ctx.ast).in_mod(ctx.module));
-            Ref::UNDEF
-        }
-    };
-    ir.build_store(var, val);
-}
-
 enum LVal {
     Var(Ref),
     Hole,
@@ -134,7 +103,7 @@ fn reduce_lval_expr(
         scope, ctx, ir, expr, info.reborrow(),
         |ir| ir.build_decl(expected)
     ).0 {
-        ExprResult::VarRef(var) | ExprResult::Stored(var) => LVal::Var(var),
+        ExprResult::VarRef(var) => LVal::Var(var),
         ExprResult::Hole => LVal::Hole,
         ExprResult::Val(_) | ExprResult::Method { .. } | ExprResult::Symbol(_) => {
             if !ir.types.get_type(info.expected).is_invalid() {
@@ -177,7 +146,7 @@ fn reduce_expr_any(
             }
             (Ref::UNIT, items.count == 0)
         }
-        Expr::Declare { name, end: _, annotated_ty } => {
+        Expr::Declare { pat, annotated_ty } => {
             let expr_span = ctx.span(expr);
             ir.types.specify(info.expected, TypeInfo::UNIT, &mut ctx.errors, expr_span, &ctx.ctx);
             let ty = match scope.resolve_type(annotated_ty, &mut ir.types, ctx) {
@@ -188,12 +157,22 @@ fn reduce_expr_any(
                 }
             };
             let ty = ir.types.add(ty);
-
-            scope.declare_var(ir, ctx.src(*name).to_owned(), ty);
+            
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let mut exhaustion = Exhaustion::None;
+            let prev_emit = ir.emit;
+            pat::reduce_pat(scope, ctx, ir, Ref::UNDEF, *pat, ty, bool_ty, &mut exhaustion);
+            ir.emit = prev_emit;
+            if exhaustion != Exhaustion::Full && exhaustion != Exhaustion::Invalid {
+                // This might lead to full exhaustion cases leading to errors such as single-variant enums,
+                // but this doesn't feel like a sensible use case.
+                eprintln!("{exhaustion:?}");
+                ctx.errors.emit_span(Error::Inexhaustive, ctx.ref_span(*pat));
+            }
 
             (Ref::UNIT, false)
         }
-        Expr::DeclareWithVal { name, annotated_ty, val } => {
+        Expr::DeclareWithVal { pat, annotated_ty, val } => {
             let ty = match scope.resolve_type(annotated_ty, &mut ir.types, ctx) {
                 Ok(t) => t,
                 Err(err) => {
@@ -203,9 +182,21 @@ fn reduce_expr_any(
             };
             let ty = ir.types.add(ty);
 
-            let var = scope.declare_var(ir, ctx.src(*name).to_owned(), ty);
+            let val = val_expr(scope, ctx, ir, *val, info.with_expected(ty));
 
-            reduce_expr_store_into_var(scope, ctx, ir, &ctx.ast[*val], var, info.with_expected(ty));
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let mut exhaustion = Exhaustion::None;
+            let prev_emit = ir.emit;
+            pat::reduce_pat(scope, ctx, ir, val, *pat, ty, bool_ty, &mut exhaustion);
+            ir.emit = prev_emit;
+            if let Some(false) = exhaustion.is_exhausted(None, &ctx.ctx) {
+                ctx.errors.emit_span(Error::Inexhaustive, ctx.ref_span(*pat));
+            }
+            if exhaustion != Exhaustion::Full && exhaustion != Exhaustion::Invalid {
+                // This might lead to full exhaustion cases leading to errors such as single-variant enums,
+                // but this doesn't feel like a sensible use case.
+            }
+            
             (Ref::UNIT, false)
         }
         Expr::Return { start: _, val } => {
@@ -303,7 +294,7 @@ fn reduce_expr_any(
                 let elem_ptr = ir.build_member_int(arr, i as u32, elem_ty_ptr);
                 ir.build_store(elem_ptr, elem_val);
             }
-            return (ExprResult::Stored(arr), true)
+            return (ExprResult::VarRef(arr), true)
         }
         Expr::Tuple(span, elems) => {
             let elems = &ctx.ast[*elems];
@@ -321,7 +312,7 @@ fn reduce_expr_any(
                 let member = ir.build_member_int(var, i as u32, member_ty_ptr);
                 ir.build_store(member, member_val);
             }
-            return (ExprResult::Stored(var), true);
+            return (ExprResult::VarRef(var), true);
         }
         Expr::If { start: _, cond, then } => {
             let after_block = gen_if_then(scope, ctx, ir, *cond, info.ret, info.noreturn);
@@ -415,7 +406,9 @@ fn reduce_expr_any(
                 let val = val_expr(&mut branch_block, ctx, ir, *branch, info.with_noreturn(&mut branch_noreturn));
 
                 if branch_noreturn {
-                    ir.build_ret_undef();
+                    if !ir.currently_terminated() {
+                        ir.build_ret_undef();
+                    }
                 } else {
                     branches.push((on_match, val));
                     ir.build_goto(after_block);
@@ -488,7 +481,7 @@ fn reduce_expr_any(
                     return (ExprResult::Val(match 
                         reduce_expr(scope, ctx, ir, &ctx.ast[*val], info.with_expected(inner_expected))
                     {
-                        ExprResult::VarRef(r) | ExprResult::Stored(r) => {
+                        ExprResult::VarRef(r) => {
                             ir.types.specify(info.expected, TypeInfo::Pointer(inner_expected),
                                 &mut ctx.errors, span.in_mod(ctx.module), &ctx.ctx);
                             r
@@ -631,7 +624,7 @@ fn reduce_expr_any(
             }
             let left = &ctx.ast[*left];
             let left_val = match reduce_expr(scope, ctx, ir, left, info.with_expected(left_ty)) {
-                ExprResult::VarRef(val) | ExprResult::Stored(val) => MemberAccessType::Val { val, is_ptr: true },
+                ExprResult::VarRef(val) => MemberAccessType::Val { val, is_ptr: true },
                 ExprResult::Val(val) => MemberAccessType::Val { val, is_ptr: false },
                 ExprResult::Symbol(ConstSymbol::Type(ty)) => MemberAccessType::StructAssociated(ty),
                 ExprResult::Symbol(ConstSymbol::TypeValue(ty)) => MemberAccessType::TypeAssociated(ty),
@@ -907,7 +900,7 @@ fn reduce_expr_any(
             let indexed_ty = ir.types.add(TypeInfo::Tuple(elem_types, TupleCountMode::AtLeast));
             let res = reduce_expr(scope, ctx, ir, &ctx.ast[*indexed], info.with_expected(indexed_ty));
             let expr_var = match res {
-                ExprResult::VarRef(r) | ExprResult::Stored(r) => r,
+                ExprResult::VarRef(r) => r,
                 ExprResult::Val(val) => {
                     let var = ir.build_decl(info.expected);
                     ir.build_store(var, val);

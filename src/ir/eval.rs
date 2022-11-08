@@ -321,6 +321,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 continue;
                 */
             }
+            super::Tag::Value => todo!(),
             super::Tag::Cast => todo!(),
             super::Tag::Goto => {
                 let target = ir.blocks[inst.data.int32 as usize];
@@ -335,9 +336,9 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 continue;
             }
             super::Tag::Branch => {
-                let ConstVal::Bool(val) = get_ref(&values, inst.data.branch.0)
+                let ConstVal::Bool(val) = get_ref(&values, inst.data.ref_int.0)
                     else { panic!("bool expected") };
-                let i = inst.data.branch.1 as usize;
+                let i = inst.data.ref_int.1 as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&ir.extra[i..i+4]);
                 let a = u32::from_le_bytes(bytes);

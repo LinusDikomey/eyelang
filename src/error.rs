@@ -213,6 +213,7 @@ pub enum Error {
     TooManyGenerics(usize),
     HoleLHSOnly,
     CantMutateHole,
+    InvalidGlobalVarPattern,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -281,6 +282,7 @@ impl Error {
             Error::TooManyGenerics(_) => "too many generics",
             Error::HoleLHSOnly => "hole can only used on left-hand side of an assignment",
             Error::CantMutateHole => "can't mutate hole",
+            Error::InvalidGlobalVarPattern => "invalid pattern for a global variable definition"
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -322,6 +324,9 @@ impl Error {
             ),
             Error::CantMutateHole => cformat!(
                 "#r<_> can only be assigned to"
+            ),
+            Error::InvalidGlobalVarPattern => cformat!(
+                "only a single #c<identifier> can be used as a pattern when creating global variables"
             ),
             _ => return None
         })

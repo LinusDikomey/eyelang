@@ -469,11 +469,17 @@ unsafe fn build_func(
             ir::Tag::Member => {
                 let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
-                let Type::Pointer(pointee) = origin_ty else { panic!("Tried to get member of non-pointer") };
+                let Type::Pointer(pointee) = origin_ty else {
+                    panic!("Tried to get member of non-pointer type {origin_ty:?}")
+                };
                 let int_ty = llvm_ty(ctx, module, types, &idx_ty);
                 let mut elems = [LLVMConstInt(int_ty, 0, FALSE), idx];
                 let pointee_ty = llvm_ty(ctx, module, types, &pointee);
                 LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
+            }
+            ir::Tag::Value => {
+                let r = get_ref(&instructions,  data.ref_int.0);
+                LLVMBuildExtractValue(builder, r, data.ref_int.1, NONE)
             }
             ir::Tag::Cast => {
                 // cast just panics here right now when the cast is invalid because cast checks aren't implemented
@@ -554,13 +560,13 @@ unsafe fn build_func(
             }
             ir::Tag::Branch => {
                 let mut bytes = [0; 4];
-                let begin = data.branch.1 as usize;
+                let begin = data.ref_int.1 as usize;
                 bytes.copy_from_slice(&ir.extra[begin .. begin+4]);
                 let then = u32::from_le_bytes(bytes);
                 bytes.copy_from_slice(&ir.extra[begin+4 .. begin+8]);
                 let else_ = u32::from_le_bytes(bytes);
 
-                LLVMBuildCondBr(builder, get_ref(&instructions, data.branch.0), blocks[then as usize], blocks[else_ as usize])
+                LLVMBuildCondBr(builder, get_ref(&instructions, data.ref_int.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
                 if *ir.types.get(ty) == Type::Prim(Primitive::Unit) {

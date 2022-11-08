@@ -70,7 +70,7 @@ pub(super) fn call(
 
                     ir.build_store(member, member_val);
                 }
-                return (ExprResult::Stored(var), true);
+                return (ExprResult::VarRef(var), true);
             } else {
                 ctx.errors.emit_span(Error::InvalidArgCount, call_expr.span(ctx.ast).in_mod(ctx.module));
                 return (ExprResult::Val(Ref::UNDEF), true)

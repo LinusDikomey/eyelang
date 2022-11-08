@@ -212,13 +212,15 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.write_start("}");
             },
-            Self::Declare { name, end: _, annotated_ty } => {
-                c.write_add(c.src(*name));
+            Self::Declare { pat, annotated_ty } => {
+                ast[*pat].repr(c);
+
                 c.write_add(": ");
                 annotated_ty.repr(c);
             }
-            Self::DeclareWithVal { name, annotated_ty, val } => {
-                c.write_add(c.src(*name));
+            Self::DeclareWithVal { pat, annotated_ty, val } => {
+                ast[*pat].repr(c);
+                
                 if matches!(annotated_ty, UnresolvedType::Infer(_)) {
                     c.write_add(" := ");
                 } else {
