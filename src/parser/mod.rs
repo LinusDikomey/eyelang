@@ -4,7 +4,7 @@ use crate::{
     error::{CompileError, Error, ExpectedTokens, EyeResult},
     span::{Span, TSpan},
     token::{Keyword, Operator, Token, TokenType},
-    types::Primitive,
+    types::Primitive, resolve::VarId,
 };
 
 mod reader;
@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
         while !self.toks.is_at_end() {
             let start = self.toks.current().unwrap().start;
             let name_pat = |pat: ExprRef, s: &Self|  match &s.ast[pat] {
-                Expr::Variable(span) => Ok(*span),
+                Expr::Variable { span, .. } => Ok(*span),
                 expr => {
                     Err(Error::InvalidGlobalVarPattern.at_span(expr.span_in(&s.ast, s.toks.module)))
                 }
@@ -289,7 +289,7 @@ impl<'a> Parser<'a> {
                         let ty = self.parse_type()?;
                         if self.toks.step_if(TokenType::Equals).is_some() {
                             // typed variable with initial value
-                            let pat = self.ast.add_expr(Expr::Variable(ident_span));
+                            let pat = self.ast.add_expr(Expr::Variable { span: ident_span, resolved: VarId::MISSING });
                             let val = self.parse_expr()?;
                             Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
                                 pat,
@@ -305,7 +305,7 @@ impl<'a> Parser<'a> {
                             }
                         } else {
                             // typed variable without initial value
-                            let pat = self.ast.add_expr(Expr::Variable(ident_span));
+                            let pat = self.ast.add_expr(Expr::Variable { span: ident_span, resolved: VarId::MISSING });
                             Item::Expr(self.ast.add_expr(Expr::Declare {
                                 pat,
                                 annotated_ty: ty,
@@ -315,7 +315,7 @@ impl<'a> Parser<'a> {
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
                         let decl_start = self.toks.step_assert(TokenType::Declare).start;
-                        let pat = self.ast.add_expr(Expr::Variable(ident_span));
+                        let pat = self.ast.add_expr(Expr::Variable { span: ident_span, resolved: VarId::MISSING });
                         let val = self.parse_expr()?;
 
                         Item::Expr(self.ast.add_expr(Expr::DeclareWithVal {
@@ -325,7 +325,7 @@ impl<'a> Parser<'a> {
                         }))
                     }
                     _ => {
-                        let var = self.ast.add_expr(Expr::Variable(ident_span));
+                        let var = self.ast.add_expr(Expr::Variable { span: ident_span, resolved: VarId::MISSING });
                         let expr = self.parse_stmt_starting_with(var)?;
                         Item::Expr(expr)
                     }
@@ -578,7 +578,7 @@ impl<'a> Parser<'a> {
             TokenType::StringLiteral => Expr::StringLiteral(TSpan::new(first.start, first.end)),
             TokenType::Keyword(Keyword::True) => Expr::BoolLiteral { start, val: true },
             TokenType::Keyword(Keyword::False) => Expr::BoolLiteral { start, val: false },
-            TokenType::Ident => Expr::Variable(first.span()),
+            TokenType::Ident => Expr::Variable { span: first.span(), resolved: VarId::MISSING },
             TokenType::Underscore => Expr::Hole(first.start),
             TokenType::Keyword(Keyword::If) => {
                 let cond = self.parse_expr()?;
@@ -815,6 +815,7 @@ impl<'a> Parser<'a> {
         let mut values = vec![];
         let end = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?.span();
+            p.toks.step_expect(TokenType::Colon)?;
             let val = p.parse_expr()?;
             names.push(name);
             values.push(val);

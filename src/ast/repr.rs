@@ -261,7 +261,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char(')');
             }
             Self::Unit(_) => c.write_add("()"),
-            Self::Variable(span) => c.write_add(c.src(*span)),
+            Self::Variable { span, .. } => c.write_add(c.src(*span)),
             Self::Hole(_) => c.char('_'),
             Self::Array(_, elems) => {
                 let elems = &ast[*elems];

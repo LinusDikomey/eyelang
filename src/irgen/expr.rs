@@ -24,26 +24,6 @@ use crate::{
 };
 use super::{call::call, ConstSymbol, IrBuilder, pat, Scope, GenCtx, int_literal, Symbol, ExprResult};
 
-pub struct ExprInfo<'a> {
-    pub expected: TypeTableIndex,
-    pub ret: TypeTableIndex,
-    pub noreturn: &'a mut bool,
-}
-impl<'a> ExprInfo<'a> {
-    pub fn mark_noreturn(&mut self) {
-        *self.noreturn = true;
-    }
-    pub fn with_expected(&mut self, expected: TypeTableIndex) -> ExprInfo {
-        ExprInfo { expected, ret: self.ret, noreturn: self.noreturn }
-    }
-    pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
-        ExprInfo { expected: self.expected, ret: self.ret, noreturn }
-    }
-    pub fn reborrow(&mut self) -> ExprInfo<'_> {
-        ExprInfo { expected: self.expected, ret: self.ret, noreturn: &mut *self.noreturn }
-    }
-}
-
 pub fn val_expr(
     scope: &mut Scope,
     ctx: &mut GenCtx,

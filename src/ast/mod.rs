@@ -3,7 +3,7 @@ use crate::{
     token::Operator,
     types::Primitive,
     span::{TSpan, Span},
-    dmap::{self, DHashMap},
+    dmap::{self, DHashMap}, resolve::VarId,
 };
 
 pub mod repr;
@@ -82,6 +82,11 @@ impl Index<ExprRef> for Ast {
         &self.exprs[index.0 as usize]    
     }   
 }
+impl IndexMut<ExprRef> for Ast {
+    fn index_mut(&mut self, index: ExprRef) -> &mut Self::Output {
+        &mut self.exprs[index.0 as usize]
+    }
+}
 impl Index<Defs> for Ast {
     type Output = DHashMap<String, Definition>;
 
@@ -140,6 +145,11 @@ pub struct ExprRef(u32);
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExprExtra { pub idx: u32, pub count: u32 }
+impl ExprExtra {
+    pub fn iter(self) -> impl Iterator<Item = ExprRef> {
+        (self.idx .. self.idx + self.count).map(ExprRef)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExprExtraSpans(u32, u32);
@@ -172,11 +182,21 @@ pub struct StructDefinition {
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
     pub methods: DHashMap<String, Function>
 }
+impl StructDefinition {
+    pub fn generic_count(&self) -> u8 {
+        self.generics.len() as u8
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
     pub generics: Vec<TSpan>,
     pub variants: Vec<(TSpan, String)>,
+}
+impl EnumDefinition {
+    pub fn generic_count(&self) -> u8 {
+        self.generics.len() as u8
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -225,7 +245,10 @@ pub enum Expr {
     },
     Nested(TSpan, ExprRef),
     Unit(TSpan),
-    Variable(TSpan),
+    Variable {
+        span: TSpan,
+        resolved: VarId,
+    },
     Hole(u32), // underscore: _
     Array(TSpan, ExprExtra),
     Tuple(TSpan, ExprExtra),
@@ -281,7 +304,7 @@ impl Expr {
                 | Expr::Record { span, .. }
                 | Expr::Nested(span, _) 
                 | Expr::Unit(span)
-                | Expr::Variable(span)
+                | Expr::Variable { span, .. }
                 | Expr::Array(span, _)
                 | Expr::Tuple(span, _)
                 | Expr::Cast(span, _, _)

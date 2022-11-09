@@ -4,7 +4,7 @@ use crate::{
     ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
     lexer,
-    parser::Parser, Stats, span::Span, dmap::DHashMap,
+    parser::Parser, Stats, span::Span, dmap::DHashMap, resolve,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -45,10 +45,13 @@ pub fn project(
         }
     }
 
+    resolve::resolve_project(&mut ast, main_module, &mut errors, require_main_func);
+
     let reduce_start_time = Instant::now();
-    let (reduce_res, errors) = crate::irgen::reduce(&ast, main_module, errors, require_main_func);
-    stats.irgen += reduce_start_time.elapsed();
-    (reduce_res.map(|(ir, _globals)| ir), ast, errors)
+    //let (reduce_res, errors) = crate::irgen::reduce(&ast, main_module, errors, require_main_func);
+    //stats.irgen += reduce_start_time.elapsed();
+    //(reduce_res.map(|(ir, _globals)| ir), ast, errors)
+    todo!()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

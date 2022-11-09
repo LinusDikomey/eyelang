@@ -162,7 +162,7 @@ impl ExprResult {
     }
 }
 
-pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require_main_func: bool) 
+pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require_main_func: bool)
 -> (Result<(ir::Module, Globals), ()>, Errors) {
     let mut ctx = TypingCtx::new();
     //let mut globals = types2::gen_globals(ast, &mut ctx, &mut errors);

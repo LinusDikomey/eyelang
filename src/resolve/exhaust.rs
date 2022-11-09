@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::{dmap, ir::Type};
+use crate::dmap;
+
+use super::types::{SymbolTable, Type, TypeDef};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
@@ -25,7 +27,7 @@ impl Default for Exhaustion {
     fn default() -> Self { Self::None }
 }
 impl Exhaustion {
-    pub fn is_exhausted(&self, ty: Option<&Type>, ctx: &super::TypingCtx) -> Option<bool> {
+    pub fn is_exhausted(&self, ty: Option<&Type>, symbols: &SymbolTable) -> Option<bool> {
         Some(match self {
             Exhaustion::None => false,
             Exhaustion::Full => true,
@@ -55,8 +57,8 @@ impl Exhaustion {
                 match ty {
                     Some(Type::Enum(variants)) => variants.iter().all(|v| exhausted_variants.contains(v)),
                     Some(Type::Id(symbol, _generics)) => {
-                        match &ctx.get_type(*symbol) {
-                            crate::ir::TypeDef::Enum(enum_def) => {
+                        match &symbols.get_type(*symbol) {
+                            TypeDef::Enum(enum_def) => {
                                 enum_def.variants.iter().all(|(v, _)| exhausted_variants.contains(v))
                             }
                             _ => return None
@@ -82,7 +84,7 @@ impl Exhaustion {
                         Some(member_types) => Some(member_types.next().unwrap()),
                         None => None
                     };
-                    match member.is_exhausted(ty, ctx) {
+                    match member.is_exhausted(ty, symbols) {
                         Some(true) => {}
                         Some(false) => exhausted = false,
                         None => return None

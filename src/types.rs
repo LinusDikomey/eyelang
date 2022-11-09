@@ -1,5 +1,4 @@
 use std::fmt;
-use crate::ir::Layout;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
@@ -184,5 +183,38 @@ impl FloatType {
 
     pub fn bit_count(self) -> u32 {
         self.size() * 8
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub size: u64,
+    pub alignment: u64,
+}
+impl Layout {
+    pub const ZERO: Self = Self { size: 0, alignment: 1 };
+    pub const PTR: Self = Self { size: 8, alignment: 8 };
+
+    pub fn align(offset: u64, alignment: u64) -> u64 {
+        let misalignment = offset % alignment;
+        if misalignment > 0 {
+            offset + alignment - misalignment
+        } else {
+            offset
+        }
+    }
+    #[must_use]
+    pub fn accumulate(self, other: Self) -> Self {
+        Self {
+            size: Self::align(self.size, other.alignment),
+            alignment: self.alignment.max(other.alignment),
+        }
+    }
+    #[must_use]
+    pub fn mul_size(self, factor: u64) -> Self {
+        Self {
+            size: self.size * factor,
+            alignment: self.alignment,
+        }
     }
 }

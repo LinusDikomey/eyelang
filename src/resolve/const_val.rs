@@ -1,8 +1,8 @@
 use std::fmt;
 
-use crate::{types::{IntType, FloatType, Primitive}, irgen::IrBuilder, ast::ModuleId, span::{TSpan, Span}, error::Errors};
+use crate::{types::{IntType, FloatType, Primitive}, ast::ModuleId};
 
-use super::{TypeTable, TypeInfo, SymbolKey, TypeTableIndex, TypingCtx, Ref, Type};
+use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{FunctionId, TypeId, Type, TraitId}};
 
 #[derive(Debug, Clone)]
 pub enum ConstVal {
@@ -64,18 +64,18 @@ impl fmt::Display for ConstVal {
 
 #[derive(Debug, Clone)]
 pub enum ConstSymbol {
-    Func(SymbolKey),
+    Func(FunctionId),
     GenericFunc(u32),
-    TraitFunc(SymbolKey, u32),
-    Type(SymbolKey),
+    TraitFunc(TraitId, u32),
+    Type(TypeId),
     TypeValue(Type),
-    Trait(SymbolKey),
+    Trait(TraitId),
     LocalType(TypeTableIndex),
     Module(ModuleId),
 }
 impl ConstSymbol {
-    pub fn add_instruction(&self, ir: &mut IrBuilder, ctx: &TypingCtx, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
-        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), ctx);
+    /*pub fn add_instruction(&self, ir: &mut IrBuilder, symbols: &SymbolTable, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
+        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), symbols);
         match self {
             &ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
             ConstSymbol::GenericFunc(_) => todo!(),
@@ -89,11 +89,12 @@ impl ConstSymbol {
             &ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
         }
     }
+    */
     pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
         match (self, other) {
-            (Self::Func(l), Self::Func(r))
-            | (Self::Type(l), Self::Type(r))
-            | (Self::Trait(l), Self::Trait(r)) => l == r,
+            (Self::Func(l), Self::Func(r)) => l == r,
+            (Self::Type(l), Self::Type(r)) => l == r,
+            (Self::Trait(l), Self::Trait(r)) => l == r,
             (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
             (Self::LocalType(l), Self::LocalType(r)) => {
                 let TypeInfo::Resolved(_l_id, _l_generics) = types[*l] else { unreachable!() };
