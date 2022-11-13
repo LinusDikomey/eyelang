@@ -86,21 +86,19 @@ impl<C: Representer> Repr<C> for Module {
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
         c.write_start(name);
-        if !matches!(self, Self::Global(_, _) | Self::Const(_, _)) {
+        if !matches!(self, Self::Global(_) | Self::Const(_, _)) {
             c.write_add(" :: ");
         }
         match self {
-            Self::Function(func) => func.repr(c, false),
-            Self::Struct(struct_) => struct_.repr(c),
-            Self::Enum(def) => def.repr(c),
-            Self::Trait(t) => t.repr(c),
+            Self::Function(func) => c.ast()[*func].repr(c, false),
+            Self::Type(ty) => c.ast()[*ty].repr(c),
+            Self::Trait(t) => c.ast()[*t].repr(c),
             Self::Module(_) => {}
             Self::Use(path) => {
                 c.write_add("use ");
                 path.repr(c);
             }
             Self::Const(ty, expr) => {
-                c.write_add(name);
                 if let UnresolvedType::Infer(_) = ty {
                     c.write_add(" :: ");
                 }  else {
@@ -110,11 +108,13 @@ impl Definition {
                 }
                 c.ast()[*expr].repr(c);
             }
-            Self::Global(ty, val) => {
+            Self::Global(id) => {
+                let global = &c.ast()[*id];
+
                 c.write_add(name);
                 c.write_add(": ");
-                ty.repr(c);
-                if let &Some(val) = val {
+                global.ty.repr(c);
+                if let Some(val) = global.val {
                     c.write_add(" = ");
                     c.ast()[val].repr(c);
                 }
@@ -150,6 +150,14 @@ impl Function {
                 expr.repr(c);
             }
             None => if !in_trait { c.write_add(" extern") }
+        }
+    }
+}
+impl TypeDef {
+    fn repr<C: Representer>(&self, c: &C) {
+        match self {
+            TypeDef::Struct(s) => s.repr(c),
+            TypeDef::Enum(e) => e.repr(c),
         }
     }
 }
@@ -234,6 +242,9 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add("ret");
                 c.space();
                 ast[*val].repr(c);
+            }
+            Self::ReturnUnit { .. } => {
+                c.write_add("ret");
             }
             Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) 
                 => c.write_add(c.src(*span)),
@@ -341,10 +352,11 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 body.repr(c);
             }
-            Self::FunctionCall { func, args, end: _ } => {
+            Self::FunctionCall(call_id) => {
+                let Call { called_expr, args, .. } = &ast[*call_id];
                 let args = &ast[*args];
-                let func = &ast[*func];
-                func.repr(c);
+                let called = &ast[*called_expr];
+                called.repr(c);
                 c.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
                     ast[*arg].repr(c);

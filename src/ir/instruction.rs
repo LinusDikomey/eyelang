@@ -1,7 +1,9 @@
 use std::fmt;
 
 use color_format::cwrite;
-use super::{TypeTableIndex, Ref, SymbolKey, BlockIndex};
+use crate::{resolve::{type_info::TypeTableIndex}, ast::{TypeId, FunctionId, TraitId, GlobalId}};
+
+use super::{Ref, BlockIndex};
 
 
 #[derive(Debug, Clone, Copy)]
@@ -82,7 +84,9 @@ impl Tag {
             Tag::Float => Float,
             Tag::EnumLit | Tag::String => String,
             
-            Tag::Func | Tag::Type | Tag::Trait => Symbol,
+            Tag::Func => Func,
+            Tag::Type => Type,
+            Tag::Trait => Trait,
             Tag::TraitFunc => TraitFunc,
             Tag::LocalType | Tag::Decl => TypeTableIdx,
             Tag::Module => Int,
@@ -138,7 +142,10 @@ pub union Data {
     pub bin_op: (Ref, Ref),
     pub ref_int: (Ref, u32),
     pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
-    pub symbol: SymbolKey,
+    pub func_symbol: FunctionId,
+    pub type_symbol: TypeId,
+    pub trait_symbol: TraitId,
+    pub global_symbol: GlobalId,
     pub trait_func: (u32, u32), // extra_index for SymbolKey, func index in trait
     pub none: (),
     pub block: BlockIndex
@@ -155,7 +162,6 @@ pub enum DataVariant {
     Int32,
     LargeInt,
     TypeTableIdx,
-    Symbol,
     TraitFunc,
     Block,
     Branch,
@@ -167,6 +173,9 @@ pub enum DataVariant {
     BinOp,
     RefInt,
     Asm,
+    Func,
+    Type,
+    Trait,
     Global,
     None,
 }

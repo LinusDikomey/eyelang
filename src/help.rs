@@ -1,5 +1,23 @@
 use std::fmt;
 
+macro_rules! id {
+    ($t: ty, $size: literal: $($name: ident)*) => {
+        $(
+            #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+            pub struct $name($t);
+            impl $name {
+                pub fn idx(self) -> usize { self.0 as usize }
+                pub fn to_bytes(self) -> [u8; $size] {
+                    self.0.to_le_bytes()
+                }
+                pub fn from_bytes(b: [u8; $size]) -> Self {
+                    Self(<$t>::from_le_bytes(b))
+                }
+            }
+        )*
+    };
+}
+pub(crate) use id;
 
 
 pub fn write_delimited<I, T, D>(f: &mut fmt::Formatter, i: I, delim: D) -> fmt::Result

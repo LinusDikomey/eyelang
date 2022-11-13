@@ -6,26 +6,7 @@ use crate::{
     token::IntLiteral,
     types::{Primitive, IntType},
     span::{Span, TSpan},
-    dmap::{self, DHashMap},
-    ir::{
-        TypeTableIndex,
-        Ref,
-        TypingCtx,
-        ConstSymbol,
-        SymbolKey,
-        self,
-        FunctionOrHeader,
-        Type,
-        Function,
-        TypeInfo,
-        TypeTable,
-        FunctionHeader,
-        ConstVal,
-        TypeDef,
-        Struct,
-        Enum,
-        TraitDef, GenericFunc, StructMemberSymbol
-    },
+    dmap::{self, DHashMap}, resolve::types::SymbolTable,
 }; 
 
 mod call;
@@ -36,9 +17,8 @@ mod pat;
 pub use crate::ir::builder::IrBuilder;
 
 pub struct GenCtx<'s> {
-    pub ctx: TypingCtx,
-    pub globals: Globals,
     pub ast: &'s ast::Ast,
+    pub symbols: &'s SymbolTable,
     pub module: ModuleId,
     pub errors: Errors,
 }
@@ -51,23 +31,6 @@ impl<'s> GenCtx<'s> {
     }
     pub fn src(&self, span: TSpan) -> &str {
         &self.ast.sources[self.module.idx()].0[span.range()]
-    }
-
-    fn resolve_module_symbol(&mut self, id: ModuleId, name: &str) -> Option<Symbol> {
-        let prev_id = self.module;
-        self.module = id;
-        let symbol = self.globals[id].get(name).cloned().or_else(|| {
-            self.ast[self.ast[id].definitions].get(name).map(|def|
-                gen_definition(name, def, &mut Scope::Module(id), self,
-                    |_scope, name, symbol, ctx| {
-                        let prev = ctx.globals[id].insert(name, symbol);
-                        debug_assert!(prev.is_none());
-                    }
-                )
-            )
-        });
-        self.module = prev_id;
-        symbol
     }
 }
 
@@ -624,21 +587,6 @@ fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol
         let State::Module(id) = state else { unreachable!() };
         Symbol::Module(id)
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum Symbol {
-    Func(SymbolKey),
-    GenericFunc(u32),
-    Type(SymbolKey),
-    TypeValue(Type),
-    Trait(SymbolKey),
-    Generic(u8),
-    Module(ModuleId),
-    Var { ty: TypeTableIndex, var: Ref },
-    GlobalVar(SymbolKey),
-    Const(SymbolKey),
-    Invalid,
 }
 
 pub enum Scope<'a> {

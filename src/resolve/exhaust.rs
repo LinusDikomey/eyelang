@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::dmap;
 
-use super::types::{SymbolTable, Type, TypeDef};
+use super::types::{SymbolTable, Type, ResolvedTypeDef};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
@@ -58,7 +58,7 @@ impl Exhaustion {
                     Some(Type::Enum(variants)) => variants.iter().all(|v| exhausted_variants.contains(v)),
                     Some(Type::Id(symbol, _generics)) => {
                         match &symbols.get_type(*symbol) {
-                            TypeDef::Enum(enum_def) => {
+                            ResolvedTypeDef::Enum(enum_def) => {
                                 enum_def.variants.iter().all(|(v, _)| exhausted_variants.contains(v))
                             }
                             _ => return None

@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufWriter, Write}, fmt, process::Command, path::Path};
 use std::fmt::Write as _;
 
-use crate::{ir::{self, Instruction, Tag, SymbolKey, Ref}, types::Primitive};
+use crate::{ir::{self, Instruction, Tag, Ref}, types::Primitive, resolve::types, ast::FunctionId};
 
 #[allow(non_camel_case_types)]
 #[derive(Clone, Copy)]
@@ -350,7 +350,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], info
                 }
                 Tag::Int => {
                     match &ir.types[inst.ty] {
-                        ir::Type::Prim(p) => {
+                        types::Type::Prim(p) => {
                             let ty = Type::try_from(*p)
                                 .expect("Unsupported int size");
                             Int(ty, data.int)
@@ -363,13 +363,13 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], info
                 Tag::Float => todo!(),
                 Tag::Decl => {
                     let size = match ir.types[inst.ty] {
-                        ir::Type::Prim(p) => p.layout().size,
-                        ir::Type::Id(_, _) | ir::Type::Array(_) | ir::Type::Enum(_) | ir::Type::Tuple(_)
+                        types::Type::Prim(p) => p.layout().size,
+                        types::Type::Id(_, _) | types::Type::Array(_) | types::Type::Enum(_) | types::Type::Tuple(_)
                             => todo!("Non-primitives not supported in x86 backend"),
-                        ir::Type::Pointer { .. } => 8,
-                        ir::Type::Symbol => 0,
-                        ir::Type::Generic(_) => todo!("Generics not supported in x86 backend"),
-                        ir::Type::Invalid => panic!("Invalid type reached codegen")
+                        types::Type::Pointer { .. } => 8,
+                        types::Type::Symbol => 0,
+                        types::Type::Generic(_) => todo!("Generics not supported in x86 backend"),
+                        types::Type::Invalid => panic!("Invalid type reached codegen")
                     };
                     stack_pos += size;
                     w.inst(sub(rsp, Int(Type::qword, size as u64)));
@@ -400,7 +400,7 @@ unsafe fn gen_func(index: u32, func: &ir::Function, funcs: &[ir::Function], info
                     let start = data.extra_len.0 as usize;
                     let mut bytes = [0; 8];
                     bytes.copy_from_slice(&ir.extra[start..start+8]);
-                    let func = SymbolKey::from_bytes(bytes);
+                    let func = FunctionId::from_bytes(bytes);
                     let refs = (0..data.extra_len.1).map(|i| {
                         let mut ref_bytes = [0; 4];
                         let begin = 8 + start + (4 * i) as usize;

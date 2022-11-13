@@ -1,8 +1,8 @@
 use std::fmt;
 
-use crate::{types::{IntType, FloatType, Primitive}, ast::ModuleId};
+use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId}};
 
-use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{FunctionId, TypeId, Type, TraitId}};
+use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::Type};
 
 #[derive(Debug, Clone)]
 pub enum ConstVal {
@@ -65,7 +65,7 @@ impl fmt::Display for ConstVal {
 #[derive(Debug, Clone)]
 pub enum ConstSymbol {
     Func(FunctionId),
-    GenericFunc(u32),
+    //GenericFunc(u32),
     TraitFunc(TraitId, u32),
     Type(TypeId),
     TypeValue(Type),

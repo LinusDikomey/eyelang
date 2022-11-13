@@ -1,51 +1,15 @@
 use std::fmt;
 use color_format::*;
-use crate::ast::{self, ModuleId};
-use crate::dmap::DHashMap;
-use crate::types::Primitive;
+use crate::{resolve::{type_info::FinalTypeTable, types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}};
 use builder::IrBuilder;
 
 pub mod builder;
 pub mod eval;
-pub mod exhaust;
-
-mod const_val;
-pub use const_val::{ConstVal, ConstSymbol};
 
 pub mod display;
 
 mod instruction;
 pub use instruction::{Instruction, Tag, Data};
-
-mod typing;
-pub use typing::{TypeTable, FinalTypeTable, TypeInfo, TypeTableIndex, TypeTableIndices};
-
-pub enum FunctionOrHeader {
-    Func(Function),
-    Header(FunctionHeader),
-}
-impl FunctionOrHeader {
-    pub fn header(&self) -> &FunctionHeader {
-        match self {
-            Self::Func(f) => &f.header,
-            Self::Header(header) => header,
-        }
-    }
-}
-
-pub struct GenericFunc {
-    pub name: String,
-    pub header: FunctionHeader,
-    pub def: ast::Function,
-    pub generics: Vec<String>,
-    pub instantiations: DHashMap<Vec<Type>, SymbolKey>,
-    pub module: ModuleId,
-}
-impl GenericFunc {
-    pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
-    }
-}
 
 #[derive(Debug)]
 pub struct Function {
@@ -65,7 +29,7 @@ pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
     pub globals: Vec<(String, Type, Option<ConstVal>)>,
-    pub types: Vec<(String, TypeDef)>,
+    pub types: Vec<(String, ResolvedTypeDef)>,
 }
 
 const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;

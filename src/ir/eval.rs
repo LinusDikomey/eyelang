@@ -1,6 +1,7 @@
-use crate::{ir::{Ref, SymbolKey, TypeTableIndex, BlockIndex, ConstSymbol}, error::Error, ast::ModuleId};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::ConstSymbol, type_info::TypeTableIndex}};
 
-use super::{ConstVal, TypeInfo};
+use super::ConstVal;
+use crate::resolve::type_info::TypeInfo;
 
 #[derive(Clone, Debug)]
 enum LocalVal {
@@ -210,16 +211,16 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 ConstVal::EnumVariant(variant)
             }
             super::Tag::Func => {
-                ConstVal::Symbol(ConstSymbol::Func(inst.data.symbol))
+                ConstVal::Symbol(ConstSymbol::Func(inst.data.func_symbol))
             }
             super::Tag::TraitFunc => {
                 let mut buf = [0; 8];
                 buf.copy_from_slice(&ir.extra[inst.data.trait_func.0 as usize .. inst.data.trait_func.0 as usize + 8]);
 
-                ConstVal::Symbol(ConstSymbol::TraitFunc(SymbolKey::from_bytes(buf), inst.data.trait_func.1))
+                ConstVal::Symbol(ConstSymbol::TraitFunc(TraitId::from_bytes(buf), inst.data.trait_func.1))
             }
-            super::Tag::Type => ConstVal::Symbol(ConstSymbol::Type(inst.data.symbol)),
-            super::Tag::Trait => ConstVal::Symbol(ConstSymbol::Trait(inst.data.symbol)),
+            super::Tag::Type => ConstVal::Symbol(ConstSymbol::Type(inst.data.type_symbol)),
+            super::Tag::Trait => ConstVal::Symbol(ConstSymbol::Trait(inst.data.trait_symbol)),
             super::Tag::LocalType => ConstVal::Symbol(ConstSymbol::LocalType(TypeTableIndex(inst.data.int32))),
             super::Tag::Module => ConstVal::Symbol(ConstSymbol::Module(ModuleId::new(inst.data.int32))),
 

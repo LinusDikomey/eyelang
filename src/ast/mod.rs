@@ -3,7 +3,7 @@ use crate::{
     token::Operator,
     types::Primitive,
     span::{TSpan, Span},
-    dmap::{self, DHashMap}, resolve::VarId,
+    dmap::{self, DHashMap}, parser::IdentId, help::id,
 };
 
 pub mod repr;
@@ -12,10 +12,13 @@ pub struct Ast {
     pub modules: Vec<Module>,
     pub sources: Vec<(String, PathBuf)>,
     exprs: Vec<Expr>,
-    //expr_types: Vec<TypeTableIndex>,
-    //type_table: TypeTable,
     extra: Vec<ExprRef>,
-    defs: Vec<DHashMap<String, Definition>>
+    defs: Vec<DHashMap<String, Definition>>,
+    pub functions: Vec<Function>,
+    pub types: Vec<TypeDef>,
+    pub traits: Vec<TraitDefinition>,
+    pub globals: Vec<GlobalDefinition>,
+    pub calls: Vec<Call>,
 }
 impl Ast {
     pub fn new() -> Self {
@@ -23,11 +26,17 @@ impl Ast {
             modules: Vec::new(),
             sources: Vec::new(),
             exprs: Vec::new(),
-            //expr_types: Vec::new(),
-            //type_table: TypeTable::new(),
             extra: Vec::new(),
             defs: Vec::new(),
+            functions: Vec::new(),
+            types: Vec::new(),
+            traits: Vec::new(),
+            globals: Vec::new(),
+            calls: Vec::new(),
         }
+    }
+    pub fn expr_count(&self) -> usize {
+        self.exprs.len()
     }
     pub fn add_expr(&mut self, expr: Expr) -> ExprRef {
         let r = ExprRef(self.exprs.len() as u32);
@@ -46,6 +55,7 @@ impl Ast {
         self.extra.extend(extra);
         idx
     }
+
     pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
         let id = ModuleId(self.modules.len() as u32);
         self.modules.push(module);
@@ -68,6 +78,31 @@ impl Ast {
     pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
         self.modules[id.0 as usize] = module;
         self.sources[id.0 as usize] = (src, path);
+    }
+
+    pub fn add_func(&mut self, function: Function) -> FunctionId {
+        self.functions.push(function);
+        FunctionId((self.functions.len() - 1) as _)
+    }
+
+    pub fn add_type(&mut self, ty: TypeDef) -> TypeId {
+        self.types.push(ty);
+        TypeId((self.types.len() - 1) as _)
+    }
+
+    pub fn add_trait(&mut self, trait_def: TraitDefinition) -> TraitId {
+        self.traits.push(trait_def);
+        TraitId((self.traits.len() - 1) as _)
+    }
+
+    pub fn add_global(&mut self, global: GlobalDefinition) -> GlobalId {
+        self.globals.push(global);
+        GlobalId((self.globals.len() - 1) as _)
+    }
+    
+    pub fn add_call(&mut self, call: Call) -> CallId {
+        self.calls.push(call);
+        CallId((self.calls.len() - 1) as _)
     }
     
     pub fn src(&self, id: ModuleId) -> (&str, &Path) {
@@ -118,13 +153,66 @@ impl Index<ExprExtra> for Ast {
         &self.extra[index.idx as usize .. index.idx as usize + index.count as usize]
     }
 }
+impl Index<FunctionId> for Ast {
+    type Output = Function;
+
+    fn index(&self, id: FunctionId) -> &Self::Output {
+        &self.functions[id.idx()]
+    }
+}
+impl Index<TypeId> for Ast {
+    type Output = TypeDef;
+
+    fn index(&self, id: TypeId) -> &Self::Output {
+        &self.types[id.idx()]
+    }
+}
+impl Index<TraitId> for Ast {
+    type Output = TraitDefinition;
+
+    fn index(&self, id: TraitId) -> &Self::Output {
+        &self.traits[id.idx()]
+    }
+}
+impl Index<GlobalId> for Ast {
+    type Output = GlobalDefinition;
+
+    fn index(&self, id: GlobalId) -> &Self::Output {
+        &self.globals[id.idx()]
+    }
+}
+impl Index<CallId> for Ast {
+    type Output = Call;
+
+    fn index(&self, index: CallId) -> &Self::Output {
+        &self.calls[index.idx()]
+    }
+}
+
+pub enum TypeDef {
+    Struct(StructDefinition),
+    Enum(EnumDefinition),
+}
+impl TypeDef {
+    pub fn name(&self) -> &str {
+        match self {
+            TypeDef::Struct(s) => &s.name,
+            TypeDef::Enum(e) => &e.name,
+        }
+    }
+    pub fn generic_count(&self) -> u8 {
+        match self {
+            TypeDef::Struct(s) => s.generic_count(),
+            TypeDef::Enum(e) => e.generic_count(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModuleId(u32);
 impl ModuleId {
     pub fn new(id: u32) -> Self { Self(id) }
     pub fn idx(self) -> usize { self.0 as usize }
-    pub fn inner(self) -> u32 { self.0 }
 }
 
 #[derive(Debug, Clone)]
@@ -142,14 +230,18 @@ impl Module {
 #[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct ExprRef(u32);
+impl ExprRef {
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct DeclId(u32);
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExprExtra { pub idx: u32, pub count: u32 }
-impl ExprExtra {
-    pub fn iter(self) -> impl Iterator<Item = ExprRef> {
-        (self.idx .. self.idx + self.count).map(ExprRef)
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExprExtraSpans(u32, u32);
@@ -166,18 +258,20 @@ pub enum Item {
 
 #[derive(Debug, Clone)]
 pub enum Definition {
-    Function(Function),
-    Struct(StructDefinition),
-    Enum(EnumDefinition),
-    Trait(TraitDefinition),
+    Function(FunctionId),
+    Type(TypeId),
+    Trait(TraitId),
     Module(ModuleId),
     Use(IdentPath),
     Const(UnresolvedType, ExprRef),
-    Global(UnresolvedType, Option<ExprRef>),
+    Global(GlobalId),
 }
+
+id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId);
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
+    pub name: String,
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
     pub methods: DHashMap<String, Function>
@@ -190,6 +284,7 @@ impl StructDefinition {
 
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
+    pub name: String,
     pub generics: Vec<TSpan>,
     pub variants: Vec<(TSpan, String)>,
 }
@@ -205,6 +300,11 @@ pub struct TraitDefinition {
     pub functions: DHashMap<String, (TSpan, Function)>,
 }
 
+pub struct GlobalDefinition {
+    pub ty: UnresolvedType,
+    pub val: Option<ExprRef>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
@@ -213,6 +313,7 @@ pub struct Function {
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprRef>,
+    pub ident_count: u32,
     pub span: TSpan,
 }
 
@@ -233,6 +334,7 @@ pub enum Expr {
         val: ExprRef
     },
     Return { start: u32, val: ExprRef },
+    ReturnUnit { start: u32 },
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
     StringLiteral(TSpan),
@@ -247,7 +349,7 @@ pub enum Expr {
     Unit(TSpan),
     Variable {
         span: TSpan,
-        resolved: VarId,
+        id: IdentId,
     },
     Hole(u32), // underscore: _
     Array(TSpan, ExprExtra),
@@ -275,7 +377,7 @@ pub enum Expr {
         cond: ExprRef,
         body: ExprRef
     },
-    FunctionCall { func: ExprRef, args: ExprExtra, end: u32 },
+    FunctionCall(CallId),
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
     MemberAccess { left: ExprRef, name: TSpan },
@@ -309,9 +411,10 @@ impl Expr {
                 | Expr::Tuple(span, _)
                 | Expr::Cast(span, _, _)
                 => *span,
-            Expr::Declare { pat, annotated_ty } => TSpan::new(s(pat), annotated_ty.span().end),
+            Expr::Declare { pat, annotated_ty, .. } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
+            Expr::ReturnUnit { start } => TSpan::new(*start, start+2),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
             Expr::EnumLiteral { dot, ident } => TSpan::new(*dot, ident.end),
             &Expr::Hole(start) => TSpan::new(start, start),
@@ -319,7 +422,10 @@ impl Expr {
             Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
             Expr::Match { start, end, .. } => TSpan::new(*start, *end),
             Expr::While { start, cond: _, body } => TSpan::new(*start, e(body)),
-            Expr::FunctionCall { func, args: _, end } => TSpan::new(s(func), *end),
+            Expr::FunctionCall(call_id) => {
+                let Call { called_expr, args: _, end } = &ast[*call_id];
+                TSpan::new(s(called_expr), *end)
+            }
             Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
                 TSpan::new(s(expr), *start_or_end)
             } else {
@@ -344,6 +450,12 @@ impl Expr {
         //TODO: more efficient implementation
         self.span(ast).end
     }
+}
+
+pub struct Call {
+    pub called_expr: ExprRef,
+    pub args: ExprExtra,
+    pub end: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

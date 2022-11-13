@@ -2,27 +2,24 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::help::{write_delimited, write_delimited_with};
+use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef}};
 
 use super::{
     Type,
-    TypeDef,
     Function,
     Module,
     Instruction,
     FinalTypeTable,
     instruction::DataVariant,
     Ref,
-    SymbolKey,
     Data,
     Tag,
     FunctionIr,
-    Struct
 };
 
 #[derive(Clone, Copy)]
 pub struct Info<'a> {
-    pub types: &'a [(String, TypeDef)],
+    pub types: &'a [(String, ResolvedTypeDef)],
     pub funcs: &'a [Function],
 }
 
@@ -87,16 +84,16 @@ impl Type {
     pub fn display<'a>(&'a self, info: Info<'a>) -> impl fmt::Display + 'a {
         self.display_fn(|key| &info.types[key.idx()].0)
     }
-    pub fn display_fn<'a, F: Fn(SymbolKey) -> &'a str>(&'a self, type_name: F) -> TypeDisplay<'a, F> {
+    pub fn display_fn<'a, F: Fn(TypeId) -> &'a str>(&'a self, type_name: F) -> TypeDisplay<'a, F> {
         TypeDisplay { ty: self, type_name }
     }
 }
-pub struct TypeDisplay<'a, F: Fn(SymbolKey) -> &'a str> {
+pub struct TypeDisplay<'a, F: Fn(TypeId) -> &'a str> {
     ty: &'a Type,
     type_name: F,
 }
 
-impl<'a, F: Fn(SymbolKey) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
+impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { ty, type_name } = self;
         match ty {
@@ -185,22 +182,22 @@ impl fmt::Display for StructDisplay<'_> {
 }
 
 
-impl TypeDef {
+impl ResolvedTypeDef {
     pub fn display<'a>(&'a self, info: Info<'a>) -> TypeDefDisplay<'a> {
         TypeDefDisplay { def: self, info }
     }
 }
 pub struct TypeDefDisplay<'a> {
-    def: &'a TypeDef,
+    def: &'a ResolvedTypeDef,
     info: Info<'a>,
 }
 impl fmt::Display for TypeDefDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { def, info } = self;
         match def {
-            TypeDef::Struct(s) => write!(f, "{}", s.display(*info)),
-            TypeDef::Enum(e) => write!(f, "{e}"),
-            TypeDef::NotGenerated { .. } => write!(f, "not generated")
+            ResolvedTypeDef::Struct(s) => write!(f, "{}", s.display(*info)),
+            ResolvedTypeDef::Enum(e) => write!(f, "{e}"),
+            ResolvedTypeDef::NotGenerated { .. } => write!(f, "not generated")
         }
     }
 }
@@ -266,7 +263,7 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             let start = inst.data.extra_len.0 as usize;
             let mut bytes = [0; 8];
             bytes.copy_from_slice(&extra[start..start+8]);
-            let func = SymbolKey(u64::from_le_bytes(bytes));
+            let func = FunctionId::from_bytes(bytes);
             let refs = (0..inst.data.extra_len.1).map(|i| {
                 let mut ref_bytes = [0; 4];
                 let begin = 8 + start + (4 * i) as usize;
@@ -297,12 +294,11 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             Ok(())
         }
         DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float),
-        DataVariant::Symbol => cwrite!(f, "f#m<{}>", inst.data.symbol.0),
         DataVariant::TraitFunc => {
             let mut buf = [0; 8];
             buf.copy_from_slice(&extra[inst.data.trait_func.0 as usize ..inst.data.trait_func.0 as usize + 8]);
             
-            cwrite!(f, "#m<t{}>.#m<f{}>", SymbolKey::from_bytes(buf).0, inst.data.trait_func.1)
+            cwrite!(f, "#m<t{}>.#m<f{}>", TraitId::from_bytes(buf).idx(), inst.data.trait_func.1)
         }
         DataVariant::TypeTableIdx => {
             cwrite!(f, "#m<{}>", types[inst.data.ty].display(info))
@@ -340,7 +336,10 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             }
             Ok(())
         }
-        DataVariant::Global => cwrite!(f, "#c<##{}>", inst.data.symbol.0),
+        DataVariant::Func => cwrite!(f, "func #c<##{}>", inst.data.func_symbol.idx()),
+        DataVariant::Type => cwrite!(f, "type #c<##{}>", inst.data.type_symbol.idx()),
+        DataVariant::Trait => cwrite!(f, "trait #c<##{}>", inst.data.trait_symbol.idx()),
+        DataVariant::Global => cwrite!(f, "global #c<##{}>", inst.data.global_symbol.idx()),
         DataVariant::None => Ok(())
     }}
 }

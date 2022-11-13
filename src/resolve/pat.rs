@@ -1,14 +1,17 @@
-use crate::{ast::{ExprRef, Expr}, token::IntLiteral, span::TSpan, error::Error};
+use crate::{ast::{ExprRef, Expr}, token::IntLiteral, span::TSpan, error::Error, types::Primitive};
 
-use super::{Ctx, LocalScope, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}};
+use super::{Ctx, LocalScope, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident};
 
 impl<'a> LocalScope<'a> {
     pub(super) fn pat(&mut self, pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exhaustion: &mut Exhaustion) {
+        ctx.symbols.expr_types[pat_expr.idx()] = expected;
+
         let expr = &ctx.ast[pat_expr];  
-        let mut int_lit = |exhaustion: &mut Exhaustion, mut ctx: Ctx, lit: IntLiteral, lit_span: TSpan, neg| {
+        let int_lit = |exhaustion: &mut Exhaustion, mut ctx: Ctx, lit: IntLiteral, lit_span: TSpan, neg| {
             exhaustion.exhaust_int(exhaust::SignedInt(lit.val, neg));
             let int_ty = lit.ty
                 .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
+            ctx.specify(expected, int_ty, lit_span.in_mod(self.scope.module.id));
         };
         match expr {
             &Expr::IntLiteral(lit_span) => {
@@ -16,19 +19,21 @@ impl<'a> LocalScope<'a> {
                 int_lit(exhaustion, ctx, lit, lit_span, false);
             }
             Expr::FloatLiteral(_) => todo!(),
-            Expr::BoolLiteral { start, val } => todo!(),
-            Expr::EnumLiteral { dot, ident } => todo!(),
+            Expr::BoolLiteral { start: _, val } => {
+                exhaustion.exhaust_bool(*val);
+                ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, self.scope.module.id));
+            }
+            Expr::EnumLiteral { .. } => todo!(),
             Expr::Nested(_, _) => todo!(),
             Expr::Unit(_) => todo!(),
-            Expr::Variable { span, .. } => {
+            Expr::Variable { span, id } => {
+                let var_id = ctx.new_var(super::Var { ty: expected });
+                ctx.set_ident(*id, Ident::Var(var_id));
                 exhaustion.exhaust_full();
                 let name = self.scope.module.src()[span.range()].to_owned();
-                let id = ctx.new_var(expected);
-                self.define_var(name, id);
-                let Expr::Variable { resolved, .. } = &mut ctx.ast[pat_expr] else { unreachable!() };
-                *resolved = id;
+                self.define_var(name, var_id);
             }
-            Expr::Hole(_) => todo!(),
+            Expr::Hole(_) => exhaustion.exhaust_full(),
             Expr::Tuple(_, _) => todo!(),
 
             Expr::Record { .. } // very useful to match on records
@@ -37,6 +42,7 @@ impl<'a> LocalScope<'a> {
             | Expr::Declare { .. }
             | Expr::DeclareWithVal { .. }
             | Expr::Return { .. }
+            | Expr::ReturnUnit { .. }
             | Expr::Array(_, _)
             | Expr::If { .. } 
             | Expr::IfElse { .. } 

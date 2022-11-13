@@ -1,8 +1,8 @@
 use std::{ops::Index, borrow::Cow};
 
-use crate::{resolve::types::{TupleCountMode, TypeDef}, error::{Errors, Error}, span::Span, types::Primitive};
+use crate::{resolve::types::{TupleCountMode, ResolvedTypeDef}, error::{Errors, Error}, span::Span, types::Primitive, ast::TypeId};
 
-use super::types::{Type, SymbolTable, TypeId};
+use super::types::{Type, SymbolTable};
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
@@ -28,6 +28,25 @@ impl TypeTable {
         }
     }
 
+    pub fn find_optimizing(&mut self, mut idx: TypeTableIndex) -> (TypeTableIndex, TypeInfo) {
+        let initial = idx;
+        let mut updated = false;
+        let found = loop {
+            match self.types[idx.idx()] {
+                TypeInfoOrIndex::Type(ty) => break ty,
+                TypeInfoOrIndex::Idx(new_idx) => {
+                    idx = new_idx;
+                    updated = true;
+                }
+            }
+        };
+        if updated {
+            self.types[initial.idx()] = TypeInfoOrIndex::Idx(idx)
+        }
+        (idx, found)
+
+    }
+
     pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
         self.find(idx).1
     }
@@ -35,6 +54,17 @@ impl TypeTable {
     pub fn update_type(&mut self, idx: TypeTableIndex, ty: TypeInfo) {
         let idx = self.find(idx).0;
         self.types[idx.idx()] = TypeInfoOrIndex::Type(ty);
+    }   
+
+    pub fn is_invalid(&self, idx: TypeTableIndex) -> bool {
+        matches!(self.find(idx).1, TypeInfo::Invalid)
+    }
+
+    /// sets the type `ty` points to to `Invalid` and returns `true` if the type wasn't invalid before.
+    pub fn invalidate(&mut self, ty: TypeTableIndex) -> bool {
+        let (idx, prev) = self.find(ty);
+        self.types[idx.idx()] = TypeInfo::Invalid.into();
+        !matches!(prev, TypeInfo::Invalid)
     }
 
     fn update_type_and_point(&mut self, idx: TypeTableIndex, info: TypeInfo, b: TypeTableIndex) {
@@ -97,7 +127,7 @@ impl TypeTable {
         span: Span,
         symbols: &SymbolTable,
     ) {
-        let (curr_idx, prev) = self.find(idx);
+        let (curr_idx, prev) = self.find_optimizing(idx);
 
         self.ty_dbg("Specifying", (prev, idx, other));
         let ty = merge_twosided(prev, other, self, symbols).unwrap_or_else(|| {
@@ -390,6 +420,7 @@ pub enum TypeInfo {
     Enum(TypeTableNames),
     Tuple(TypeTableIndices, TupleCountMode),
     Symbol, // compile time Symbol like a function, type or trait
+    Generic(u8),
     Invalid,
 }
 impl TypeInfo {
@@ -458,11 +489,30 @@ impl TypeInfo {
                 s.into()
             }
             TypeInfo::Symbol => "symbol".into(),
+            TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
     }
     pub fn is_invalid(&self) -> bool {
         matches!(self, TypeInfo::Invalid)
+    }
+    pub fn is_zero_sized(&self, generics: TypeTableIndices, types: &TypeTable, symbols: &SymbolTable) -> bool {
+        match self {
+            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::Symbol => unreachable!(),
+            TypeInfo::Int | TypeInfo::Float  => false,
+            TypeInfo::Primitive(p) => p.layout().size == 0,
+            TypeInfo::Resolved(id, generics) => match symbols.get_type(*id) {
+                ResolvedTypeDef::Struct(def) => def.members.iter().map(|(_, ty)| ty.is_zero_sized(todo!(), todo!())).all(|b| b),
+                ResolvedTypeDef::Enum(def) => def.variants.len() < 2,
+                ResolvedTypeDef::NotGenerated { name, generic_count, generating } => unreachable!(),
+            }
+            TypeInfo::Pointer(_) => false,
+            TypeInfo::Array(Some(0), _) => true,
+            TypeInfo::Array(_, ty) => types.get_type(*ty).is_zero_sized(generics, types, symbols),
+            TypeInfo::Enum(names) => names.count < 2,
+            TypeInfo::Tuple(_, _) => todo!(),
+            TypeInfo::Generic(i) => types.get_type(generics.nth(*i as usize)).is_zero_sized(generics, types, symbols),
+        }
     }
     fn finalize(self, types: &TypeTable) -> Type {
         match self {
@@ -491,6 +541,7 @@ impl TypeInfo {
                     .map(|ty| types.get_type(ty).finalize(types))
                     .collect(),
             ),
+            Self::Generic(i) => Type::Generic(i),
             Self::Symbol => Type::Symbol,
         }
     }
@@ -550,7 +601,7 @@ fn merge_onesided(
                     })
                     .all(|v| v.is_some())
             }
-        } else if let TypeDef::Enum(def) = symbols.get_type(id) {
+        } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
             if let Enum(names) = other {
                 !types
                     .get_names(names)
@@ -648,6 +699,13 @@ fn merge_onesided(
                 Some(ty)
             } else {
                 None
+            }
+        }
+        Generic(i) => {
+            // TODO: proper generic type checking
+            match other {
+                Generic(i2) if i == i2 => Some(ty),
+                _ => None
             }
         }
         Invalid => Some(Invalid), // invalid type 'spreading'

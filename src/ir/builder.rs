@@ -1,10 +1,10 @@
 use crate::{
-    ast::ModuleId,
-    ir::{Instruction, typing::{TypeTable, TypeInfo}, Data, Tag, TypeTableIndex, Ref, FunctionIr, BlockIndex, SymbolKey, FunctionHeader},
-    error::Errors, span::TSpan, types::Primitive, irgen::{GenCtx, Scope},
+    ast::{FunctionId, GlobalId},
+    ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
+    types::Primitive, resolve::type_info::{TypeTable, TypeTableIndex, TypeInfo},
 };
 
-use super::{TypingCtx, exhaust::Exhaustion, RefVal};
+use super::RefVal;
 
 pub enum BinOp {
     Add,
@@ -25,25 +25,19 @@ pub enum BinOp {
     GE,
 }
 
-#[derive(Clone, Debug)]
-pub struct IrBuilder {
-    module: ModuleId,
+#[derive(Debug)]
+pub struct IrBuilder<'a> {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
     next_block: u32,
     pub blocks: Vec<u32>,
-    pub types: TypeTable,
     pub extra: Vec<u8>,
-
-    // exhaustion checks are deferred until the end of the IR generation for the type is known.
-    exhaustion_checks: Vec<(Exhaustion, TypeTableIndex, TSpan)>,
-    generic_instantiations: Vec<(u32, super::TypeTableIndices, Ref)>,
+    pub types: &'a mut TypeTable,
 }
-impl IrBuilder {
-    pub fn new(module: ModuleId) -> Self {
+impl<'a> IrBuilder<'a> {
+    pub fn new(types: &'a mut TypeTable) -> Self {
         Self {
-            module,
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
                 tag: Tag::BlockBegin,
@@ -54,11 +48,8 @@ impl IrBuilder {
             current_block: 0,
             next_block: 1,
             blocks: vec![0],
-            types: TypeTable::new(),
             extra: Vec::new(),
-
-            exhaustion_checks: Vec::new(),
-            generic_instantiations: Vec::new(),
+            types,
         }
     }
 
@@ -173,89 +164,17 @@ impl IrBuilder {
         BlockIndex(self.current_block)
     }
 
-    pub fn finish(mut self, ctx: &mut GenCtx) -> FunctionIr {
+    pub fn finish(self) -> FunctionIr {
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
         }
-        let types = self.types.finalize();
-        for (exhaustion, ty, span) in self.exhaustion_checks {
-            let ty = &types[ty];
-            match exhaustion.is_exhausted(Some(ty), &ctx.ctx) {
-                Some(true) => {}
-                Some(false) => {
-                    crate::log!("Inexhaustive: {:?}", exhaustion);
-                    ctx.errors.emit_span(crate::error::Error::Inexhaustive, span.in_mod(self.module));
-                }
-                None => debug_assert!(ctx.errors.has_errors(),
-                    "there should have been at least one error if this exhaustion is invalid")
-            }
-        }
-        for (idx, generic_types, call_ref) in self.generic_instantiations {
-            let func = &mut ctx.ctx.generic_funcs[idx as usize];
-            debug_assert_eq!(func.generic_count() as usize, generic_types.len());
-            let generic_types = types[generic_types].to_vec();
-            let func_key = match func.instantiations.get(&generic_types) {
-                Some(key) => *key,
-                None => {
-                    let mut name = func.name.to_owned();
-                    name.push('[');
-                    for (i, t) in generic_types.iter().enumerate() {
-                        use std::fmt::Write;
 
-                        if i != 0 {
-                            name.push(',');
-                        }
-                        write!(name, "{}", t.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name)).unwrap();
-                    }
-                    name.push(']');
-                    
-                    let params = func.header.params  
-                        .iter()
-                        .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_types)))
-                        .collect();
-                    let varargs = func.header.varargs;
-                    let return_type = func.header.return_type.instantiate_generics(&generic_types);
-
-                    crate::log!("instantiating generic function {name}");
-                    let new_key = ctx.ctx.add_func(crate::ir::FunctionOrHeader::Header(FunctionHeader {
-                        name,
-                        params,
-                        varargs,
-                        return_type,
-                    }));
-                    let func = &mut ctx.ctx.generic_funcs[idx as usize];
-
-                    func.instantiations.insert(generic_types.clone(), new_key);
-                    let mut scope = Scope::Module(func.module);
-
-                    // PERF: again: store definitions seperately to avoid cloning
-                    // this isn't even the single place this needs to be cloned
-                    let def = func.def.clone();
-                    // PERF: also cloning here
-                    let generic_names = func.generics.clone();
-                    let generics = generic_names.iter().map(String::as_str).zip(generic_types);
-                    
-                    let prev_module = ctx.module;
-                    ctx.module = func.module;
-
-                    crate::irgen::gen_func_body(&def, new_key, &mut scope, ctx, generics);
-                    ctx.module = prev_module;
-
-                    new_key
-                }
-            };
-            let call_ref = call_ref.into_ref().expect("Ref to call inst expected");
-            let inst = &mut self.inst[call_ref as usize];
-            debug_assert_eq!(inst.tag, Tag::Call);
-            let data = unsafe { inst.data.extra_len };
-            self.extra[data.0 as usize .. data.0 as usize + 8].copy_from_slice(&func_key.bytes());
-        }
         FunctionIr {
             inst: self.inst,
             extra: self.extra,
-            types,
             blocks: self.blocks,
+            types: self.types.clone().finalize(), //TODO: this is just a temporary solution and type tables should be handled differently
         }
     }
 
@@ -263,46 +182,6 @@ impl IrBuilder {
         let block = self.create_block();
         self.begin_block(block);
         block
-    }
-
-    pub fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, errors: &mut Errors, span: TSpan, ctx: &TypingCtx,
-    ) {
-        self.types.specify(idx, info, errors, span.in_mod(self.module), ctx);
-    }
-    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: TSpan,
-        ctx: &TypingCtx, errors: &mut Errors
-    ) {
-        // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
-        let (idx, ty) = self.types.find(idx);
-        if let TypeInfo::Enum(names) = ty {
-            if !self.types.get_names(names).iter().any(|s| *s == name) {
-                let new_names = self.types.extend_names(names, std::iter::once(name.to_owned()));
-                self.types.update_type(idx, TypeInfo::Enum(new_names));
-            }
-        } else {
-            let variant = self.types.add_names(std::iter::once(name.to_owned()));
-            self.specify(
-                idx,
-                TypeInfo::Enum(variant),
-                errors,
-                name_span,
-                ctx,
-            );
-        }
-    }
-
-    pub fn invalidate(&mut self, idx: TypeTableIndex) {
-        self.types.update_type(idx, TypeInfo::Invalid);
-    }
-
-    pub fn add_exhaustion_check(&mut self, exhaustion: Exhaustion, idx: TypeTableIndex, span: TSpan) {
-        self.exhaustion_checks.push((exhaustion, idx, span));
-    }
-
-    pub fn add_generic_instantiation(&mut self, generic_idx: u32, generics: super::TypeTableIndices, call_ref: Ref) {
-        debug_assert!(call_ref.is_ref(), "Reference to call expression expected");
-        crate::log!("Registering generic instantiation: {:?}", generics);
-        self.generic_instantiations.push((generic_idx, generics, call_ref));
     }
 
     /// --------------------------------------------------------------
@@ -339,7 +218,7 @@ impl IrBuilder {
         self.add(Data { float }, Tag::Float, float_ty)
     }
 
-    pub fn build_enum_lit(&mut self, variant: &str, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
+    /*pub fn build_enum_lit(&mut self, variant: &str, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
         let ty = ty.into().into_idx(&mut self.types);
         let extra = self.extra_data(variant.as_bytes());
         self.add(Data { extra_len: (extra, variant.len() as u32) }, Tag::EnumLit, ty)
@@ -368,7 +247,7 @@ impl IrBuilder {
 
     pub fn build_module(&mut self, module: ModuleId, ty: TypeTableIndex) -> Ref {
         self.add(Data { int32: module.inner() }, Tag::Module, ty)
-    }
+    }*/
 
     pub fn build_decl(&mut self, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
         let ty = ty.into().into_idx(&mut self.types);
@@ -402,9 +281,9 @@ impl IrBuilder {
         self.add(Data { extra_len: (extra, string.len() as u32) }, Tag::String, ty)
     }
 
-    pub fn build_call(&mut self, func: SymbolKey, params: impl IntoIterator<Item = Ref>, return_ty: TypeTableIndex)
+    pub fn build_call(&mut self, func: FunctionId, params: impl IntoIterator<Item = Ref>, return_ty: TypeTableIndex)
     -> Ref {
-        let extra = self.extra_data(&func.bytes());
+        let extra = self.extra_data(&func.to_bytes());
         let mut param_count = 0;
         for param in params {
             self.extra_data(&param.to_bytes());
@@ -421,8 +300,8 @@ impl IrBuilder {
         self.add(Data { un_op: val }, Tag::Not, ty)
     }
 
-    pub fn build_global(&mut self, global: SymbolKey, ptr_ty: TypeTableIndex) -> Ref {
-        self.add(Data { symbol: global }, Tag::Global, ptr_ty)
+    pub fn build_global(&mut self, global: GlobalId, ptr_ty: TypeTableIndex) -> Ref {
+        self.add(Data { global_symbol: global }, Tag::Global, ptr_ty)
     }
 
     
@@ -436,14 +315,18 @@ impl IrBuilder {
             BinOp::Or => {
                 if l.into_val() == Some(RefVal::True) || r.into_val() == Some(RefVal::True) {
                     return Ref::val(RefVal::True);
-                } else if l.into_val() == Some(RefVal::False) && r.into_val() == Some(RefVal::False) {
-                    return Ref::val(RefVal::False);
+                } else if l.into_val() == Some(RefVal::False) {
+                    return r;
+                } else if r.into_val() == Some(RefVal::False) {
+                    return l;
                 }
                 Tag::Or
             }
             BinOp::And => {
-                if l.into_val() == Some(RefVal::True) && r.into_val() == Some(RefVal::True) {
-                    return Ref::val(RefVal::True);
+                if l.into_val() == Some(RefVal::True) {
+                    return r;
+                } else if r.into_val() == Some(RefVal::True) {
+                    return l;
                 } else if l.into_val() == Some(RefVal::False) || r.into_val() == Some(RefVal::False) {
                     return Ref::val(RefVal::False);
                 }

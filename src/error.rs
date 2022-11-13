@@ -21,6 +21,7 @@ impl Errors {
         self.emit_span(err, Span { start, end, module });
     }
     
+    #[track_caller]
     pub fn emit_span(&mut self, err: Error, span: Span) {
         self.emit_err(CompileError { err, span });
     }
@@ -160,6 +161,7 @@ pub enum Error {
     UnknownVariable,
     UnknownModule,
     MissingMain,
+    MainArgs,
     InvalidMainReturnType(String),
     UnexpectedType,
     IntLiteralOutOfRange,
@@ -175,13 +177,14 @@ pub enum Error {
     FunctionOrTypeExpected,
     IntExpected,
     FloatExpected,
-    MismatchedType { expected: String, found: String  },
+    MismatchedType { expected: String, found: String },
     ExpectedVarFoundDefinition,
+    ExpectedValue,
     ExpectedValueFoundDefinition,
     ExpectedValueFoundFunction,
     ExpectedValueOrModuleFoundDefiniton,
     ExpectedValueFoundHole,
-    InvalidArgCount,
+    InvalidArgCount { expected: u32, varargs: bool, found: u32 },
     CantNegateType,
     NonexistantMember,
     NonexistantEnumVariant,
@@ -205,7 +208,7 @@ pub enum Error {
     RecursiveDefinition,
     CantIndex,
     ExpectedConstValue,
-    UnusedStatementValue,
+    UnusedExpressionValue,
     InfiniteLoop,
     NotAPattern,
     NotAPatternRangeValue,
@@ -229,6 +232,7 @@ impl Error {
             Error::UnknownVariable => "variable not found",
             Error::UnknownModule => "module not found",
             Error::MissingMain => "no main function provided",
+            Error::MainArgs => "the main function shouln't take arguments",
             Error::InvalidMainReturnType(_) => "invalid main return type",
             Error::UnexpectedType => "type was not expected here",
             Error::IntLiteralOutOfRange => "int literal out of range",
@@ -246,11 +250,12 @@ impl Error {
             Error::FloatExpected => "float expected",
             Error::MismatchedType { .. } => "type mismatch",
             Error::ExpectedVarFoundDefinition => "expected variable but found a definition",
+            Error::ExpectedValue => "a value was expected",
             Error::ExpectedValueFoundDefinition => "expected value but found a definition",
             Error::ExpectedValueFoundFunction => "expected value but found a function",
             Error::ExpectedValueOrModuleFoundDefiniton => "expected value or module but found a definition",
             Error::ExpectedValueFoundHole => "expected a value but found a hole",
-            Error::InvalidArgCount => "invalid argument count",
+            Error::InvalidArgCount { .. } => "invalid argument count",
             Error::CantNegateType => "can't negate this value",
             Error::NonexistantMember => "member doesn't exist",
             Error::NonexistantEnumVariant => "enum variant doesn't exist",
@@ -274,7 +279,7 @@ impl Error {
             Error::RecursiveDefinition => "definition depends on itself recursively",
             Error::CantIndex => "can't index this",
             Error::ExpectedConstValue => "constant value expected",
-            Error::UnusedStatementValue => "unused expression value",
+            Error::UnusedExpressionValue => "unused expression value",
             Error::InfiniteLoop => "possibly detected infinite loop",
             Error::NotAPattern => "not a pattern",
             Error::NotAPatternRangeValue => "can't be used for ranges in patterns",
@@ -302,12 +307,19 @@ impl Error {
             Error::MismatchedType { expected, found } => {
                 cformat!("expected value of type #m<{}> but found #m<{}>", expected, found)
             }
+            &Error::InvalidArgCount { expected, varargs, found } => {
+                cformat!("expected #g<{}{}> arguments but #r<{}> were found",
+                    if varargs { "at least" } else { "" },
+                    expected,
+                    found
+                )
+            }
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",
                 expected, found
             ),
-            Error::UnusedStatementValue => cformat!(
-                "this statement only produces a value that is not used"
+            Error::UnusedExpressionValue => cformat!(
+                "this expression only produces a value that is not used"
             ),
             Error::NotAPattern => cformat!(
                 "this expression is not a valid pattern"
@@ -334,7 +346,7 @@ impl Error {
     }
     pub fn severity(&self) -> Severity {
         match self {
-            Self::UnusedStatementValue
+            Self::UnusedExpressionValue
             | Self::CantMutateHole
                 => Severity::Warn,
             _ => Severity::Error

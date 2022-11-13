@@ -1,7 +1,6 @@
 #![feature(
     variant_count,
     fs_try_exists,
-    int_log,
     int_roundings,
     array_chunks,
     iter_intersperse,
@@ -10,47 +9,15 @@
 #![warn(unused_qualifications)]
 
 mod ast;
-//mod backend;
-mod backend {
-    pub mod llvm {
-        pub fn module(a: *mut llvm_sys::LLVMContext, ir: &crate::ir::Module, b: bool) -> ! {
-            todo!()
-        }
-        pub mod output {
-            pub fn run_jit(b: *mut llvm_sys::LLVMModule) -> ! {
-                todo!()
-            }
-            pub fn emit_bitcode(a: Option<()>, b: *mut llvm_sys::LLVMModule, c: &str) -> ! {
-                todo!()
-            }
-        }
-    }
-    pub mod x86 {
-        pub fn emit(ir: &crate::ir::Module, a: std::fs::File) -> ! { todo!() } 
-        pub fn assemble(asm_path: &std::path::Path, p: &std::path::Path) -> ! { todo!() }
-    }
-}
+mod backend;
 mod compile;
 mod dmap;
 mod error;
 mod help;
-//mod ir;
-mod ir {
-    #[derive(Debug)]
-    pub struct Module;
-    impl std::fmt::Display for Module {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "")
-        }
-    }
-    pub mod builder {
-        pub struct IrBuilder;
-    }
-}
+mod ir;
 //mod irgen;
-mod irgen {
-    pub fn reduce(ast: &crate::ast::Ast, main_module: crate::ast::ModuleId, errors: crate::error::Errors, require_main_func: bool) -> ! { todo!() }
-}
+mod irgen2;
+pub(crate) use irgen2 as irgen;
 mod lexer;
 mod link;
 #[cfg(feature = "lsp")]
@@ -70,7 +37,7 @@ use std::{
     fmt,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 static LOG: AtomicBool = AtomicBool::new(false);
@@ -258,6 +225,7 @@ fn run(args: &Args) -> bool {
 #[derive(Default)]
 pub struct Stats {
     file_times: Vec<FileStats>,
+    resolve: Duration,
     irgen: Duration,
 }
 impl fmt::Display for Stats {
@@ -285,11 +253,12 @@ impl fmt::Display for Stats {
         }
         writeln!(
             f,
-            "Overall: {:?} (lex: {:?}, parse: {:?}, irgen: {:?})\n\
+            "\nOverall: {:?}:\n\tlex: {:?}\n\tparse: {:?}\n\tresolve: {:?}\n\tirgen: {:?}\n\
             ----------------------------------------",
-            overall_lex + overall_parse + self.irgen,
+            overall_lex + overall_parse + self.resolve + self.irgen,
             overall_lex,
             overall_parse,
+            self.resolve,
             self.irgen,
         )
     }
@@ -333,7 +302,7 @@ impl fmt::Display for BackendStats {
 
 fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let mut stats = Stats::default();
-    let ir = {
+    let (symbols, ast) = {
         let debug_options = compile::Debug {
             tokens: args.tokens,
             reconstruct_src: args.reconstruct_src,
@@ -351,10 +320,14 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         );
         errors.print(&ast);
         match res {
-            Ok(val) => val,
+            Ok(symbols) => (symbols, ast),
             Err(()) => return true,
         }
     };
+    
+    let reduce_start_time = Instant::now();
+    let ir = irgen::reduce(&ast, symbols);
+    stats.irgen += reduce_start_time.elapsed();
 
     if args.ir {
         eprintln!("\n\n{ir}\n");
@@ -407,13 +380,13 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         #[cfg(feature = "llvm-backend")]
         (Cmd::Run | Cmd::Build | Cmd::Jit, Backend::LLVM) => unsafe {
             let context = llvm::core::LLVMContextCreate();
-            let (llvm_module, stats): (*mut llvm::LLVMModule, i32) = backend::llvm::module(context, &ir, args.llvm_ir);
+            let (llvm_module, stats) = backend::llvm::module(context, &ir, args.llvm_ir);
             if args.timings {
                 println!("{stats}");
             }
             if args.cmd == Cmd::Jit {
                 cprintln!("#g<JIT running>...\n");
-                let ret_val: i32 = backend::llvm::output::run_jit(llvm_module);
+                let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
                 println!("\nResult of JIT execution: {ret_val}");

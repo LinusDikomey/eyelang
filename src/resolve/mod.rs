@@ -1,6 +1,9 @@
-use crate::{ast::{self, ModuleId, Definition, ExprRef, Ast}, error::{Errors, Error}, dmap, span::{Span, TSpan}};
+use crate::{ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId}, error::{Errors, Error}, dmap, span::{Span, TSpan}, parser::IdentId, resolve::types::ResolvedFunc, types::Primitive};
 
-use self::{types::{DefId, Type, SymbolTable, FunctionHeader, Struct, TypeDef, TupleCountMode, FunctionId}, type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices}};
+use self::{
+    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, TupleCountMode, ResolvedTypeDef},
+    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}
+};
 
 pub mod const_val;
 pub mod types;
@@ -212,10 +215,6 @@ impl<'a> Scope<'a> {
                 TypeInfo::Pointer(types.add(inner))
             }
             ast::UnresolvedType::Array(inner) => {
-                let Some(count) = inner.2 else {
-                    errors.emit_span(Error::ArraySizeCantBeInferredHere, inner.1.in_mod(self.module.id));
-                    return TypeInfo::Invalid;
-                };
                 let elem_ty = self.resolve_type_info(&inner.0, symbols, types, errors);
                 TypeInfo::Array(inner.2, types.add(elem_ty))
             }
@@ -255,9 +254,10 @@ impl<'a> ExprInfo<'a> {
 
 
 #[derive(Clone, Copy)]
-pub enum LocalDefId {
+enum LocalDefId {
     Def(DefId),
     Var(VarId),
+    Type(TypeTableIndex),
 }
 enum LocalOrGlobalScope<'a> {
     Local(&'a LocalScope<'a>),
@@ -281,11 +281,14 @@ impl<'a> LocalScope<'a> {
             locals: dmap::new()
         }
     }
-    pub fn define_var(&mut self, name: String, id: VarId) {
+    fn define_var(&mut self, name: String, id: VarId) {
         self.locals.insert(name, LocalDefId::Var(id));
     }
+    pub fn add_generic(&mut self, name: String, ty: TypeTableIndex) {
+        self.locals.insert(name, LocalDefId::Type(ty));
+    }
 
-    pub fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors) -> Option<LocalDefId> {
+    fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors) -> Option<LocalDefId> {
         if let Some(local) = self.locals.get(name) {
             Some(*local)
         } else if let Some(def) = self.scope.names.get(name) {
@@ -296,12 +299,15 @@ impl<'a> LocalScope<'a> {
                 LocalOrGlobalScope::Global(global) => global.resolve(name, name_span, errors).map(LocalDefId::Def),
             }
         }
+    }
 
+    pub fn span(&self, expr: ExprRef, ast: &Ast) -> Span {
+        ast[expr].span_in(ast, self.scope.module.id)
     }
 }
 
-pub fn resolve_project(ast: &mut Ast, main_module: ModuleId, errors: &mut Errors, require_main_func: bool) {
-    let mut symbols = SymbolTable::new();
+pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool) -> SymbolTable {
+    let mut symbols = SymbolTable::new(ast.functions.len(), ast.expr_count(), &ast.types, ast.traits.len(), ast.calls.len());
     // add ids for all definitions
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
         let module_id = ModuleId::new(i as _);
@@ -318,75 +324,114 @@ pub fn resolve_project(ast: &mut Ast, main_module: ModuleId, errors: &mut Errors
         for (name, def) in &ast[module.definitions] {
 
             let def_id = *scope.names.get(name).unwrap();
-            resolve_def(name, def, def_id, &mut symbols, scope, errors);
+            resolve_def(name, def, ast, def_id, &mut symbols, scope, errors);
         }
     }
-    eprintln!("{symbols:?}");
-    // function bodies
-    for scope in &mut module_scopes {
-        for (name, def) in &scope.names {
-            match def {
-                DefId::Function(func_id) => {
-                    let Some(Definition::Function(func)) = ast[ast[scope.module.id].definitions].get(name) else {
-                        unreachable!()
-                    };
 
-                    if let Some(body) = func.body {
-                        let mut types = TypeTable::new();
-                        let mut vars = vec![];
-                        func_body(body, *func_id, scope, Ctx {
-                            ast,
-                            symbols: &mut symbols,
-                            types: &mut types,
-                            errors,
-                            vars: &mut vars,
-                        });
-                    }
-                }
-                DefId::Type(_) | DefId::Module(_) => {}
+    if require_main {
+        if let Some(DefId::Function(id)) = module_scopes[main_module.idx()].names.get("main") {
+            let main = symbols.get_func(*id);
+            if main.varargs || main.params.len() != 0 {
+                errors.emit_span(Error::MainArgs, ast.functions[id.idx()].span.in_mod(main_module));
+            }
+            match main.return_type {
+                Type::Prim(p) if p.is_int() => {}
+                Type::Prim(Primitive::Unit) => {}
+                _ => errors.emit_span(
+                    Error::InvalidMainReturnType("TODO: show type here".to_owned()),
+                    ast.functions[id.idx()].return_type.span().in_mod(main_module)
+                )
             }
         }
     }
+
+    // function bodies
+    for scope in &mut module_scopes {
+        scope_bodies(scope, &ast, &mut symbols, errors);
+    }
+
+    symbols
 }
 
 /// add all order independent definitions to a scope
 fn scope_defs<'a>(scope_defs: &'a dmap::DHashMap<String, Definition>, symbols: &mut SymbolTable) -> dmap::DHashMap<String, DefId> {
     scope_defs.iter().map(|(name, def)| {
         let def_id = match def {
-            Definition::Function(_) => DefId::Function(symbols.add_func()),
-            Definition::Struct(def) => DefId::Type(symbols.add_type(name.clone(), def.generic_count())),
-            Definition::Enum(def) => DefId::Type(symbols.add_type(name.clone(), def.generic_count())),
-            Definition::Trait(_) => todo!(),
+            &Definition::Function(id) => DefId::Function(id),
+            &Definition::Type(id) => DefId::Type(id),
+            Definition::Trait(_id) => todo!()/*DefId::Trait(id)*/,
             Definition::Module(_) => todo!(),
             Definition::Use(_) => todo!(),
             Definition::Const(_, _) => todo!(),
-            Definition::Global(_, _) => todo!(),
+            Definition::Global(_) => todo!(),
         };
         (name.clone(), def_id)
     }).collect()
 }
 
-fn resolve_def(name: &str, def: &Definition, def_id: DefId, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors) {
+fn scope_bodies<'a>(scope: &mut Scope<'static>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
+    let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
+    for (name, def) in &scope.names {
+        match def {
+            DefId::Function(func_id) => {
+                let Some(&Definition::Function(func)) = ast[ast[scope.module.id].definitions].get(name) else {
+                    unreachable!()
+                };
+
+                let func = &ast[*func_id];
+
+
+                if let Some(body) = func.body {
+                    let mut types = TypeTable::new();
+                    let mut vars = vec![];
+                    let mut idents = vec![Ident::Invalid; func.ident_count as usize];
+                    func_body(body, *func_id, scope, Ctx {
+                        ast,
+                        symbols: symbols,
+                        types: &mut types,
+                        idents: &mut idents,
+                        vars: &mut vars,
+                        errors,
+                        expr_types: &mut expr_types,
+                    });
+
+                    symbols.get_func_mut(*func_id).resolved_body = Some(ResolvedFunc {
+                        body,
+                        idents,
+                        vars,
+                        types,
+                    })
+                }
+            }
+            DefId::Type(_) | DefId::Module(_) => {}
+        }
+    }
+}
+
+fn resolve_def(name: &str, def: &Definition, ast: &Ast, def_id: DefId, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors) {
     match def {
-        Definition::Function(def) => {
-            let DefId::Function(id) = def_id else { unreachable!() };
-            symbols.place_func(id, func_signature(name.to_owned(), def, scope, symbols, errors));
+        &Definition::Function(id) => {
+            symbols.place_func(id, func_signature(name.to_owned(), &ast[id], scope, symbols, errors));
         }
-        Definition::Struct(def) => {
-            let DefId::Type(id) = def_id else { unreachable!() };
-            symbols.place_type(id, TypeDef::Struct(struct_def(name.to_owned(),def, scope, symbols, errors)));
+        &Definition::Type(id) => {
+            let def = match &ast[id] {
+                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, symbols, errors)),
+                TypeDef::Enum(_) => todo!(),
+            };
+            symbols.place_type(id, def);
         }
-        Definition::Enum(_) => todo!(),
         Definition::Trait(_) => todo!(),
         Definition::Module(_) => todo!(),
         Definition::Use(_) => todo!(),
         Definition::Const(_, _) => todo!(),
-        Definition::Global(_, _) => todo!(),
+        Definition::Global(_) => todo!(),
     }
 }
 
 fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols: &SymbolTable, errors: &mut Errors)
 -> FunctionHeader {
+    let generics = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
+
     let params = func.params.iter().map(|(name, ty, _, _)| {
         (name.clone(), scope.resolve_ty(ty, symbols, errors))
     }).collect();
@@ -395,9 +440,12 @@ fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols
 
     FunctionHeader {
         name,
+        generics,
         params,
         return_type,
         varargs: func.varargs,
+        resolved_body: None,
+        module: scope.module.id,
     }
 }
 
@@ -415,56 +463,134 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, symb
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, Debug)]
+pub enum Ident {
+    Invalid,
+    Var(VarId),
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct VarId(u32);
 impl VarId {
-    pub const MISSING: Self = Self(u32::MAX);
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Var {
+    ty: TypeTableIndex,
 }
 
 struct Ctx<'a> {
-    ast: &'a mut Ast,
+    ast: &'a Ast,
     symbols: &'a mut SymbolTable,
     types: &'a mut TypeTable,
+    idents: &'a mut [Ident],
+    vars: &'a mut Vec<Var>,
     errors: &'a mut Errors,
-    vars: &'a mut Vec<TypeTableIndex>,
+    expr_types: &'a mut [TypeTableIndex],
 }
 impl<'a> Ctx<'a> {
     fn reborrow(&mut self) -> Ctx<'_> {
         Ctx {
-            ast: &mut *self.ast,
+            ast: self.ast,
             symbols: &mut *self.symbols,
             types: &mut *self.types,
-            errors: &mut *self.errors,
+            idents: &mut *self.idents,
             vars: &mut *self.vars,
+            errors: &mut *self.errors,
+            expr_types: &mut *self.expr_types,
         }
     }
+    fn new_var(&mut self, var: Var) -> VarId {
+        self.vars.push(var);
+        VarId((self.vars.len() - 1) as _)
+    }
+    fn var(&self, id: VarId) -> Var {
+        self.vars[id.0 as usize]
+    }
+    fn set_ident(&mut self, id: IdentId, ident: Ident) {
+        self.idents[id.idx()] = ident;
+    }
+    fn ident(&self, id: IdentId) -> Ident {
+        self.idents[id.idx()]
+    }
 
+    fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, span: Span) {
+        self.types.merge(a, b, self.errors, span, &self.symbols);
+    } 
     fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, span: Span) {
         self.types.specify(idx, info, self.errors, span, &self.symbols)
     }
-
-    fn new_var(&mut self, ty: TypeTableIndex) -> VarId {
-        let id = VarId(self.vars.len() as u32);
-        self.vars.push(ty);
-        id
+    
+    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: Span) {
+        // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
+        let (idx, ty) = self.types.find_optimizing(idx);
+        match ty {
+            TypeInfo::Enum(names) => {
+                if !self.types.get_names(names).iter().any(|s| *s == name) {
+                    let new_names = self.types.extend_names(names, std::iter::once(name.to_owned()));
+                    self.types.update_type(idx, TypeInfo::Enum(new_names));
+                }
+            }
+            TypeInfo::Resolved(id, _generics) => {
+                if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
+                    if def.variants.get(name).is_none() {
+                        self.errors.emit_span(Error::NonexistantEnumVariant, name_span);
+                    }
+                } else {
+                    self.errors.emit_span(Error::MismatchedType {
+                        expected: "an enum".to_string(), found: "a non-enum type".to_owned()
+                    }, name_span);
+                }
+            }
+            _ => {
+                let variant = self.types.add_names(std::iter::once(name.to_owned()));
+                self.specify(
+                    idx,
+                    TypeInfo::Enum(variant),
+                    name_span,
+                );
+            }
+        }
     }
 }
 
-fn func_body<'src>(body: ExprRef, func_id: FunctionId, scope: &Scope<'static>, mut ctx: Ctx) {
+#[derive(Debug, Clone, Copy)]
+pub enum ResolvedCall {
+    Function { func_id: FunctionId, generics: TypeTableIndices },
+    Type(TypeId),
+    Invalid,
+}
+
+fn func_body<'src>(body: ExprRef, func_id: FunctionId, scope: &Scope<'static>, ctx: Ctx) {
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
-    for (name, ty) in &signature.params {
-        let type_info = ty.as_info(ctx.types);
-        let ty = ctx.types.add(type_info);
-        let var = VarId(ctx.vars.len() as _);
-        ctx.vars.push(ty);
-        scope.define_var(name.clone(), var);
+    let generics = ctx.types.add_multiple(
+        (0..signature.generics.len())
+            .map(|i| TypeInfo::Generic(i as u8))
+    );
+
+    for (name, ty) in signature.generics.iter().zip(generics.iter()) {
+        scope.add_generic(name.clone(), ty);
+    }
+
+    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as usize));
+
+    for (i, (name, ty)) in signature.params.iter().enumerate() {
+        let ty = ty.as_info(ctx.types, on_generic);
+        let ty = ctx.types.add_info_or_idx(ty);
+        ctx.vars.push(Var { ty });
+        let var_id = VarId((ctx.vars.len() - 1) as _);
+        ctx.idents[i] = Ident::Var(var_id);
+        scope.define_var(name.clone(), var_id);
     }
 
     let signature = ctx.symbols.get_func(func_id);
-    let return_type_info = signature.return_type.as_info(ctx.types);
-    let expected = ctx.types.add(return_type_info);
+    let return_type_info = signature.return_type.as_info(ctx.types, on_generic);
+    let expected = ctx.types.add_info_or_idx(return_type_info);
 
     let mut noreturn = false;
-    scope.expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx);
+    scope.val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx, false); 
 }

@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{dmap::{self, DHashMap}, ir::{self, Type}, types::Primitive, BackendStats};
+use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir, resolve::{types::{ResolvedTypeDef, Type}, type_info::TypeTableIndex, const_val::ConstVal}};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
 pub mod output;
@@ -52,19 +52,19 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     let mut types = module.types.iter()
         .map(|(name, ty)| {
             match ty {
-                ir::TypeDef::Struct(def) => {
+                ResolvedTypeDef::Struct(def) => {
                     if def.generic_count != 0 { return TypeInstance::Generic(dmap::new()); }
                     let name = ffi::CString::new(name.as_bytes()).unwrap();
                     TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
                 }
-                ir::TypeDef::Enum(def) => {
+                ResolvedTypeDef::Enum(def) => {
                     if def.generic_count == 0 {
                         TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()))
                     } else {
                         TypeInstance::Generic(dmap::new())
                     }
                 }
-                ir::TypeDef::NotGenerated { .. } => unreachable!()
+                ResolvedTypeDef::NotGenerated { .. } => unreachable!()
             }
         })
         .collect::<Vec<_>>();
@@ -72,15 +72,15 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     for (i, (_, ty)) in module.types.iter().enumerate() {
         let &TypeInstance::Simple(struct_ty) = &types[i] else { continue };
         match ty {
-            ir::TypeDef::Struct(def) => {
+            ResolvedTypeDef::Struct(def) => {
                     if def.generic_count != 0 { continue }
                     let mut members = def.members.iter()
                         .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
                         .collect::<Vec<_>>();
                     LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
             }
-            ir::TypeDef::Enum(_) => continue, // nothing to do, just an int right now
-            ir::TypeDef::NotGenerated { .. } => unreachable!()
+            ResolvedTypeDef::Enum(_) => continue, // nothing to do, just an int right now
+            ResolvedTypeDef::NotGenerated { .. } => unreachable!()
         }
     }
 
@@ -213,7 +213,7 @@ unsafe fn build_func(
     };
 
 
-    let table_ty = |ty: ir::TypeTableIndex, types: &mut [TypeInstance]| {
+    let table_ty = |ty: TypeTableIndex, types: &mut [TypeInstance]| {
         let info = ir.types.get(ty);
         llvm_ty(ctx, module, types, info)
     };
@@ -234,11 +234,11 @@ unsafe fn build_func(
     }
     let info_to_num = |info: &Type| {
         match info {
-            ir::Type::Prim(p) => prim_to_num(*p),
+            Type::Prim(p) => prim_to_num(*p),
             t => panic!("Invalid type for int/float operation: {t:?}")
         }
     };
-    let float_or_int = |ty: ir::TypeTableIndex| info_to_num(ir.types.get(ty));
+    let float_or_int = |ty: TypeTableIndex| info_to_num(ir.types.get(ty));
 
     for (i, inst) in ir.inst.iter().enumerate() {
         if crate::LOG.load(Ordering::Relaxed) {
@@ -291,7 +291,7 @@ unsafe fn build_func(
                 let range = data.extra_len.0 as usize .. data.extra_len.0 as usize + data.extra_len.1 as usize;
                 let name = &ir.extra[range];
                 let (ty, index) = match &ir.types[ty] {
-                    ir::Type::Enum(variants) => {
+                    Type::Enum(variants) => {
                         let index = variants.iter()
                             .enumerate()
                             .find(|(_, s)| s.as_bytes() == name)
@@ -300,17 +300,17 @@ unsafe fn build_func(
                         let ty = int_from_variant_count(ctx, variants.len());
                         (ty, index)
                     }
-                    ir::Type::Id(id, _) => {
+                    Type::Id(id, _) => {
                         let name = std::str::from_utf8(name)
                             .expect("Typecheck error: Internal Error: Enum variant in invalid utf8 encoded");
                         match &module.types[id.idx()].1 {
-                            ir::TypeDef::Struct(_) => panic!("Expected enum, found struct type"),
-                            ir::TypeDef::Enum(def) => {
+                            ResolvedTypeDef::Struct(_) => panic!("Expected enum, found struct type"),
+                            ResolvedTypeDef::Enum(def) => {
                                 let index = *def.variants.get(name)
                                     .expect("Typecheck failure: Missing enum variant.");
                                 (int_from_variant_count(ctx, def.variants.len()), index as usize)
                             }
-                            ir::TypeDef::NotGenerated { .. } => unreachable!()
+                            ResolvedTypeDef::NotGenerated { .. } => unreachable!()
                         }
                     }
                     _ => panic!("Enum variant not found for non-enum type")
@@ -375,7 +375,7 @@ unsafe fn build_func(
                 LLVMBuildNot(builder, r, NONE)
             }
             ir::Tag::Global => {
-                globals[data.symbol.idx()]
+                globals[data.global_symbol.idx()]
             }
             ir::Tag::Add | ir::Tag::Sub | ir::Tag::Mul | ir::Tag::Div | ir::Tag::Mod | ir::Tag::Or | ir::Tag::And => {
                 let l = get_ref(&instructions, data.bin_op.0);
@@ -418,7 +418,7 @@ unsafe fn build_func(
                 
                 let is_enum_ty = || {
                     if let Type::Id(id, _) = ty {
-                        matches!(module.types[id.idx()].1, ir::TypeDef::Enum(_))
+                        matches!(module.types[id.idx()].1, ResolvedTypeDef::Enum(_))
                     } else { false }
                 };
 
@@ -705,7 +705,7 @@ unsafe fn llvm_ty_recursive(
                 name.push(']');
                 let name = ffi::CString::new(name).unwrap();
                 match &module.types[id.idx()].1 {
-                    ir::TypeDef::Struct(def) => {
+                    ResolvedTypeDef::Struct(def) => {
                         let llvm_struct = LLVMStructCreateNamed(ctx, name.as_ptr());
                         map.insert(generics.clone(), llvm_struct);
                         let mut members = def.members.iter()
@@ -714,10 +714,10 @@ unsafe fn llvm_ty_recursive(
                             LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
                         llvm_struct
                     }
-                    ir::TypeDef::Enum(def) => {
+                    ResolvedTypeDef::Enum(def) => {
                         int_from_variant_count(ctx, def.variants.len())
                     }
-                    ir::TypeDef::NotGenerated { .. } => unreachable!()
+                    ResolvedTypeDef::NotGenerated { .. } => unreachable!()
                 }
             }
         }
@@ -757,7 +757,7 @@ enum TypeInstance {
 
 // returns the constant or None in case of a zero sized type
 unsafe fn add_global(
-    ctx: LLVMContextRef, module: LLVMModuleRef, ty: LLVMTypeRef, name: &str, val: &Option<ir::ConstVal>
+    ctx: LLVMContextRef, module: LLVMModuleRef, ty: LLVMTypeRef, name: &str, val: &Option<ConstVal>
 ) -> Option<LLVMValueRef> {
     let c_name = ffi::CString::new(name).unwrap();
     let global = LLVMAddGlobal(module, ty, c_name.as_ptr());
@@ -765,19 +765,19 @@ unsafe fn add_global(
     Some(global)
 }
 
-unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ir::ConstVal) -> Option<LLVMValueRef> {
+unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ConstVal) -> Option<LLVMValueRef> {
     Some(match val {
-        ir::ConstVal::Invalid => LLVMGetUndef(ty),
-        ir::ConstVal::Unit => return None,
-        &ir::ConstVal::Int(_, int) => {
+        ConstVal::Invalid => LLVMGetUndef(ty),
+        ConstVal::Unit => return None,
+        &ConstVal::Int(_, int) => {
             let unsigned_int = if int < 0 { (-int) as u128 } else { int as u128 };
             LLVMConstInt(ty, u64::try_from(unsigned_int).expect("TODO: large global ints"), llvm_bool(int < 0))
         }
-        ir::ConstVal::Float(_, _float) => todo!("Float globals"),
-        ir::ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
-        ir::ConstVal::EnumVariant(_val) => todo!("static enum values"),
-        &ir::ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
-        ir::ConstVal::Symbol(_) | ir::ConstVal::NotGenerated { .. }
+        ConstVal::Float(_, _float) => todo!("Float globals"),
+        ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
+        ConstVal::EnumVariant(_val) => todo!("static enum values"),
+        &ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
+        ConstVal::Symbol(_) | ConstVal::NotGenerated { .. }
             => unreachable!("This shouldn't reach codegen"),
     })
 }
