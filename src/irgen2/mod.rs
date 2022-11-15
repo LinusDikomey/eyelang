@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{ast::{Ast, ExprRef, Expr, ModuleId, FunctionId}, resolve::{types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type}, self, type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId}, ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal, FunctionIr}, token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}};
+use crate::{ast::{Ast, ExprRef, Expr, ModuleId, FunctionId}, resolve::{types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc}, self, type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId}, ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal, FunctionIr}, token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}};
 
 
 struct Ctx<'a> {
@@ -96,10 +96,29 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
 
         // PERF: cloning here
         let (id, generic_instance) = functions.functions_to_create[i].clone();
-        let header = symbols.get_func(id);
-        let func = gen_func(header.clone(), &ast, &symbols, &mut functions, &generic_instance);
+        let generic_header = symbols.get_func(id);
+        // TODO: FunctionHeader type just for ir
+        let header = FunctionHeader {
+            name: generic_header.name.clone(),
+            generics: vec![],
+            params: generic_header.params
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_instance)))
+                .collect(),
+            varargs: generic_header.varargs,
+            return_type: generic_header.return_type.instantiate_generics(&generic_instance),
+            resolved_body: None,
+            module: generic_header.module
+        };
+        let func = gen_func(
+            header,
+            generic_header.resolved_body.as_ref(),
+            &ast,
+            &symbols,
+            &mut functions,
+            &generic_instance
+        );
 
-        // PERF: don't clone header here?
         funcs.push(func);
         i += 1;
     }
@@ -120,23 +139,46 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
 }
 
 fn gen_func(
-    mut header: FunctionHeader,
+    header: FunctionHeader,
+    body: Option<&ResolvedFunc>,
     ast: &Ast,
     symbols: &SymbolTable,
     functions: &mut Functions,
     generics: &[Type]
 )
 -> Function {
-    let Some(body) = &mut header.resolved_body else { return Function {
-        header, ir: None
-    } };
+    let Some(body) = body else {
+        return Function { header, ir: None }
+    };
 
-    let mut builder = IrBuilder::new(&mut body.types);
+    // PERF: cloning type table here might be a problem
+    let mut types = body.types.clone();
+
+    // replace Generic(n) TypeInfo with the specific type.
+    debug_assert_eq!(body.generics.len(), generics.len());
+    for (i, (idx, ty)) in body.generics.iter().zip(generics).enumerate() {
+        let info = ty.as_info(&mut types, |i| body.generics.nth(i as usize).into());
+        #[cfg(debug_assertions)]
+        {
+            match types.get_type(idx) {
+                TypeInfo::Generic(i2) if i == i2 as usize => {}
+                ty => unreachable!("unexpected type {ty:?} when Generic({i}) was expected")
+            }
+        }
+        types.replace_idx(body.generics.nth(i), info);
+    }
+
+    let mut builder = IrBuilder::new(&mut types);
+
+    // reserve generics types
+    //let generic_infos = builder.types.add_multiple_unknown(generics.len() as u32);
+
+    
 
     let mut var_refs = vec![Ref::UNDEF; body.vars.len()];
 
     for (i, (_, param_ty)) in header.params.iter().enumerate() {
-        let ty = param_ty.as_info(builder.types, |_| todo!());
+        let ty = param_ty.as_info(builder.types, |i| body.generics.nth(i as usize).into());
         let ty = builder.types.add_info_or_idx(ty);
         let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
         var_refs[i] = builder.build_param(i as u32, ptr_ty);
@@ -144,7 +186,7 @@ fn gen_func(
 
     let mut noreturn = false;
 
-    gen_expr(&mut builder, body.body, &mut Ctx {
+    let body_res = gen_expr(&mut builder, body.body, &mut Ctx {
         ast,
         symbols,
         var_refs: &mut var_refs,
@@ -152,13 +194,13 @@ fn gen_func(
         module: header.module,
         functions,
     }, &mut noreturn);
-
-    if !noreturn {
-        debug_assert_eq!(
-            header.return_type, Type::Prim(Primitive::Unit),
-            "missing return value not caught in typecheck"
-        );
-        builder.build_ret_undef();
+    if !noreturn {  
+        if header.return_type == Type::Prim(Primitive::Unit) {
+            builder.build_ret_undef();
+        } else {
+            let val = body_res.val(&mut builder, symbols.expr_types[body.body.idx()]);
+            builder.build_ret(val);
+        }
     }
 
     let ir = builder.finish();
@@ -177,6 +219,7 @@ impl Res {
             self.r
         }
     }
+
     fn var(&self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
         if self.is_ptr {
             self.r
@@ -204,9 +247,9 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
 fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
     debug_assert_eq!(*noreturn, false, "generating expression with noreturn enabled means dead code will be generated");
     let r = match &ctx.ast[expr] {
-        Expr::Block { span, items, defs } => {
+        Expr::Block { items, .. } => {
             for item in &ctx.ast[*items] {
-                let res = gen_expr(ir, *item, ctx, noreturn);
+                gen_expr(ir, *item, ctx, noreturn);
                 if *noreturn { break }
             }
             Ref::UNIT
@@ -274,7 +317,6 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
         Expr::FunctionCall(call_id) => {
             match &ctx.symbols.calls[call_id.idx()].unwrap() {
                 resolve::ResolvedCall::Function { func_id, generics } => {
-                    debug_assert_eq!(generics.len(), 0, "TODO: generics are unimplemented");
                     let func = ctx.symbols.get_func(*func_id);
                     let call = &ctx.ast.calls[call_id.idx()];
 

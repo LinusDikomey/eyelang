@@ -3,7 +3,7 @@ use color_format::cwriteln;
 
 use crate::{types::{Primitive, Layout}, dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId}};
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall};
+use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices}, Ident, Var, ResolvedCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -236,6 +236,7 @@ pub enum DefId {
     Function(FunctionId),
     Type(TypeId),
     Module(ModuleId),
+    Generic(u8),
 }
 impl From<DefId> for ConstSymbol {
     fn from(value: DefId) -> Self {
@@ -243,6 +244,7 @@ impl From<DefId> for ConstSymbol {
             DefId::Function(id) => Self::Func(id),
             DefId::Type(id) => Self::Type(id),
             DefId::Module(id) => Self::Module(id),
+            DefId::Generic(i) => todo!(),
         }
     }
 }
@@ -321,6 +323,7 @@ pub struct ResolvedFunc {
     pub idents: Vec<Ident>,
     pub vars: Vec<Var>,
     pub types: TypeTable,
+    pub generics: TypeTableIndices,
 }
 
 #[derive(Debug)]

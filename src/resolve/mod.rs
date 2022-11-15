@@ -1,4 +1,4 @@
-use crate::{ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId}, error::{Errors, Error}, dmap, span::{Span, TSpan}, parser::IdentId, resolve::types::ResolvedFunc, types::Primitive};
+use crate::{ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId}, error::{Errors, Error, CompileError}, dmap, span::{Span, TSpan}, parser::IdentId, resolve::types::ResolvedFunc, types::Primitive};
 
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, TupleCountMode, ResolvedTypeDef},
@@ -50,13 +50,21 @@ impl Scope<'static> {
                 module_scopes: self.module_scopes,
                 module: self.module,
                 parent: Some(self),
-                names: dmap::new()
+                names: dmap::new(),
             },
             locals: dmap::new(),
         }
     }
 }
 impl<'a> Scope<'a> {
+    fn signature_scope(&self, generics: dmap::DHashMap<String, DefId>) -> Scope {
+        Scope {
+            module_scopes: self.module_scopes,
+            module: self.module,
+            parent: Some(self),
+            names: generics,
+        }
+    }
     fn module_scope(&'a self, id: ModuleId) -> &'a Scope<'static> {
         unsafe { &(*self.module_scopes)[id.idx()] }
     }
@@ -79,8 +87,14 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors) -> Option<DefId> {
-        let (root, middle, last) = path.segments(self.module.src());
+    /// Resolves everything in a path except the last segment.
+    /// Returns None if the path was invalid and Some(None) if the path is simply empty.
+    fn resolve_path_front<'s>(
+        &self,
+        root: Option<TSpan>,
+        middle: impl Iterator<Item = (&'s str, TSpan)>,
+        errors: &mut Errors,
+    ) -> Option<Option<ModuleId>> {
         let mut current_module = if root.is_some() { Some(self.module.root) } else { None };
 
         for (segment, segment_span) in middle {
@@ -96,8 +110,14 @@ impl<'a> Scope<'a> {
                     return None;
                 }
             }
-
         }
+
+        Some(current_module)
+    }
+
+    fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors) -> Option<DefId> {
+        let (root, middle, last) = path.segments(self.module.src());
+        let current_module = self.resolve_path_front(root, middle, errors)?;
 
         if let Some((segment, span)) = last {
             if let Some(module) = current_module {
@@ -117,35 +137,15 @@ impl<'a> Scope<'a> {
             ast::UnresolvedType::Unresolved(path, generics) => {
                 let Some(id) = self.resolve_path(path, errors) else { return Type::Invalid };
                 match id {                    
-                    DefId::Type(id) => {
-                        let generic_count = symbols.generic_count(id);
-                        let generics = if let Some((generics, generics_span)) = generics {
-                            if generics.len() as u8 != generic_count {
-                                errors.emit_span(
-                                    Error::InvalidGenericCount {
-                                        expected: generic_count,
-                                        found: generics.len() as u8
-                                    },
-                                    generics_span.in_mod(self.module.id)
-                                );
-                                return Type::Invalid;
-                            }
-                            generics
-                                .iter()
-                                .map(|ty| self.resolve_ty(ty, symbols, errors))
-                                .collect()
-                        } else {
-                            if generic_count != 0 {
-                                errors.emit_span(
-                                    Error::InvalidGenericCount { expected: generic_count, found: 0 },
-                                    path.span().in_mod(self.module.id)
-                                );
-                                return Type::Invalid;
-                            }
-                            vec![]
-                        };
-                        Type::Id(id, generics)
-                    }
+                    DefId::Type(id) => self.generic_type_instantiation(
+                        path,
+                        id,
+                        generics,
+                        symbols,
+                        errors,
+                        |id, errors| self.resolve_ty(id, symbols, errors)
+                    ).map_or(Type::Invalid, |generics| Type::Id(id, generics)),
+                    DefId::Generic(i) => Type::Generic(i),
                     DefId::Function(_) | DefId::Module(_) => {
                         errors.emit_span(Error::TypeExpected, path.span().in_mod(self.module.id));
                         Type::Invalid
@@ -168,66 +168,42 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn resolve_type_info(&self, ty: &ast::UnresolvedType, symbols: &SymbolTable, types: &mut TypeTable, errors: &mut Errors) -> TypeInfo {
-        match ty {
-            ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
-            ast::UnresolvedType::Unresolved(path, generics) => {
-                let Some(id) = self.resolve_path(path, errors) else { return TypeInfo::Invalid };
-                match id {                    
-                    DefId::Type(id) => {
-                        let generic_count = symbols.generic_count(id);
-                        let generics = if let Some((generics, generics_span)) = generics {
-                            if generics.len() as u8 != generic_count {
-                                errors.emit_span(
-                                    Error::InvalidGenericCount {
-                                        expected: generic_count,
-                                        found: generics.len() as u8
-                                    },
-                                    generics_span.in_mod(self.module.id)
-                                );
-                                return TypeInfo::Invalid;
-                            }
-                            let generics: Vec<_> = generics
-                                .iter()
-                                .map(|ty| self.resolve_type_info(ty, symbols, types, errors))
-                                .collect();
-                            types.add_multiple(generics)
-                        } else {
-                            if generic_count != 0 {
-                                errors.emit_span(
-                                    Error::InvalidGenericCount { expected: generic_count, found: 0 },
-                                    path.span().in_mod(self.module.id)
-                                );
-                                return TypeInfo::Invalid;
-                            }
-                            TypeTableIndices::EMPTY
-                        };
-                        TypeInfo::Resolved(id, generics)
-                    }
-                    DefId::Function(_) | DefId::Module(_) => {
-                        errors.emit_span(Error::TypeExpected, path.span().in_mod(self.module.id));
-                        TypeInfo::Invalid
-                    }
-                }
+    fn generic_type_instantiation<T>(
+        &self,
+        path: &ast::IdentPath,
+        id: TypeId,
+        generics: &Option<(Vec<ast::UnresolvedType>, TSpan)>,
+        symbols: &SymbolTable,
+        errors: &mut Errors,
+        mut resolve_ty: impl FnMut(&ast::UnresolvedType, &mut Errors) -> T,
+    ) -> Option<Vec<T>> {
+        let generic_count = symbols.generic_count(id);
+        let generics = if let Some((generics, generics_span)) = generics {
+            if generics.len() as u8 != generic_count {
+                errors.emit_span(
+                    Error::InvalidGenericCount {
+                        expected: generic_count,
+                        found: generics.len() as u8
+                    },
+                    generics_span.in_mod(self.module.id)
+                );
+                return None;
             }
-            ast::UnresolvedType::Pointer(inner) => {
-                let inner = self.resolve_type_info(&inner.0, symbols, types, errors);
-                TypeInfo::Pointer(types.add(inner))
+            generics
+                .iter()
+                .map(|ty| resolve_ty(ty, errors))
+                .collect()
+        } else {
+            if generic_count != 0 {
+                errors.emit_span(
+                    Error::InvalidGenericCount { expected: generic_count, found: 0 },
+                    path.span().in_mod(self.module.id)
+                );
+                return None;
             }
-            ast::UnresolvedType::Array(inner) => {
-                let elem_ty = self.resolve_type_info(&inner.0, symbols, types, errors);
-                TypeInfo::Array(inner.2, types.add(elem_ty))
-            }
-            ast::UnresolvedType::Tuple(elems, _) => {
-                let elems = elems
-                    .iter()
-                    .map(|ty| self.resolve_type_info(ty, symbols, types, errors))
-                    .collect::<Vec<_>>();
-                
-                TypeInfo::Tuple(types.add_multiple(elems), TupleCountMode::Exact)
-            }
-            ast::UnresolvedType::Infer(_) => TypeInfo::Unknown,
-        }
+            vec![]
+        };
+        Some(generics)
     }
 }
 
@@ -281,11 +257,83 @@ impl<'a> LocalScope<'a> {
             locals: dmap::new()
         }
     }
+    fn mod_id(&self) -> ModuleId {
+        self.scope.module.id
+    }
     fn define_var(&mut self, name: String, id: VarId) {
         self.locals.insert(name, LocalDefId::Var(id));
     }
     pub fn add_generic(&mut self, name: String, ty: TypeTableIndex) {
         self.locals.insert(name, LocalDefId::Type(ty));
+    }
+
+    fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors) -> Option<LocalDefId> {
+        let (root, middle, last) = path.segments(self.scope.module.src());
+        let current_module = self.scope.resolve_path_front(root, middle, errors)?;
+
+        if let Some((segment, span)) = last {
+            if let Some(module) = current_module {
+                self.scope.module_scope(module).resolve(segment, span, errors)
+                    .map(LocalDefId::Def)
+            } else {
+                self.resolve_local(segment, span, errors)
+            }
+        } else {
+            // should be fine to unwrap here since empty paths don't exist
+            Some(LocalDefId::Def(DefId::Module(current_module.unwrap())))
+        }
+    }
+
+    fn resolve_type_info(&self, ty: &ast::UnresolvedType, symbols: &SymbolTable, types: &mut TypeTable, errors: &mut Errors)
+    -> TypeInfoOrIndex {
+        TypeInfoOrIndex::Type(match ty {
+            ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
+            ast::UnresolvedType::Unresolved(path, generics) => {
+                let Some(id) = self.resolve_path(path, errors) else {
+                    return TypeInfoOrIndex::Type(TypeInfo::Invalid);
+                };
+                match id {
+                    LocalDefId::Type(idx) => {
+                        if let Some((_, generics_span)) = generics {
+                            errors.emit_span(Error::UnexpectedGenerics, generics_span.in_mod(self.mod_id()));
+                            return TypeInfoOrIndex::Type(TypeInfo::Invalid);
+                        }
+                        return TypeInfoOrIndex::Idx(idx);
+                    }
+                    LocalDefId::Def(DefId::Type(id)) => {
+                        self.scope.generic_type_instantiation(path, id, generics, symbols, errors,
+                            |ty, errors| self.resolve_type_info(ty, symbols, types, errors)
+                        )
+                        .map_or(
+                            TypeInfo::Invalid,
+                            |generics| TypeInfo::Resolved(id, types.add_multiple_info_or_index(generics))
+                        )
+                    }
+                    LocalDefId::Def(DefId::Generic(i)) => TypeInfo::Generic(i),
+                    LocalDefId::Var(_) | LocalDefId::Def(DefId::Function(_)) | LocalDefId::Def(DefId::Module(_)) => {
+                        errors.emit_span(Error::TypeExpected, path.span().in_mod(self.mod_id()));
+                        TypeInfo::Invalid
+                    }
+                }
+            }
+            ast::UnresolvedType::Pointer(inner) => {
+                let inner = self.resolve_type_info(&inner.0, symbols, types, errors);
+                TypeInfo::Pointer(types.add_info_or_idx(inner))
+            }
+            ast::UnresolvedType::Array(inner) => {
+                let elem_ty = self.resolve_type_info(&inner.0, symbols, types, errors);
+                TypeInfo::Array(inner.2, types.add_info_or_idx(elem_ty))
+            }
+            ast::UnresolvedType::Tuple(elems, _) => {
+                let elems = elems
+                    .iter()
+                    .map(|ty| self.resolve_type_info(ty, symbols, types, errors))
+                    .collect::<Vec<_>>();
+                
+                TypeInfo::Tuple(types.add_multiple_info_or_index(elems), TupleCountMode::Exact)
+            }
+            ast::UnresolvedType::Infer(_) => TypeInfo::Unknown,
+        })
     }
 
     fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors) -> Option<LocalDefId> {
@@ -376,21 +424,16 @@ fn scope_defs<'a>(scope_defs: &'a dmap::DHashMap<String, Definition>, symbols: &
 
 fn scope_bodies<'a>(scope: &mut Scope<'static>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
     let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
-    for (name, def) in &scope.names {
+    for (_name, def) in &scope.names {
         match def {
             DefId::Function(func_id) => {
-                let Some(&Definition::Function(func)) = ast[ast[scope.module.id].definitions].get(name) else {
-                    unreachable!()
-                };
-
                 let func = &ast[*func_id];
-
 
                 if let Some(body) = func.body {
                     let mut types = TypeTable::new();
                     let mut vars = vec![];
                     let mut idents = vec![Ident::Invalid; func.ident_count as usize];
-                    func_body(body, *func_id, scope, Ctx {
+                    let func_body_info = func_body(body, *func_id, scope, Ctx {
                         ast,
                         symbols: symbols,
                         types: &mut types,
@@ -405,10 +448,11 @@ fn scope_bodies<'a>(scope: &mut Scope<'static>, ast: &Ast, symbols: &mut SymbolT
                         idents,
                         vars,
                         types,
+                        generics: func_body_info.generics,
                     })
                 }
             }
-            DefId::Type(_) | DefId::Module(_) => {}
+            DefId::Type(_) | DefId::Generic(_) | DefId::Module(_) => {}
         }
     }
 }
@@ -435,7 +479,13 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, def_id: DefId, symbols: 
 
 fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols: &SymbolTable, errors: &mut Errors)
 -> FunctionHeader {
-    let generics = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
+    let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
+    let generic_defs = generics
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), DefId::Generic(i as u8)))
+        .collect();
+    let scope = scope.signature_scope(generic_defs);
 
     let params = func.params.iter().map(|(name, ty, _, _)| {
         (name.clone(), scope.resolve_ty(ty, symbols, errors))
@@ -569,7 +619,11 @@ pub enum ResolvedCall {
     Invalid,
 }
 
-fn func_body<'src>(body: ExprRef, func_id: FunctionId, scope: &Scope<'static>, ctx: Ctx) {
+struct FuncBodyInfo {
+    generics: TypeTableIndices,
+}
+
+fn func_body<'src>(body: ExprRef, func_id: FunctionId, scope: &Scope<'static>, ctx: Ctx) -> FuncBodyInfo {
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
     let generics = ctx.types.add_multiple(
@@ -597,5 +651,7 @@ fn func_body<'src>(body: ExprRef, func_id: FunctionId, scope: &Scope<'static>, c
     let expected = ctx.types.add_info_or_idx(return_type_info);
 
     let mut noreturn = false;
-    scope.val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx, false); 
+    scope.val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx, false);
+
+    FuncBodyInfo { generics }
 }

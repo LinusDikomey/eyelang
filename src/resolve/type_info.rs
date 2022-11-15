@@ -205,6 +205,11 @@ impl TypeTable {
         }
     }
 
+    // not for normal use, just to replace temporaries etc.
+    pub fn replace_idx(&mut self, idx: TypeTableIndex, entry: TypeInfoOrIndex) {
+        self.types[idx.idx()] = entry;
+    }
+
     pub fn add_names(&mut self, names: impl IntoIterator<Item = String>) -> TypeTableNames {
         let idx = self.names.len();
         self.names.extend(names);
@@ -728,5 +733,10 @@ impl TypeInfoOrIndex {
 impl From<TypeInfo> for TypeInfoOrIndex {
     fn from(info: TypeInfo) -> Self {
         Self::Type(info)
+    }
+}
+impl From<TypeTableIndex> for TypeInfoOrIndex {
+    fn from(value: TypeTableIndex) -> Self {
+        Self::Idx(value)
     }
 }

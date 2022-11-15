@@ -50,8 +50,8 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::Declare { pat, annotated_ty } => {
-                let ty = self.scope.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
-                let ty = ctx.types.add(ty);
+                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = ctx.types.add_info_or_idx(ty);
 
                 let mut exhaustion = Exhaustion::None;
                 self.pat(*pat, ty, ctx.reborrow(), &mut exhaustion);
@@ -60,8 +60,8 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::DeclareWithVal { pat, annotated_ty, val } => {
-                let ty = self.scope.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
-                let ty = ctx.types.add(ty);
+                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = ctx.types.add_info_or_idx(ty);
 
                 self.val_expr(*val, info.with_expected(ty), ctx.reborrow(), false);
                 
