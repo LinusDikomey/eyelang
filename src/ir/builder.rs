@@ -1,10 +1,10 @@
 use crate::{
-    ast::{FunctionId, GlobalId},
+    ast::GlobalId,
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
     types::Primitive, resolve::type_info::{TypeTable, TypeTableIndex, TypeInfo},
 };
 
-use super::RefVal;
+use super::{RefVal, FunctionId};
 
 pub enum BinOp {
     Add,

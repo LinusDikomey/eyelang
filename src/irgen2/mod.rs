@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{ast::{Ast, ExprRef, Expr, ModuleId}, resolve::{types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type}, self, type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId}, ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal}, token::{IntLiteral, Operator}, span::TSpan, types::Primitive};
+use crate::{ast::{Ast, ExprRef, Expr, ModuleId, FunctionId}, resolve::{types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type}, self, type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId}, ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal, FunctionIr}, token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}};
 
 
 struct Ctx<'a> {
@@ -10,6 +10,7 @@ struct Ctx<'a> {
     idents: &'a [resolve::Ident],
     //ident_refs: &'a mut [Ref],
     module: ModuleId,
+    functions: &'a mut Functions,
 }
 impl<'a> Ctx<'a> {
     fn src(&self) -> &'a str {
@@ -34,9 +35,75 @@ impl<'a> Index<VarId> for Ctx<'a> {
     }
 }
 
-pub fn reduce(ast: &Ast, symbols: SymbolTable) -> ir::Module {
-    let funcs = symbols.funcs.iter().map(|func| gen_func(func.clone().unwrap(), &ast, &symbols)).collect();
+enum FunctionIds {
+    Simple(ir::FunctionId),
+    Generic(DHashMap<Vec<Type>, ir::FunctionId>)
+}
+
+struct Functions {
+    // ir::FunctionId implied by position in functions_to_create
+    functions_to_create: Vec<(FunctionId, Vec<Type>)>,
+    ids: DHashMap<FunctionId, FunctionIds>, 
+}
+impl Functions {
+    fn get(&mut self, function: FunctionId, symbols: &SymbolTable, generic_args: Vec<Type>) -> ir::FunctionId {
+        if let Some(ids) = self.ids.get_mut(&function) {
+            match ids {
+                FunctionIds::Simple(id) => *id,
+                FunctionIds::Generic(generic) => {
+                    if let Some(id) = generic.get(generic_args.as_slice()) {
+                        *id
+                    } else {
+                        let id = ir::FunctionId::new(self.functions_to_create.len() as u64);
+                        self.functions_to_create.push((function, generic_args.clone()));
+                        generic.insert(generic_args, id);
+
+                        id
+                    }
+                }
+            }
+        } else {
+            let id = ir::FunctionId::new(self.functions_to_create.len() as u64);
+            let entry = if symbols.get_func(function).generic_count() != 0 {
+                debug_assert_eq!(generic_args.len(), symbols.get_func(function).generic_count() as usize);
+                self.functions_to_create.push((function, generic_args.clone()));
+                let mut map = dmap::with_capacity(1);
+                map.insert(generic_args, id);
+                FunctionIds::Generic(map)
+            } else {
+                debug_assert!(generic_args.is_empty());
+                self.functions_to_create.push((function, generic_args));
+                FunctionIds::Simple(id)
+            };
+            self.ids.insert(function, entry);
+
+            id
+        }
+    }
+}
+
+pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::Module {
+    let mut functions = Functions {
+        functions_to_create: main.map_or(Vec::new(), |main| vec![(main, vec![])]),
+        ids: dmap::new(),
+    };
+
+    let mut funcs: Vec<Function> = Vec::with_capacity(1);
     
+    let mut i = 0;
+    while i < functions.functions_to_create.len() {
+        assert_eq!(i, funcs.len());
+
+        // PERF: cloning here
+        let (id, generic_instance) = functions.functions_to_create[i].clone();
+        let header = symbols.get_func(id);
+        let func = gen_func(header.clone(), &ast, &symbols, &mut functions, &generic_instance);
+
+        // PERF: don't clone header here?
+        funcs.push(func);
+        i += 1;
+    }
+
     let types = symbols.types.into_iter().map(|(name, def)| {
         let MaybeTypeDef::Some(ty) = def else { unreachable!() };
         (name, ty)
@@ -52,13 +119,17 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable) -> ir::Module {
     }
 }
 
-fn gen_func(mut header: FunctionHeader, ast: &Ast, symbols: &SymbolTable) -> Function {
-    let Some(body) = &mut header.resolved_body else {
-        return Function {
-            header,
-            ir: None
-        }
-    };
+fn gen_func(
+    mut header: FunctionHeader,
+    ast: &Ast,
+    symbols: &SymbolTable,
+    functions: &mut Functions,
+    generics: &[Type]
+)
+-> Function {
+    let Some(body) = &mut header.resolved_body else { return Function {
+        header, ir: None
+    } };
 
     let mut builder = IrBuilder::new(&mut body.types);
 
@@ -79,6 +150,7 @@ fn gen_func(mut header: FunctionHeader, ast: &Ast, symbols: &SymbolTable) -> Fun
         var_refs: &mut var_refs,
         idents: &body.idents,
         module: header.module,
+        functions,
     }, &mut noreturn);
 
     if !noreturn {
@@ -90,10 +162,7 @@ fn gen_func(mut header: FunctionHeader, ast: &Ast, symbols: &SymbolTable) -> Fun
     }
 
     let ir = builder.finish();
-    Function {
-        header,
-        ir: Some(ir)
-    }
+    Function { header, ir: Some(ir) }
 }
 
 struct Res {
@@ -209,7 +278,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let func = ctx.symbols.get_func(*func_id);
                     let call = &ctx.ast.calls[call_id.idx()];
 
-                    // PERF: reuse buffer here
+                    // PERF: reuse buffer here (maybe by pre-reserving in extra_refs buffer in ir)
                     let mut args = Vec::with_capacity(call.args.count as usize);
                     for arg in &ctx.ast[call.args] {
                         let arg_val = val_expr(ir, *arg, ctx, noreturn);
@@ -220,9 +289,12 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     }
 
                     let func_noreturn = func.return_type == Type::Prim(Primitive::Never);
-
                     let ty = ctx[expr];
-                    let call_val = ir.build_call(*func_id, args, ty);
+                    
+                    let generics = generics.iter().map(|idx| ir.types.get_type(idx).finalize(ir.types)).collect();
+                    let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics);
+                    let call_val = ir.build_call(ir_func_id, args, ty);
+
                     if func_noreturn {
                         *noreturn = true;
                         ir.build_ret_undef();

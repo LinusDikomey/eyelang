@@ -306,7 +306,8 @@ impl<'a> LocalScope<'a> {
     }
 }
 
-pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool) -> SymbolTable {
+pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool)
+-> (SymbolTable, Option<FunctionId>) {
     let mut symbols = SymbolTable::new(ast.functions.len(), ast.expr_count(), &ast.types, ast.traits.len(), ast.calls.len());
     // add ids for all definitions
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
@@ -328,7 +329,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
         }
     }
 
-    if require_main {
+    let main = require_main.then_some(()).and_then(|()| {
         if let Some(DefId::Function(id)) = module_scopes[main_module.idx()].names.get("main") {
             let main = symbols.get_func(*id);
             if main.varargs || main.params.len() != 0 {
@@ -342,15 +343,19 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
                     ast.functions[id.idx()].return_type.span().in_mod(main_module)
                 )
             }
+            Some(*id)
+        } else {
+            errors.emit_span(Error::MissingMain, Span::new(0, 0, main_module));
+            None
         }
-    }
+    });
 
     // function bodies
     for scope in &mut module_scopes {
         scope_bodies(scope, &ast, &mut symbols, errors);
     }
 
-    symbols
+    (symbols, main)
 }
 
 /// add all order independent definitions to a scope

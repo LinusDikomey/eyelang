@@ -19,7 +19,7 @@ pub fn project(
     dependencies: DHashMap<String, PathBuf>,
     require_main_func: bool,
     stats: &mut Stats
-) -> (Result<SymbolTable, ()>, Ast, Errors) {
+) -> (Result<(SymbolTable, Option<ast::FunctionId>), ()>, Ast, Errors) {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
 
@@ -46,10 +46,10 @@ pub fn project(
     }
 
     let resolve_start_time = Instant::now();
-    let symbols = resolve::resolve_project(&ast, main_module, &mut errors, require_main_func);
+    let (symbols, main) = resolve::resolve_project(&ast, main_module, &mut errors, require_main_func);
     stats.resolve = resolve_start_time.elapsed();
     
-    (Ok(symbols), ast, errors)
+    (Ok((symbols, main)), ast, errors)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

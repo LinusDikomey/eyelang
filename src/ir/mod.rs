@@ -1,6 +1,6 @@
 use std::fmt;
 use color_format::*;
-use crate::{resolve::{type_info::FinalTypeTable, types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}};
+use crate::{resolve::{type_info::FinalTypeTable, types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}, help::id};
 use builder::IrBuilder;
 
 pub mod builder;
@@ -10,6 +10,8 @@ pub mod display;
 
 mod instruction;
 pub use instruction::{Instruction, Tag, Data};
+
+id!(u64, 8: FunctionId);
 
 #[derive(Debug)]
 pub struct Function {

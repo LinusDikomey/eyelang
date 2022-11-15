@@ -5,11 +5,18 @@ macro_rules! id {
         $(
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
             pub struct $name($t);
+            #[allow(unused)]
             impl $name {
+                pub fn new(id: $t) -> Self {
+                    Self(id)
+                }
+
                 pub fn idx(self) -> usize { self.0 as usize }
+
                 pub fn to_bytes(self) -> [u8; $size] {
                     self.0.to_le_bytes()
                 }
+
                 pub fn from_bytes(b: [u8; $size]) -> Self {
                     Self(<$t>::from_le_bytes(b))
                 }

@@ -514,7 +514,7 @@ impl TypeInfo {
             TypeInfo::Generic(i) => types.get_type(generics.nth(*i as usize)).is_zero_sized(generics, types, symbols),
         }
     }
-    fn finalize(self, types: &TypeTable) -> Type {
+    pub fn finalize(self, types: &TypeTable) -> Type {
         match self {
             Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
             Self::Int => Type::Prim(Primitive::I32),

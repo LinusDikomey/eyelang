@@ -37,11 +37,7 @@ impl Errors {
         };
         list.push(err);
     }
-
-    pub fn has_errors(&self) -> bool {
-        !self.errors.is_empty()
-    }
-
+    
     pub fn error_count(&self) -> usize {
         self.errors.len()
     }
