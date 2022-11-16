@@ -85,8 +85,10 @@ impl<C: Representer> Repr<C> for Module {
 
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
-        c.write_start(name);
-        if !matches!(self, Self::Global(_) | Self::Const(_, _)) {
+        if !matches!(self, Self::Use(_)) {
+            c.write_start(name);
+        }
+        if !matches!(self, Self::Global(_) | Self::Const(_, _) | Self::Use(_)) {
             c.write_add(" :: ");
         }
         match self {
@@ -95,8 +97,11 @@ impl Definition {
             Self::Trait(t) => c.ast()[*t].repr(c),
             Self::Module(_) => {}
             Self::Use(path) => {
-                c.write_add("use ");
+                c.write_start("use ");
                 path.repr(c);
+                
+                c.write_add(" as ");
+                c.write_add(name);
             }
             Self::Const(ty, expr) => {
                 if let UnresolvedType::Infer(_) = ty {
@@ -212,6 +217,7 @@ impl<C: Representer> Repr<C> for Expr {
                 let child = c.child();
                 for (name, def) in &ast[*defs] {
                     def.repr(&child, name);
+                    c.writeln("\n");
                 }
                 for item in &ast[*items] {
                     child.write_start("");

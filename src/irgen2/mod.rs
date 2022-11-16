@@ -97,9 +97,26 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
         // PERF: cloning here
         let (id, generic_instance) = functions.functions_to_create[i].clone();
         let generic_header = symbols.get_func(id);
+
+        let mut name = generic_header.name.to_owned();
+        if generic_instance.len() > 0 {
+            name.push('[');
+            let mut first = true;
+            for ty in &generic_instance {
+                if first {
+                    first = false;
+                } else {
+                    name.push(',');
+                }
+                use std::fmt::Write;
+                write!(name, "{}", ty.display_fn(|key| symbols.get_type(key).name())).unwrap();
+            }
+            name.push(']');
+        }
+
         // TODO: FunctionHeader type just for ir
         let header = FunctionHeader {
-            name: generic_header.name.clone(),
+            name,
             generics: vec![],
             params: generic_header.params
                 .iter()

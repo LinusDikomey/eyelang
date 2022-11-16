@@ -1,6 +1,6 @@
 use crate::{ast::{ExprRef, Expr}, token::IntLiteral, span::TSpan, error::Error, types::Primitive};
 
-use super::{Ctx, LocalScope, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident};
+use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident, scope::LocalScope};
 
 impl<'a> LocalScope<'a> {
     pub(super) fn pat(&mut self, pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exhaustion: &mut Exhaustion) {

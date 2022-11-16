@@ -243,8 +243,15 @@ impl<'a> Parser<'a> {
                     err: Error::CantUseRootPath,
                     span: Span::new(use_start, use_end, self.toks.module),
                 })?;
+
+                let name = if self.toks.step_if(TokenType::Keyword(Keyword::As)).is_some() {
+                    self.src[self.toks.step_expect(TokenType::Ident)?.span().range()].to_owned()
+                } else {
+                    last.0.to_owned()
+                };
+
                 Item::Definition {
-                    name: last.0.to_owned(),
+                    name,
                     name_span: last.1,
                     def: Definition::Use(path),
                 }

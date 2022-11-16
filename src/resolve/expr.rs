@@ -1,6 +1,6 @@
 use crate::{ast::{ExprRef, self, CallId}, error::Error, token::{FloatLiteral, IntLiteral}, types::Primitive, resolve::exhaust::Exhaustion};
 
-use super::{ExprInfo, Ctx, scope_defs, LocalScope, type_info::{TypeInfo, TypeInfoOrIndex}, const_val::ConstSymbol, Ident, ResolvedCall, types::Type};
+use super::{Ctx, type_info::{TypeInfo, TypeInfoOrIndex}, const_val::ConstSymbol, Ident, ResolvedCall, scope::{LocalScope, ExprInfo, LocalDefId}, types::DefId};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum UseHint {
@@ -39,8 +39,8 @@ impl<'a> LocalScope<'a> {
         let mut use_hint = UseHint::Can;
         match &ctx.ast[expr] {
             ast::Expr::Block { span: _, items, defs } => {
-                let defs = scope_defs(&ctx.ast[*defs], ctx.symbols);
-                let mut block_scope = self.child(defs);
+                let mut block_scope = self.child_with_defs(&ctx.ast[*defs], ctx.ast, ctx.symbols, ctx.errors);
+
                 for item in &ctx.ast[*items] {
                     let expected = ctx.types.add_unknown();
                     let res = block_scope.expr(*item, info.with_expected(expected), ctx.reborrow());
@@ -107,18 +107,15 @@ impl<'a> LocalScope<'a> {
             }
             ast::Expr::Variable { span, id } => {
                 let resolved = self.resolve_local(&self.scope.module.src()[span.range()], *span, ctx.errors);
-                let ident = if let Some(def) = resolved {
-                    match def {
-                        super::LocalDefId::Def(def) => return Res::Symbol(def.into()),
-                        super::LocalDefId::Var(var) => {
-                            let ty = ctx.var(var).ty;
-                            ctx.merge(info.expected, ty, span.in_mod(self.scope.module.id));
-                            Ident::Var(var)
-                        }
-                        super::LocalDefId::Type(_) => todo!(),
+                let ident = match resolved {
+                    LocalDefId::Def(DefId::Invalid) => Ident::Invalid,
+                    LocalDefId::Def(def) => return Res::Symbol(def.into()),
+                    LocalDefId::Var(var) => {
+                        let ty = ctx.var(var).ty;
+                        ctx.merge(info.expected, ty, span.in_mod(self.scope.module.id));
+                        Ident::Var(var)
                     }
-                } else {
-                    Ident::Invalid
+                    LocalDefId::Type(_) => todo!(),
                 };
                 ctx.set_ident(*id, ident);
             }

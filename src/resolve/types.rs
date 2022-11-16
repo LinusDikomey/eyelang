@@ -1,7 +1,7 @@
 use core::fmt;
 use color_format::cwriteln;
 
-use crate::{types::{Primitive, Layout}, dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId}};
+use crate::{types::{Primitive, Layout}, dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, UnresolvedType, IdentPath, GlobalId}};
 
 use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices}, Ident, Var, ResolvedCall};
 
@@ -235,16 +235,24 @@ impl SymbolTable {
 pub enum DefId {
     Function(FunctionId),
     Type(TypeId),
+    Trait(TraitId),
     Module(ModuleId),
+    Global(GlobalId),
     Generic(u8),
+    Invalid,
+    Unresolved { resolving: bool }
 }
 impl From<DefId> for ConstSymbol {
     fn from(value: DefId) -> Self {
         match value {
             DefId::Function(id) => Self::Func(id),
             DefId::Type(id) => Self::Type(id),
+            DefId::Trait(id) => Self::Trait(id),
             DefId::Module(id) => Self::Module(id),
+            DefId::Global(id) => todo!(),
             DefId::Generic(i) => todo!(),
+            DefId::Invalid => todo!(),
+            DefId::Unresolved { .. } => unreachable!()
         }
     }
 }
