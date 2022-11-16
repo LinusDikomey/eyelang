@@ -2,15 +2,15 @@ use crate::{
     ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId},
     error::{Errors, Error},
     dmap::{self, DHashMap},
-    span::{Span, TSpan},
+    span::Span,
     parser::IdentId,
     resolve::types::ResolvedFunc,
     types::Primitive
 };
 
 use self::{
-    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef},
-    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo, LocalScope}
+    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
+    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}
 };
 
 pub mod const_val;
@@ -139,7 +139,7 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
         &Definition::Type(id) => {
             let def = match &ast[id] {
                 TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, symbols, errors)),
-                TypeDef::Enum(_) => todo!(),
+                TypeDef::Enum(e) => ResolvedTypeDef::Enum(enum_def(name.to_owned(), e, scope, symbols, errors)),
             };
             symbols.place_type(id, def);
         }
@@ -190,6 +190,12 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, symb
         symbols: dmap::new(),
         generic_count: def.generic_count(),
     }
+}
+
+fn enum_def(name: String, def: &ast::EnumDefinition, _scope: &mut Scope, _symbols: &SymbolTable, _errors: &mut Errors)
+-> Enum {
+    let variants = def.variants.iter().enumerate().map(|(i, (_, name))| (name.clone(), i as _)).collect();
+    Enum { name, variants, generic_count: def.generic_count() }
 }
 
 #[derive(Clone, Copy, Debug)]
