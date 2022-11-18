@@ -535,7 +535,7 @@ unsafe fn build_func(
                             _ => panic!("Invalid cast to primitive")
                         }
                     }
-                    Type::Id(_, _) | Type::Array(_) | Type::Tuple(_) | Type::Symbol => panic!("Invalid cast"),
+                    Type::Id(_, _) | Type::Array(_) | Type::Tuple(_) => panic!("Invalid cast"),
                     Type::Pointer(_) => {
                         let llvm_target = llvm_ty(ctx, module, types, target);
                         match origin {
@@ -684,7 +684,6 @@ unsafe fn llvm_ty_recursive(
 ) -> LLVMTypeRef {
     match ty {
         Type::Prim(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
-        Type::Symbol => LLVMVoidTypeInContext(ctx),
         Type::Prim(p) => llvm_primitive_ty(ctx, *p),
         Type::Id(id, generics) => match &mut types[id.idx()] {
             TypeInstance::Simple(simple) => {

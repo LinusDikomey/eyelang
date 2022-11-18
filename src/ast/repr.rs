@@ -329,7 +329,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(" else ");
                 ast[*else_].repr(c);
             }
-            Self::Match { start: _, end: _, val, extra_branches, branch_count } => {
+            Self::Match { span: _, val, extra_branches, branch_count } => {
                 c.write_add("match ");
                 ast[*val].repr(c);
                 c.write_add(" {\n");

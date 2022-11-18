@@ -232,6 +232,18 @@ pub struct LocalScope<'a> {
     pub locals: DHashMap<String, LocalDefId>,
 }
 impl<'a> LocalScope<'a> {
+    pub fn child(&'a self, locals: DHashMap<String, LocalDefId>) -> LocalScope<'a> {
+        LocalScope {
+            parent: LocalOrGlobalScope::Local(self),
+            scope: Scope {
+                module_scopes: self.scope.module_scopes,
+                module: self.scope.module,
+                parent: Some(&self.scope),
+                names: dmap::new(),
+            },
+            locals,
+        }
+    }
     pub fn child_with_defs(&'a self, defs: &DHashMap<String, ast::Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
     -> LocalScope<'a> {
         let mut names = super::scope_defs(defs);
@@ -245,7 +257,7 @@ impl<'a> LocalScope<'a> {
                 parent: Some(&self.scope),
                 names,
             },
-            locals: dmap::new()
+            locals: dmap::new(),
         };
         
         // resolve types, function signatures

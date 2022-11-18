@@ -123,7 +123,6 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
                 write!(f, ")")
             }
             Type::Generic(idx) => write!(f, "Generic #{idx}"),
-            Type::Symbol => write!(f, "[symbol]"),
             Type::Invalid => write!(f, "[invalid]"),
         }
     }

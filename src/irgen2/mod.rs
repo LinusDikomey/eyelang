@@ -1,6 +1,14 @@
 use std::ops::Index;
 
-use crate::{ast::{Ast, ExprRef, Expr, ModuleId, FunctionId}, resolve::{types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc}, self, type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId}, ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal, FunctionIr}, token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}};
+use crate::{
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId},
+    resolve::{
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc},
+        self,
+        type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId},
+    ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
+    token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
+};
 
 
 struct Ctx<'a> {
@@ -329,7 +337,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
         Expr::Tuple(_, _) => todo!(),
         Expr::If { start, cond, then } => todo!(),
         Expr::IfElse { start, cond, then, else_ } => todo!(),
-        Expr::Match { start, end, val, extra_branches, branch_count } => todo!(),
+        Expr::Match { span: _, val, extra_branches, branch_count } => todo!(),
         Expr::While { start, cond, body } => todo!(),
         Expr::FunctionCall(call_id) => {
             match &ctx.symbols.calls[call_id.idx()].unwrap() {

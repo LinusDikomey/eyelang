@@ -274,7 +274,7 @@ pub struct StructDefinition {
     pub name: String,
     pub generics: Vec<TSpan>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
-    pub methods: DHashMap<String, Function>
+    pub methods: DHashMap<String, FunctionId>
 }
 impl StructDefinition {
     pub fn generic_count(&self) -> u8 {
@@ -366,8 +366,7 @@ pub enum Expr {
         else_: ExprRef
     },
     Match {
-        start: u32,
-        end: u32,
+        span: TSpan,
         val: ExprRef,
         extra_branches: u32, // each branch consists of a pat expr and a branch expr
         branch_count: u32,
@@ -409,7 +408,8 @@ impl Expr {
                 | Expr::Variable { span, .. }
                 | Expr::Array(span, _)
                 | Expr::Tuple(span, _)
-                | Expr::Cast(span, _, _)
+                | Expr::Cast(span, _, _)    
+                | Expr::Match { span, .. }
                 => *span,
             Expr::Declare { pat, annotated_ty, .. } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
@@ -420,7 +420,6 @@ impl Expr {
             &Expr::Hole(start) => TSpan::new(start, start),
             Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
             Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
-            Expr::Match { start, end, .. } => TSpan::new(*start, *end),
             Expr::While { start, cond: _, body } => TSpan::new(*start, e(body)),
             Expr::FunctionCall(call_id) => {
                 let Call { called_expr, args: _, end } = &ast[*call_id];

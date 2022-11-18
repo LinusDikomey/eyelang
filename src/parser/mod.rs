@@ -384,8 +384,9 @@ impl<'a> Parser<'a> {
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                 let method = p.parse_function_def(fn_tok)?;
+                let func_id = p.ast.add_func(method);
                 let name = ident.get_val(p.src).to_owned();
-                if let Some(_existing) = methods.insert(name, method) {
+                if let Some(_existing) = methods.insert(name, func_id) {
                     return Err(CompileError::new(
                         Error::DuplicateDefinition,
                         ident_span.in_mod(p.toks.module),
@@ -658,7 +659,7 @@ impl<'a> Parser<'a> {
                 let extra_branches = self.ast.add_extra(&branches).idx;
                 debug_assert_eq!(branches.len() % 2, 0);
                 let branch_count = (branches.len() / 2) as u32;
-                Expr::Match { start: lbrace.start, end: rbrace.end, val, extra_branches, branch_count }
+                Expr::Match { span: TSpan::new(lbrace.start, rbrace.end), val, extra_branches, branch_count }
             },
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, ident_count)?,
             TokenType::Keyword(Keyword::Primitive(p)) => {

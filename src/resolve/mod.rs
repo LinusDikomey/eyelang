@@ -138,7 +138,7 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
-                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, symbols, errors)),
+                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, ast, symbols, errors)),
                 TypeDef::Enum(e) => ResolvedTypeDef::Enum(enum_def(name.to_owned(), e, scope, symbols, errors)),
             };
             symbols.place_type(id, def);
@@ -178,16 +178,21 @@ fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols
     }
 }
 
-fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, symbols: &SymbolTable, errors: &mut Errors)
+fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
 -> Struct {
     let members = def.members.iter().map(|(name, ty, _, _)| {
         (name.clone(), scope.resolve_ty(ty, symbols, errors))
     }).collect();
 
+    let symbols = def.methods.iter().map(|(name, id)| {
+        symbols.place_func(*id, func_signature(name.to_owned(), &ast[*id], scope, symbols, errors));
+        (name.clone(), *id)
+    }).collect();
+
     Struct {
         name,
         members,
-        symbols: dmap::new(),
+        methods: symbols,
         generic_count: def.generic_count(),
     }
 }

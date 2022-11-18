@@ -206,7 +206,7 @@ pub enum Error {
     ExpectedConstValue,
     UnusedExpressionValue,
     InfiniteLoop,
-    NotAPattern,
+    NotAPattern { coming_soon: bool },
     NotAPatternRangeValue,
     Inexhaustive,
     DuplicateDependency(String),
@@ -277,7 +277,7 @@ impl Error {
             Error::ExpectedConstValue => "constant value expected",
             Error::UnusedExpressionValue => "unused expression value",
             Error::InfiniteLoop => "possibly detected infinite loop",
-            Error::NotAPattern => "not a pattern",
+            Error::NotAPattern { .. } => "not a pattern",
             Error::NotAPatternRangeValue => "can't be used for ranges in patterns",
             Error::Inexhaustive => "not all possible values were covered",
             Error::DuplicateDependency(_) => "duplicate dependency",
@@ -317,9 +317,11 @@ impl Error {
             Error::UnusedExpressionValue => cformat!(
                 "this expression only produces a value that is not used"
             ),
-            Error::NotAPattern => cformat!(
-                "this expression is not a valid pattern"
-            ),
+            Error::NotAPattern { coming_soon } => if *coming_soon {
+                cformat!("this might be a valid pattern #c<soon>")
+            } else {
+                cformat!("this expression is not a valid pattern")
+            }
             Error::DuplicateDependency(name) => cformat!(
                 "multiple dependencies named '#m<{}>'",
                 name

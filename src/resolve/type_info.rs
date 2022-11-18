@@ -1,8 +1,8 @@
 use std::{ops::Index, borrow::Cow};
 
-use crate::{resolve::types::{TupleCountMode, ResolvedTypeDef}, error::{Errors, Error}, span::Span, types::Primitive, ast::TypeId};
+use crate::{resolve::types::{TupleCountMode, ResolvedTypeDef}, error::{Errors, Error}, span::Span, types::Primitive, ast::{TypeId, FunctionId}};
 
-use super::types::{Type, SymbolTable};
+use super::types::{Type, SymbolTable, DefId};
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
@@ -424,7 +424,11 @@ pub enum TypeInfo {
     Array(Option<u32>, TypeTableIndex),
     Enum(TypeTableNames),
     Tuple(TypeTableIndices, TupleCountMode),
-    Symbol, // compile time Symbol like a function, type or trait
+    SymbolItem(DefId),
+    MethodItem {
+        function: FunctionId,
+        this_ty: TypeTableIndex,
+    },
     Generic(u8),
     Invalid,
 }
@@ -493,7 +497,12 @@ impl TypeInfo {
                 s.push(')');
                 s.into()
             }
-            TypeInfo::Symbol => "symbol".into(),
+            TypeInfo::SymbolItem(id) => format!("<symbol item: {id:?}?>").into(),
+            TypeInfo::MethodItem { function, this_ty } => format!(
+                "<method {} with {}>",
+                symbols.get_func(function).name,
+                types[this_ty].as_string(types, symbols)
+            ).into(),
             TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
@@ -503,7 +512,7 @@ impl TypeInfo {
     }
     pub fn is_zero_sized(&self, generics: TypeTableIndices, types: &TypeTable, symbols: &SymbolTable) -> bool {
         match self {
-            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::Symbol => unreachable!(),
+            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } => unreachable!(),
             TypeInfo::Int | TypeInfo::Float  => false,
             TypeInfo::Primitive(p) => p.layout().size == 0,
             TypeInfo::Resolved(id, generics) => match symbols.get_type(*id) {
@@ -547,7 +556,7 @@ impl TypeInfo {
                     .collect(),
             ),
             Self::Generic(i) => Type::Generic(i),
-            Self::Symbol => Type::Symbol,
+            Self::SymbolItem(_) | Self::MethodItem { .. } => Type::Invalid,
         }
     }
 }

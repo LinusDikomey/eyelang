@@ -1,7 +1,10 @@
 use core::fmt;
 use color_format::cwriteln;
 
-use crate::{types::{Primitive, Layout}, dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, UnresolvedType, IdentPath, GlobalId}};
+use crate::{
+    types::{Primitive, Layout},
+    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId}
+};
 
 use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices}, Ident, Var, ResolvedCall};
 
@@ -14,7 +17,6 @@ pub enum Type {
     //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
     Enum(Vec<String>),
     Tuple(Vec<Type>),
-    Symbol,
     /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
     Invalid
@@ -34,7 +36,7 @@ impl Type {
                 tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
             }
             Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
-            Type::Symbol | Type::Invalid => Layout::ZERO,
+            Type::Invalid => Layout::ZERO,
         }
     }
     pub fn is_zero_sized(&self, types: &[(String, ResolvedTypeDef)], generics: &[Type]) -> bool {
@@ -48,7 +50,6 @@ impl Type {
             }
             Type::Enum(variants) => variants.len() < 2,
             Type::Tuple(elems) => elems.iter().all(|ty| ty.is_zero_sized(types, generics)),
-            Type::Symbol => true,
             Type::Generic(idx) => generics[*idx as usize].is_zero_sized(types, generics),
             Type::Invalid => true,
         }
@@ -95,7 +96,6 @@ impl Type {
             Self::Generic(idx) => {
                 return on_generic(*idx);
             }
-            Self::Symbol => TypeInfo::Symbol,
             Self::Invalid => TypeInfo::Invalid
         })
     }
@@ -119,7 +119,6 @@ impl Type {
                     .map(|ty| ty.instantiate_generics(generics))
                     .collect()
             ),
-            Type::Symbol => Type::Symbol,
             Type::Generic(idx) => generics[*idx as usize].clone(),
             Type::Invalid => Type::Invalid,
         }
@@ -349,14 +348,13 @@ pub enum TupleCountMode {
 pub struct Struct {
     pub name: String,
     pub members: Vec<(String, Type)>,
-    pub symbols: DHashMap<String, StructMemberSymbol>,
+    pub methods: DHashMap<String, FunctionId>,
     pub generic_count: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum StructMemberSymbol {
-    Func(SymbolKey),
-    GenericFunc(u32),
+    Func(FunctionId),
 }
 
 #[derive(Debug, Clone)]

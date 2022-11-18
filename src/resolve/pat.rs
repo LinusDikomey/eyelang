@@ -18,7 +18,6 @@ impl<'a> LocalScope<'a> {
                 let lit = IntLiteral::parse(&self.scope.module.src()[lit_span.range()]);
                 int_lit(exhaustion, ctx, lit, lit_span, false);
             }
-            Expr::FloatLiteral(_) => todo!(),
             Expr::BoolLiteral { start: _, val } => {
                 exhaustion.exhaust_bool(*val);
                 ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, self.scope.module.id));
@@ -36,29 +35,39 @@ impl<'a> LocalScope<'a> {
             Expr::Hole(_) => exhaustion.exhaust_full(),
             Expr::Tuple(_, _) => todo!(),
 
-            Expr::Record { .. } // very useful to match on records
-            | Expr::StringLiteral(_) // TODO definitely very important
-            | Expr::Block { .. }
+            Expr::FloatLiteral(_)
+            | Expr::Record { .. } // very useful to match on records
+            | Expr::StringLiteral(_) // definitely very important
+            | Expr::Array(_, _)
+            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
+            | Expr::FunctionCall { .. } => {
+                ctx.errors.emit_span(
+                    Error::NotAPattern { coming_soon: true },
+                    expr.span_in(&ctx.ast, self.scope.module.id)
+                );
+            }
+
+            Expr::Block { .. }
             | Expr::Declare { .. }
             | Expr::DeclareWithVal { .. }
             | Expr::Return { .. }
             | Expr::ReturnUnit { .. }
-            | Expr::Array(_, _)
             | Expr::If { .. } 
             | Expr::IfElse { .. } 
             | Expr::Match { .. } 
             | Expr::While { .. } 
-            | Expr::FunctionCall { .. } 
             | Expr::UnOp(_, _, _) 
             | Expr::BinOp(_, _, _) 
-            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
             | Expr::Index { .. } 
             | Expr::TupleIdx { .. } 
             | Expr::Cast(_, _, _)
             | Expr::Root(_) 
             | Expr::Asm { .. } 
             => {
-                ctx.errors.emit_span(Error::NotAPattern, expr.span_in(&ctx.ast, self.scope.module.id));
+                ctx.errors.emit_span(
+                    Error::NotAPattern { coming_soon: false },
+                    expr.span_in(&ctx.ast, self.scope.module.id)
+                );
             }
             
         }
