@@ -47,7 +47,7 @@ impl TypeTable {
 
     }
 
-    pub fn get_type(&self, idx: TypeTableIndex) -> TypeInfo {
+    pub fn get(&self, idx: TypeTableIndex) -> TypeInfo {
         self.find(idx).1
     }
 
@@ -205,6 +205,24 @@ impl TypeTable {
         }
     }
 
+    pub fn deref(&self, mut ty: TypeTableIndex) -> TypeTableIndex {
+        loop {
+            ty = match self.get(ty) {
+                TypeInfo::Pointer(pointee) => pointee,
+                _ => break ty
+            }
+        }
+    }
+
+    /// merges two type table indices while dereferencing pointers automatically to type check auto ref/deref.
+    pub fn merge_dereffed(
+        &mut self,
+        a: TypeTableIndex, b: TypeTableIndex,
+        errors: &mut Errors, span: Span, ctx: &SymbolTable
+    ) {
+        self.merge(self.deref(a), self.deref(b), errors, span, ctx)
+    }
+
     // not for normal use, just to replace temporaries etc.
     pub fn replace_idx(&mut self, idx: TypeTableIndex, entry: TypeInfoOrIndex) {
         self.types[idx.idx()] = entry;
@@ -248,7 +266,7 @@ impl TypeTable {
             .map(|ty| {
                 match *ty {
                     TypeInfoOrIndex::Type(ty) => ty,
-                    TypeInfoOrIndex::Idx(idx) => self.get_type(idx),
+                    TypeInfoOrIndex::Idx(idx) => self.get(idx),
                 }
                 .finalize(&self)
             })
@@ -429,13 +447,15 @@ pub enum TypeInfo {
         function: FunctionId,
         this_ty: TypeTableIndex,
     },
+    EnumItem(TypeId, u32),
+    LocalTypeItem(TypeTableIndex),
     Generic(u8),
     Invalid,
 }
 impl TypeInfo {
     pub const UNIT: Self = Self::Primitive(Primitive::Unit);
 
-    fn as_string(&self, types: &TypeTable, symbols: &SymbolTable) -> Cow<'static, str> {
+    pub fn as_string(&self, types: &TypeTable, symbols: &SymbolTable) -> Cow<'static, str> {
         match *self {
             TypeInfo::Unknown => "<unknown>".into(),
             TypeInfo::Int => "<integer>".into(),
@@ -483,7 +503,7 @@ impl TypeInfo {
                     } else {
                         s.push_str(", ");
                     }
-                    s.push_str(&types.get_type(elem).as_string(types, symbols));
+                    s.push_str(&types.get(elem).as_string(types, symbols));
                 }
                 match mode {
                     TupleCountMode::Exact => {}
@@ -503,7 +523,16 @@ impl TypeInfo {
                 symbols.get_func(function).name,
                 types[this_ty].as_string(types, symbols)
             ).into(),
+            TypeInfo::EnumItem(id, variant) => {
+                let ResolvedTypeDef::Enum(def) = symbols.get_type(id) else { unreachable!() };
+                format!(
+                    "<variant {}.{}>",
+                    def.name,
+                    def.variants.iter().find(|(_, v)| **v == variant).unwrap().0
+                ).into()
+            }
             TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
+            TypeInfo::LocalTypeItem(idx) => format!("<type {}>", types.get(idx).as_string(types, symbols)).into(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
     }
@@ -512,7 +541,8 @@ impl TypeInfo {
     }
     pub fn is_zero_sized(&self, generics: TypeTableIndices, types: &TypeTable, symbols: &SymbolTable) -> bool {
         match self {
-            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } => unreachable!(),
+            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::SymbolItem(_) 
+            | TypeInfo::MethodItem { .. } | TypeInfo::EnumItem(_, _) | TypeInfo::LocalTypeItem(_) => unreachable!(),
             TypeInfo::Int | TypeInfo::Float  => false,
             TypeInfo::Primitive(p) => p.layout().size == 0,
             TypeInfo::Resolved(id, generics) => match symbols.get_type(*id) {
@@ -522,10 +552,10 @@ impl TypeInfo {
             }
             TypeInfo::Pointer(_) => false,
             TypeInfo::Array(Some(0), _) => true,
-            TypeInfo::Array(_, ty) => types.get_type(*ty).is_zero_sized(generics, types, symbols),
+            TypeInfo::Array(_, ty) => types.get(*ty).is_zero_sized(generics, types, symbols),
             TypeInfo::Enum(names) => names.count < 2,
             TypeInfo::Tuple(_, _) => todo!(),
-            TypeInfo::Generic(i) => types.get_type(generics.nth(*i as usize)).is_zero_sized(generics, types, symbols),
+            TypeInfo::Generic(i) => types.get(generics.nth(*i as usize)).is_zero_sized(generics, types, symbols),
         }
     }
     pub fn finalize(self, types: &TypeTable) -> Type {
@@ -537,13 +567,13 @@ impl TypeInfo {
             Self::Resolved(id, generics) => {
                 let generic_types = generics
                     .iter()
-                    .map(|ty| types.get_type(ty).finalize(types))
+                    .map(|ty| types.get(ty).finalize(types))
                     .collect();
                 Type::Id(id, generic_types)
             }
-            Self::Pointer(inner) => Type::Pointer(Box::new(types.get_type(inner).finalize(types))),
+            Self::Pointer(inner) => Type::Pointer(Box::new(types.get(inner).finalize(types))),
             Self::Array(size, inner) => {
-                let inner = types.get_type(inner).finalize(types);
+                let inner = types.get(inner).finalize(types);
                 size.map_or(Type::Prim(Primitive::Unit), |size| {
                     Type::Array(Box::new((inner, size)))
                 })
@@ -552,11 +582,12 @@ impl TypeInfo {
             Self::Tuple(inners, _) => Type::Tuple(
                 inners
                     .iter()
-                    .map(|ty| types.get_type(ty).finalize(types))
+                    .map(|ty| types.get(ty).finalize(types))
                     .collect(),
             ),
             Self::Generic(i) => Type::Generic(i),
-            Self::SymbolItem(_) | Self::MethodItem { .. } => Type::Invalid,
+            Self::SymbolItem(_) | Self::MethodItem { .. }
+            | Self::EnumItem(_, _)  | TypeInfo::LocalTypeItem(_) => Type::Invalid,
         }
     }
 }
@@ -631,8 +662,8 @@ fn merge_onesided(
         Pointer(inner) => {
             let Pointer(other_inner) = other else { return None };
             let new_inner = merge_onesided(
-                types.get_type(inner),
-                types.get_type(other_inner),
+                types.get(inner),
+                types.get(other_inner),
                 types,
                 symbols,
             )?;
@@ -643,8 +674,8 @@ fn merge_onesided(
             let Array(other_size, other_inner) = other else { return None };
 
             let new_inner = merge_onesided(
-                types.get_type(inner),
-                types.get_type(other_inner),
+                types.get(inner),
+                types.get(other_inner),
                 types,
                 symbols,
             )?;
@@ -703,18 +734,19 @@ fn merge_onesided(
             };
 
             for (a, b) in res_ty.iter().zip(other_ty.iter()) {
-                let new = merge_twosided(types.get_type(a), types.get_type(b), types, symbols)?;
+                let new = merge_twosided(types.get(a), types.get(b), types, symbols)?;
                 types.update_type_and_point(a, new, b);
             }
             Some(Tuple(res_ty, mode))
         }
-        Symbol => {
-            if let Symbol = other {
-                Some(ty)
+        SymbolItem(id) => {
+            if let SymbolItem(id2) = other {
+                (id == id2).then_some(ty)
             } else {
                 None
             }
         }
+        
         Generic(i) => {
             // TODO: proper generic type checking
             match other {
@@ -723,6 +755,7 @@ fn merge_onesided(
             }
         }
         Invalid => Some(Invalid), // invalid type 'spreading'
+        MethodItem { .. } | EnumItem(_, _) | LocalTypeItem(_) => todo!(),
     }
 }
 
@@ -735,7 +768,7 @@ impl TypeInfoOrIndex {
     pub fn into_info(self, types: &TypeTable) -> TypeInfo {
         match self {
             TypeInfoOrIndex::Type(info) => info,
-            TypeInfoOrIndex::Idx(idx) => types.get_type(idx),
+            TypeInfoOrIndex::Idx(idx) => types.get(idx),
         }
     }
 }

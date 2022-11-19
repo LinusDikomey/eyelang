@@ -27,7 +27,6 @@ pub enum Tag {
     Int,
     LargeInt,
     Float,
-    EnumLit,
 
     Func,
     TraitFunc,
@@ -82,7 +81,7 @@ impl Tag {
             Tag::Int => Int,
             Tag::LargeInt => LargeInt,
             Tag::Float => Float,
-            Tag::EnumLit | Tag::String => String,
+            Tag::String => String,
             
             Tag::Func => Func,
             Tag::Type => Type,

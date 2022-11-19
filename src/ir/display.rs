@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef}};
+use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::{types::{Struct, ResolvedTypeDef}, type_info::{TypeTable, TypeInfo}}};
 
 use super::{
     Type,
@@ -202,7 +202,7 @@ impl fmt::Display for TypeDefDisplay<'_> {
 }
 
 impl Instruction {
-    fn display<'a>(&'a self, extra: &'a [u8], types: &'a FinalTypeTable, info: Info<'a>)
+    fn display<'a>(&'a self, extra: &'a [u8], types: &'a TypeTable, info: Info<'a>)
     -> InstructionDisplay<'a> {
         InstructionDisplay { inst: self, extra, types, info }
     }
@@ -210,7 +210,7 @@ impl Instruction {
 pub struct InstructionDisplay<'a> {
     inst: &'a Instruction,
     extra: &'a [u8],
-    types: &'a FinalTypeTable,
+    types: &'a TypeTable,
     info: Info<'a>,
 }
 
@@ -224,12 +224,16 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
                 Tag::Cast => cwrite!(f, "#m!< as >")?,
                 _ => cwrite!(f, " :: ")?
             };
-            cwrite!(f, "#m!<{}>", types.get(inst.ty).display(*info))?;
+            display_type(f, types.get(inst.ty), types, self.info)?;
         }
         Ok(())
     }
 }
-fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &FinalTypeTable, info: Info)
+fn display_type(f: &mut fmt::Formatter<'_>, ty: TypeInfo, types: &TypeTable, info: Info) -> fmt::Result {
+    todo!()
+}
+
+fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &TypeTable, info: Info)
 -> fmt::Result {
     let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
         if let Some(val) = r.into_val() {
@@ -300,7 +304,7 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             cwrite!(f, "#m<t{}>.#m<f{}>", TraitId::from_bytes(buf).idx(), inst.data.trait_func.1)
         }
         DataVariant::TypeTableIdx => {
-            cwrite!(f, "#m<{}>", types[inst.data.ty].display(info))
+            display_type(f, types[inst.data.ty], types, info)
         }
         DataVariant::UnOp => write_ref(f, inst.data.un_op),
         DataVariant::BinOp => {

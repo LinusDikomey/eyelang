@@ -141,7 +141,7 @@ impl IntType {
             IntType::U16 => u16::MAX as u128,
             IntType::U32 => u32::MAX as u128,
             IntType::U64 => u64::MAX as u128,
-            IntType::U128 => u128::MAX as u128,
+            IntType::U128 => u128::MAX,
         }
     }
     pub fn min(self) -> u128 {

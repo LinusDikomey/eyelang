@@ -138,6 +138,10 @@ pub struct Args {
     #[clap(long)]
     emit_obj: bool,
 
+    /// Library that doesn't require a main function.
+    #[clap(long)]
+    lib: bool,
+
     /// Report compilation times of all files/compilation steps.
     #[clap(long)]
     timings: bool,
@@ -315,16 +319,21 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             path,
             debug_options,
             dependencies,
-            !args.emit_obj,
+            !args.emit_obj && !args.lib,
             &mut stats,
         );
-        errors.print(&ast);
+        if errors.error_count() > 0 {
+            errors.print(&ast);
+            return true;
+        } else if errors.warning_count() > 0 {
+            errors.print(&ast);
+        }
         match res {
             Ok((symbols, main)) => (symbols, main, ast),
             Err(()) => return true,
         }
     };
-    
+
     let reduce_start_time = Instant::now();
     let ir = irgen::reduce(&ast, symbols, main);
     stats.irgen += reduce_start_time.elapsed();
@@ -385,6 +394,10 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                 println!("{stats}");
             }
             if args.cmd == Cmd::Jit {
+                if args.lib {
+                    cprintln!("#r<There is nothing to run> because --lib was passed.");
+                    return true;
+                }
                 cprintln!("#g<JIT running>...\n");
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
@@ -410,6 +423,10 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                     return false;
                 }
                 if args.cmd == Cmd::Run {
+                    if args.lib {
+                        cprintln!("#r<There is nothing to run> because --lib was passed.");
+                        return true;
+                    }
                     exec();
                 } else {
                     cprintln!("#g<Built #u<{}>>", output_name);
@@ -417,7 +434,8 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             }
         },
         (Cmd::Jit, Backend::X86) => panic!("JIT compilation is not supported with the x86 backend"),
-        (Cmd::Run | Cmd::Build, Backend::X86) => {
+        (Cmd::Run | Cmd::Build, Backend::X86) => todo!("X86 backend isn't available right now"),
+        /*(Cmd::Run | Cmd::Build, Backend::X86) => {
             let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
             let asm_file =
                 std::fs::File::create(&asm_path).expect("Failed to create assembly file");
@@ -435,7 +453,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             } else {
                 cprintln!("#g<Built #u<{}>>", output_name);
             }
-        }
+        }*/
         #[cfg(feature = "lsp")]
         (Cmd::Lsp, _) => unreachable!(),
     }

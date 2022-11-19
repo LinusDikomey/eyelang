@@ -3,7 +3,7 @@ use root.c.printf
 use root.c.malloc   
 use root.c.memcpy
 
-FIRST_CAPACITY :: 4
+# FIRST_CAPACITY :: 4
 
 List :: struct[T] {
     buf *T,
@@ -17,7 +17,7 @@ List :: struct[T] {
         if this^.len < this^.cap {
             # printf("Pushing item %d { len %d cap %d } \n", item, this^.len, this^.cap)
         } else {
-            new_cap := if this^.cap == 0: FIRST_CAPACITY else this^.cap * 2
+            new_cap := if this^.cap == 0: 4 else this^.cap * 2
             new_buf := malloc(new_cap * T.size) as *T
             if this^.len != 0 {
                 memcpy(new_buf as *i8, this^.buf as *i8, this^.len * T.size)

@@ -1,7 +1,7 @@
 use crate::{
     ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId},
     error::{Errors, Error},
-    dmap::{self, DHashMap},
+    dmap::DHashMap,
     span::Span,
     parser::IdentId,
     resolve::types::ResolvedFunc,
@@ -72,8 +72,9 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     });
 
     // function bodies
-    for scope in &mut module_scopes {
-        scope_bodies(scope, &ast, &mut symbols, errors);
+    debug_assert_eq!(ast.modules.len(), module_scopes.len());
+    for (module, scope) in ast.modules.iter().zip(&module_scopes) {
+        scope_bodies(scope, &ast[module.definitions], &ast, &mut symbols, errors);
     }
 
     (symbols, main)
@@ -94,11 +95,11 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, D
     }).collect()
 }
 
-fn scope_bodies(scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
+fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
     let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
-    for (_name, def) in &scope.names {
+    for (_name, def) in defs {
         match def {
-            DefId::Function(func_id) => {
+            Definition::Function(func_id) => {
                 let func = &ast[*func_id];
 
                 if let Some(body) = func.body {
@@ -124,9 +125,9 @@ fn scope_bodies(scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors:
                     })
                 }
             }
-            DefId::Type(_) | DefId::Trait(_) | DefId::Module(_)
-            | DefId::Generic(_) | DefId::Global(_) | DefId::Invalid => {}
-            DefId::Unresolved { .. } => unreachable!("unresolved def ids should be resolved before this stage"),
+            Definition::Type(_) => {} // TODO: methods?
+            Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
+            | Definition::Const(_, _) | Definition::Global(_) => {}
         }
     }
 }
@@ -151,7 +152,7 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
     }
 }
 
-fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols: &SymbolTable, errors: &mut Errors)
+fn func_signature(name: String, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
 -> FunctionHeader {
     let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
     let generic_defs = generics
@@ -180,12 +181,20 @@ fn func_signature(name: String, func: &ast::Function, scope: &mut Scope, symbols
 
 fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
 -> Struct {
+    
+    let names = def.generics.iter().enumerate().map(|(i, name_span)| {
+        let name = &ast.src(scope.module.id).0[name_span.range()];
+        (name.to_owned(), DefId::Generic(i as u8))
+    }).collect();
+
+    let scope = scope.child_scope(names);
+    
     let members = def.members.iter().map(|(name, ty, _, _)| {
         (name.clone(), scope.resolve_ty(ty, symbols, errors))
     }).collect();
 
     let symbols = def.methods.iter().map(|(name, id)| {
-        symbols.place_func(*id, func_signature(name.to_owned(), &ast[*id], scope, symbols, errors));
+        symbols.place_func(*id, func_signature(name.to_owned(), &ast[*id], &scope, symbols, errors));
         (name.clone(), *id)
     }).collect();
 
@@ -257,10 +266,10 @@ impl<'a> Ctx<'a> {
         self.idents[id.idx()]
     }
     fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, span: Span) {
-        self.types.merge(a, b, self.errors, span, &self.symbols);
+        self.types.merge(a, b, self.errors, span, self.symbols);
     } 
     fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, span: Span) {
-        self.types.specify(idx, info, self.errors, span, &self.symbols)
+        self.types.specify(idx, info, self.errors, span, self.symbols)
     }
     
     pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: Span) {
@@ -299,7 +308,7 @@ impl<'a> Ctx<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum ResolvedCall {
     Function { func_id: FunctionId, generics: TypeTableIndices },
-    Type(TypeId),
+    Struct { type_id: TypeId, generics: TypeTableIndices },
     Invalid,
 }
 

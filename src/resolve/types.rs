@@ -230,7 +230,7 @@ impl SymbolTable {
     pub fn get_const_mut(&mut self, key: SymbolKey) -> &mut ConstVal { &mut self.consts[key.idx()] }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DefId {
     Function(FunctionId),
     Type(TypeId),

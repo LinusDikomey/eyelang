@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir, resolve::{types::{ResolvedTypeDef, Type}, type_info::TypeTableIndex, const_val::ConstVal}};
+use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir, resolve::{types::{ResolvedTypeDef, Type}, type_info::{TypeTableIndex, TypeInfo}, const_val::ConstVal}};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
 pub mod output;
@@ -160,6 +160,7 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
 ) {
+    /*
     crate::log!("-------------------- Building LLVM IR for func {}", func.header.name);
     let blocks = ir.blocks.iter()
         .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
@@ -167,16 +168,16 @@ unsafe fn build_func(
 
     let mut instructions = Vec::new();
 
-    let get_ref_and_type_ptr = |instructions: &[LLVMValueRef], r: ir::Ref| -> (LLVMValueRef, Type) {
+    let get_ref_and_type_ptr = |instructions: &[LLVMValueRef], r: ir::Ref| -> (LLVMValueRef, TypeInfo) {
         if let Some(val) = r.into_val() {
             match val {
                 ir::RefVal::True | ir::RefVal::False => (
                     LLVMConstInt(LLVMInt1TypeInContext(ctx), (val == ir::RefVal::True) as _, FALSE),
-                    Type::Prim(Primitive::Bool)
+                    TypeInfo::Primitive(Primitive::Bool)
                 ),
                 ir::RefVal::Unit => (
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
-                    Type::Prim(Primitive::Unit)
+                    TypeInfo::Primitive(Primitive::Unit)
                 ),
                 ir::RefVal::Undef => panic!("Tried to use an undefined IR value. This is an internal compiler error."),
             }
@@ -215,7 +216,7 @@ unsafe fn build_func(
 
     let table_ty = |ty: TypeTableIndex, types: &mut [TypeInstance]| {
         let info = ir.types.get(ty);
-        llvm_ty(ctx, module, types, info)
+        llvm_ty_info(ctx, module, types, info)
     };
     #[derive(Clone, Copy, Debug)]
     enum Numeric { Float(u32), Int(bool, u32) }
@@ -232,9 +233,9 @@ unsafe fn build_func(
             panic!("Invalid type for int/float operation: {p}")
         }
     }
-    let info_to_num = |info: &Type| {
+    let info_to_num = |info: TypeInfo| {
         match info {
-            Type::Prim(p) => prim_to_num(*p),
+            TypeInfo::Primitive(p) => prim_to_num(p),
             t => panic!("Invalid type for int/float operation: {t:?}")
         }
     };
@@ -253,7 +254,7 @@ unsafe fn build_func(
             }
             ir::Tag::Ret => {
                 let (r, ty) = get_ref_and_type(&instructions, data.un_op);
-                if is_void_type(&ty) {
+                if is_void_type_info(ty) {
                     LLVMBuildRetVoid(builder)
                 } else {
                     LLVMBuildRet(builder, r)
@@ -275,7 +276,7 @@ unsafe fn build_func(
                 param_var
             }
             ir::Tag::Uninit => {
-                let llvm_ty = llvm_ty(ctx, module, types, &ir.types[inst.ty]);
+                let llvm_ty = llvm_ty_info(ctx, module, types, ir.types[inst.ty]);
                 LLVMGetUndef(llvm_ty)
             }
             ir::Tag::Int => LLVMConstInt(table_ty(ty, types), data.int, FALSE),
@@ -287,17 +288,17 @@ unsafe fn build_func(
                 LLVMConstIntOfArbitraryPrecision(table_ty(ty, types), 2, words.as_ptr())
             }
             ir::Tag::Float => LLVMConstReal(table_ty(ty, types), data.float),
-            ir::Tag::EnumLit => {
+            /*ir::Tag::EnumLit => {
                 let range = data.extra_len.0 as usize .. data.extra_len.0 as usize + data.extra_len.1 as usize;
                 let name = &ir.extra[range];
                 let (ty, index) = match &ir.types[ty] {
-                    Type::Enum(variants) => {
-                        let index = variants.iter()
+                    TypeInfo::Enum(variants) => {
+                        let index = ir.types.get_names(*variants).iter()
                             .enumerate()
                             .find(|(_, s)| s.as_bytes() == name)
                             .unwrap_or_else(|| panic!("Missing enum variant {}.", std::str::from_utf8(name).unwrap()))
                             .0;
-                        let ty = int_from_variant_count(ctx, variants.len());
+                        let ty = int_from_variant_count(ctx, variants.c);
                         (ty, index)
                     }
                     Type::Id(id, _) => {
@@ -316,7 +317,7 @@ unsafe fn build_func(
                     _ => panic!("Enum variant not found for non-enum type")
                 };
                 LLVMConstInt(ty, index as _, FALSE)
-            }
+            }*/
             ir::Tag::Func
             | ir::Tag::TraitFunc
             | ir::Tag::Type
@@ -615,6 +616,7 @@ unsafe fn build_func(
         }
         instructions.push(val);
     }
+    */
 }
 
 unsafe fn inline_asm(
@@ -663,6 +665,10 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
 
 unsafe fn llvm_ty(ctx: LLVMContextRef, module: &ir::Module, types: &mut [TypeInstance], ty: &Type) -> LLVMTypeRef {
     llvm_ty_recursive(ctx, module, types, ty, false, &[])
+}
+
+unsafe fn llvm_ty_info(ctx: LLVMContextRef, module: &ir::Module, types: &mut [TypeInstance], ty: TypeInfo) -> LLVMTypeRef {
+    todo!()
 }
 
 unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeRef {
@@ -747,6 +753,10 @@ unsafe fn llvm_ty_recursive(
 
 fn is_void_type(ty: &Type) -> bool {
     matches!(ty, Type::Prim(Primitive::Unit | Primitive::Never))
+}
+
+fn is_void_type_info(ty: TypeInfo) -> bool {
+    matches!(ty, TypeInfo::Primitive(Primitive::Unit | Primitive::Never))
 }
 
 enum TypeInstance {

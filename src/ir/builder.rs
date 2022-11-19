@@ -26,17 +26,17 @@ pub enum BinOp {
 }
 
 #[derive(Debug)]
-pub struct IrBuilder<'a> {
+pub struct IrBuilder {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
     next_block: u32,
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
-    pub types: &'a mut TypeTable,
+    pub types: TypeTable,
 }
-impl<'a> IrBuilder<'a> {
-    pub fn new(types: &'a mut TypeTable) -> Self {
+impl IrBuilder {
+    pub fn new(types: TypeTable) -> Self {
         Self {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
@@ -174,7 +174,7 @@ impl<'a> IrBuilder<'a> {
             inst: self.inst,
             extra: self.extra,
             blocks: self.blocks,
-            types: self.types.clone().finalize(), //TODO: this is just a temporary solution and type tables should be handled differently
+            types: self.types,
         }
     }
 

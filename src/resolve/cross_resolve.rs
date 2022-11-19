@@ -145,7 +145,7 @@ fn cross_resolve_local(
                         let mut current_module = None;
                         for (name, name_span) in segments {
                             let next_mod = if let Some(current) = current_module {
-                                parent.module_scope(current).resolve(name, name_span, errors)
+                                parent.module_scope(current).resolve(name, name_span.in_mod(parent.module.id), errors)
                             } else {
                                 cross_resolve_local_by_name(name, name_span, defs, scope_defs, parent, ast, errors)
                             };
@@ -170,7 +170,8 @@ fn cross_resolve_local(
                                 return DefId::Invalid;
                             }
                             if let Some(module) = current_module {
-                                parent.module_scope(module).resolve(last_name, name_span, errors)
+                                parent.module_scope(module)
+                                    .resolve(last_name, name_span.in_mod(parent.module.id), errors)
                             } else {
                                 cross_resolve_local_by_name(last_name, name_span, defs, scope_defs, parent, ast, errors)
                             }

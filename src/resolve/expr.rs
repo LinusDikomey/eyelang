@@ -3,8 +3,8 @@ use crate::{
     error::Error,
     token::{FloatLiteral, IntLiteral, Operator},
     types::Primitive,
-    resolve::{exhaust::Exhaustion, types::{ResolvedTypeDef, FunctionHeader}},
-    dmap
+    resolve::{exhaust::Exhaustion, types::ResolvedTypeDef},
+    dmap, span::TSpan
 };
 
 use super::{
@@ -13,7 +13,7 @@ use super::{
     Ident,
     ResolvedCall,
     scope::{LocalScope, ExprInfo, LocalDefId},
-    types::{DefId, TupleCountMode, StructMemberSymbol}
+    types::{DefId, TupleCountMode}
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -117,8 +117,8 @@ impl<'a> LocalScope<'a> {
                 let name = &self.scope.module.src()[ident.range()];
                 ctx.specify_enum_variant(info.expected, name, ident.in_mod(self.scope.module.id))
             }
-            ast::Expr::Record { .. } => todo!(),
-            ast::Expr::Nested(_, _) => todo!(),
+            ast::Expr::Record { .. } => todo!("record literals"),
+            ast::Expr::Nested(_, inner) => return self.expr(*inner, info, ctx, hole_allowed),
             ast::Expr::Unit(_) => {
                 ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
             }
@@ -134,11 +134,16 @@ impl<'a> LocalScope<'a> {
                         Ident::Invalid
                     }
                     LocalDefId::Var(var) => {
+                        lval = true;
+
                         let ty = ctx.var(var).ty;
                         ctx.merge(info.expected, ty, span.in_mod(self.mod_id()));
                         Ident::Var(var)
                     }
-                    LocalDefId::Type(_) => todo!(),
+                    LocalDefId::Type(idx) => {
+                        ctx.specify(info.expected, TypeInfo::LocalTypeItem(idx), span.in_mod(self.mod_id()));
+                        Ident::Invalid
+                    }
                 };
                 ctx.set_ident(*id, ident);
             }
@@ -284,10 +289,10 @@ impl<'a> LocalScope<'a> {
                 let left_ty = ctx.types.add_unknown();
                 let Res::Val { .. } = self.expr(left, info.with_expected(left_ty), ctx.reborrow(), false);
                 // auto deref
-                let mut deref_ty = ctx.types.get_type(left_ty);
+                let mut deref_ty = ctx.types.get(left_ty);
                 loop {
                     deref_ty = match deref_ty {
-                        TypeInfo::Pointer(inner) => ctx.types.get_type(inner),
+                        TypeInfo::Pointer(inner) => ctx.types.get(inner),
                         TypeInfo::Resolved(id, generics) => match ctx.symbols.get_type(id) {
                             ResolvedTypeDef::Struct(s) => {
                                 let member = s.members.iter().find(|(member_name, _)| member_name == name);
@@ -325,6 +330,15 @@ impl<'a> LocalScope<'a> {
                         }
                         TypeInfo::Generic(_) => todo!("generic member checking (traits?)"),
                         TypeInfo::SymbolItem(DefId::Type(id)) => {
+                            match name {
+                                "size" | "align" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64),
+                                        self.span(expr, ctx.ast)
+                                    );
+                                    break;
+                                }
+                                _ => {}
+                            }
                             match ctx.symbols.get_type(id) {
                                 ResolvedTypeDef::Struct(def) => match def.methods.get(name) {
                                     Some(method) => {
@@ -342,6 +356,11 @@ impl<'a> LocalScope<'a> {
                                 ResolvedTypeDef::Enum(def) => {
                                     match def.variants.get(name) {
                                         Some(variant) => {
+                                            ctx.specify(
+                                                info.expected,
+                                                TypeInfo::EnumItem(id, *variant),
+                                                name_span.in_mod(self.mod_id())
+                                            );
                                             // TODO: store variant somewhere
                                         }
                                         None => {
@@ -355,11 +374,24 @@ impl<'a> LocalScope<'a> {
                             break;
                         }
                         TypeInfo::SymbolItem(DefId::Module(id)) => {
-                            let def = self.scope.module_scope(id).resolve(name, name_span, ctx.errors);
+                            let def = self.scope.module_scope(id)
+                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors);
                             ctx.specify(info.expected, TypeInfo::SymbolItem(def), self.span(expr, ctx.ast));
                             break;
                         }
+                        TypeInfo::LocalTypeItem(_) => {
+                            match name {
+                                "size" | "align" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64),
+                                        self.span(expr, ctx.ast)
+                                    );
+                                    break;
+                                }
+                                _ => todo!("member access on generics")
+                            }
+                        }
                         TypeInfo::SymbolItem(DefId::Function(_)) | TypeInfo::MethodItem { .. }
+                        | TypeInfo::EnumItem(_, _)
                         | TypeInfo::Int | TypeInfo::Float | TypeInfo::Primitive(_)
                         | TypeInfo::SymbolItem(_)
                         | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
@@ -410,19 +442,57 @@ impl<'a> LocalScope<'a> {
         let call = &ctx.ast[id];
         let called_ty = ctx.types.add_unknown();
 
-        let Res::Val { use_hint, lval } = self.expr(call.called_expr, info.with_expected(called_ty), ctx.reborrow(), false);
-        let (res, call) = match ctx.types.get_type(called_ty) {
+        _ = self.expr(call.called_expr, info.with_expected(called_ty), ctx.reborrow(), false);
+        let (res, call) = match ctx.types.get(called_ty) {
             TypeInfo::SymbolItem(DefId::Function(func_id)) => {                
                 let call = self.call_func(func_id, ctx.reborrow(), None, call, call_expr, info);
                 
                 (Res::Val { use_hint: UseHint::Can, lval: false }, call)
             }
-            TypeInfo::SymbolItem(DefId::Type(_)) => todo!(),
-            TypeInfo::MethodItem { function, this_ty } => {
-                let call = self.call_func(function, ctx.reborrow(), Some(this_ty), call, call_expr, info);
+            TypeInfo::SymbolItem(DefId::Type(id)) => {
+                match ctx.symbols.get_type(id) {
+                    ResolvedTypeDef::Struct(def) => {
+                        if call.args.count as usize != def.members.len() {
+                            ctx.errors.emit_span(
+                                Error::InvalidArgCount {
+                                    expected: def.members.len() as _,
+                                    varargs: false,
+                                    found: call.args.count,
+                                },
+                                self.span(call_expr, ctx.ast)
+                            )
+                        }
+                        let generics = ctx.types.add_multiple_unknown(def.generic_count as _);
+                        let arg_types = ctx.types.add_multiple_unknown(call.args.count);
+                        for (i, (_, ty)) in def.members.iter().enumerate() {
+                            let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
+                            ctx.types.replace_idx(arg_types.nth(i), param_ty);
+
+                        }
+                        for (arg, ty) in ctx.ast[call.args].iter().zip(arg_types.iter()) {
+                            self.val_expr(*arg, info.with_expected(ty), ctx.reborrow(), false);
+                        }
+                        (
+                            Res::Val { use_hint: UseHint::Can, lval: false },
+                            ResolvedCall::Struct { type_id: id, generics }
+                        )
+                    }
+                    ResolvedTypeDef::Enum(_) => {
+                        ctx.errors.emit_span(
+                            Error::FunctionOrStructTypeExpected,
+                            ctx.ast[call.called_expr].span_in(&ctx.ast, self.scope.module.id),
+                        );
+                        (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
+                    }
+                    ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
+                } 
+            }
+            TypeInfo::MethodItem { function: id, this_ty } => {
+                let this = Some((this_ty, ctx.ast[call.called_expr].span(ctx.ast)));
+                let call = self.call_func(id, ctx.reborrow(), this, call, call_expr, info);
                 (Res::Val { use_hint: UseHint::Can, lval: false }, call)
             }
-            other => {
+            _other => {
                 if !ctx.types.invalidate(called_ty) {
                     ctx.errors.emit_span(
                         Error::FunctionOrStructTypeExpected,
@@ -440,7 +510,7 @@ impl<'a> LocalScope<'a> {
         &mut self,
         func_id: ast::FunctionId,
         mut ctx: Ctx,
-        this: Option<TypeTableIndex>,
+        this: Option<(TypeTableIndex, TSpan)>,
         call: &ast::Call,
         call_expr: ExprRef,
         mut info: ExprInfo
@@ -460,7 +530,7 @@ impl<'a> LocalScope<'a> {
                 ctx.errors.emit_span(Error::InvalidArgCount {
                     expected: sig.params.len() as _,
                     varargs: sig.varargs,
-                    found: call.args.count,
+                    found: arg_count,
                 }, self.span(call_expr, &ctx.ast));
             }
         }
@@ -480,10 +550,9 @@ impl<'a> LocalScope<'a> {
 
         let mut params = params.into_iter();
 
-        if let Some(this) = this {
+        if let Some((this, this_span)) = this {
             let this_param = params.next().unwrap_or_else(|| ctx.types.add_unknown());
-            // TODO: unify and auto ref/deref
-            todo!("this arg in calls")
+            ctx.types.merge_dereffed(this, this_param, ctx.errors, this_span.in_mod(self.mod_id()), ctx.symbols);
         }
 
         for arg in &ctx.ast[call.args] {

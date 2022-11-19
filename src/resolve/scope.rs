@@ -34,6 +34,15 @@ impl Scope<'static> {
     }
 }
 impl<'a> Scope<'a> {
+    pub fn child_scope(&self, names: DHashMap<String, DefId>) -> Scope<'_> {
+        Scope {
+            module_scopes: self.module_scopes,
+            module: self.module,
+            parent: Some(self),
+            names,
+        }
+    }
+
     pub fn child(&self) -> LocalScope<'_> {
         LocalScope {
             parent: LocalOrGlobalScope::Global(self),
@@ -59,7 +68,7 @@ impl<'a> Scope<'a> {
         unsafe { &(*self.module_scopes)[id.idx()] }
     }
 
-    pub fn resolve(&self, name: &str, name_span: TSpan, errors: &mut Errors) -> DefId {
+    pub fn resolve(&self, name: &str, name_span: Span, errors: &mut Errors) -> DefId {
         // PERF: make non-recursive
         if let Some(id) = self.names.get(name) {
             *id
@@ -67,7 +76,7 @@ impl<'a> Scope<'a> {
             if let Some(parent) = self.parent {
                 return parent.resolve(name, name_span, errors);
             } else {
-                errors.emit_span(Error::UnknownIdent, name_span.in_mod(self.module.id));
+                errors.emit_span(Error::UnknownIdent, name_span);
                 DefId::Invalid
             }
         }
@@ -89,7 +98,7 @@ impl<'a> Scope<'a> {
             } else {
                 self
             };
-            match scope.resolve(segment, segment_span, errors) {
+            match scope.resolve(segment, segment_span.in_mod(self.module.id), errors) {
                 DefId::Module(id) => current_module = Some(id),
                 _ => {
                     errors.emit_span(Error::ModuleExpected, segment_span.in_mod(self.module.id));
@@ -110,7 +119,7 @@ impl<'a> Scope<'a> {
                 self.module_scope(module)
             } else {
                 self
-            }.resolve(segment, span, errors)
+            }.resolve(segment, span.in_mod(self.module.id), errors)
         } else {
             // should be fine to unwrap here since empty paths don't exist
             DefId::Module(current_module.unwrap())
@@ -216,7 +225,7 @@ impl<'a> ExprInfo<'a> {
 
 
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum LocalDefId {
     Def(DefId),
     Var(VarId),
@@ -266,7 +275,7 @@ impl<'a> LocalScope<'a> {
         }
 
         // function bodies
-        super::scope_bodies(&mut scope.scope, &ast, symbols, errors);
+        super::scope_bodies(&scope.scope, defs, &ast, symbols, errors);
 
         scope
     }
@@ -289,7 +298,7 @@ impl<'a> LocalScope<'a> {
 
         if let Some((segment, span)) = last {
             if let Some(module) = current_module {
-                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span, errors))
+                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span.in_mod(self.mod_id()), errors))
             } else {
                 self.resolve_local(segment, span, errors)
             }
@@ -361,7 +370,9 @@ impl<'a> LocalScope<'a> {
         } else {
             match self.parent {
                 LocalOrGlobalScope::Local(local) => local.resolve_local(name, name_span, errors),
-                LocalOrGlobalScope::Global(global) => LocalDefId::Def(global.resolve(name, name_span, errors)),
+                LocalOrGlobalScope::Global(global) => LocalDefId::Def(
+                    global.resolve(name, name_span.in_mod(self.mod_id()), errors)
+                ),
             }
         }
     }

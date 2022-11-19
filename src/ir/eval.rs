@@ -203,13 +203,6 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 };
                 ConstVal::Float(float_ty, inst.data.float)
             }
-            super::Tag::EnumLit => {
-                let variant = String::from_utf8(ir.extra[
-                    inst.data.extra_len.0 as usize
-                    .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
-                ].to_vec()).expect("Enum variant was invalid utf8");
-                ConstVal::EnumVariant(variant)
-            }
             super::Tag::Func => {
                 ConstVal::Symbol(ConstSymbol::Func(inst.data.func_symbol))
             }
