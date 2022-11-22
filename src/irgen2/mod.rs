@@ -1,15 +1,16 @@
 use std::ops::Index;
 
 use crate::{
-    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId},
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp},
     resolve::{
-        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc},
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum},
         self,
         type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId},
     ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
-    token::{IntLiteral, Operator}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
+    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
+mod main_func;
 
 struct Ctx<'a> {
     ast: &'a Ast,
@@ -125,6 +126,7 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
         // TODO: FunctionHeader type just for ir
         let header = FunctionHeader {
             name,
+            type_method_generic_count: 0,
             generics: vec![],
             params: generic_header.params
                 .iter()
@@ -154,6 +156,16 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
     }).collect();
 
     let globals = symbols.globals;
+
+    if let Some(main) = main {
+        // main is always at idx 0
+
+        funcs[0].header.name = "eyemain".to_owned();
+        let return_type = funcs[0].header.return_type.clone();
+
+        let func = main_func::main_wrapper(ir::FunctionId::new(0), funcs[0].header.module, return_type);
+        funcs.push(func);
+    }
 
     ir::Module {
         name: "MainModule".to_owned(),
@@ -232,26 +244,30 @@ fn gen_func(
     Function { header, ir: Some(ir) }
 }
 
-struct Res {
-    r: Ref,
-    is_ptr: bool,
+#[derive(Clone, Copy)]
+enum Res {
+    Val(Ref),
+    Var(Ref),
+    Hole,
 }
 impl Res {
-    fn val(&self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
-        if self.is_ptr {
-            ir.build_load(self.r, ty)
-        } else {
-            self.r
+    fn val(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+        match self {
+            Res::Val(r) => r,
+            Res::Var(r) => ir.build_load(r, ty),
+            Res::Hole => unreachable!(),
         }
     }
 
-    fn var(&self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
-        if self.is_ptr {
-            self.r
-        } else {
-            let var = ir.build_decl(ty);
-            ir.build_store(var, self.r);
-            var
+    fn var(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+        match self {
+            Res::Val(r) => {
+                let var = ir.build_decl(ty);
+                ir.build_store(var, r);
+                var
+            }
+            Res::Var(r) => r,
+            Res::Hole => unreachable!(),
         }
     }
 }
@@ -261,10 +277,10 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
     if *noreturn {
         Ref::UNDEF
     } else {
-        if res.is_ptr {
-            ir.build_load(res.r, ctx[expr])
-        } else {
-            res.r
+        match res {
+            Res::Val(r) => r,
+            Res::Var(r) => ir.build_load(r, ctx[expr]),
+            Res::Hole => unreachable!(),
         }
     }
 } 
@@ -319,26 +335,135 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             let ty = ctx[expr];
             int_literal(lit, ty, ir)
         }
-        Expr::FloatLiteral(_) => todo!(),
-        Expr::StringLiteral(_) => todo!(),
-        Expr::BoolLiteral { start, val } => todo!(),
-        Expr::EnumLiteral { dot, ident } => todo!(),
+        Expr::FloatLiteral(span) => {
+            let lit = FloatLiteral::parse(&ctx.src()[span.range()]);
+            let ty = ctx[expr];
+            ir.build_float(lit.val, ty)
+        }
+        Expr::StringLiteral(span) => {
+            let lit = string_literal(*span, ctx.src());
+            let ty = ctx[expr];
+            ir.build_string(lit.as_bytes(), true, ty)
+        }
+        Expr::BoolLiteral { val, .. } => if *val { Ref::val(RefVal::True) } else { Ref::val(RefVal::False) }
+        &Expr::EnumLiteral { ident, .. } => {
+            let name = ctx.src_at(ident);
+            let (variant, int_ty) = match ir.types.get(ctx[expr]) {
+                TypeInfo::Resolved(id, _generics) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    (def.variants[name], def.int_ty())
+                }
+                TypeInfo::Enum(variants) => {
+                    let variants = ir.types.get_names(variants);
+                    let variant = variants
+                        .iter()
+                        .enumerate()
+                        .find(|(_, s)| s.as_str() == name)
+                        .unwrap()
+                        .0 as u32;
+
+                    (variant, Enum::int_ty_from_variant_count(variants.len() as u32))
+
+                }
+                _ => unreachable!()
+            };
+            let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
+            ir.build_int(variant as u64, ty)
+
+        }
         Expr::Record { span, names, values } => todo!(),
-        Expr::Nested(_, _) => todo!(),
+        Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
         Expr::Unit(_) => Ref::UNIT,
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
                 resolve::Ident::Invalid => unreachable!(),
-                resolve::Ident::Var(var_id) => return Res { r: ctx.var_refs[var_id.idx()], is_ptr: true }
+                resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()])
             }
         }
         Expr::Hole(_) => todo!(),
         Expr::Array(_, _) => todo!(),
         Expr::Tuple(_, _) => todo!(),
-        Expr::If { start, cond, then } => todo!(),
-        Expr::IfElse { start, cond, then, else_ } => todo!(),
+        &Expr::If { cond, then, .. } => {
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let then_block = ir.create_block();
+            let after_block = ir.create_block();
+            ir.build_branch(cond, then_block, after_block);
+            
+            ir.begin_block(then_block);
+            let mut then_noreturn = false;
+            gen_expr(ir, then, ctx, &mut then_noreturn);
+            if !then_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(after_block);
+            Ref::UNIT
+        }
+        &Expr::IfElse { cond, then, else_, .. } => {
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            
+            let then_block = ir.create_block();
+            let else_block = ir.create_block();
+            let after_block = ir.create_block();
+
+            ir.build_branch(cond, then_block, else_block);
+            
+            ir.begin_block(then_block);
+            let mut then_noreturn = false;
+            let then_val = val_expr(ir, then, ctx, &mut then_noreturn);
+            let then_exit = ir.current_block();
+
+            if !then_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(else_block);
+            let mut else_noreturn = false;
+            let else_val = val_expr(ir, else_, ctx, &mut else_noreturn);
+            let else_exit = ir.current_block();
+
+            if !else_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(after_block);
+            
+            if then_noreturn && else_noreturn {
+                *noreturn = true;
+                Ref::UNDEF
+            } else if then_noreturn {
+                else_val
+            } else if else_noreturn {
+                then_val
+            } else {
+                let ty = ctx[expr];
+                ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
+            }
+        }
         Expr::Match { span: _, val, extra_branches, branch_count } => todo!(),
-        Expr::While { start, cond, body } => todo!(),
+        &Expr::While { cond, body, .. } => {
+            let cond_block = ir.create_block();
+            let body_block = ir.create_block();
+            let after_block = ir.create_block();
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            
+            ir.build_goto(cond_block);
+            
+            ir.begin_block(cond_block);
+            ir.build_branch(cond, body_block, after_block);
+            
+            ir.begin_block(body_block);
+            let mut body_noreturn = false;
+            gen_expr(ir, body, ctx, &mut body_noreturn);
+            if !body_noreturn {
+                ir.build_goto(cond_block);
+            }
+            ir.begin_block(after_block);
+
+            Ref::UNIT
+        }
         Expr::FunctionCall(call_id) => {
             match &ctx.symbols.calls[call_id.idx()].unwrap() {
                 resolve::ResolvedCall::Function { func_id, generics } => {
@@ -350,7 +475,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     for arg in &ctx.ast[call.args] {
                         let arg_val = val_expr(ir, *arg, ctx, noreturn);
                         if *noreturn {
-                            return Res { r: Ref::UNDEF, is_ptr: false }
+                            return Res::Val(Ref::UNDEF)
                         }
                         args.push(arg_val);
                     }
@@ -372,16 +497,155 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 resolve::ResolvedCall::Invalid => todo!(),
             }
         }
-        Expr::UnOp(_, _, _) => todo!(),
-        Expr::BinOp(_, _, _) => todo!(),
+        &Expr::UnOp(_, op, val) => {
+            match op {
+                UnOp::Neg => {
+                    let ty = ctx[val];
+                    let val = val_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    ir.build_neg(val, ty)
+                }
+                UnOp::Not => {
+                    let ty = ctx[val];
+                    let val = val_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    ir.build_not(val, ty)
+                }
+                UnOp::Ref => {
+                    let TypeInfo::Pointer(ty) = ir.types.get(ctx[expr]) else { unreachable!() };
+                    let val = gen_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    match val {
+                        Res::Val(r) => {
+                            let temp = ir.build_decl(ty);
+                            ir.build_store(temp, r);
+                            temp
+                        }
+                        Res::Var(r) => r,
+                        Res::Hole => unreachable!(),
+                    }
+                }
+                UnOp::Deref => {
+                    let r = val_expr(ir, val, ctx, noreturn);
+                    return Res::Var(r);
+                }
+            }
+        }
+        &Expr::BinOp(op, l, r) => {
+            if let Operator::Assignment(assign) = op {
+                let rval = val_expr(ir, r, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                // TODO: special assign lval expr here? Doesn't support patterns but also not exprs
+                let lval = gen_expr(ir, l, ctx, noreturn);
+                let var = match lval {
+                    Res::Val(_) => unreachable!(),
+                    Res::Var(v) => v,
+                    Res::Hole => {
+                        return Res::Val(Ref::UNIT);
+                    }
+                };
+                let op = match assign {
+                    AssignType::Assign => {
+                        ir.build_store(var, rval);
+                        return Res::Val(Ref::UNIT);
+                    }
+                    AssignType::AddAssign => BinOp::Add,
+                    AssignType::SubAssign => BinOp::Sub,
+                    AssignType::MulAssign => BinOp::Mul,
+                    AssignType::DivAssign => BinOp::Div,
+                    AssignType::ModAssign => BinOp::Mod,
+                };
+                let ty = ctx[r];
+                let loaded = ir.build_load(var, ty);
+                let val = ir.build_bin_op(op, loaded, rval, ty);
+                ir.build_store(var, val);
+                Ref::UNIT
+            } else {
+                let l = val_expr(ir, l, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let r = val_expr(ir, r, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let op = match op {
+                    Operator::Add => BinOp::Add,
+                    Operator::Sub => BinOp::Sub,
+                    Operator::Mul => BinOp::Mul,
+                    Operator::Div => BinOp::Div,
+                    Operator::Mod => BinOp::Mod,
+                    
+                    Operator::Or => BinOp::Or,
+                    Operator::And => BinOp::And,
+                    
+                    Operator::Equals => BinOp::Eq,
+                    Operator::NotEquals => BinOp::NE,
+                    
+                    Operator::LT => BinOp::LT,
+                    Operator::GT => BinOp::GT,
+                    Operator::LE => BinOp::LE,
+                    Operator::GE => BinOp::GE,
+                    Operator::Range | Operator::RangeExclusive => {
+                        todo!("range expressions")
+                    }
+                    
+                    Operator::Assignment(_) => unreachable!(),
+                };
+
+                let ty = ctx[expr];
+                ir.build_bin_op(op, l, r, ty)
+            }
+        }
         Expr::MemberAccess { left, name } => todo!(),
-        Expr::Index { expr, idx, end } => todo!(),
-        Expr::TupleIdx { expr, idx, end } => todo!(),
-        Expr::Cast(_, _, _) => todo!(),
-        Expr::Root(_) => todo!(),
-        Expr::Asm { span, asm_str_span, args } => todo!(),
+        &Expr::Index { expr: val, idx, .. } => {
+            let res = gen_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let var = res.var(ir, ctx[val]);
+
+            let member = val_expr(ir, idx, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            return Res::Var(ir.build_member(var, member, ctx[expr]));
+        }
+        &Expr::TupleIdx { expr: val, idx, .. } => {
+            let res = gen_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+
+            let member_ty = ctx[expr];
+            match res {
+                Res::Val(r) => ir.build_value(r, idx, member_ty),
+                Res::Var(r) => {
+                    let pointer_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+                    return Res::Var(ir.build_member_int(r, idx, pointer_ty))
+                }
+                Res::Hole => unreachable!(),
+            }
+
+        }
+        Expr::Cast(_, _, val) => {
+            let val = val_expr(ir, *val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            // let from_ty = ctx[val];
+            let target_ty = ctx[expr];
+
+            // TODO: handle cast here instead of in the backend?
+            ir.build_cast(val, target_ty)
+
+        }
+        Expr::Root(_) => unreachable!(),
+        Expr::Asm { .. } => todo!("inline asm codegen"),
     };
-    Res { r, is_ptr: false }
+    Res::Val(r)
+}
+
+fn string_literal(span: TSpan, src: &str) -> String {
+    // PERF a little suboptimal
+    src[span.start as usize + 1 .. span.end as usize]
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace("\\0", "\0")
+        .replace("\\\"", "\"")
 }
 
 fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, bool_ty: TypeTableIndex, ctx: &mut Ctx) -> Ref {

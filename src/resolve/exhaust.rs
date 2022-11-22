@@ -7,6 +7,7 @@ use super::types::{SymbolTable, Type, ResolvedTypeDef};
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
 #[derive(Clone, Debug, PartialEq, Eq)]
+// FIXME: exhaustion of tuples is wrong
 pub enum Exhaustion {
     None, // no values exhausted
     Full, // all values exhausted

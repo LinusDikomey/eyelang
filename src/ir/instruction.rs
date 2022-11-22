@@ -1,16 +1,16 @@
 use std::fmt;
 
 use color_format::cwrite;
-use crate::{resolve::{type_info::TypeTableIndex}, ast::{TypeId, FunctionId, TraitId, GlobalId}};
+use crate::ast::{TypeId, FunctionId, TraitId, GlobalId};
 
-use super::{Ref, BlockIndex};
+use super::{Ref, BlockIndex, types::TypeRef};
 
 
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
-    pub ty: TypeTableIndex,
+    pub ty: TypeRef,
     pub used: bool
 }
 
@@ -135,7 +135,7 @@ pub union Data {
     pub int: u64,
     pub extra: u32,
     pub extra_len: (u32, u32),
-    pub ty: TypeTableIndex,
+    pub ty: TypeRef,
     pub float: f64,
     pub un_op: Ref,
     pub bin_op: (Ref, Ref),

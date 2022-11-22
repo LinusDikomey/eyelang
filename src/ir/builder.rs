@@ -4,7 +4,7 @@ use crate::{
     types::Primitive, resolve::type_info::{TypeTable, TypeTableIndex, TypeInfo},
 };
 
-use super::{RefVal, FunctionId};
+use super::{RefVal, FunctionId, types::{IrTypes, TypeRef, IrType}};
 
 pub enum BinOp {
     Add,
@@ -34,6 +34,7 @@ pub struct IrBuilder {
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
     pub types: TypeTable,
+    ir_types: IrTypes,
 }
 impl IrBuilder {
     pub fn new(types: TypeTable) -> Self {
@@ -41,7 +42,7 @@ impl IrBuilder {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
                 tag: Tag::BlockBegin,
-                ty: TypeTableIndex::NONE,
+                ty: TypeRef::NONE,
                 used: false
             }],
             emit: true,
@@ -50,6 +51,7 @@ impl IrBuilder {
             blocks: vec![0],
             extra: Vec::new(),
             types,
+            ir_types: IrTypes::new()
         }
     }
 
@@ -75,6 +77,21 @@ impl IrBuilder {
     fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
         debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
         debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
+        let ty = self.ir_types.add_info(self.types[ty], &self.types);
+        self.add_inst(Instruction {
+            data,
+            tag,
+            ty,
+            used: true
+        })
+    }
+
+    #[must_use = "Use add_unused if the result of this instruction isn't needed."]
+    #[cfg_attr(debug_assertions, track_caller)]
+    fn add_ir_typed(&mut self, data: Data, tag: Tag, ty: TypeRef) -> Ref {
+        debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
+        debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
+
         self.add_inst(Instruction {
             data,
             tag,
@@ -115,7 +132,7 @@ impl IrBuilder {
         self.add_inst(Instruction {
             data,
             tag,
-            ty: TypeTableIndex::NONE,
+            ty: TypeRef::NONE,
             used: false
         });
     }
@@ -154,7 +171,7 @@ impl IrBuilder {
             self.add_inst(Instruction {
                 data: Data { block: idx },
                 tag: Tag::BlockBegin,
-                ty: TypeTableIndex::NONE,
+                ty: TypeRef::NONE,
                 used: false
             });
         }
@@ -174,7 +191,7 @@ impl IrBuilder {
             inst: self.inst,
             extra: self.extra,
             blocks: self.blocks,
-            types: self.types,
+            types: self.ir_types,
         }
     }
 
@@ -188,10 +205,12 @@ impl IrBuilder {
     /// -------------------- instruction builders --------------------
     /// --------------------------------------------------------------
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn build_ret(&mut self, val: Ref) {
         self.add_unused_untyped(Tag::Ret, Data { un_op: val });
     }
 
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn build_ret_undef(&mut self) {
         self.add_unused_untyped(Tag::RetUndef, Data { none: () });
     }
@@ -250,9 +269,13 @@ impl IrBuilder {
     }*/
 
     pub fn build_decl(&mut self, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
-        let ty = ty.into().into_idx(&mut self.types);
-        let ptr_ty = self.types.add(TypeInfo::Pointer(ty));
-        self.add(Data { ty }, Tag::Decl, ptr_ty)
+        let ty_info = match ty.into() {
+            TypeTableIdxOrInfo::Idx(idx) => self.types.get(idx),
+            TypeTableIdxOrInfo::Info(info) => info,
+        };
+        let ty = self.ir_types.add_info(ty_info, &self.types);
+        let ptr_ty = self.ir_types.add(IrType::Ptr(ty));
+        self.add_ir_typed(Data { ty }, Tag::Decl, ptr_ty)
     }
 
     pub fn build_load(&mut self, var: Ref, ty: TypeTableIndex) -> Ref {

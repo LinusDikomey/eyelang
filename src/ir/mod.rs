@@ -1,15 +1,16 @@
 use std::fmt;
 use color_format::*;
-use crate::{resolve::{type_info::{FinalTypeTable, TypeTable}, types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}, help::id};
-use builder::IrBuilder;
+use crate::{resolve::{types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}, help::id};
 
 pub mod builder;
 pub mod eval;
-
 pub mod display;
+pub mod types;
 
 mod instruction;
 pub use instruction::{Instruction, Tag, Data};
+
+use self::types::IrTypes;
 
 id!(u64, 8: FunctionId);
 
@@ -23,7 +24,7 @@ pub struct Function {
 pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
-    pub types: TypeTable,
+    pub types: IrTypes,
     pub blocks: Vec<u32>,
 }
 

@@ -29,7 +29,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
         let module_id = ModuleId::new(i as _);
-        let module_ctx = ModuleCtx { src: ast.src(module_id).0, id: module_id, root: main_module };
+        let module_ctx = ModuleCtx { src: ast.src(module_id).0, id: module_id, root: module.root_module };
         let names = scope_defs(&ast[module.definitions]);
         Scope::root(names, module_ctx)
     }).collect();   
@@ -135,7 +135,7 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
 fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors) {
     match def {
         &Definition::Function(id) => {
-            symbols.place_func(id, func_signature(name.to_owned(), &ast[id], scope, symbols, errors));
+            symbols.place_func(id, func_signature(name.to_owned(), 0, &ast[id], scope, symbols, errors));
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
@@ -152,7 +152,7 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
     }
 }
 
-fn func_signature(name: String, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
+fn func_signature(name: String, type_method_generic_count: u8, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
 -> FunctionHeader {
     let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
     let generic_defs = generics
@@ -170,6 +170,7 @@ fn func_signature(name: String, func: &ast::Function, scope: &Scope, symbols: &S
 
     FunctionHeader {
         name,
+        type_method_generic_count,
         generics,
         params,
         return_type,
@@ -194,7 +195,7 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast:
     }).collect();
 
     let symbols = def.methods.iter().map(|(name, id)| {
-        symbols.place_func(*id, func_signature(name.to_owned(), &ast[*id], &scope, symbols, errors));
+        symbols.place_func(*id, func_signature(name.to_owned(), def.generic_count(), &ast[*id], &scope, symbols, errors));
         (name.clone(), *id)
     }).collect();
 
@@ -320,7 +321,7 @@ fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, ctx: 
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
     let generics = ctx.types.add_multiple(
-        (0..signature.generics.len())
+        (0..signature.generic_count())
             .map(|i| TypeInfo::Generic(i as u8))
     );
 

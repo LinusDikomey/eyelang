@@ -2,7 +2,7 @@ use core::fmt;
 use color_format::cwriteln;
 
 use crate::{
-    types::{Primitive, Layout},
+    types::{Primitive, Layout, IntType},
     dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId}
 };
 
@@ -22,20 +22,20 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn layout(&self, ctx: &SymbolTable, generics: &[Type]) -> Layout {
+    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generic: impl Fn(u8) -> Layout + Copy) -> Layout {
         match self {
             Type::Prim(p) => p.layout(),
-            Type::Id(key, generics) => ctx.get_type(*key).layout(ctx, generics),
+            Type::Id(key, generics) => todo!(), /*ctx(*key).layout(ctx, generic*/ /*|i| generics[i as usize].layout(ctx, generic)),*/ // TODO: generics are used wrongly here
             Type::Pointer(_) => Layout::PTR,
             Type::Array(b) => {
                 let (ty, size) = &**b;
-                ty.layout(ctx, generics).mul_size(*size as u64)
+                ty.layout(ctx, generic).mul_size(*size as u64)
             }
             Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
-                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
+                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generic)))
             }
-            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
+            Type::Generic(idx) => generic(*idx),
             Type::Invalid => Layout::ZERO,
         }
     }
@@ -277,13 +277,13 @@ impl ResolvedTypeDef {
             Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
-    pub fn layout(&self, ctx: &SymbolTable, generics: &[Type]) -> Layout {
+    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generic: impl Fn(u8) -> Layout + Copy) -> Layout {
         match self {
             Self::Struct(struct_) => {
                 let mut alignment = 1;
                 let size = struct_.members.iter()
                     .map(|(_, ty)| {
-                        let layout = ty.layout(ctx, generics);
+                        let layout = ty.layout(ctx, generic);
                         alignment = alignment.max(layout.alignment);
                         layout.size
                     })
@@ -311,6 +311,7 @@ impl ResolvedTypeDef {
 #[derive(Debug, Clone)]
 pub struct FunctionHeader {
     pub name: String,
+    pub type_method_generic_count: u8,
     pub generics: Vec<String>,
     pub params: Vec<(String, Type)>,
     pub varargs: bool,
@@ -320,7 +321,7 @@ pub struct FunctionHeader {
 }
 impl FunctionHeader {
     pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
+        self.type_method_generic_count + self.generics.len() as u8
     }
 }
 
@@ -382,12 +383,20 @@ impl Enum {
     pub fn _layout(&self) -> Layout {
         Self::_layout_from_variant_count(self.variants.len())
     }
-    pub fn _bit_size(&self) -> u64 {
-        (self.variants.len() as u64 - 1).ilog2() as u64 + 1
+    pub fn int_ty(&self) -> IntType {
+        Self::int_ty_from_variant_count(self.variants.len() as u32)
     }
-    pub fn _size(&self) -> u64 {
-        self._bit_size().div_ceil(8)
+
+    pub fn int_ty_from_variant_count(variant_count: u32) -> IntType {
+        match ((variant_count - 1).ilog2() as u64 + 1).div_ceil(8) {
+            1 => IntType::U8,
+            2 => IntType::U16,
+            3 | 4 => IntType::U32,
+            5..=8 => IntType::U64,
+            _ => unreachable!()
+        }
     }
+    
 }
 impl fmt::Display for Enum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

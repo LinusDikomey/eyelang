@@ -109,8 +109,7 @@ fn cross_resolve_local_by_name(
     errors: &mut Errors
 ) -> DefId {
     let Some(def) = defs.get(name) else {
-        errors.emit_span(Error::UnknownIdent, name_span.in_mod(parent.module.id));
-        return DefId::Invalid;
+        return parent.resolve(name, name_span.in_mod(parent.module.id), errors);
     };
     cross_resolve_local(def, name, defs, scope_defs, parent, ast, errors)
 }
@@ -164,11 +163,6 @@ fn cross_resolve_local(
                         }
 
                         if let Some((last_name, name_span)) = last {
-                            if last_name == name {
-                                errors.emit_span(Error::RecursiveDefinition, name_span.in_mod(parent.module.id));
-                                *scope_defs.get_mut(name).unwrap() = DefId::Invalid;
-                                return DefId::Invalid;
-                            }
                             if let Some(module) = current_module {
                                 parent.module_scope(module)
                                     .resolve(last_name, name_span.in_mod(parent.module.id), errors)

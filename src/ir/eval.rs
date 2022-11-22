@@ -50,6 +50,7 @@ impl<'a> Drop for StackFrame<'a> {
 
 pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
+/*
 pub fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Error> {
     let mut stack = StackMem::new();
     unsafe {
@@ -86,7 +87,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
             let l = get_ref(&values, $inst.data.bin_op.0);
             let r = get_ref(&values, $inst.data.bin_op.1);
 
-            match &ir.types[$inst.ty] {
+            match &ir.ir_types[$inst.ty] {
                 TypeInfo::Primitive(p) if p.is_int() => {
                     let ConstVal::Int(l_ty, l_val) = l else { panic!() };
                     let ConstVal::Int(r_ty, r_val) = r else { panic!() };
@@ -373,3 +374,5 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
     };
     Ok(val)
 }
+
+*/

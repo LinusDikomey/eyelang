@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir, resolve::{types::{ResolvedTypeDef, Type}, type_info::{TypeTableIndex, TypeInfo}, const_val::ConstVal}};
+use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef}}, resolve::{types::ResolvedTypeDef, const_val::ConstVal, self}};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
 pub mod output;
@@ -75,7 +75,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             ResolvedTypeDef::Struct(def) => {
                     if def.generic_count != 0 { continue }
                     let mut members = def.members.iter()
-                        .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
+                        .map(|(_name, ty)| llvm_resolved_ty(ctx, ty, module, &mut types))
                         .collect::<Vec<_>>();
                     LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
             }
@@ -91,9 +91,9 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
 
     let funcs = module.funcs.iter()
         .map(|func| {
-            let ret = llvm_ty(ctx, module, &mut types, &func.header.return_type);
+            let ret = llvm_resolved_ty(ctx, &func.header.return_type, module, &mut types);
             let mut params = func.header.params.iter()
-                .map(|(_name, ty)| llvm_ty(ctx, module, &mut types, ty))
+                .map(|(_name, ty)| llvm_resolved_ty(ctx, ty, module, &mut types))
                 .collect::<Vec<_>>();
             
             let varargs = llvm_bool(func.header.varargs);
@@ -110,7 +110,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     let builder = LLVMCreateBuilderInContext(ctx);
     
     let globals = module.globals.iter().map(|(name, ty, val)| {
-        add_global(ctx, llvm_module, llvm_ty(ctx, module, &mut types, ty), name, val)
+        add_global(ctx, llvm_module, llvm_resolved_ty(ctx, ty, module, &mut types), name, val)
             .unwrap_or(std::ptr::null_mut())
     }).collect::<Vec<_>>();
 
@@ -160,7 +160,6 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
 ) {
-    /*
     crate::log!("-------------------- Building LLVM IR for func {}", func.header.name);
     let blocks = ir.blocks.iter()
         .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
@@ -168,16 +167,16 @@ unsafe fn build_func(
 
     let mut instructions = Vec::new();
 
-    let get_ref_and_type_ptr = |instructions: &[LLVMValueRef], r: ir::Ref| -> (LLVMValueRef, TypeInfo) {
+    let get_ref_and_type_ptr = |instructions: &[LLVMValueRef], r: ir::Ref| -> (LLVMValueRef, IrType) {
         if let Some(val) = r.into_val() {
             match val {
                 ir::RefVal::True | ir::RefVal::False => (
                     LLVMConstInt(LLVMInt1TypeInContext(ctx), (val == ir::RefVal::True) as _, FALSE),
-                    TypeInfo::Primitive(Primitive::Bool)
+                    IrType::Primitive(Primitive::Bool)
                 ),
                 ir::RefVal::Unit => (
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx)),
-                    TypeInfo::Primitive(Primitive::Unit)
+                    IrType::Primitive(Primitive::Unit)
                 ),
                 ir::RefVal::Undef => panic!("Tried to use an undefined IR value. This is an internal compiler error."),
             }
@@ -189,7 +188,7 @@ unsafe fn build_func(
             
             let r = instructions[i];
             debug_assert!(!r.is_null());
-            let ty = ir.types.get(ir.inst[i].ty).clone();
+            let ty = ir.types[ir.inst[i].ty];
             (r, ty)
         }
     };
@@ -214,9 +213,9 @@ unsafe fn build_func(
     };
 
 
-    let table_ty = |ty: TypeTableIndex, types: &mut [TypeInstance]| {
-        let info = ir.types.get(ty);
-        llvm_ty_info(ctx, module, types, info)
+    let table_ty = |ty: TypeRef, types: &mut [TypeInstance]| {
+        let info = ir.types[ty];
+        llvm_ty(ctx, module, &ir.types, types, info)
     };
     #[derive(Clone, Copy, Debug)]
     enum Numeric { Float(u32), Int(bool, u32) }
@@ -233,13 +232,13 @@ unsafe fn build_func(
             panic!("Invalid type for int/float operation: {p}")
         }
     }
-    let info_to_num = |info: TypeInfo| {
+    let info_to_num = |info: IrType| {
         match info {
-            TypeInfo::Primitive(p) => prim_to_num(p),
+            IrType::Primitive(p) => prim_to_num(p),
             t => panic!("Invalid type for int/float operation: {t:?}")
         }
     };
-    let float_or_int = |ty: TypeTableIndex| info_to_num(ir.types.get(ty));
+    let float_or_int = |ty: TypeRef| info_to_num(ir.types[ty]);
 
     for (i, inst) in ir.inst.iter().enumerate() {
         if crate::LOG.load(Ordering::Relaxed) {
@@ -254,29 +253,29 @@ unsafe fn build_func(
             }
             ir::Tag::Ret => {
                 let (r, ty) = get_ref_and_type(&instructions, data.un_op);
-                if is_void_type_info(ty) {
+                if is_void_type(ty) {
                     LLVMBuildRetVoid(builder)
                 } else {
                     LLVMBuildRet(builder, r)
                 }
             }
             ir::Tag::RetUndef => {
-                if is_void_type(&func.header.return_type) {
+                if is_resolved_void_type(&func.header.return_type) {
                     LLVMBuildRetVoid(builder)
                 } else {
-                    let val = LLVMGetUndef(llvm_ty(ctx, module, types, &func.header.return_type));
+                    let val = LLVMGetUndef(llvm_resolved_ty(ctx, &func.header.return_type, module, types));
                     LLVMBuildRet(builder, val)
                 }
             }
             ir::Tag::Param => {
-                let llvm_ty = llvm_ty(ctx, module, types, &func.header.params[data.int32 as usize].1);
+                let llvm_ty = llvm_resolved_ty(ctx, &func.header.params[data.int32 as usize].1, module, types);
                 let param_var = LLVMBuildAlloca(builder, llvm_ty, NONE);
                 let val = LLVMGetParam(llvm_func, data.int32);
                 LLVMBuildStore(builder, val, param_var);
                 param_var
             }
             ir::Tag::Uninit => {
-                let llvm_ty = llvm_ty_info(ctx, module, types, ir.types[inst.ty]);
+                let llvm_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[inst.ty]);
                 LLVMGetUndef(llvm_ty)
             }
             ir::Tag::Int => LLVMConstInt(table_ty(ty, types), data.int, FALSE),
@@ -326,7 +325,7 @@ unsafe fn build_func(
             | ir::Tag::Module
             => ptr::null_mut(), // should never be used in runtime code
             ir::Tag::Decl => {
-                if ir.types[data.ty].is_zero_sized(&module.types, &[]) {
+                if ir.types[data.ty].layout(&ir.types, module).size == 0 {
                     ptr::null_mut()
                 } else {
                     LLVMBuildAlloca(builder, table_ty(data.ty, types), NONE)
@@ -334,13 +333,13 @@ unsafe fn build_func(
             }
             ir::Tag::Load => {
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
-                let Type::Pointer(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty:?}"); };
-                let pointee_ty = llvm_ty(ctx, module, types, &inner);
+                let IrType::Ptr(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty:?}"); };
+                let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[inner]);
                 LLVMBuildLoad2(builder, pointee_ty, val, NONE)
             }
             ir::Tag::Store => {
                 let (val, ty) = get_ref_and_type(&instructions, data.bin_op.1);
-                if ty.is_zero_sized(&module.types, &[]) {
+                if ty.layout(&ir.types, module).size == 0 {
                     ptr::null_mut()
                 } else {
                     let ptr = get_ref(&instructions, data.bin_op.0);
@@ -418,13 +417,13 @@ unsafe fn build_func(
                 let r = get_ref(&instructions, data.bin_op.1);
                 
                 let is_enum_ty = || {
-                    if let Type::Id(id, _) = ty {
+                    if let IrType::Id(id, _) = ty {
                         matches!(module.types[id.idx()].1, ResolvedTypeDef::Enum(_))
                     } else { false }
                 };
 
-                if matches!(ty, Type::Enum(_) | Type::Prim(Primitive::Bool)) 
-                || is_enum_ty() || info_to_num(&ty).int() {
+                if matches!(ty, IrType::Primitive(Primitive::Bool)) 
+                || is_enum_ty() || info_to_num(ty).int() {
                     LLVMBuildICmp(builder, if tag == ir::Tag::Eq {LLVMIntEQ} else {LLVMIntNE}, l, r, NONE)
                 } else {
                     LLVMBuildFCmp(builder, if tag == ir::Tag::Eq {LLVMRealUEQ} else {LLVMRealUNE}, l, r, NONE)
@@ -435,7 +434,7 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                match info_to_num(&ty) {
+                match info_to_num(ty) {
                     Numeric::Float(_) => LLVMBuildFCmp(builder, LLVMRealOLT, l, r, NONE),
                     Numeric::Int(s, _) => LLVMBuildICmp(builder, if s { LLVMIntSLT } else { LLVMIntULT }, l, r, NONE),
                 }
@@ -444,7 +443,7 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                match info_to_num(&ty) {
+                match info_to_num(ty) {
                     Numeric::Float(_) => LLVMBuildFCmp(builder, LLVMRealOGT, l, r, NONE),
                     Numeric::Int(s, _) => LLVMBuildICmp(builder, if s { LLVMIntSGT } else { LLVMIntUGT }, l, r, NONE),
                 }
@@ -453,7 +452,7 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                match info_to_num(&ty) {
+                match info_to_num(ty) {
                     Numeric::Float(_) => LLVMBuildFCmp(builder, LLVMRealOLE, l, r, NONE),
                     Numeric::Int(s, _) => LLVMBuildICmp(builder, if s { LLVMIntSLE } else { LLVMIntULE }, l, r, NONE),
                 }
@@ -462,7 +461,7 @@ unsafe fn build_func(
                 let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let r = get_ref(&instructions, data.bin_op.1);
                 
-                match info_to_num(&ty) {
+                match info_to_num(ty) {
                     Numeric::Float(_) => LLVMBuildFCmp(builder, LLVMRealOGT, l, r, NONE),
                     Numeric::Int(s, _) => LLVMBuildICmp(builder, if s { LLVMIntSGE } else { LLVMIntUGE }, l, r, NONE),
                 }
@@ -470,12 +469,12 @@ unsafe fn build_func(
             ir::Tag::Member => {
                 let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
                 let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
-                let Type::Pointer(pointee) = origin_ty else {
+                let IrType::Ptr(pointee) = origin_ty else {
                     panic!("Tried to get member of non-pointer type {origin_ty:?}")
                 };
-                let int_ty = llvm_ty(ctx, module, types, &idx_ty);
+                let int_ty = llvm_ty(ctx, module, &ir.types, types, idx_ty);
                 let mut elems = [LLVMConstInt(int_ty, 0, FALSE), idx];
-                let pointee_ty = llvm_ty(ctx, module, types, &pointee);
+                let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[pointee]);
                 LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
             }
             ir::Tag::Value => {
@@ -488,20 +487,20 @@ unsafe fn build_func(
                 // IR should probably just have different types of casts like in LLVM. 
                 // (reinterpret, trunc, extend, float to int, int to float, etc.)
                 let (val, origin) = get_ref_and_type(&instructions, data.un_op);
-                let target = ir.types.get(ty);
+                let target = ir.types[ty];
                 match target {
                     // pointer to int
-                    Type::Prim(Primitive::U64) if matches!(origin, Type::Pointer(_)) => {
-                        let llvm_target = llvm_ty(ctx, module, types, target);
+                    IrType::Primitive(Primitive::U64) if matches!(origin, IrType::Ptr(_)) => {
+                        let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
                         LLVMBuildPtrToInt(builder, val, llvm_target, NONE)
                     }
-                    Type::Prim(target) => {
+                    IrType::Primitive(target) => {
                         //TODO: enum to int casts
                         match origin {
-                            Type::Prim(origin) => {
+                            IrType::Primitive(origin) => {
                                 let origin = prim_to_num(origin);
-                                let target_num = prim_to_num(*target);
-                                let llvm_target = llvm_primitive_ty(ctx, *target);
+                                let target_num = prim_to_num(target);
+                                let llvm_target = llvm_primitive_ty(ctx, target);
                                 match (origin, target_num) {
                                     (Numeric::Float(a), Numeric::Float(b)) => match a.cmp(&b) {
                                         std::cmp::Ordering::Less 
@@ -536,22 +535,16 @@ unsafe fn build_func(
                             _ => panic!("Invalid cast to primitive")
                         }
                     }
-                    Type::Id(_, _) | Type::Array(_) | Type::Tuple(_) => panic!("Invalid cast"),
-                    Type::Pointer(_) => {
-                        let llvm_target = llvm_ty(ctx, module, types, target);
+                    IrType::Id(_, _) | IrType::Array(_, _) | IrType::Tuple(_) => panic!("Invalid cast"),
+                    IrType::Ptr(_) => {
+                        let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
                         match origin {
-                            Type::Pointer(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
+                            IrType::Ptr(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
                             // int to ptr
-                            Type::Prim(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
+                            IrType::Primitive(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
                             t => panic!("Can't cast from non-pointer type {t:?} to pointer")
                         }
                     }
-                    Type::Enum(_) => {
-                        //TODO: int to enum casts
-                        panic!("Enum casts unsupported")
-                    }
-                    Type::Generic(_) => panic!("Generic casts are invalid for now"),
-                    Type::Invalid => unreachable!()
                 }
             }
             ir::Tag::Goto => {
@@ -570,7 +563,7 @@ unsafe fn build_func(
                 LLVMBuildCondBr(builder, get_ref(&instructions, data.ref_int.0), blocks[then as usize], blocks[else_ as usize])
             }
             ir::Tag::Phi => {
-                if *ir.types.get(ty) == Type::Prim(Primitive::Unit) {
+                if let IrType::Primitive(Primitive::Unit) = ir.types[ty] {
                     LLVMGetUndef(LLVMVoidTypeInContext(ctx))
                 } else {
                     let phi = LLVMBuildPhi(builder, table_ty(ty, types), NONE);
@@ -600,7 +593,7 @@ unsafe fn build_func(
                     arg_bytes.copy_from_slice(&ir.extra[expr_base + 4*i .. expr_base + 4*(i+1) ]);
                     let (val, ty) = get_ref_and_type(&instructions, ir::Ref::from_bytes(arg_bytes));
                     asm_values.push(val);
-                    asm_types.push(llvm_ty(ctx, module, types, &ty));
+                    asm_types.push(llvm_ty(ctx, module, &ir.types, types, ty));
                 }
 
                 inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &asm_values, &mut asm_types)
@@ -616,7 +609,6 @@ unsafe fn build_func(
         }
         instructions.push(val);
     }
-    */
 }
 
 unsafe fn inline_asm(
@@ -663,12 +655,26 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     }
 }
 
-unsafe fn llvm_ty(ctx: LLVMContextRef, module: &ir::Module, types: &mut [TypeInstance], ty: &Type) -> LLVMTypeRef {
-    llvm_ty_recursive(ctx, module, types, ty, false, &[])
+unsafe fn llvm_resolved_ty(ctx: LLVMContextRef, ty: &resolve::types::Type, module: &ir::Module, type_instances: &mut [TypeInstance]) -> LLVMTypeRef {
+    match ty {
+        resolve::types::Type::Prim(p) => llvm_primitive_ty(ctx, *p),
+        resolve::types::Type::Id(id, generics) => {
+            todo!()
+        }
+        resolve::types::Type::Pointer(_) => LLVMPointerTypeInContext(ctx, 0),
+        resolve::types::Type::Array(inner) => {
+            let (inner, size) = &**inner;
+            LLVMArrayType(llvm_resolved_ty(ctx, inner, module, type_instances), *size)
+        }
+        resolve::types::Type::Enum(variants) => int_from_variant_count(ctx, variants.len()),
+        resolve::types::Type::Tuple(_) => todo!(),
+        resolve::types::Type::Generic(_) => todo!(),
+        resolve::types::Type::Invalid => unreachable!(),
+    }
 }
 
-unsafe fn llvm_ty_info(ctx: LLVMContextRef, module: &ir::Module, types: &mut [TypeInstance], ty: TypeInfo) -> LLVMTypeRef {
-    todo!()
+unsafe fn llvm_ty(ctx: LLVMContextRef, module: &ir::Module, types: &IrTypes, type_instances: &mut [TypeInstance], ty: IrType) -> LLVMTypeRef {
+    llvm_ty_recursive(ctx, module, types, type_instances, ty, false, &[])
 }
 
 unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeRef {
@@ -683,20 +689,24 @@ unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeR
 unsafe fn llvm_ty_recursive(
     ctx: LLVMContextRef,
     module: &ir::Module,
-    types: &mut [TypeInstance],
-    ty: &Type,
+    types: &IrTypes,
+    type_instances: &mut [TypeInstance],
+    ty: IrType,
     pointee: bool,
-    generics: &[Type],
+    generics: &[IrType],
 ) -> LLVMTypeRef {
     match ty {
-        Type::Prim(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
-        Type::Prim(p) => llvm_primitive_ty(ctx, *p),
-        Type::Id(id, generics) => match &mut types[id.idx()] {
+        IrType::Primitive(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
+        IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
+        IrType::Id(id, generics) => match &mut type_instances[id.idx()] {
             TypeInstance::Simple(simple) => {
                 debug_assert_eq!(generics.len(), 0);
                 *simple
             }
             TypeInstance::Generic(map) => {
+                let generics = &types[generics];
+                todo!("generic type instances") // problem: hashing IrTypes.
+                /*
                 if let Some(llvm_ty) = map.get(generics) { return *llvm_ty };
                 let mut name = format!("t{}[", id.idx());
                 
@@ -714,7 +724,7 @@ unsafe fn llvm_ty_recursive(
                         let llvm_struct = LLVMStructCreateNamed(ctx, name.as_ptr());
                         map.insert(generics.clone(), llvm_struct);
                         let mut members = def.members.iter()
-                            .map(|(_, ty)| llvm_ty_recursive(ctx, module, types, ty, false, generics))
+                            .map(|(_, ty)| llvm_ty_recursive(ctx, module, type_instances, ty, false, generics))
                             .collect::<Vec<_>>();
                             LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
                         llvm_struct
@@ -724,44 +734,36 @@ unsafe fn llvm_ty_recursive(
                     }
                     ResolvedTypeDef::NotGenerated { .. } => unreachable!()
                 }
+                */
             }
         }
-        Type::Pointer(inner) => {
-            LLVMPointerType(llvm_ty_recursive(ctx, module, types, inner, true, generics), 0)
+        IrType::Ptr(inner) => {
+            LLVMPointerType(llvm_ty_recursive(ctx, module, types, type_instances, types[inner], true, generics), 0)
         }
-        Type::Array(array) => {
-            let (inner, count) = &**array;
-            let elem_ty = llvm_ty_recursive(ctx, module, types, inner, false, generics);
-            LLVMArrayType(elem_ty, *count)
+        IrType::Array(inner, count) => {
+            let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false, generics);
+            LLVMArrayType(elem_ty, count)
         }
-        Type::Enum(variants) => {
-            int_from_variant_count(ctx, variants.len())
-        }
-        Type::Tuple(elems) => {
+        IrType::Tuple(elems) => {
             let mut elem_tys = elems.iter()
-                .map(|ty| llvm_ty_recursive(ctx, module, types, ty, false, generics))
+                .map(|ty| llvm_ty_recursive(ctx, module, types, type_instances, types[ty], false, generics))
                 .collect::<Vec<_>>();
             LLVMStructTypeInContext(ctx, elem_tys.as_mut_ptr(), elem_tys.len() as u32, FALSE)
-        }
-        &Type::Generic(idx) => llvm_ty(ctx, module, types, &generics[idx as usize]),
-        Type::Invalid => {
-            eprintln!("ERROR: Invalid type reached codegen type");
-            llvm_ty_recursive(ctx, module, types, &Type::Prim(Primitive::Unit), pointee, generics)
         }
     }
 }
 
-fn is_void_type(ty: &Type) -> bool {
-    matches!(ty, Type::Prim(Primitive::Unit | Primitive::Never))
+fn is_resolved_void_type(ty: &resolve::types::Type) -> bool {
+    matches!(ty, resolve::types::Type::Prim(Primitive::Unit | Primitive::Never))
 }
 
-fn is_void_type_info(ty: TypeInfo) -> bool {
-    matches!(ty, TypeInfo::Primitive(Primitive::Unit | Primitive::Never))
+fn is_void_type(ty: IrType) -> bool {
+    matches!(ty, IrType::Primitive(Primitive::Unit | Primitive::Never))
 }
 
 enum TypeInstance {
     Simple(LLVMTypeRef),
-    Generic(DHashMap<Vec<Type>, LLVMTypeRef>),
+    Generic(DHashMap<Vec<IrType>, LLVMTypeRef>),
 }
 
 // returns the constant or None in case of a zero sized type

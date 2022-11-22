@@ -2,19 +2,17 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::{types::{Struct, ResolvedTypeDef}, type_info::{TypeTable, TypeInfo}}};
+use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::{types::{Struct, ResolvedTypeDef, Type}}};
 
 use super::{
-    Type,
     Function,
     Module,
     Instruction,
-    FinalTypeTable,
     instruction::DataVariant,
     Ref,
     Data,
     Tag,
-    FunctionIr,
+    FunctionIr, types::IrTypes,
 };
 
 #[derive(Clone, Copy)]
@@ -202,7 +200,7 @@ impl fmt::Display for TypeDefDisplay<'_> {
 }
 
 impl Instruction {
-    fn display<'a>(&'a self, extra: &'a [u8], types: &'a TypeTable, info: Info<'a>)
+    fn display<'a>(&'a self, extra: &'a [u8], types: &'a IrTypes, info: Info<'a>)
     -> InstructionDisplay<'a> {
         InstructionDisplay { inst: self, extra, types, info }
     }
@@ -210,7 +208,7 @@ impl Instruction {
 pub struct InstructionDisplay<'a> {
     inst: &'a Instruction,
     extra: &'a [u8],
-    types: &'a TypeTable,
+    types: &'a IrTypes,
     info: Info<'a>,
 }
 
@@ -224,16 +222,45 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
                 Tag::Cast => cwrite!(f, "#m!< as >")?,
                 _ => cwrite!(f, " :: ")?
             };
-            display_type(f, types.get(inst.ty), types, self.info)?;
+            display_type(f, types[inst.ty], types, self.info)?;
         }
         Ok(())
     }
 }
-fn display_type(f: &mut fmt::Formatter<'_>, ty: TypeInfo, types: &TypeTable, info: Info) -> fmt::Result {
-    todo!()
+fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &IrTypes, info: Info) -> fmt::Result {
+    use super::types::IrType;
+
+    match ty {
+        IrType::Primitive(p) => write!(f, "{p}"),
+        IrType::Id(id, generics) => {
+            write!(f, "{}", info.types[id.idx()].0)?;
+            if generics.len() > 0 {
+                write!(f, "[")?;
+                for generic in generics.iter() {
+                    display_type(f, types[generic], types, info)?;
+                }
+                write!(f, "]")?;
+            }
+            Ok(())
+        }
+        IrType::Ptr(inner) => {
+            write!(f, "*")?;
+            display_type(f, types[inner], types, info)
+        }
+        IrType::Array(inner, count) => {
+            write!(f, "[")?;
+            display_type(f, types[inner], types, info)?;
+            write!(f, "; {count}]")
+        }
+        IrType::Tuple(elems) => {
+            write!(f, "(")?;
+            write_delimited_with(f, elems.iter(), |f, ty| display_type(f, types[ty], types, info), ", ")?;
+            write!(f, ")")
+        }
+    }
 }
 
-fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &TypeTable, info: Info)
+fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &IrTypes, info: Info)
 -> fmt::Result {
     let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
         if let Some(val) = r.into_val() {

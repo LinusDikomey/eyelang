@@ -755,7 +755,16 @@ fn merge_onesided(
             }
         }
         Invalid => Some(Invalid), // invalid type 'spreading'
-        MethodItem { .. } | EnumItem(_, _) | LocalTypeItem(_) => todo!(),
+        MethodItem { .. } | EnumItem(_, _) => todo!(),
+        LocalTypeItem(t1) => {
+            let LocalTypeItem(t2) = other else { return None };
+            match merge_twosided(types.get(t1), types.get(t2), types, symbols) {
+                Some(ty) => {
+                    Some(LocalTypeItem(types.add(ty)))
+                }
+                None => None
+            }
+        }
     }
 }
 

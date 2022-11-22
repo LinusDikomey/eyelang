@@ -106,8 +106,11 @@ impl<'a> LocalScope<'a> {
                 ctx.specify(info.expected, ty, span.in_mod(self.scope.module.id));
                 use_hint = UseHint::Should;
             }
-            ast::Expr::StringLiteral(_span) => {
+            ast::Expr::StringLiteral(span) => {
                 use_hint = UseHint::Should;
+                let i8_ty = ctx.types.add(TypeInfo::Primitive(Primitive::I8));
+                let ty = TypeInfo::Pointer(i8_ty);
+                ctx.specify(info.expected, ty, span.in_mod(self.scope.module.id))
             }
             ast::Expr::BoolLiteral { .. } => {
                 ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), self.span(expr, ctx.ast));
@@ -256,6 +259,7 @@ impl<'a> LocalScope<'a> {
                     let var_ty = ctx.types.add_unknown();
                     self.val_expr(r, info.with_expected(var_ty), ctx.reborrow(), false);
 
+                    // TODO: handle lvals properly
                     let lval = self.expr(l, info.with_expected(var_ty), ctx.reborrow(), true);
                     match lval {
                         Res::Val { use_hint: _, lval } => {
@@ -432,7 +436,7 @@ impl<'a> LocalScope<'a> {
                 let ty = TypeInfo::SymbolItem(DefId::Module(self.scope.module.root));
                 ctx.specify(info.expected, ty, self.span(expr, ctx.ast));
             }
-            ast::Expr::Asm { span, asm_str_span, args } => todo!("inline asm is unsupported right now"),
+            ast::Expr::Asm { .. } => todo!("inline asm is unsupported right now"),
         };
         Res::Val { use_hint, lval }
     }
@@ -463,15 +467,20 @@ impl<'a> LocalScope<'a> {
                             )
                         }
                         let generics = ctx.types.add_multiple_unknown(def.generic_count as _);
+                        
+                        
                         let arg_types = ctx.types.add_multiple_unknown(call.args.count);
                         for (i, (_, ty)) in def.members.iter().enumerate() {
                             let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
                             ctx.types.replace_idx(arg_types.nth(i), param_ty);
-
+                            
                         }
                         for (arg, ty) in ctx.ast[call.args].iter().zip(arg_types.iter()) {
                             self.val_expr(*arg, info.with_expected(ty), ctx.reborrow(), false);
                         }
+
+                        ctx.specify(info.expected, TypeInfo::Resolved(id, generics), self.span(call_expr, ctx.ast));
+                        
                         (
                             Res::Val { use_hint: UseHint::Can, lval: false },
                             ResolvedCall::Struct { type_id: id, generics }
