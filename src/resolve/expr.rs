@@ -294,7 +294,7 @@ impl<'a> LocalScope<'a> {
                 let Res::Val { .. } = self.expr(left, info.with_expected(left_ty), ctx.reborrow(), false);
                 // auto deref
                 let mut deref_ty = ctx.types.get(left_ty);
-                loop {
+                let member_ty: TypeInfoOrIndex = loop {
                     deref_ty = match deref_ty {
                         TypeInfo::Pointer(inner) => ctx.types.get(inner),
                         TypeInfo::Resolved(id, generics) => match ctx.symbols.get_type(id) {
@@ -302,94 +302,68 @@ impl<'a> LocalScope<'a> {
                                 let member = s.members.iter().find(|(member_name, _)| member_name == name);
                                 if let Some((_, ty)) = member {
                                     let ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
-                                    ctx.types.specify_or_merge(
-                                        info.expected, ty,
-                                        ctx.errors, self.span(expr, ctx.ast), &ctx.symbols
-                                    );
-                                    break;
+                                    break ty;
                                 } else if let Some(id) = s.methods.get(name) {
                                     let ty = TypeInfo::MethodItem { function: *id, this_ty: left_ty };
-                                    ctx.specify(info.expected, ty, self.span(expr, ctx.ast));
+                                    break ty.into();
                                 } else {
                                     ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                                    ctx.types.invalidate(info.expected);
+                                    break TypeInfo::Invalid.into();
                                 }
-                                break;
                             }
                             ResolvedTypeDef::Enum(_) => {
-                                ctx.types.invalidate(info.expected);
                                 ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                                break;
+                                break TypeInfo::Invalid.into();
                             }
                             ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                         }
                         TypeInfo::Unknown => {
-                            ctx.types.invalidate(info.expected);
                             ctx.errors.emit_span(Error::TypeMustBeKnownHere, self.span(left, ctx.ast));
-                            break;
+                            break TypeInfo::Invalid.into();
                         }
                         TypeInfo::Invalid => {
-                            ctx.types.invalidate(info.expected);
-                            break;
+                            break TypeInfo::Invalid.into();
                         }
                         TypeInfo::Generic(_) => todo!("generic member checking (traits?)"),
                         TypeInfo::SymbolItem(DefId::Type(id)) => {
                             match name {
                                 "size" | "align" => {
-                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64),
-                                        self.span(expr, ctx.ast)
-                                    );
-                                    break;
+                                    break TypeInfo::Primitive(Primitive::U64).into();
                                 }
                                 _ => {}
                             }
-                            match ctx.symbols.get_type(id) {
+                            let type_info = match ctx.symbols.get_type(id) {
                                 ResolvedTypeDef::Struct(def) => match def.methods.get(name) {
                                     Some(method) => {
-                                        ctx.specify(
-                                            info.expected,
-                                            TypeInfo::SymbolItem(DefId::Function(*method)),
-                                            name_span.in_mod(self.mod_id())
-                                        );
+                                        TypeInfo::SymbolItem(DefId::Function(*method))
                                     }
                                     None => {
                                         ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(self.mod_id()));
-                                        ctx.types.invalidate(info.expected);
+                                        TypeInfo::Invalid
                                     }
                                 }
                                 ResolvedTypeDef::Enum(def) => {
                                     match def.variants.get(name) {
-                                        Some(variant) => {
-                                            ctx.specify(
-                                                info.expected,
-                                                TypeInfo::EnumItem(id, *variant),
-                                                name_span.in_mod(self.mod_id())
-                                            );
-                                            // TODO: store variant somewhere
-                                        }
+                                        Some(variant) => TypeInfo::EnumItem(id, *variant),
                                         None => {
                                             ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(self.mod_id()));
-                                            ctx.types.invalidate(info.expected);
+                                            TypeInfo::Invalid
                                         }
                                     }
                                 }
                                 ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
-                            }
-                            break;
+                            };
+                            break type_info.into();
                         }
                         TypeInfo::SymbolItem(DefId::Module(id)) => {
                             let def = self.scope.module_scope(id)
                                 .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors);
-                            ctx.specify(info.expected, TypeInfo::SymbolItem(def), self.span(expr, ctx.ast));
-                            break;
+                            break TypeInfo::SymbolItem(def).into();
                         }
                         TypeInfo::LocalTypeItem(_) => {
                             match name {
                                 "size" | "align" => {
-                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64),
-                                        self.span(expr, ctx.ast)
-                                    );
-                                    break;
+                                    break TypeInfo::Primitive(Primitive::U64).into();
                                 }
                                 _ => todo!("member access on generics")
                             }
@@ -400,13 +374,18 @@ impl<'a> LocalScope<'a> {
                         | TypeInfo::SymbolItem(_)
                         | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
                             ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                            ctx.types.invalidate(info.expected);
-                            break;
+                            break TypeInfo::Invalid.into();
                         }
                     }
-                }
+                };
+                ctx.types.specify_or_merge(
+                    info.expected, member_ty,
+                    ctx.errors, self.span(expr, ctx.ast), &ctx.symbols,
+                );
             }
             &ast::Expr::Index { expr, idx, .. } => {
+                lval = true;
+                
                 let arr_ty = ctx.types.add(TypeInfo::Array(None, info.expected));
                 self.val_expr(expr, info.with_expected(arr_ty), ctx.reborrow(), false);
 

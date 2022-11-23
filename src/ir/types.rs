@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}}};
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::Enum}};
 
 use super::Module;
 
@@ -37,7 +37,7 @@ impl IrTypes {
             }
             TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
             TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
-            TypeInfo::Enum(_) => todo!("enum size"),
+            TypeInfo::Enum(names) => IrType::Primitive(Enum::int_ty_from_variant_count(names.count()).into()),
             TypeInfo::Tuple(elems, _) => {
                 let elems_idx = self.types.len() as u32;
                 self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(elems.len()));

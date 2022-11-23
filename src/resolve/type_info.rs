@@ -402,6 +402,11 @@ pub struct TypeTableNames {
     idx: u32,
     count: u32,
 }
+impl TypeTableNames {
+    pub fn count(self) -> u32 {
+        self.count
+    }
+}
 
 #[derive(Debug)]
 pub struct FinalTypeTable {

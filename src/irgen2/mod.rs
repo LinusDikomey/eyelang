@@ -3,11 +3,11 @@ use std::ops::Index;
 use crate::{
     ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp},
     resolve::{
-        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum},
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum, DefId},
         self,
         type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId},
     ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
-    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
+    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::{Primitive, Layout}, dmap::{DHashMap, self}
 };
 
 mod main_func;
@@ -465,10 +465,10 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             Ref::UNIT
         }
         Expr::FunctionCall(call_id) => {
+            let call = &ctx.ast.calls[call_id.idx()];
             match &ctx.symbols.calls[call_id.idx()].unwrap() {
                 resolve::ResolvedCall::Function { func_id, generics } => {
                     let func = ctx.symbols.get_func(*func_id);
-                    let call = &ctx.ast.calls[call_id.idx()];
 
                     // PERF: reuse buffer here (maybe by pre-reserving in extra_refs buffer in ir)
                     let mut args = Vec::with_capacity(call.args.count as usize);
@@ -493,8 +493,28 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     }
                     call_val
                 }
-                resolve::ResolvedCall::Struct { .. } => todo!(),
-                resolve::ResolvedCall::Invalid => todo!(),
+                resolve::ResolvedCall::Struct { type_id, .. } => {
+                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(*type_id) else { unreachable!() };
+                    debug_assert_eq!(def.members.len(), call.args.count as usize);
+                    let ty = ctx[expr];
+
+                    let var = ir.build_decl(ty);
+
+                    for (i, arg) in ctx.ast[call.args].iter().enumerate() {
+                        let member_val = val_expr(ir, *arg, ctx, noreturn);
+                        if *noreturn {
+                            return Res::Val(Ref::UNDEF)
+                        }
+                        let arg_ty = ctx[*arg];
+
+
+                        let member_ptr = ir.build_member_int(var, i as u32, arg_ty);
+                        ir.build_store(member_ptr, member_val);
+                    }
+
+                    return Res::Var(var)
+                }
+                resolve::ResolvedCall::Invalid => unreachable!(),
             }
         }
         &Expr::UnOp(_, op, val) => {
@@ -594,7 +614,99 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 ir.build_bin_op(op, l, r, ty)
             }
         }
-        Expr::MemberAccess { left, name } => todo!(),
+        &Expr::MemberAccess { left, name } => {
+            let layout_val = |ir: &mut IrBuilder, layout: Layout| {
+                let name = ctx.src_at(name);
+                let val = match name {
+                    "size" => layout.size,
+                    "align" => layout.alignment,
+                    _ => unreachable!()
+                };
+                let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+                ir.build_int(val, ty)
+            };
+            match ir.types.get(ctx[expr]) {
+                // layout (size/align) of type ids
+                TypeInfo::Primitive(Primitive::U64)
+                    if matches!(ir.types.get(ctx[left]), TypeInfo::SymbolItem(DefId::Type(_)))
+                => {
+                    let TypeInfo::SymbolItem(DefId::Type(type_id)) = ir.types.get(ctx[left]) else { unreachable!() };
+                    let layout = ctx.symbols.get_type(type_id).layout(
+                        |id| ctx.symbols.get_type(id),
+                        |_| unreachable!("should be checked in resolve")
+                    );
+                    layout_val(ir, layout)
+                }
+                // layout (size/align) of local types
+                TypeInfo::Primitive(Primitive::U64)
+                    if matches!(ir.types.get(ctx[left]), TypeInfo::LocalTypeItem(_))
+                => {
+                    let TypeInfo::LocalTypeItem(idx) = ir.types.get(ctx[left]) else { unreachable!() };
+                    let final_ty = ir.types[idx].finalize(&ir.types);
+                    let layout = final_ty.layout(
+                        |id| ctx.symbols.get_type(id),
+                        |_| unreachable!(),
+                    );
+                    layout_val(ir, layout)
+                }
+                TypeInfo::EnumItem(id, variant) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
+                    ir.build_int(variant as u64, int_ty)
+                }
+                TypeInfo::MethodItem { .. } | TypeInfo::SymbolItem(_) => Ref::UNDEF,
+                _ => {
+                    let mut member_ty = ir.types.get(ctx[left]);
+                    let mut l_ptr_count = 0u32;
+                    let (id, generics) = loop {
+                        match member_ty {
+                            TypeInfo::Pointer(pointee) => {
+                                l_ptr_count += 1;
+                                member_ty = ir.types.get(pointee);
+                            }
+                            TypeInfo::Resolved(id, generics) => break (id, generics),
+                            _ => unreachable!()
+                        }
+                    };
+                    let mut left = match gen_expr(ir, left, ctx, noreturn) {
+                        Res::Val(v) => v,
+                        Res::Var(v) => {
+                            l_ptr_count += 1;
+                            v
+                        }
+                        Res::Hole => unreachable!()
+                    };
+
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let name = ctx.src_at(name);
+                    let member_idx = def.members
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (member_name, _))| member_name == name)
+                        .unwrap()
+                        .0 as u32;
+
+                    if l_ptr_count == 0 {
+                        return Res::Val(ir.build_value(left, member_idx, ctx[expr]))
+                    }
+                    let mut ptr_ty = ir.types.add(TypeInfo::Resolved(id, generics));
+                    for _ in 0..l_ptr_count {
+                        ptr_ty = ir.types.add(TypeInfo::Pointer(ptr_ty));
+                    }
+                    while l_ptr_count > 1 {
+                        let TypeInfo::Pointer(loaded_ty) = ir.types.get(ptr_ty) else { unreachable!() };
+                        left = ir.build_load(left, loaded_ty);
+                        ptr_ty = loaded_ty;
+                        l_ptr_count -= 1;
+                    }
+
+                    let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+                    return Res::Var(ir.build_member_int(left, member_idx, member_ptr_ty));
+                }
+            }
+        }
         &Expr::Index { expr: val, idx, .. } => {
             let res = gen_expr(ir, val, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
