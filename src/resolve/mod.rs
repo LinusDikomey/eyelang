@@ -96,36 +96,56 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, D
 }
 
 fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
-    let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
+
+    fn gen_func_body(id: FunctionId, scope: &Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors,) {
+        let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
+
+        let func = &ast[id];
+        if let Some(body) = func.body {
+            let mut types = TypeTable::new();
+            let mut vars = vec![];
+            let mut idents = vec![Ident::Invalid; func.ident_count as usize];
+            let func_body_info = func_body(body, id, scope, Ctx {
+                ast,
+                symbols,
+                types: &mut types,
+                idents: &mut idents,
+                vars: &mut vars,
+                errors,
+                expr_types: &mut expr_types,
+            });
+
+            symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
+                body,
+                idents,
+                vars,
+                types,
+                generics: func_body_info.generics,
+            })
+        }
+    }
+
     for (_name, def) in defs {
         match def {
             Definition::Function(func_id) => {
-                let func = &ast[*func_id];
 
-                if let Some(body) = func.body {
-                    let mut types = TypeTable::new();
-                    let mut vars = vec![];
-                    let mut idents = vec![Ident::Invalid; func.ident_count as usize];
-                    let func_body_info = func_body(body, *func_id, scope, Ctx {
-                        ast,
-                        symbols: symbols,
-                        types: &mut types,
-                        idents: &mut idents,
-                        vars: &mut vars,
-                        errors,
-                        expr_types: &mut expr_types,
-                    });
-
-                    symbols.get_func_mut(*func_id).resolved_body = Some(ResolvedFunc {
-                        body,
-                        idents,
-                        vars,
-                        types,
-                        generics: func_body_info.generics,
-                    })
-                }
+                gen_func_body(*func_id, scope, ast, symbols, errors);
             }
-            Definition::Type(_) => {} // TODO: methods?
+            Definition::Type(id) => {
+                match symbols.get_type(*id) {
+                    ResolvedTypeDef::Struct(def) => {
+                        // PERF: collecting here (ownership reasons)
+                        for method_id in def.methods.values().copied().collect::<Vec<_>>() {
+                            // TODO: inherited generics
+                            gen_func_body(method_id, scope, ast, symbols, errors);
+                        }
+                        
+                    }
+                    ResolvedTypeDef::Enum(_) => {}
+                    ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
+                }
+                
+            }
             Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
             | Definition::Const(_, _) | Definition::Global(_) => {}
         }

@@ -34,10 +34,10 @@ pub struct IrBuilder {
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
     pub types: TypeTable,
-    ir_types: IrTypes,
+    pub ir_types: IrTypes,
 }
 impl IrBuilder {
-    pub fn new(types: TypeTable) -> Self {
+    pub fn new(types: TypeTable, generic_instances: Vec<IrType>) -> Self {
         Self {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
@@ -51,7 +51,7 @@ impl IrBuilder {
             blocks: vec![0],
             extra: Vec::new(),
             types,
-            ir_types: IrTypes::new()
+            ir_types: IrTypes::new(generic_instances)
         }
     }
 
@@ -143,6 +143,7 @@ impl IrBuilder {
         idx
     }
 
+    #[must_use = "block has to be begun somewhere"]
     pub fn create_block(&mut self) -> BlockIndex {
         let idx = BlockIndex(self.next_block);
         if self.emit {

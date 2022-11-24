@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef}}, resolve::{types::ResolvedTypeDef, const_val::ConstVal, self}};
+use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef, TypeRefs}}, resolve::{types::{ResolvedTypeDef, Type}, const_val::ConstVal, self}, ast::TypeId};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
 pub mod output;
@@ -75,7 +75,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             ResolvedTypeDef::Struct(def) => {
                     if def.generic_count != 0 { continue }
                     let mut members = def.members.iter()
-                        .map(|(_name, ty)| llvm_resolved_ty(ctx, ty, module, &mut types))
+                        .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
                         .collect::<Vec<_>>();
                     LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
             }
@@ -89,12 +89,23 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     // define function headers
     let start_time = Instant::now();
 
-    let funcs = module.funcs.iter()
-        .map(|func| {
-            let ret = llvm_resolved_ty(ctx, &func.header.return_type, module, &mut types);
-            let mut params = func.header.params.iter()
-                .map(|(_name, ty)| llvm_resolved_ty(ctx, ty, module, &mut types))
-                .collect::<Vec<_>>();
+    let funcs = module.funcs.iter().enumerate()
+        .map(|(i, func)| {
+            let ir_func = &module.funcs[i];
+            let (ret, mut params) = if ir_func.ir.is_some() {
+                let ret = llvm_global_ty(ctx, &func.header.return_type, module, &mut types);
+                let params = func.header.params.iter()
+                    .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
+                    .collect::<Vec<_>>();
+                (ret, params)
+            } else {
+                let ret = llvm_global_ty(ctx, &func.header.return_type, module, &mut types);
+                let params = func.header.params.iter()
+                    .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
+                    .collect::<Vec<_>>();
+                (ret, params)
+            };
+            
             
             let varargs = llvm_bool(func.header.varargs);
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
@@ -110,7 +121,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     let builder = LLVMCreateBuilderInContext(ctx);
     
     let globals = module.globals.iter().map(|(name, ty, val)| {
-        add_global(ctx, llvm_module, llvm_resolved_ty(ctx, ty, module, &mut types), name, val)
+        add_global(ctx, llvm_module, llvm_global_ty(ctx, ty, module, &mut types), name, val)
             .unwrap_or(std::ptr::null_mut())
     }).collect::<Vec<_>>();
 
@@ -147,6 +158,22 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             emit: emit_time
         }
     )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Numeric { Float(u32), Int(bool, u32) }
+impl Numeric {
+    fn float(self) -> bool { matches!(self, Numeric::Float(_)) }
+    fn int(self) -> bool { matches!(self, Numeric::Int(_, _)) }
+}
+fn prim_to_num(p: Primitive) -> Numeric {
+    if let Some(p) = p.as_int() {
+        Numeric::Int(p.is_signed(), p.bit_count())
+    } else if let Some(p) = p.as_float() {
+        Numeric::Float(p.bit_count())
+    } else {
+        panic!("Invalid type for int/float operation: {p}")
+    }
 }
 
 unsafe fn build_func(
@@ -217,21 +244,7 @@ unsafe fn build_func(
         let info = ir.types[ty];
         llvm_ty(ctx, module, &ir.types, types, info)
     };
-    #[derive(Clone, Copy, Debug)]
-    enum Numeric { Float(u32), Int(bool, u32) }
-    impl Numeric {
-        fn float(self) -> bool { matches!(self, Numeric::Float(_)) }
-        fn int(self) -> bool { matches!(self, Numeric::Int(_, _)) }
-    }
-    fn prim_to_num(p: Primitive) -> Numeric {
-        if let Some(p) = p.as_int() {
-            Numeric::Int(p.is_signed(), p.bit_count())
-        } else if let Some(p) = p.as_float() {
-            Numeric::Float(p.bit_count())
-        } else {
-            panic!("Invalid type for int/float operation: {p}")
-        }
-    }
+    
     let info_to_num = |info: IrType| {
         match info {
             IrType::Primitive(p) => prim_to_num(p),
@@ -263,12 +276,12 @@ unsafe fn build_func(
                 if is_resolved_void_type(&func.header.return_type) {
                     LLVMBuildRetVoid(builder)
                 } else {
-                    let val = LLVMGetUndef(llvm_resolved_ty(ctx, &func.header.return_type, module, types));
+                    let val = LLVMGetUndef(llvm_global_ty(ctx, &func.header.return_type, module, types));
                     LLVMBuildRet(builder, val)
                 }
             }
             ir::Tag::Param => {
-                let llvm_ty = llvm_resolved_ty(ctx, &func.header.params[data.int32 as usize].1, module, types);
+                let llvm_ty = llvm_global_ty(ctx, &func.header.params[data.int32 as usize].1, module, types);
                 let param_var = LLVMBuildAlloca(builder, llvm_ty, NONE);
                 let val = LLVMGetParam(llvm_func, data.int32);
                 LLVMBuildStore(builder, val, param_var);
@@ -333,7 +346,9 @@ unsafe fn build_func(
             }
             ir::Tag::Load => {
                 let (val, ty) = get_ref_and_type(&instructions, data.un_op);
-                let IrType::Ptr(inner) = ty else { panic!("Invalid IR, loading non-pointer type: {ty:?}"); };
+                let IrType::Ptr(inner) = ty else {
+                    panic!("Invalid IR, loading non-pointer type: {ty:?}, ref: {:?}", data.un_op);
+                };
                 let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[inner]);
                 LLVMBuildLoad2(builder, pointee_ty, val, NONE)
             }
@@ -488,64 +503,7 @@ unsafe fn build_func(
                 // (reinterpret, trunc, extend, float to int, int to float, etc.)
                 let (val, origin) = get_ref_and_type(&instructions, data.un_op);
                 let target = ir.types[ty];
-                match target {
-                    // pointer to int
-                    IrType::Primitive(Primitive::U64) if matches!(origin, IrType::Ptr(_)) => {
-                        let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
-                        LLVMBuildPtrToInt(builder, val, llvm_target, NONE)
-                    }
-                    IrType::Primitive(target) => {
-                        //TODO: enum to int casts
-                        match origin {
-                            IrType::Primitive(origin) => {
-                                let origin = prim_to_num(origin);
-                                let target_num = prim_to_num(target);
-                                let llvm_target = llvm_primitive_ty(ctx, target);
-                                match (origin, target_num) {
-                                    (Numeric::Float(a), Numeric::Float(b)) => match a.cmp(&b) {
-                                        std::cmp::Ordering::Less 
-                                            => LLVMBuildFPExt(builder, val, llvm_target, NONE),
-                                        std::cmp::Ordering::Equal => val,
-                                        std::cmp::Ordering::Greater 
-                                            => LLVMBuildFPTrunc(builder, val, llvm_target, NONE),
-                                    },
-                                    (Numeric::Float(_a), Numeric::Int(s, _b)) => if s {
-                                        LLVMBuildFPToSI(builder, val, llvm_target, NONE)
-                                    } else {
-                                        LLVMBuildFPToUI(builder, val, llvm_target, NONE)
-                                    }
-                                    (Numeric::Int(s, _a), Numeric::Float(_b)) => if s {
-                                        LLVMBuildSIToFP(builder, val, llvm_target, NONE)
-                                    } else {
-                                        LLVMBuildUIToFP(builder, val, llvm_target, NONE)
-                                    }
-                                    (Numeric::Int(s1, a), Numeric::Int(s2, b)) => match a.cmp(&b) {
-                                        std::cmp::Ordering::Less => if s2 {
-                                            LLVMBuildSExt(builder, val, llvm_target, NONE)
-                                        } else {
-                                            LLVMBuildZExt(builder, val, llvm_target, NONE)
-                                        }
-                                        std::cmp::Ordering::Equal => if s1 == s2 { val } else {
-                                            LLVMBuildBitCast(builder, val, llvm_target, NONE)
-                                        },
-                                        std::cmp::Ordering::Greater => LLVMBuildTrunc(builder, val, llvm_target, NONE)
-                                    }
-                                }
-                            }
-                            _ => panic!("Invalid cast to primitive")
-                        }
-                    }
-                    IrType::Id(_, _) | IrType::Array(_, _) | IrType::Tuple(_) => panic!("Invalid cast"),
-                    IrType::Ptr(_) => {
-                        let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
-                        match origin {
-                            IrType::Ptr(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
-                            // int to ptr
-                            IrType::Primitive(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
-                            t => panic!("Can't cast from non-pointer type {t:?} to pointer")
-                        }
-                    }
-                }
+                cast(val, origin, target, builder, ctx, module, ir, types)
             }
             ir::Tag::Goto => {
                 let block_inst = ir.inst[ir.blocks[data.int32 as usize] as usize];
@@ -655,26 +613,29 @@ unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     }
 }
 
-unsafe fn llvm_resolved_ty(ctx: LLVMContextRef, ty: &resolve::types::Type, module: &ir::Module, type_instances: &mut [TypeInstance]) -> LLVMTypeRef {
+// TODO: just convert all types to 'IrType's in irgen to make this unnecessary
+unsafe fn llvm_global_ty(ctx: LLVMContextRef, ty: &Type, module: &ir::Module, type_instances: &mut [TypeInstance]) -> LLVMTypeRef {
+    llvm_global_ty_generic(ctx, ty, module, type_instances, &[])
+}
+
+unsafe fn llvm_global_ty_generic(ctx: LLVMContextRef, ty: &Type, module: &ir::Module, instances: &mut [TypeInstance], generics: &[Type]) -> LLVMTypeRef {
     match ty {
         resolve::types::Type::Prim(p) => llvm_primitive_ty(ctx, *p),
-        resolve::types::Type::Id(id, generics) => {
-            todo!()
-        }
+        resolve::types::Type::Id(id, generics) => get_id_ty(*id, generics, ctx, module, instances),
         resolve::types::Type::Pointer(_) => LLVMPointerTypeInContext(ctx, 0),
         resolve::types::Type::Array(inner) => {
             let (inner, size) = &**inner;
-            LLVMArrayType(llvm_resolved_ty(ctx, inner, module, type_instances), *size)
+            LLVMArrayType(llvm_global_ty(ctx, inner, module, instances), *size)
         }
         resolve::types::Type::Enum(variants) => int_from_variant_count(ctx, variants.len()),
         resolve::types::Type::Tuple(_) => todo!(),
-        resolve::types::Type::Generic(_) => todo!(),
+        resolve::types::Type::Generic(i) => llvm_global_ty_generic(ctx, &generics[*i as usize], module, instances, generics),
         resolve::types::Type::Invalid => unreachable!(),
     }
 }
 
 unsafe fn llvm_ty(ctx: LLVMContextRef, module: &ir::Module, types: &IrTypes, type_instances: &mut [TypeInstance], ty: IrType) -> LLVMTypeRef {
-    llvm_ty_recursive(ctx, module, types, type_instances, ty, false, &[])
+    llvm_ty_recursive(ctx, module, types, type_instances, ty, false, TypeRefs::EMPTY)
 }
 
 unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeRef {
@@ -686,34 +647,22 @@ unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeR
     }
 }
 
-unsafe fn llvm_ty_recursive(
-    ctx: LLVMContextRef,
-    module: &ir::Module,
-    types: &IrTypes,
-    type_instances: &mut [TypeInstance],
-    ty: IrType,
-    pointee: bool,
-    generics: &[IrType],
-) -> LLVMTypeRef {
-    match ty {
-        IrType::Primitive(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
-        IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
-        IrType::Id(id, generics) => match &mut type_instances[id.idx()] {
-            TypeInstance::Simple(simple) => {
-                debug_assert_eq!(generics.len(), 0);
-                *simple
-            }
-            TypeInstance::Generic(map) => {
-                let generics = &types[generics];
-                todo!("generic type instances") // problem: hashing IrTypes.
-                /*
-                if let Some(llvm_ty) = map.get(generics) { return *llvm_ty };
+unsafe fn get_id_ty(id: TypeId, generics: &[Type], ctx: LLVMContextRef, module: &ir::Module, instances: &mut [TypeInstance]) -> LLVMTypeRef {
+    match &mut instances[id.idx()] {
+        TypeInstance::Simple(simple) => {
+            debug_assert_eq!(generics.len(), 0);
+            *simple
+        }
+        TypeInstance::Generic(map) => {
+            if let Some(ty) = map.get(generics) {
+                *ty
+            } else {
                 let mut name = format!("t{}[", id.idx());
-                
+
                 for (i, ty) in generics.iter().enumerate() {
                     use std::fmt::Write;
                     if i != 0 {
-                        name.push_str(", ");
+                        name.push_str(",");
                     }
                     name.write_fmt(format_args!("{ty:?}")).unwrap();
                 }
@@ -722,9 +671,9 @@ unsafe fn llvm_ty_recursive(
                 match &module.types[id.idx()].1 {
                     ResolvedTypeDef::Struct(def) => {
                         let llvm_struct = LLVMStructCreateNamed(ctx, name.as_ptr());
-                        map.insert(generics.clone(), llvm_struct);
+                        //map.insert(generics.clone(), llvm_struct);
                         let mut members = def.members.iter()
-                            .map(|(_, ty)| llvm_ty_recursive(ctx, module, type_instances, ty, false, generics))
+                            .map(|(_, ty)| llvm_global_ty_generic(ctx, ty, module, instances, generics))
                             .collect::<Vec<_>>();
                             LLVMStructSetBody(llvm_struct, members.as_mut_ptr(), members.len() as _, FALSE);
                         llvm_struct
@@ -734,8 +683,27 @@ unsafe fn llvm_ty_recursive(
                     }
                     ResolvedTypeDef::NotGenerated { .. } => unreachable!()
                 }
-                */
             }
+        }
+    }
+}
+
+unsafe fn llvm_ty_recursive(
+    ctx: LLVMContextRef,
+    module: &ir::Module,
+    types: &IrTypes,
+    type_instances: &mut [TypeInstance],
+    ty: IrType,
+    pointee: bool,
+    generics: TypeRefs,
+) -> LLVMTypeRef {
+    match ty {
+        IrType::Primitive(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
+        IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
+        IrType::Id(id, generics) => {
+            // PERF: alllocating a Vec here each time
+            let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
+            get_id_ty(id, &generics, ctx, module, type_instances)
         }
         IrType::Ptr(inner) => {
             LLVMPointerType(llvm_ty_recursive(ctx, module, types, type_instances, types[inner], true, generics), 0)
@@ -750,10 +718,73 @@ unsafe fn llvm_ty_recursive(
                 .collect::<Vec<_>>();
             LLVMStructTypeInContext(ctx, elem_tys.as_mut_ptr(), elem_tys.len() as u32, FALSE)
         }
+        IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee, generics),
     }
 }
 
-fn is_resolved_void_type(ty: &resolve::types::Type) -> bool {
+unsafe fn cast(val: LLVMValueRef, origin: IrType, target: IrType, builder: LLVMBuilderRef, ctx: LLVMContextRef, module: &ir::Module, ir: &ir::FunctionIr, types: &mut [TypeInstance]) -> LLVMValueRef {
+    match target {
+        // pointer to int
+        IrType::Primitive(Primitive::U64) if matches!(origin, IrType::Ptr(_)) => {
+            let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
+            LLVMBuildPtrToInt(builder, val, llvm_target, NONE)
+        }
+        IrType::Primitive(target) => {
+            //TODO: enum to int casts
+            match origin {
+                IrType::Primitive(origin) => {
+                    let origin = prim_to_num(origin);
+                    let target_num = prim_to_num(target);
+                    let llvm_target = llvm_primitive_ty(ctx, target);
+                    match (origin, target_num) {
+                        (Numeric::Float(a), Numeric::Float(b)) => match a.cmp(&b) {
+                            std::cmp::Ordering::Less 
+                                => LLVMBuildFPExt(builder, val, llvm_target, NONE),
+                            std::cmp::Ordering::Equal => val,
+                            std::cmp::Ordering::Greater 
+                                => LLVMBuildFPTrunc(builder, val, llvm_target, NONE),
+                        },
+                        (Numeric::Float(_a), Numeric::Int(s, _b)) => if s {
+                            LLVMBuildFPToSI(builder, val, llvm_target, NONE)
+                        } else {
+                            LLVMBuildFPToUI(builder, val, llvm_target, NONE)
+                        }
+                        (Numeric::Int(s, _a), Numeric::Float(_b)) => if s {
+                            LLVMBuildSIToFP(builder, val, llvm_target, NONE)
+                        } else {
+                            LLVMBuildUIToFP(builder, val, llvm_target, NONE)
+                        }
+                        (Numeric::Int(s1, a), Numeric::Int(s2, b)) => match a.cmp(&b) {
+                            std::cmp::Ordering::Less => if s2 {
+                                LLVMBuildSExt(builder, val, llvm_target, NONE)
+                            } else {
+                                LLVMBuildZExt(builder, val, llvm_target, NONE)
+                            }
+                            std::cmp::Ordering::Equal => if s1 == s2 { val } else {
+                                LLVMBuildBitCast(builder, val, llvm_target, NONE)
+                            },
+                            std::cmp::Ordering::Greater => LLVMBuildTrunc(builder, val, llvm_target, NONE)
+                        }
+                    }
+                }
+                _ => panic!("Invalid cast to primitive")
+            }
+        }
+        IrType::Id(_, _) | IrType::Array(_, _) | IrType::Tuple(_) => panic!("Invalid cast"),
+        IrType::Ptr(_) => {
+            let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
+            match origin {
+                IrType::Ptr(_) => LLVMBuildPointerCast(builder, val, llvm_target, NONE),
+                // int to ptr
+                IrType::Primitive(Primitive::U64) => LLVMBuildIntToPtr(builder, val, llvm_target, NONE),
+                t => panic!("Can't cast from non-pointer type {t:?} to pointer")
+            }
+        }
+        IrType::Ref(_) => unreachable!()
+    }
+}
+
+fn is_resolved_void_type(ty: &Type) -> bool {
     matches!(ty, resolve::types::Type::Prim(Primitive::Unit | Primitive::Never))
 }
 
@@ -763,7 +794,7 @@ fn is_void_type(ty: IrType) -> bool {
 
 enum TypeInstance {
     Simple(LLVMTypeRef),
-    Generic(DHashMap<Vec<IrType>, LLVMTypeRef>),
+    Generic(DHashMap<Vec<Type>, LLVMTypeRef>),
 }
 
 // returns the constant or None in case of a zero sized type

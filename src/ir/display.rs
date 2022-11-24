@@ -236,7 +236,10 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &Ir
             write!(f, "{}", info.types[id.idx()].0)?;
             if generics.len() > 0 {
                 write!(f, "[")?;
-                for generic in generics.iter() {
+                for (i, generic) in generics.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ",")?;
+                    }
                     display_type(f, types[generic], types, info)?;
                 }
                 write!(f, "]")?;
@@ -257,6 +260,7 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &Ir
             write_delimited_with(f, elems.iter(), |f, ty| display_type(f, types[ty], types, info), ", ")?;
             write!(f, ")")
         }
+        IrType::Ref(r) => display_type(f, types[r], types, info)
     }
 }
 

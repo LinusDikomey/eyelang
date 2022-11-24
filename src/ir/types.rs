@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::Enum}};
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type}, self}};
 
 use super::Module;
 
@@ -9,12 +9,20 @@ use super::Module;
 #[derive(Debug)]
 pub struct IrTypes {
     types: Vec<IrType>,
+    generic_instances: Vec<IrType>,
 }
 impl IrTypes {
-    pub fn new() -> Self {
+    pub fn new(generic_instances: Vec<IrType>) -> Self {
         Self {
             types: Vec::new(),
+            generic_instances,
         }
+    }
+    pub fn add_generic_instance_ty(&mut self, ty: IrType) {
+        self.generic_instances.push(ty);
+    }
+    pub fn generic_instance_ty(&self, i: u8) -> IrType {
+        self.generic_instances[i as usize]
     }
     pub fn add(&mut self, ty: IrType) -> TypeRef {
         self.types.push(ty);
@@ -46,11 +54,48 @@ impl IrTypes {
                 }
                 IrType::Tuple(TypeRefs { idx: elems_idx, count: elems.len() as _ })
             }
+            TypeInfo::Generic(i) => self.generic_instances[i as usize],
             TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
-            TypeInfo::Array(None, _) | TypeInfo::Invalid | TypeInfo::Generic(_)
+            TypeInfo::Array(None, _) | TypeInfo::Invalid
             | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } 
             | TypeInfo::EnumItem(_, _) | TypeInfo::LocalTypeItem(_)
                 => panic!("Invalid type supplied while buiding ir: {info:?}"),
+        }
+    }
+    pub fn resolved_to_ty(&mut self, ty: &Type, on_generic: impl Fn(u8) -> TypeRef + Copy) -> IrType {
+        match ty {
+            resolve::types::Type::Prim(p) => IrType::Primitive(*p),
+            resolve::types::Type::Id(id, generics) => {
+                let generic_idx = self.types.len() as u32;
+                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(generics.len()));
+                
+                for (i, ty) in generics.iter().enumerate() {
+                    self.types[i] = self.resolved_to_ty(ty, |i| TypeRef(generic_idx + i as u32));
+                }
+                IrType::Id(*id, TypeRefs { idx: generic_idx, count: generics.len() as _ })
+            }
+            resolve::types::Type::Pointer(inner) => {
+                let inner = self.resolved_to_ty(inner, on_generic);
+                IrType::Ptr(self.add(inner))
+            }
+            resolve::types::Type::Array(b) => {
+                let elem_ty = self.resolved_to_ty(&b.0, on_generic);
+                IrType::Array(self.add(elem_ty), b.1)
+            }
+            resolve::types::Type::Enum(variants) => IrType::Primitive(
+                Enum::int_ty_from_variant_count(variants.len() as _).into()
+            ),
+            resolve::types::Type::Tuple(elems) => {
+                let idx = self.types.len() as u32;
+                self.types.extend((0..elems.len()).map(|_| IrType::Primitive(Primitive::Unit)));
+
+                for (i, ty) in elems.iter().enumerate() {
+                    self.types[i] = self.resolved_to_ty(ty, on_generic);
+                }
+                IrType::Tuple(TypeRefs { idx, count: elems.len() as _ })
+            }
+            resolve::types::Type::Generic(i) => IrType::Ref(on_generic(*i)),
+            resolve::types::Type::Invalid => unreachable!("invalid 'Type' encountered during irgen"),
         }
     }
     pub fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef {
@@ -62,14 +107,10 @@ impl Index<TypeRef> for IrTypes {
     type Output = IrType;
 
     fn index(&self, index: TypeRef) -> &Self::Output {
-        &self.types[index.0 as usize]
-    }
-}
-impl Index<TypeRefs> for IrTypes {
-    type Output = [IrType];
-
-    fn index(&self, index: TypeRefs) -> &Self::Output {
-        &self.types[index.idx as usize .. index.idx as usize + index.count as usize]
+        match &self.types[index.0 as usize] {
+            IrType::Ref(r) => &self[*r],
+            other => other
+        }
     }
 }
 
@@ -80,6 +121,8 @@ pub enum IrType {
     Ptr(TypeRef),
     Array(TypeRef, u32),
     Tuple(TypeRefs),
+    
+    Ref(TypeRef), // just refers to a different index
 }
 impl IrType {
     pub fn layout(self, types: &IrTypes, module: &Module) -> Layout {
@@ -101,11 +144,24 @@ impl IrType {
             }
             IrType::Tuple(elems) => {
                 let mut layout = Layout { size: 0, alignment: 1 };
-                for ty in &types[elems] {
+                for ty in elems.iter() {
+                    let ty = &types[ty];
                     layout = layout.accumulate(ty.layout(types, module));
                 }
                 layout
             }
+
+            IrType::Ref(r) => types[r].layout(types, module),
+        }
+    }
+    pub fn as_resolved_type(self, types: &IrTypes) -> Type {
+        match self {
+            IrType::Primitive(p) => Type::Prim(p),
+            IrType::Id(id, generics) => Type::Id(id, generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect()),
+            IrType::Ptr(pointee) => Type::Pointer(Box::new(types[pointee].as_resolved_type(types))),
+            IrType::Array(member, count) => Type::Array(Box::new((types[member].as_resolved_type(types), count))),
+            IrType::Tuple(members) => Type::Tuple(members.iter().map(|ty| types[ty].as_resolved_type(types)).collect()),
+            IrType::Ref(idx) => types[idx].as_resolved_type(types),
         }
     }
 }
@@ -123,6 +179,8 @@ impl TypeRef {
 #[derive(Clone, Copy, Debug)]
 pub struct TypeRefs { idx: u32, count: u32 }
 impl TypeRefs {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+    
     pub fn iter(self) -> impl Iterator<Item = TypeRef> {
         (self.idx .. self.idx + self.count).map(TypeRef)
     }

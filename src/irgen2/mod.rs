@@ -1,7 +1,7 @@
 use std::ops::Index;
 
 use crate::{
-    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp},
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra},
     resolve::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum, DefId},
         self,
@@ -12,6 +12,17 @@ use crate::{
 
 mod main_func;
 
+/// Macro for internal errors. Indicates that type checking went wrong or some internal assumption was broken
+macro_rules! int {
+    () => {{
+        ::color_format::ceprintln!("#r<internal irgen error>");
+        ::std::process::exit(1)
+    }};
+    ($($arg: tt)*) => {{
+        ::color_format::ceprintln!("#r<internal irgen error>: {}", format!($($arg)*));
+        ::std::process::exit(1)
+    }}
+}
 struct Ctx<'a> {
     ast: &'a Ast,
     symbols: &'a SymbolTable,
@@ -151,13 +162,13 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
     }
 
     let types = symbols.types.into_iter().map(|(name, def)| {
-        let MaybeTypeDef::Some(ty) = def else { unreachable!() };
+        let MaybeTypeDef::Some(ty) = def else { int!() };
         (name, ty)
     }).collect();
 
     let globals = symbols.globals;
 
-    if let Some(main) = main {
+    if let Some(_main) = main {
         // main is always at idx 0
 
         funcs[0].header.name = "eyemain".to_owned();
@@ -188,24 +199,36 @@ fn gen_func(
         return Function { header, ir: None }
     };
 
+    eprintln!("translating function with {} generics: {}", generics.len(), header.name);
     // PERF: cloning type table here might be a problem
-    let mut types = body.types.clone();
-
+    let types = body.types.clone();
+    
+    /*
     // replace Generic(n) TypeInfo with the specific type.
-    debug_assert_eq!(body.generics.len(), generics.len());
     for (i, (idx, ty)) in body.generics.iter().zip(generics).enumerate() {
         let info = ty.as_info(&mut types, |i| body.generics.nth(i as usize).into());
         #[cfg(debug_assertions)]
         {
             match types.get(idx) {
                 TypeInfo::Generic(i2) if i == i2 as usize => {}
-                ty => unreachable!("unexpected type {ty:?} when Generic({i}) was expected")
+                ty => int!("unexpected type {ty:?} when Generic({i}) was expected")
             }
         }
         types.replace_idx(body.generics.nth(i), info);
+    }*/
+    
+    let mut builder = IrBuilder::new(types, Vec::with_capacity(body.generics.len()));
+    
+    debug_assert_eq!(body.generics.len(), generics.len());
+    for ty in generics.iter() {
+        let info = ty.as_info(&mut builder.types, |_| unreachable!()); // TODO: is this really unreachable?
+        let info = match info {
+            resolve::type_info::TypeInfoOrIndex::Type(ty) => ty,
+            resolve::type_info::TypeInfoOrIndex::Idx(idx) => builder.types.get(idx),
+        };
+        let ir_type = builder.ir_types.info_to_ty(info, &builder.types);
+        builder.ir_types.add_generic_instance_ty(ir_type);
     }
-
-    let mut builder = IrBuilder::new(types);
 
     // reserve generics types
     //let generic_infos = builder.types.add_multiple_unknown(generics.len() as u32);
@@ -255,7 +278,7 @@ impl Res {
         match self {
             Res::Val(r) => r,
             Res::Var(r) => ir.build_load(r, ty),
-            Res::Hole => unreachable!(),
+            Res::Hole => int!(),
         }
     }
 
@@ -267,7 +290,7 @@ impl Res {
                 var
             }
             Res::Var(r) => r,
-            Res::Hole => unreachable!(),
+            Res::Hole => int!(),
         }
     }
 }
@@ -280,7 +303,7 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
         match res {
             Res::Val(r) => r,
             Res::Var(r) => ir.build_load(r, ctx[expr]),
-            Res::Hole => unreachable!(),
+            Res::Hole => int!(),
         }
     }
 } 
@@ -350,7 +373,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             let name = ctx.src_at(ident);
             let (variant, int_ty) = match ir.types.get(ctx[expr]) {
                 TypeInfo::Resolved(id, _generics) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
                     (def.variants[name], def.int_ty())
                 }
                 TypeInfo::Enum(variants) => {
@@ -365,24 +388,47 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     (variant, Enum::int_ty_from_variant_count(variants.len() as u32))
 
                 }
-                _ => unreachable!()
+                _ => int!()
             };
             let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
             ir.build_int(variant as u64, ty)
 
         }
-        Expr::Record { span, names, values } => todo!(),
+        Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
         Expr::Unit(_) => Ref::UNIT,
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
-                resolve::Ident::Invalid => unreachable!(),
+                resolve::Ident::Invalid => int!(),
                 resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()])
             }
         }
-        Expr::Hole(_) => todo!(),
-        Expr::Array(_, _) => todo!(),
-        Expr::Tuple(_, _) => todo!(),
+        Expr::Hole(_) => return Res::Hole,
+        &Expr::Array(_, values) => {
+            let array_var = ir.build_decl(ctx[expr]);
+            let TypeInfo::Array(_, member_ty) = ir.types.get(ctx[expr]) else { int!() };
+            let member_ptr_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+
+            for (i, value) in ctx.ast[values].iter().enumerate() {
+                let val = val_expr(ir, *value, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let ptr = ir.build_member_int(array_var, i as u32, member_ptr_ty);
+                ir.build_store(ptr, val);
+            }
+            return Res::Var(array_var);
+        }
+        &Expr::Tuple(_, values) => {
+            let tuple_var = ir.build_decl(ctx[expr]);
+
+            for (i, value) in ctx.ast[values].iter().enumerate() {
+                let val = val_expr(ir, *value, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[*value]));
+                let ptr = ir.build_member_int(tuple_var, i as u32, member_ptr_ty);
+                ir.build_store(ptr, val);
+            }
+            return Res::Var(tuple_var);
+        }
         &Expr::If { cond, then, .. } => {
             let cond = val_expr(ir, cond, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
@@ -442,7 +488,69 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
             }
         }
-        Expr::Match { span: _, val, extra_branches, branch_count } => todo!(),
+        &Expr::Match { span: _, val, extra_branches, branch_count } => {
+            let matched = val_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            let extra = &ctx.ast[ExprExtra { idx: extra_branches, count: branch_count * 2 }];
+            let mut all_noreturn = true;
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+
+            let after_block = ir.create_block();
+
+            let mut phi_vals = vec![];
+
+            for (i, [pat, branch]) in extra.array_chunks().enumerate() {
+                let matches = gen_pat(ir, *pat, matched, ctx[val], bool_ty, ctx);
+
+                if let Some(RefVal::False) = matches.into_val() {
+                    // branch never matches, do nothing
+                } else if let Some(RefVal::True) = matches.into_val() {
+                    let mut branch_noreturn = false;    
+                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
+                    all_noreturn &= branch_noreturn;
+                    
+                    if !branch_noreturn {
+                        ir.build_goto(after_block);
+                        phi_vals.push((ir.current_block(), branch_val));
+                    }
+                    break; // branches after this won't be reached as this branch always matches
+                } else {
+                    let next_block = if i as u32 == branch_count - 1 {
+                        None
+                    } else {
+                        let on_match = ir.create_block();
+                        let next = ir.create_block();
+                        ir.build_branch(matches, on_match, next);
+                        ir.begin_block(on_match);
+                        Some(next)
+                    };
+                
+                    let mut branch_noreturn = false;    
+                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
+                    all_noreturn &= branch_noreturn;
+
+                    if !branch_noreturn {
+                        ir.build_goto(after_block);
+                        phi_vals.push((ir.current_block(), branch_val));
+                    }
+                    if let Some(next) = next_block {
+                        ir.begin_block(next);
+                    }
+                }
+
+            }
+            ir.begin_block(after_block);
+            *noreturn = all_noreturn;
+            if all_noreturn {
+                Ref::UNDEF
+            } else {
+                match phi_vals.as_slice() {
+                    [(_, r)] => *r, // don't build a phi when only one branch yields a value
+                    _ => ir.build_phi(phi_vals, ctx[expr])
+                }
+            }
+        }
         &Expr::While { cond, body, .. } => {
             let cond_block = ir.create_block();
             let body_block = ir.create_block();
@@ -470,8 +578,57 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 resolve::ResolvedCall::Function { func_id, generics } => {
                     let func = ctx.symbols.get_func(*func_id);
 
+                    let this_arg = if let TypeInfo::MethodItem { this_ty, .. } = ir.types.get(ctx[call.called_expr]) {
+                        let mut ptr_count = 0u32;
+                        let mut current_ty = this_ty;
+                        
+                        while let TypeInfo::Pointer(pointee) = ir.types[current_ty] {
+                            current_ty = pointee;
+                            ptr_count += 1;
+                        }
+                        let Expr::MemberAccess { left: this_expr, .. } = ctx.ast[call.called_expr] else { int!() };
+                        let mut req_ptr_count = 0u32;
+                        let mut cur_req_ty = &ctx.symbols.get_func(*func_id).params.first().unwrap().1;
+                        while let Type::Pointer(pointee) = cur_req_ty {
+                            cur_req_ty = pointee;
+                            req_ptr_count += 1;
+                        }
+                        
+                        let (mut val, val_is_var) = match gen_expr(ir, this_expr, ctx, noreturn) {
+                            Res::Val(v) => (v, false),
+                            Res::Var(v) => {
+                                ptr_count += 1;
+                                (v, true)
+                            }
+                            Res::Hole => int!(),
+                        };
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+                        if req_ptr_count < ptr_count {
+                            if val_is_var {
+                                val = ir.build_load(val, this_ty);
+                                ptr_count -= 1;
+                            }
+                            let mut loaded_ty = this_ty;
+                            while req_ptr_count < ptr_count {
+                                let TypeInfo::Pointer(pointee) = ir.types[loaded_ty] else { int!() };
+                                loaded_ty = pointee;
+                                val = ir.build_load(val, loaded_ty);
+                                ptr_count -= 1;
+                            }
+                        } else if req_ptr_count > ptr_count {
+                            todo!("auto ref when calling methods")
+                        }
+                        Some(val)
+                    } else {
+                        None
+                    };
+
+
                     // PERF: reuse buffer here (maybe by pre-reserving in extra_refs buffer in ir)
-                    let mut args = Vec::with_capacity(call.args.count as usize);
+                    let mut args = Vec::with_capacity(call.args.count as usize + this_arg.is_some() as usize);
+                    if let Some(this) = this_arg {
+                        args.push(this);
+                    }
                     for arg in &ctx.ast[call.args] {
                         let arg_val = val_expr(ir, *arg, ctx, noreturn);
                         if *noreturn {
@@ -494,7 +651,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     call_val
                 }
                 resolve::ResolvedCall::Struct { type_id, .. } => {
-                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(*type_id) else { unreachable!() };
+                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(*type_id) else { int!() };
                     debug_assert_eq!(def.members.len(), call.args.count as usize);
                     let ty = ctx[expr];
 
@@ -514,7 +671,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
 
                     return Res::Var(var)
                 }
-                resolve::ResolvedCall::Invalid => unreachable!(),
+                resolve::ResolvedCall::Invalid => int!(),
             }
         }
         &Expr::UnOp(_, op, val) => {
@@ -532,7 +689,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     ir.build_not(val, ty)
                 }
                 UnOp::Ref => {
-                    let TypeInfo::Pointer(ty) = ir.types.get(ctx[expr]) else { unreachable!() };
+                    let TypeInfo::Pointer(ty) = ir.types.get(ctx[expr]) else { int!() };
                     let val = gen_expr(ir, val, ctx, noreturn);
                     if *noreturn { return Res::Val(Ref::UNDEF) }
                     match val {
@@ -542,7 +699,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                             temp
                         }
                         Res::Var(r) => r,
-                        Res::Hole => unreachable!(),
+                        Res::Hole => int!(),
                     }
                 }
                 UnOp::Deref => {
@@ -559,7 +716,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 // TODO: special assign lval expr here? Doesn't support patterns but also not exprs
                 let lval = gen_expr(ir, l, ctx, noreturn);
                 let var = match lval {
-                    Res::Val(_) => unreachable!(),
+                    Res::Val(_) => int!(),
                     Res::Var(v) => v,
                     Res::Hole => {
                         return Res::Val(Ref::UNIT);
@@ -607,7 +764,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                         todo!("range expressions")
                     }
                     
-                    Operator::Assignment(_) => unreachable!(),
+                    Operator::Assignment(_) => int!(),
                 };
 
                 let ty = ctx[expr];
@@ -620,7 +777,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 let val = match name {
                     "size" => layout.size,
                     "align" => layout.alignment,
-                    _ => unreachable!()
+                    name => int!("expected size/align but found '{name}'")
                 };
                 let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 ir.build_int(val, ty)
@@ -630,10 +787,10 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 TypeInfo::Primitive(Primitive::U64)
                     if matches!(ir.types.get(ctx[left]), TypeInfo::SymbolItem(DefId::Type(_)))
                 => {
-                    let TypeInfo::SymbolItem(DefId::Type(type_id)) = ir.types.get(ctx[left]) else { unreachable!() };
+                    let TypeInfo::SymbolItem(DefId::Type(type_id)) = ir.types.get(ctx[left]) else { int!() };
                     let layout = ctx.symbols.get_type(type_id).layout(
                         |id| ctx.symbols.get_type(id),
-                        |_| unreachable!("should be checked in resolve")
+                        |_| int!("should be checked in resolve")
                     );
                     layout_val(ir, layout)
                 }
@@ -641,16 +798,16 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 TypeInfo::Primitive(Primitive::U64)
                     if matches!(ir.types.get(ctx[left]), TypeInfo::LocalTypeItem(_))
                 => {
-                    let TypeInfo::LocalTypeItem(idx) = ir.types.get(ctx[left]) else { unreachable!() };
+                    let TypeInfo::LocalTypeItem(idx) = ir.types.get(ctx[left]) else { int!() };
                     let final_ty = ir.types[idx].finalize(&ir.types);
                     let layout = final_ty.layout(
                         |id| ctx.symbols.get_type(id),
-                        |_| unreachable!(),
+                        |_| int!(),
                     );
                     layout_val(ir, layout)
                 }
                 TypeInfo::EnumItem(id, variant) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
                     let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
                     ir.build_int(variant as u64, int_ty)
                 }
@@ -665,7 +822,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                                 member_ty = ir.types.get(pointee);
                             }
                             TypeInfo::Resolved(id, generics) => break (id, generics),
-                            _ => unreachable!()
+                            _ => int!()
                         }
                     };
                     let mut left = match gen_expr(ir, left, ctx, noreturn) {
@@ -674,12 +831,12 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                             l_ptr_count += 1;
                             v
                         }
-                        Res::Hole => unreachable!()
+                        Res::Hole => int!()
                     };
 
                     if *noreturn { return Res::Val(Ref::UNDEF) }
 
-                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(id) else { int!() };
                     let name = ctx.src_at(name);
                     let member_idx = def.members
                         .iter()
@@ -715,7 +872,8 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             let member = val_expr(ir, idx, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
 
-            return Res::Var(ir.build_member(var, member, ctx[expr]));
+            let ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+            return Res::Var(ir.build_member(var, member, ty));
         }
         &Expr::TupleIdx { expr: val, idx, .. } => {
             let res = gen_expr(ir, val, ctx, noreturn);
@@ -729,7 +887,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let pointer_ty = ir.types.add(TypeInfo::Pointer(member_ty));
                     return Res::Var(ir.build_member_int(r, idx, pointer_ty))
                 }
-                Res::Hole => unreachable!(),
+                Res::Hole => int!(),
             }
 
         }
@@ -744,7 +902,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             ir.build_cast(val, target_ty)
 
         }
-        Expr::Root(_) => unreachable!(),
+        Expr::Root(_) => int!(),
         Expr::Asm { .. } => todo!("inline asm codegen"),
     };
     Res::Val(r)
@@ -786,10 +944,10 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
                     .unwrap()
                     .0 as u64,
                 TypeInfo::Resolved(id, _generics) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { unreachable!() };
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
                     *def.variants.get(name).unwrap() as u64
                 }
-                _ => unreachable!()
+                _ => int!()
             };
             let i = ir.build_int(ordinal, ty);
             ir.build_bin_op(BinOp::Eq, pat_val, i, bool_ty)
@@ -798,7 +956,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
         Expr::Unit(_) => Ref::val(RefVal::True),
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
-                resolve::Ident::Invalid => unreachable!(),
+                resolve::Ident::Invalid => int!(),
                 resolve::Ident::Var(var_id) => {
                     let var = ir.build_decl(ty);
                     ir.build_store(var, pat_val);
@@ -810,9 +968,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
         Expr::Hole(_) => Ref::val(RefVal::True),
         Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => todo!(),
         Expr::Tuple(_, items) => {
-            let TypeInfo::Tuple(types, _) = ir.types.get(ty) else {
-                unreachable!()
-            };
+            let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
             let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
             let mut matches_bool = Ref::val(RefVal::True);
             for (i, (item, item_ty)) in ctx.ast[*items].iter().zip(types.iter()).enumerate() {
@@ -845,7 +1001,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
             | Expr::Cast(_, _, _)
             | Expr::Root(_) 
             | Expr::Asm { .. } 
-            => unreachable!(),
+            => int!(),
     }
 }
 
