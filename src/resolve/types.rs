@@ -6,7 +6,7 @@ use crate::{
     dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId}
 };
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices}, Ident, Var, ResolvedCall};
+use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -22,20 +22,27 @@ pub enum Type {
     Invalid
 }
 impl Type {
-    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generic: impl Fn(u8) -> Layout + Copy) -> Layout {
+    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
         match self {
             Type::Prim(p) => p.layout(),
-            Type::Id(key, generics) => todo!(), /*ctx(*key).layout(ctx, generic*/ /*|i| generics[i as usize].layout(ctx, generic)),*/ // TODO: generics are used wrongly here
+            Type::Id(key, generics) => ctx(*key).layout(
+                ctx,
+                generics
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect::<Vec<_>>()
+                    .as_slice()
+                ),
             Type::Pointer(_) => Layout::PTR,
             Type::Array(b) => {
                 let (ty, size) = &**b;
-                ty.layout(ctx, generic).mul_size(*size as u64)
+                ty.layout(ctx, generics).mul_size(*size as u64)
             }
             Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
-                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generic)))
+                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
             }
-            Type::Generic(idx) => generic(*idx),
+            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
             Type::Invalid => Layout::ZERO,
         }
     }
@@ -272,18 +279,18 @@ impl ResolvedTypeDef {
     }
     pub fn generic_count(&self) -> u8 {
         match self {
-            Self::Struct(struct_) => struct_.generic_count,
+            Self::Struct(struct_) => struct_.generic_count(),
             Self::Enum(enum_) => enum_.generic_count,
             Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
-    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generic: impl Fn(u8) -> Layout + Copy) -> Layout {
+    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
         match self {
             Self::Struct(struct_) => {
                 let mut alignment = 1;
                 let size = struct_.members.iter()
                     .map(|(_, ty)| {
-                        let layout = ty.layout(ctx, generic);
+                        let layout = ty.layout(ctx, generics);
                         alignment = alignment.max(layout.alignment);
                         layout.size
                     })
@@ -311,7 +318,7 @@ impl ResolvedTypeDef {
 #[derive(Debug, Clone)]
 pub struct FunctionHeader {
     pub name: String,
-    pub type_method_generic_count: u8,
+    pub inherited_generic_count: u8,
     pub generics: Vec<String>,
     pub params: Vec<(String, Type)>,
     pub varargs: bool,
@@ -321,7 +328,7 @@ pub struct FunctionHeader {
 }
 impl FunctionHeader {
     pub fn generic_count(&self) -> u8 {
-        self.type_method_generic_count + self.generics.len() as u8
+        self.inherited_generic_count + self.generics.len() as u8
     }
 }
 
@@ -331,7 +338,6 @@ pub struct ResolvedFunc {
     pub idents: Vec<Ident>,
     pub vars: Vec<Var>,
     pub types: TypeTable,
-    pub generics: TypeTableIndices,
 }
 
 #[derive(Debug)]
@@ -350,7 +356,12 @@ pub struct Struct {
     pub name: String,
     pub members: Vec<(String, Type)>,
     pub methods: DHashMap<String, FunctionId>,
-    pub generic_count: u8,
+    pub generics: Vec<String>,
+}
+impl Struct {
+    pub fn generic_count(&self) -> u8 {
+        self.generics.len() as u8
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -445,7 +445,7 @@ impl<'a> LocalScope<'a> {
                                 self.span(call_expr, ctx.ast)
                             )
                         }
-                        let generics = ctx.types.add_multiple_unknown(def.generic_count as _);
+                        let generics = ctx.types.add_multiple_unknown(def.generic_count() as _);
                         
                         
                         let arg_types = ctx.types.add_multiple_unknown(call.args.count);

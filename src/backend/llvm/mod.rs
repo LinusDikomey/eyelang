@@ -53,7 +53,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
         .map(|(name, ty)| {
             match ty {
                 ResolvedTypeDef::Struct(def) => {
-                    if def.generic_count != 0 { return TypeInstance::Generic(dmap::new()); }
+                    if def.generic_count() != 0 { return TypeInstance::Generic(dmap::new()); }
                     let name = ffi::CString::new(name.as_bytes()).unwrap();
                     TypeInstance::Simple(LLVMStructCreateNamed(ctx, name.as_ptr()))
                 }
@@ -73,7 +73,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
         let &TypeInstance::Simple(struct_ty) = &types[i] else { continue };
         match ty {
             ResolvedTypeDef::Struct(def) => {
-                    if def.generic_count != 0 { continue }
+                    if def.generic_count() != 0 { continue }
                     let mut members = def.members.iter()
                         .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
                         .collect::<Vec<_>>();
@@ -338,7 +338,7 @@ unsafe fn build_func(
             | ir::Tag::Module
             => ptr::null_mut(), // should never be used in runtime code
             ir::Tag::Decl => {
-                if ir.types[data.ty].layout(&ir.types, module).size == 0 {
+                if ir.types[data.ty].layout(&ir.types, |id| &module.types[id.idx()].1).size == 0 {
                     ptr::null_mut()
                 } else {
                     LLVMBuildAlloca(builder, table_ty(data.ty, types), NONE)
@@ -354,7 +354,7 @@ unsafe fn build_func(
             }
             ir::Tag::Store => {
                 let (val, ty) = get_ref_and_type(&instructions, data.bin_op.1);
-                if ty.layout(&ir.types, module).size == 0 {
+                if ty.layout(&ir.types, |id| &module.types[id.idx()].1).size == 0 {
                     ptr::null_mut()
                 } else {
                     let ptr = get_ref(&instructions, data.bin_op.0);

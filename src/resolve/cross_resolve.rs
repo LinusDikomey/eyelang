@@ -38,7 +38,7 @@ fn cross_resolve_top_level(
     errors: &mut Errors
 ) -> DefId {
 
-    match scopes[module.idx()].names.get_mut(def_name).unwrap() {
+    match scopes[module.idx()].get_def_mut(def_name) {
         DefId::Unresolved { resolving } => {
             if *resolving {
                 let span = match def {
@@ -65,11 +65,11 @@ fn cross_resolve_top_level(
                         match cross_resolve_top_level_by_name(name, name_span, cur_mod, scopes, ast, errors) {
                             DefId::Module(id) => cur_mod = id,
                             DefId::Invalid => {
-                                *scopes[module.idx()].names.get_mut(def_name).unwrap() = DefId::Invalid;
+                                *scopes[module.idx()].get_def_mut(def_name) = DefId::Invalid;
                                 return DefId::Invalid
                             }
                             _ => {
-                                *scopes[module.idx()].names.get_mut(def_name).unwrap() = DefId::Invalid;
+                                *scopes[module.idx()].get_def_mut(def_name) = DefId::Invalid;
                                 errors.emit_span(Error::ModuleExpected, name_span.in_mod(module));
                                 return DefId::Invalid
                             }
@@ -85,7 +85,7 @@ fn cross_resolve_top_level(
                 Definition::Const(_, _) => todo!(),
                 _ => unreachable!()
             };
-            *scopes[module.idx()].names.get_mut(def_name).unwrap() = def_id;
+            *scopes[module.idx()].get_def_mut(def_name) = def_id;
             def_id
         }
         other => *other

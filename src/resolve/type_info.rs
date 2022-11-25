@@ -8,15 +8,26 @@ use super::types::{Type, SymbolTable, DefId};
 pub struct TypeTable {
     types: Vec<TypeInfoOrIndex>,
     names: Vec<String>,
+    generics: TypeTableIndices,
 }
 impl TypeTable {
-    pub fn new() -> Self {
+    pub fn new(generic_count: u8) -> Self {
+
+        let types = (0..generic_count).map(|i| TypeInfo::Generic(i).into()).collect();
+        let generics = TypeTableIndices { idx: 0, count: generic_count as _ };
         let s = Self {
-            types: Vec::new(),
+            types,
             names: Vec::new(),
+            generics,
         };
         s.ty_dbg("Creating type table", ());
         s
+    }
+
+    pub fn generics(&self) -> TypeTableIndices { self.generics }
+
+    pub fn get_generic(&self, i: u8) -> TypeInfo {
+        self.get(self.generics.nth(i as usize))
     }
 
     pub fn find(&self, mut idx: TypeTableIndex) -> (TypeTableIndex, TypeInfo) {
@@ -257,21 +268,6 @@ impl TypeTable {
             idx: idx.idx,
             count: idx.count + (self.names.len() - prev_len) as u32,
         }
-    }
-
-    pub fn finalize(self) -> FinalTypeTable {
-        let types = self
-            .types
-            .iter()
-            .map(|ty| {
-                match *ty {
-                    TypeInfoOrIndex::Type(ty) => ty,
-                    TypeInfoOrIndex::Idx(idx) => self.get(idx),
-                }
-                .finalize(&self)
-            })
-            .collect();
-        FinalTypeTable { types }
     }
 
     /// Type inference debugging
@@ -544,25 +540,6 @@ impl TypeInfo {
     pub fn is_invalid(&self) -> bool {
         matches!(self, TypeInfo::Invalid)
     }
-    pub fn is_zero_sized(&self, generics: TypeTableIndices, types: &TypeTable, symbols: &SymbolTable) -> bool {
-        match self {
-            TypeInfo::Invalid | TypeInfo::Unknown | TypeInfo::SymbolItem(_) 
-            | TypeInfo::MethodItem { .. } | TypeInfo::EnumItem(_, _) | TypeInfo::LocalTypeItem(_) => unreachable!(),
-            TypeInfo::Int | TypeInfo::Float  => false,
-            TypeInfo::Primitive(p) => p.layout().size == 0,
-            TypeInfo::Resolved(id, generics) => match symbols.get_type(*id) {
-                ResolvedTypeDef::Struct(def) => def.members.iter().map(|(_, ty)| ty.is_zero_sized(todo!(), todo!())).all(|b| b),
-                ResolvedTypeDef::Enum(def) => def.variants.len() < 2,
-                ResolvedTypeDef::NotGenerated { name, generic_count, generating } => unreachable!(),
-            }
-            TypeInfo::Pointer(_) => false,
-            TypeInfo::Array(Some(0), _) => true,
-            TypeInfo::Array(_, ty) => types.get(*ty).is_zero_sized(generics, types, symbols),
-            TypeInfo::Enum(names) => names.count < 2,
-            TypeInfo::Tuple(_, _) => todo!(),
-            TypeInfo::Generic(i) => types.get(generics.nth(*i as usize)).is_zero_sized(generics, types, symbols),
-        }
-    }
     pub fn finalize(self, types: &TypeTable) -> Type {
         match self {
             Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
@@ -590,7 +567,10 @@ impl TypeInfo {
                     .map(|ty| types.get(ty).finalize(types))
                     .collect(),
             ),
-            Self::Generic(i) => Type::Generic(i),
+            Self::Generic(i) => match types.get_generic(i) {
+                Self::Generic(_) => Type::Generic(i),
+                other => other.finalize(types),
+            }
             Self::SymbolItem(_) | Self::MethodItem { .. }
             | Self::EnumItem(_, _)  | TypeInfo::LocalTypeItem(_) => Type::Invalid,
         }

@@ -51,8 +51,8 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     }
 
     let main = require_main.then_some(()).and_then(|()| {
-        if let Some(DefId::Function(id)) = module_scopes[main_module.idx()].names.get("main") {
-            let main = symbols.get_func(*id);
+        if let Some(DefId::Function(id)) = module_scopes[main_module.idx()].get_def("main") {
+            let main = symbols.get_func(id);
             if main.varargs || main.params.len() != 0 {
                 errors.emit_span(Error::MainArgs, ast.functions[id.idx()].span.in_mod(main_module));
             }
@@ -64,7 +64,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
                     ast.functions[id.idx()].return_type.span().in_mod(main_module)
                 )
             }
-            Some(*id)
+            Some(id)
         } else {
             errors.emit_span(Error::MissingMain, Span::new(0, 0, main_module));
             None
@@ -97,15 +97,17 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, D
 
 fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
 
-    fn gen_func_body(id: FunctionId, scope: &Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors,) {
+    fn gen_func_body(id: FunctionId, scope: &Scope, generics_ctx: &[String], ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
         let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
 
         let func = &ast[id];
         if let Some(body) = func.body {
-            let mut types = TypeTable::new();
+            let generic_count = symbols.get_func(id).generic_count();
+        
+            let mut types = TypeTable::new(generic_count);
             let mut vars = vec![];
             let mut idents = vec![Ident::Invalid; func.ident_count as usize];
-            let func_body_info = func_body(body, id, scope, Ctx {
+            func_body(body, id, scope, generics_ctx, Ctx {
                 ast,
                 symbols,
                 types: &mut types,
@@ -120,24 +122,21 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
                 idents,
                 vars,
                 types,
-                generics: func_body_info.generics,
             })
         }
     }
 
     for (_name, def) in defs {
         match def {
-            Definition::Function(func_id) => {
-
-                gen_func_body(*func_id, scope, ast, symbols, errors);
-            }
+            Definition::Function(func_id) => gen_func_body(*func_id, scope, &[], ast, symbols, errors),
             Definition::Type(id) => {
                 match symbols.get_type(*id) {
                     ResolvedTypeDef::Struct(def) => {
+                        // PERF: cloning generics here
+                        let generics = def.generics.clone();
                         // PERF: collecting here (ownership reasons)
                         for method_id in def.methods.values().copied().collect::<Vec<_>>() {
-                            // TODO: inherited generics
-                            gen_func_body(method_id, scope, ast, symbols, errors);
+                            gen_func_body(method_id, scope, &generics, ast, symbols, errors);
                         }
                         
                     }
@@ -172,7 +171,7 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
     }
 }
 
-fn func_signature(name: String, type_method_generic_count: u8, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
+fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
 -> FunctionHeader {
     let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
     let generic_defs = generics
@@ -190,7 +189,7 @@ fn func_signature(name: String, type_method_generic_count: u8, func: &ast::Funct
 
     FunctionHeader {
         name,
-        type_method_generic_count,
+        inherited_generic_count: inherited_generics_count,
         generics,
         params,
         return_type,
@@ -201,8 +200,7 @@ fn func_signature(name: String, type_method_generic_count: u8, func: &ast::Funct
 }
 
 fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
--> Struct {
-    
+-> Struct {    
     let names = def.generics.iter().enumerate().map(|(i, name_span)| {
         let name = &ast.src(scope.module.id).0[name_span.range()];
         (name.to_owned(), DefId::Generic(i as u8))
@@ -219,11 +217,13 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast:
         (name.clone(), *id)
     }).collect();
 
+    let generics = def.generics.iter().map(|name_span| ast.src(scope.module.id).0[name_span.range()].to_owned()).collect();
+
     Struct {
         name,
         members,
         methods: symbols,
-        generic_count: def.generic_count(),
+        generics,
     }
 }
 
@@ -333,19 +333,19 @@ pub enum ResolvedCall {
     Invalid,
 }
 
-struct FuncBodyInfo {
-    generics: TypeTableIndices,
-}
-
-fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, ctx: Ctx) -> FuncBodyInfo {
+fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, generics_ctx: &[String], ctx: Ctx) {
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
-    let generics = ctx.types.add_multiple(
-        (0..signature.generic_count())
-            .map(|i| TypeInfo::Generic(i as u8))
-    );
+    
+    let generics = ctx.types.generics();
+    let mut generic_types = generics.iter();
 
-    for (name, ty) in signature.generics.iter().zip(generics.iter()) {
+    for name in generics_ctx {
+        let ty = generic_types.next().unwrap();
+        scope.add_generic(name.clone(), ty);
+    }
+    for name in &signature.generics {
+        let ty = generic_types.next().unwrap();
         scope.add_generic(name.clone(), ty);
     }
 
@@ -366,6 +366,4 @@ fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, ctx: 
 
     let mut noreturn = false;
     scope.val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx, false);
-
-    FuncBodyInfo { generics }
 }

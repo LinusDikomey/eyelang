@@ -18,7 +18,7 @@ pub struct Scope<'a> {
     module_scopes: *const [Scope<'static>],
     pub module: ModuleCtx,
     parent: Option<&'a Scope<'a>>,
-    pub names: DHashMap<String, DefId>,
+    names: DHashMap<String, DefId>,
 }
 impl Scope<'static> {
     pub fn root(names: DHashMap<String, DefId>, module_ctx: ModuleCtx) -> Self {
@@ -108,6 +108,16 @@ impl<'a> Scope<'a> {
         }
 
         Some(current_module)
+    }
+
+    /// retrieve a definition in this scope
+    pub fn get_def(&self, name: &str) -> Option<DefId> {
+        self.names.get(name).copied()
+    }
+
+    /// retrieve a mutable reference to a definition in this scope
+    pub fn get_def_mut(&mut self, name: &str) -> &mut DefId {
+        self.names.get_mut(name).unwrap()
     }
 
     pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors) -> DefId {

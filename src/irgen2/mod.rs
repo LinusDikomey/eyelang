@@ -5,7 +5,7 @@ use crate::{
     resolve::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum, DefId},
         self,
-        type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId},
+        type_info::{TypeTableIndex, TypeInfo}, VarId},
     ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::{Primitive, Layout}, dmap::{DHashMap, self}
 };
@@ -31,6 +31,7 @@ struct Ctx<'a> {
     //ident_refs: &'a mut [Ref],
     module: ModuleId,
     functions: &'a mut Functions,
+    function_generics: &'a [Type],
 }
 impl<'a> Ctx<'a> {
     fn src(&self) -> &'a str {
@@ -137,7 +138,7 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
         // TODO: FunctionHeader type just for ir
         let header = FunctionHeader {
             name,
-            type_method_generic_count: 0,
+            inherited_generic_count: 0,
             generics: vec![],
             params: generic_header.params
                 .iter()
@@ -199,7 +200,7 @@ fn gen_func(
         return Function { header, ir: None }
     };
 
-    eprintln!("translating function with {} generics: {}", generics.len(), header.name);
+    eprintln!("translating function with {} generics: {} and types {:?}", generics.len(), header.name, body.types);
     // PERF: cloning type table here might be a problem
     let types = body.types.clone();
     
@@ -217,9 +218,9 @@ fn gen_func(
         types.replace_idx(body.generics.nth(i), info);
     }*/
     
-    let mut builder = IrBuilder::new(types, Vec::with_capacity(body.generics.len()));
+    let mut builder = IrBuilder::new(types, Vec::with_capacity(body.types.generics().len()));
     
-    debug_assert_eq!(body.generics.len(), generics.len());
+    debug_assert_eq!(body.types.generics().len(), generics.len());
     for ty in generics.iter() {
         let info = ty.as_info(&mut builder.types, |_| unreachable!()); // TODO: is this really unreachable?
         let info = match info {
@@ -238,7 +239,7 @@ fn gen_func(
     let mut var_refs = vec![Ref::UNDEF; body.vars.len()];
 
     for (i, (_, param_ty)) in header.params.iter().enumerate() {
-        let ty = param_ty.as_info(&mut builder.types, |i| body.generics.nth(i as usize).into());
+        let ty = param_ty.as_info(&mut builder.types, |i| body.types.generics().nth(i as usize).into());
         let ty = builder.types.add_info_or_idx(ty);
         let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
         var_refs[i] = builder.build_param(i as u32, ptr_ty);
@@ -253,6 +254,7 @@ fn gen_func(
         idents: &body.idents,
         module: header.module,
         functions,
+        function_generics: generics,
     }, &mut noreturn);
     if !noreturn {  
         if header.return_type == Type::Prim(Primitive::Unit) {
@@ -334,8 +336,11 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             Ref::UNIT
         }
         Expr::Return { val, .. } => {
-            let zero_sized = ir.types.get(ctx[*val])
-                .is_zero_sized(TypeTableIndices::EMPTY, &ir.types, ctx.symbols);
+            let zero_sized = ir.types
+                .get(ctx[*val])
+                .finalize(&ir.types)
+                .layout(|id| ctx.symbols.get_type(id), &[])
+                .size == 0;
 
             if zero_sized {
                 ir.build_ret_undef();
@@ -555,11 +560,11 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
             let cond_block = ir.create_block();
             let body_block = ir.create_block();
             let after_block = ir.create_block();
-            let cond = val_expr(ir, cond, ctx, noreturn);
             
             ir.build_goto(cond_block);
             
             ir.begin_block(cond_block);
+            let cond = val_expr(ir, cond, ctx, noreturn);
             ir.build_branch(cond, body_block, after_block);
             
             ir.begin_block(body_block);
@@ -640,7 +645,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let func_noreturn = func.return_type == Type::Prim(Primitive::Never);
                     let ty = ctx[expr];
                     
-                    let generics = generics.iter().map(|idx| ir.types.get(idx).finalize(&ir.types)).collect();
+                    let generics = generics.iter().map(|idx| ir.types.get(idx).finalize(&ir.types).instantiate_generics(ctx.function_generics)).collect();
                     let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics);
                     let call_val = ir.build_call(ir_func_id, args, ty);
 
@@ -790,7 +795,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let TypeInfo::SymbolItem(DefId::Type(type_id)) = ir.types.get(ctx[left]) else { int!() };
                     let layout = ctx.symbols.get_type(type_id).layout(
                         |id| ctx.symbols.get_type(id),
-                        |_| int!("should be checked in resolve")
+                        &[]
                     );
                     layout_val(ir, layout)
                 }
@@ -799,11 +804,7 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     if matches!(ir.types.get(ctx[left]), TypeInfo::LocalTypeItem(_))
                 => {
                     let TypeInfo::LocalTypeItem(idx) = ir.types.get(ctx[left]) else { int!() };
-                    let final_ty = ir.types[idx].finalize(&ir.types);
-                    let layout = final_ty.layout(
-                        |id| ctx.symbols.get_type(id),
-                        |_| int!(),
-                    );
+                    let layout = ir.ir_types.info_to_ty(ir.types[idx], &ir.types).layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout)
                 }
                 TypeInfo::EnumItem(id, variant) => {
@@ -966,7 +967,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
             Ref::val(RefVal::True)
         }
         Expr::Hole(_) => Ref::val(RefVal::True),
-        Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => todo!(),
+        Expr::BinOp(Operator::Range | Operator::RangeExclusive, _l, _r) => todo!(),
         Expr::Tuple(_, items) => {
             let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
             let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));

@@ -1,10 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type}, self}};
-
-use super::Module;
-
-
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type, ResolvedTypeDef}, self}};
 
 #[derive(Debug)]
 pub struct IrTypes {
@@ -125,18 +121,16 @@ pub enum IrType {
     Ref(TypeRef), // just refers to a different index
 }
 impl IrType {
-    pub fn layout(self, types: &IrTypes, module: &Module) -> Layout {
+    pub fn layout<'a>(self, types: &IrTypes, get_type: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy) -> Layout {
         match self {
             IrType::Primitive(p) => p.layout(),
             IrType::Id(id, generics) => {
-                module.types[id.idx()].1.layout(
-                    |id| &module.types[id.idx()].1,
-                    |i| types[generics.nth(i as _)].layout(types, module)
-                )
+                let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
+                get_type(id).layout(get_type, &generics)
             }
             IrType::Ptr(_) => Layout { size: 8, alignment: 8 },
             IrType::Array(elem_ty, size) => {
-                let elem_layout = types[elem_ty].layout(types, module);
+                let elem_layout = types[elem_ty].layout(types, get_type);
                 Layout {
                     size: elem_layout.size * size as u64,
                     alignment: elem_layout.alignment,
@@ -146,12 +140,12 @@ impl IrType {
                 let mut layout = Layout { size: 0, alignment: 1 };
                 for ty in elems.iter() {
                     let ty = &types[ty];
-                    layout = layout.accumulate(ty.layout(types, module));
+                    layout = layout.accumulate(ty.layout(types, get_type));
                 }
                 layout
             }
 
-            IrType::Ref(r) => types[r].layout(types, module),
+            IrType::Ref(r) => types[r].layout(types, get_type),
         }
     }
     pub fn as_resolved_type(self, types: &IrTypes) -> Type {
