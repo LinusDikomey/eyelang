@@ -619,8 +619,19 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                                 val = ir.build_load(val, loaded_ty);
                                 ptr_count -= 1;
                             }
-                        } else if req_ptr_count > ptr_count {
-                            todo!("auto ref when calling methods")
+                        } else if req_ptr_count > ptr_count { 
+                            let mut current_ref_ty = if val_is_var {
+                                ir.types.add(TypeInfo::Pointer(this_ty))
+                            } else {
+                                this_ty
+                            };
+                            while req_ptr_count > ptr_count {
+                                current_ref_ty = ir.types.add(TypeInfo::Pointer(current_ref_ty));
+                                let var = ir.build_decl(current_ref_ty);
+                                ir.build_store(var, val);
+                                val = var;
+                                ptr_count += 1;
+                            }
                         }
                         Some(val)
                     } else {
