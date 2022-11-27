@@ -141,7 +141,7 @@ impl TypeTable {
         let (curr_idx, prev) = self.find_optimizing(idx);
 
         self.ty_dbg("Specifying", (prev, idx, other));
-        let ty = merge_twosided(prev, other, self, symbols).unwrap_or_else(|| {
+        let ty = merge_infos(prev, other, self, symbols).unwrap_or_else(|| {
             errors.emit_span(
                 Error::MismatchedType {
                     expected: prev.as_string(self, symbols).into_owned(),
@@ -176,29 +176,35 @@ impl TypeTable {
         span: Span,
         ctx: &SymbolTable,
     ) {
+        if let Err(err) = self.try_merge(a, b, ctx) {
+            self.ty_dbg("\t... failed to merge", span);
+            errors.emit_span(
+                err,
+                span,
+            );
+        }
+    }
+
+    fn try_merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, ctx: &SymbolTable) -> Result<(), Error> {
         if a.idx() == b.idx() {
-            return;
+            return Ok(());
         }
         let (curr_a_idx, a_ty) = self.find(a);
         let (curr_b_idx, b_ty) = self.find(b);
         if curr_a_idx.idx() == curr_b_idx.idx() {
-            return;
+            return Ok(());
         }
         self.ty_dbg("Merging ...", ((a_ty, a), (b_ty, b)));
 
         // merge b's previous type into a
-        let new_ty = match merge_twosided(a_ty, b_ty, self, ctx) {
-            Some(ty) => self.ty_dbg("\t... merged", ty),
+        let (res, new_ty) = match merge_infos(a_ty, b_ty, self, ctx) {
+            Some(ty) => (Ok(()), self.ty_dbg("\t... merged", ty)),
             None => {
-                self.ty_dbg("\t... failed to merge", span);
-                errors.emit_span(
-                    Error::MismatchedType {
-                        expected: a_ty.as_string(self, ctx).into_owned(),
-                        found: b_ty.as_string(self, ctx).into_owned(),
-                    },
-                    span,
-                );
-                TypeInfo::Invalid
+                let res = Err(Error::MismatchedType {
+                    expected: a_ty.as_string(self, ctx).into_owned(),
+                    found: b_ty.as_string(self, ctx).into_owned(),
+                });
+                (res, TypeInfo::Invalid)
             }
         };
         self.types[curr_a_idx.idx()] = TypeInfoOrIndex::Type(new_ty);
@@ -214,6 +220,8 @@ impl TypeTable {
             self.ty_dbg("shortening", (a, curr_a_idx));
             self.types[a.idx()] = TypeInfoOrIndex::Idx(curr_a_idx);
         }
+
+        res
     }
 
     pub fn deref(&self, mut ty: TypeTableIndex) -> TypeTableIndex {
@@ -577,59 +585,54 @@ impl TypeInfo {
     }
 }
 
-fn merge_twosided(
-    ty: TypeInfo,
-    other: TypeInfo,
-    types: &mut TypeTable,
-    symbols: &SymbolTable,
-) -> Option<TypeInfo> {
-    match merge_onesided(ty, other, types, symbols) {
-        Some(t) => Some(t),
-        None => merge_onesided(other, ty, types, symbols),
-    }
-}
-
 /// merge the types and return the merged type
-fn merge_onesided(
+fn merge_infos(
     ty: TypeInfo,
     other: TypeInfo,
     types: &mut TypeTable,
     symbols: &SymbolTable,
 ) -> Option<TypeInfo> {
+    match other {
+        Unknown | Primitive(crate::types::Primitive::Never) => return Some(ty),
+        Invalid => return Some(Invalid),
+        Int => match ty {
+            Int => return Some(Int),
+            Primitive(p) if p.as_int().is_some() => return Some(ty),
+            _ => {}
+        },
+        Float => match ty {
+            Float => return Some(Float),
+            Primitive(p) if p.as_float().is_some() => return Some(ty),
+            _ => {}
+        },
+        _ => {}
+    }
     use TypeInfo::*;
     match ty {
         Unknown => Some(other),
         Primitive(crate::types::Primitive::Never) => Some(other),
         Int => match other {
-            Int => Some(other),
+            Int => Some(Int),
             Primitive(p) if p.as_int().is_some() => Some(other),
-            Unknown => Some(Int),
             _ => None,
         },
         Float => match other {
-            Float => Some(other),
+            Float => Some(Float),
             Primitive(p) if p.as_float().is_some() => Some(other),
-            Unknown => Some(Float),
             _ => None,
         },
         Primitive(prim) => if let Primitive(other) = other {
             prim == other
         } else {
             false
-        }
-        .then_some(ty),
+        }.then_some(ty),
         Resolved(id, generics) => if let Resolved(other, other_generics) = other {
             id == other && {
                 debug_assert_eq!(generics.count, other_generics.count);
                 generics
                     .iter()
                     .zip(other_generics.iter())
-                    .map(|(a, b)| {
-                        let new = merge_onesided(types[a], types[b], types, symbols)?;
-                        types.update_type_and_point(a, new, b);
-                        Some(())
-                    })
-                    .all(|v| v.is_some())
+                    .all(|(a, b)|types.try_merge(a, b, symbols).is_ok())
             }
         } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
             if let Enum(names) = other {
@@ -646,7 +649,7 @@ fn merge_onesided(
         .then_some(ty),
         Pointer(inner) => {
             let Pointer(other_inner) = other else { return None };
-            let new_inner = merge_onesided(
+            let new_inner = merge_infos(
                 types.get(inner),
                 types.get(other_inner),
                 types,
@@ -658,7 +661,7 @@ fn merge_onesided(
         Array(size, inner) => {
             let Array(other_size, other_inner) = other else { return None };
 
-            let new_inner = merge_onesided(
+            let new_inner = merge_infos(
                 types.get(inner),
                 types.get(other_inner),
                 types,
@@ -719,8 +722,12 @@ fn merge_onesided(
             };
 
             for (a, b) in res_ty.iter().zip(other_ty.iter()) {
-                let new = merge_twosided(types.get(a), types.get(b), types, symbols)?;
-                types.update_type_and_point(a, new, b);
+                let (a_idx, a_ty) = types.find(a);
+                let (b_idx, b_ty) = types.find(b);
+
+                let merged = merge_infos(a_ty, b_ty, types, symbols)?;
+                types.replace_idx(a_idx, TypeInfoOrIndex::Type(merged));
+                types.replace_idx(b_idx, TypeInfoOrIndex::Idx(a_idx));
             }
             Some(Tuple(res_ty, mode))
         }
@@ -743,7 +750,7 @@ fn merge_onesided(
         MethodItem { .. } | EnumItem(_, _) => todo!(),
         LocalTypeItem(t1) => {
             let LocalTypeItem(t2) = other else { return None };
-            match merge_twosided(types.get(t1), types.get(t2), types, symbols) {
+            match merge_infos(types.get(t1), types.get(t2), types, symbols) {
                 Some(ty) => {
                     Some(LocalTypeItem(types.add(ty)))
                 }

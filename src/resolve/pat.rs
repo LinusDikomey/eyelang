@@ -52,7 +52,7 @@ impl<'a> LocalScope<'a> {
             | Expr::DeclareWithVal { .. }
             | Expr::Return { .. }
             | Expr::ReturnUnit { .. }
-            | Expr::If { .. } 
+            | Expr::If { .. }
             | Expr::IfElse { .. } 
             | Expr::Match { .. } 
             | Expr::While { .. } 

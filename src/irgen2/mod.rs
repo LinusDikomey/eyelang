@@ -200,7 +200,6 @@ fn gen_func(
         return Function { header, ir: None }
     };
 
-    eprintln!("translating function with {} generics: {} and types {:?}", generics.len(), header.name, body.types);
     // PERF: cloning type table here might be a problem
     let types = body.types.clone();
     

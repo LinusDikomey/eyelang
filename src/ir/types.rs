@@ -17,9 +17,6 @@ impl IrTypes {
     pub fn add_generic_instance_ty(&mut self, ty: IrType) {
         self.generic_instances.push(ty);
     }
-    pub fn generic_instance_ty(&self, i: u8) -> IrType {
-        self.generic_instances[i as usize]
-    }
     pub fn add(&mut self, ty: IrType) -> TypeRef {
         self.types.push(ty);
         TypeRef((self.types.len() - 1) as u32)
@@ -30,25 +27,25 @@ impl IrTypes {
             TypeInfo::Float => IrType::Primitive(Primitive::F32),
             TypeInfo::Primitive(p) => IrType::Primitive(p),
             TypeInfo::Resolved(id, generics) => {
-                let generic_idx = self.types.len() as u32;
+                let generic_idx = self.types.len();
                 self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(generics.len()));
                 
                 for (i, ty) in generics.iter().enumerate() {
-                    self.types[i] = self.info_to_ty(types.get(ty), types);
+                    self.types[generic_idx + i] = self.info_to_ty(types.get(ty), types);
                 }
 
-                IrType::Id(id, TypeRefs { idx: generic_idx, count: generics.len() as _ })
+                IrType::Id(id, TypeRefs { idx: generic_idx as _, count: generics.len() as _ })
             }
             TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
             TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
             TypeInfo::Enum(names) => IrType::Primitive(Enum::int_ty_from_variant_count(names.count()).into()),
             TypeInfo::Tuple(elems, _) => {
-                let elems_idx = self.types.len() as u32;
+                let elems_idx = self.types.len();
                 self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(elems.len()));
                 for (i, ty) in elems.iter().enumerate() {
-                    self.types[i] = self.info_to_ty(types.get(ty), types);
+                    self.types[elems_idx + i] = self.info_to_ty(types.get(ty), types);
                 }
-                IrType::Tuple(TypeRefs { idx: elems_idx, count: elems.len() as _ })
+                IrType::Tuple(TypeRefs { idx: elems_idx as _, count: elems.len() as _ })
             }
             TypeInfo::Generic(i) => self.generic_instances[i as usize],
             TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
@@ -144,7 +141,6 @@ impl IrType {
                 }
                 layout
             }
-
             IrType::Ref(r) => types[r].layout(types, get_type),
         }
     }

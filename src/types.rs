@@ -206,7 +206,7 @@ impl Layout {
     #[must_use]
     pub fn accumulate(self, other: Self) -> Self {
         Self {
-            size: Self::align(self.size, other.alignment),
+            size: Self::align(self.size, other.alignment) + other.size,
             alignment: self.alignment.max(other.alignment),
         }
     }

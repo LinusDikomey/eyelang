@@ -126,7 +126,8 @@ impl<'a> LocalScope<'a> {
                 ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
             }
             ast::Expr::Variable { span, id } => {
-                let resolved = self.resolve_local(&self.scope.module.src()[span.range()], *span, ctx.errors);
+                let name = &self.scope.module.src()[span.range()];
+                let resolved = self.resolve_local(name, *span, ctx.errors);
                 let ident = match resolved {
                     LocalDefId::Def(DefId::Invalid) => {
                         ctx.types.invalidate(info.expected);
@@ -393,6 +394,8 @@ impl<'a> LocalScope<'a> {
                 self.val_expr(idx, info.with_expected(idx_ty), ctx, false);
             }
             &ast::Expr::TupleIdx { expr, idx, .. } => {
+                lval = true;
+
                 let elem_types = ctx.types.add_multiple_info_or_index(
                     (0..idx).map(|_| TypeInfoOrIndex::Type(TypeInfo::Unknown))
                     .chain(std::iter::once(TypeInfoOrIndex::Idx(info.expected)))
