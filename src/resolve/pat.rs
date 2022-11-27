@@ -22,9 +22,13 @@ impl<'a> LocalScope<'a> {
                 exhaustion.exhaust_bool(*val);
                 ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, self.scope.module.id));
             }
-            Expr::EnumLiteral { .. } => todo!(),
-            Expr::Nested(_, _) => todo!(),
-            Expr::Unit(_) => todo!(),
+            Expr::EnumLiteral { ident, .. } => {
+                let name = &ctx.ast.src(self.mod_id()).0[ident.range()];
+                ctx.specify_enum_variant(expected, name, ident.in_mod(self.mod_id()));
+                exhaustion.exhaust_enum_variant(name.to_owned());
+            }
+            Expr::Nested(_, inner) => self.pat(*inner, expected, ctx, exhaustion),
+            Expr::Unit(span) => ctx.specify(expected, TypeInfo::UNIT, span.in_mod(self.mod_id())),
             Expr::Variable { span, id } => {
                 let var_id = ctx.new_var(super::Var { ty: expected });
                 ctx.set_ident(*id, Ident::Var(var_id));

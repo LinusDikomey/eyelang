@@ -747,7 +747,7 @@ fn merge_infos(
             }
         }
         Invalid => Some(Invalid), // invalid type 'spreading'
-        MethodItem { .. } | EnumItem(_, _) => todo!(),
+        MethodItem { .. } | EnumItem(_, _) => todo!("merge {ty:?} with {other:?}"),
         LocalTypeItem(t1) => {
             let LocalTypeItem(t2) = other else { return None };
             match merge_infos(types.get(t1), types.get(t2), types, symbols) {

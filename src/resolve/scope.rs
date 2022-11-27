@@ -147,6 +147,7 @@ impl<'a> Scope<'a> {
                         generics,
                         symbols,
                         errors,
+                        None,
                         |id, errors| self.resolve_ty(id, symbols, errors)
                     ).map_or(Type::Invalid, |generics| Type::Id(id, generics)),
                     DefId::Generic(i) => Type::Generic(i),
@@ -166,7 +167,12 @@ impl<'a> Scope<'a> {
                 };
                 Type::Array(Box::new((self.resolve_ty(&inner.0, symbols, errors), count)))
             }
-            ast::UnresolvedType::Tuple(_, _) => todo!(),
+            ast::UnresolvedType::Tuple(members, _) => Type::Tuple(
+                members
+                    .iter()
+                    .map(|ty| self.resolve_ty(ty, symbols, errors))
+                    .collect()
+            ),
             ast::UnresolvedType::Infer(_) => {
                 errors.emit_span(Error::InferredTypeNotAllowedHere, ty.span().in_mod(self.module.id)) ;
                 Type::Invalid
@@ -174,13 +180,14 @@ impl<'a> Scope<'a> {
         }
     }
 
-    pub fn generic_type_instantiation<T>(
+    pub fn generic_type_instantiation<T: Clone>(
         &self,
         path: &ast::IdentPath,
         id: TypeId,
         generics: &Option<(Vec<ast::UnresolvedType>, TSpan)>,
         symbols: &SymbolTable,
         errors: &mut Errors,
+        on_omitted_generic: Option<T>,
         mut resolve_ty: impl FnMut(&ast::UnresolvedType, &mut Errors) -> T,
     ) -> Option<Vec<T>> {
         let generic_count = symbols.generic_count(id);
@@ -201,13 +208,18 @@ impl<'a> Scope<'a> {
                 .collect()
         } else {
             if generic_count != 0 {
-                errors.emit_span(
-                    Error::InvalidGenericCount { expected: generic_count, found: 0 },
-                    path.span().in_mod(self.module.id)
-                );
-                return None;
+                if let Some(on_omitted) = on_omitted_generic {
+                    vec![on_omitted; generic_count as usize]
+                } else {
+                    errors.emit_span(
+                        Error::InvalidGenericCount { expected: generic_count, found: 0 },
+                        path.span().in_mod(self.module.id)
+                    );
+                    return None;
+                }
+            } else {
+                vec![]
             }
-            vec![]
         };
         Some(generics)
     }
@@ -334,6 +346,7 @@ impl<'a> LocalScope<'a> {
                     }
                     LocalDefId::Def(DefId::Type(id)) => {
                         self.scope.generic_type_instantiation(path, id, generics, symbols, errors,
+                            Some(TypeInfoOrIndex::Type(TypeInfo::Unknown)),
                             |ty, errors| self.resolve_type_info(ty, symbols, types, errors)
                         )
                         .map_or(

@@ -133,6 +133,16 @@ impl<'a> LocalScope<'a> {
                         ctx.types.invalidate(info.expected);
                         Ident::Invalid
                     }
+                    LocalDefId::Def(DefId::Global(id)) => {
+                        lval = true;
+
+                        let (_, ty, _) = ctx.symbols.get_global(id);
+                        let global_ty = ty.as_info(ctx.types, |_| panic!("global type shouldn't be generic"));
+                        let span = self.span(expr, ctx.ast);
+                        ctx.types.specify_or_merge(info.expected, global_ty, ctx.errors, span, ctx.symbols);
+
+                        Ident::Global(id)
+                    }
                     LocalDefId::Def(def) => {
                         ctx.specify(info.expected, TypeInfo::SymbolItem(def), span.in_mod(self.mod_id()));
                         Ident::Invalid

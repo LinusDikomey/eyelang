@@ -15,11 +15,18 @@ mod main_func;
 /// Macro for internal errors. Indicates that type checking went wrong or some internal assumption was broken
 macro_rules! int {
     () => {{
-        ::color_format::ceprintln!("#r<internal irgen error>");
+        
+        line!();
+        ::color_format::ceprintln!("#r<internal irgen error> at #u<{}:{}:{}>",
+            ::core::file!(), ::core::line!(), ::core::column!()
+        );
         ::std::process::exit(1)
     }};
     ($($arg: tt)*) => {{
-        ::color_format::ceprintln!("#r<internal irgen error>: {}", format!($($arg)*));
+        ::color_format::ceprintln!("#r<internal irgen error>: {} at #u<{}:{}:{}>",
+            format!($($arg)*),
+            ::core::file!(), ::core::line!(), ::core::column!()
+        );
         ::std::process::exit(1)
     }}
 }
@@ -182,7 +189,7 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
     ir::Module {
         name: "MainModule".to_owned(),
         funcs,
-        globals,
+        globals: globals.into_iter().map(|global| global.unwrap()).collect(),
         types,
     }
 }
@@ -404,7 +411,14 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
                 resolve::Ident::Invalid => int!(),
-                resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()])
+                resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),
+                resolve::Ident::Global(global_id) => {
+                    let ty = &ctx.symbols.get_global(global_id).1;
+                    let ty = ty.as_info(&mut ir.types, |_| int!());
+                    let ty = ir.types.add_info_or_idx(ty);
+                    let ptr_ty = ir.types.add(TypeInfo::Pointer(ty));
+                    return Res::Var(ir.build_global(global_id, ptr_ty))
+                }
             }
         }
         Expr::Hole(_) => return Res::Hole,
@@ -973,6 +987,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
                     ir.build_store(var, pat_val);
                     ctx.var_refs[var_id.idx()] = var;
                 }
+                resolve::Ident::Global(_) => int!("global in pattern")
             }
             Ref::val(RefVal::True)
         }

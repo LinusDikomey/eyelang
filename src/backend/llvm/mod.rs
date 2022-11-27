@@ -656,7 +656,14 @@ unsafe fn llvm_global_ty_generic(ctx: LLVMContextRef, ty: &Type, module: &ir::Mo
             LLVMArrayType(llvm_global_ty(ctx, inner, module, instances), *size)
         }
         resolve::types::Type::Enum(variants) => int_from_variant_count(ctx, variants.len()),
-        resolve::types::Type::Tuple(_) => todo!(),
+        resolve::types::Type::Tuple(elems) => {
+            let mut llvm_elems: Vec<_> = elems
+                .iter()
+                .map(|elem| llvm_global_ty_generic(ctx, elem, module, instances, generics))
+                .collect();
+            
+            LLVMStructTypeInContext(ctx, llvm_elems.as_mut_ptr(), elems.len() as _, FALSE)
+        }
         resolve::types::Type::Generic(i) => llvm_global_ty_generic(ctx, &generics[*i as usize], module, instances, generics),
         resolve::types::Type::Invalid => unreachable!(),
     }

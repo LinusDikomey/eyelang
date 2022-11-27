@@ -156,12 +156,12 @@ pub struct SymbolTable {
     pub types: Vec<(String, MaybeTypeDef)>,
     pub traits: Vec<Option<TraitDef>>,
     pub consts: Vec<ConstVal>,
-    pub globals: Vec<(String, Type, Option<ConstVal>)>,
+    pub globals: Vec<Option<(String, Type, Option<ConstVal>)>>,
     pub expr_types: Vec<TypeTableIndex>,
     pub calls: Vec<Option<ResolvedCall>>,
 }
 impl SymbolTable {
-    pub fn new(func_count: usize, expr_count: usize, types: &[TypeDef], trait_count: usize, call_count: usize) -> Self {
+    pub fn new(func_count: usize, expr_count: usize, types: &[TypeDef], trait_count: usize, call_count: usize, global_count: usize) -> Self {
         Self {
             funcs: (0..func_count).map(|_| None).collect(),
             types: types
@@ -170,7 +170,7 @@ impl SymbolTable {
                 .collect(),
             traits: (0..trait_count).map(|_| None).collect(),
             consts: Vec::new(),
-            globals: Vec::new(),
+            globals: vec![None; global_count],
             expr_types: vec![TypeTableIndex::NONE; expr_count],
             calls: vec![None; call_count],
         }
@@ -211,10 +211,8 @@ impl SymbolTable {
         self.consts.push(c);
         key
     }
-    pub fn add_global(&mut self, name: String, ty: Type, val: Option<ConstVal>) -> SymbolKey {
-        let key = SymbolKey(self.globals.len() as u64);
-        self.globals.push((name, ty, val));
-        key
+    pub fn place_global(&mut self, id: GlobalId, name: String, ty: Type, val: Option<ConstVal>) {
+        self.globals[id.idx()] = Some((name, ty, val));
     }
 
     pub fn get_func(&self, key: FunctionId) -> &FunctionHeader { self.funcs[key.idx()].as_ref().unwrap() }
@@ -233,7 +231,9 @@ impl SymbolTable {
     //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
     //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
     pub fn get_const(&self, key: SymbolKey) -> &ConstVal { &self.consts[key.idx()] }
-    pub fn get_global(&self, key: SymbolKey) -> &(String, Type, Option<ConstVal>) { &self.globals[key.idx()] }
+    pub fn get_global(&self, key: GlobalId) -> &(String, Type, Option<ConstVal>) {
+        &self.globals[key.idx()].as_ref().unwrap()
+    }
     pub fn get_const_mut(&mut self, key: SymbolKey) -> &mut ConstVal { &mut self.consts[key.idx()] }
 }
 
@@ -255,8 +255,8 @@ impl From<DefId> for ConstSymbol {
             DefId::Type(id) => Self::Type(id),
             DefId::Trait(id) => Self::Trait(id),
             DefId::Module(id) => Self::Module(id),
-            DefId::Global(id) => todo!(),
-            DefId::Generic(i) => todo!(),
+            DefId::Global(_id) => todo!(),
+            DefId::Generic(_id) => todo!(),
             DefId::Invalid => todo!(),
             DefId::Unresolved { .. } => unreachable!()
         }

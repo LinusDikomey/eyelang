@@ -2,7 +2,9 @@ use std.c.printf
 
 swap :: fn[A, B](a A, b B) -> (B, A): (b, a)
 
-fib :: fn[T](n T) -> T: match n {
+# generic fib isn't possible right now due to generics now being typechecked but traits not being available.
+# fib :: fn[T](n T) -> T: match n {
+fib :: fn(n i32) -> i32: match n {
     0: 0,
     1: 1,
     _: fib(n-1) + fib(n-2)
@@ -16,8 +18,8 @@ main :: fn {
     y2 : f64 = tuple.0
     x2 := tuple.1
     
-    fib_a: i32 = fib(10)
-    fib_b: u64 = fib(10)
+    fib_a := fib(10)
+    fib_b := fib(10)
     
     printf("%d, %d\n", fib_a, fib_b)
 

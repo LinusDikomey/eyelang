@@ -1,5 +1,5 @@
 Compiling errors ...
-Finished with 4 errors
+Finished with 5 errors
 error: unexpected characters
 at: eye/errors.eye:12:1
      | 
@@ -28,4 +28,10 @@ at: eye/errors.eye:24:27
   24 |     print("Test Function"); # oh no, a semicolon
      |                           ^
      |                           expected an expression but found ;
+
+error: no main function provided
+at: eye/errors.eye:1:1
+     | 
+   1 | main :: fn: print("Hello")
+     | ^
 

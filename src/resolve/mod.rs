@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId},
+    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId},
     error::{Errors, Error},
     dmap::DHashMap,
     span::Span,
@@ -10,7 +10,7 @@ use crate::{
 
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
-    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}
+    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}, const_val::ConstVal
 };
 
 pub mod const_val;
@@ -24,7 +24,7 @@ mod exhaust;
 
 pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool)
 -> (SymbolTable, Option<FunctionId>) {
-    let mut symbols = SymbolTable::new(ast.functions.len(), ast.expr_count(), &ast.types, ast.traits.len(), ast.calls.len());
+    let mut symbols = SymbolTable::new(ast.functions.len(), ast.expr_count(), &ast.types, ast.traits.len(), ast.calls.len(), ast.globals.len());
 
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
@@ -163,11 +163,15 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
             };
             symbols.place_type(id, def);
         }
+        &Definition::Global(id) => {
+            let def = &ast[id];
+            let (ty, val) = global(def, ast, scope, symbols, errors);
+            symbols.place_global(id, name.to_owned(), ty, val);
+        }
         Definition::Trait(_)
         | Definition::Module(_)
         | Definition::Use(_)
         | Definition::Const(_, _) => {}
-        Definition::Global(_) => todo!(),
     }
 }
 
@@ -233,10 +237,22 @@ fn enum_def(name: String, def: &ast::EnumDefinition, _scope: &mut Scope, _symbol
     Enum { name, variants, generic_count: def.generic_count() }
 }
 
+fn global(def: &ast::GlobalDefinition, _ast: &Ast, scope: &mut Scope, symbols: &mut SymbolTable, errors: &mut Errors)
+-> (Type, Option<ConstVal>) {
+    let ty = scope.resolve_ty(&def.ty, symbols, errors);
+
+    if def.val.is_some() {
+        todo!("globals with initial values")
+    }
+
+    (ty, None)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Ident {
     Invalid,
     Var(VarId),
+    Global(GlobalId),
 }
 
 #[derive(Clone, Copy, Debug)]
