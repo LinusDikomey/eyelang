@@ -1,19 +1,19 @@
 use crate::{
-    ast::{ExprRef, self, CallId, ExprExtra},
-    error::Error,
+    ast::{ExprRef, self, CallId, ExprExtra, ModuleId, Ast, Expr},
+    error::{Error, Errors},
     token::{FloatLiteral, IntLiteral, Operator},
     types::Primitive,
     resolve::{exhaust::Exhaustion, types::ResolvedTypeDef},
-    dmap, span::TSpan
+    dmap::{self, DHashMap}, span::{TSpan, Span}
 };
 
 use super::{
     Ctx,
-    type_info::{TypeInfo, TypeInfoOrIndex, TypeTableIndex},
+    type_info::{TypeInfo, TypeInfoOrIndex, TypeTableIndex, TypeTable},
     Ident,
     ResolvedCall,
-    scope::{LocalScope, ExprInfo, LocalDefId},
-    types::{DefId, TupleCountMode}
+    scope::{ExprInfo, LocalDefId, ModuleCtx},
+    types::{DefId, TupleCountMode, SymbolTable}, VarId, exhaust
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -33,12 +33,24 @@ impl Res {
     }
 }
 
-impl<'a> LocalScope<'a> {
-    pub(super) fn val_expr(&mut self, expr: ExprRef, info: ExprInfo, mut ctx: Ctx, unused: bool) {
-        match self.expr(expr, info, ctx.reborrow(), false) {
+pub trait LocalScope {
+    type Child<'c>: LocalScope where Self: 'c;
+
+    fn module(&self) -> ModuleCtx;
+    fn mod_id(&self) -> ModuleId {
+        self.module().id
+    }
+    fn define_var(&mut self, name: String, var_id: VarId);
+
+    fn span(&self, expr: ExprRef, ast: &Ast) -> Span {
+        ast[expr].span_in(ast, self.mod_id())
+    }
+
+    fn val_expr(&mut self, expr_: ExprRef, info: ExprInfo, mut ctx: Ctx, unused: bool) where Self: Sized {
+        match self.expr(expr_, info, ctx.reborrow(), false) {
             Res::Val { use_hint, lval: _ } => {
                 if use_hint == UseHint::Should && unused {
-                    ctx.errors.emit_span(Error::UnusedExpressionValue, self.span(expr, ctx.ast));
+                    ctx.errors.emit_span(Error::UnusedExpressionValue, self.span(expr_, ctx.ast));
                 }
             }
             /*Res::Symbol(_) | Res::Method(_) => {
@@ -48,13 +60,20 @@ impl<'a> LocalScope<'a> {
         }
     }
 
+    fn resolve_in_module(&mut self, id: ModuleId, name: &str, name_span: Span, errors: &mut Errors) -> DefId;
+
+    fn child(&mut self, locals: DHashMap<String, LocalDefId>) -> Self::Child<'_>;
+    fn child_with_defs(&mut self, defs: &DHashMap<String, ast::Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) -> Self::Child<'_>;
+
+    fn resolve_local(&self, name: &str, span: TSpan, symbols: &SymbolTable, errors: &mut Errors) -> LocalDefId;
+
     #[must_use]
-    pub(super) fn expr(&mut self, expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_allowed: bool) -> Res {
-        ctx.symbols.expr_types[expr.idx()] = info.expected;
+    fn expr(&mut self, expr_: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_allowed: bool) -> Res where Self: Sized {
+        ctx.symbols.expr_types[expr_.idx()] = info.expected;
         let mut use_hint = UseHint::Can;
         let mut lval = false;
 
-        match &ctx.ast[expr] {
+        match &ctx.ast[expr_] {
             ast::Expr::Block { span: _, items, defs } => {
                 let mut block_scope = self.child_with_defs(&ctx.ast[*defs], ctx.ast, ctx.symbols, ctx.errors);
 
@@ -62,12 +81,12 @@ impl<'a> LocalScope<'a> {
                     let expected = ctx.types.add_unknown();
                     let res = block_scope.expr(*item, info.with_expected(expected), ctx.reborrow(), false);
                     if res.should_use() == UseHint::Should {
-                        ctx.errors.emit_span(Error::UnusedExpressionValue, self.span(*item, ctx.ast));
+                        ctx.errors.emit_span(Error::UnusedExpressionValue, block_scope.span(*item, ctx.ast));
                     }
                 }
             }
             ast::Expr::Declare { pat, annotated_ty } => {
-                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = self.resolve_type_info(annotated_ty, ctx.symbols, ctx.types, ctx.errors);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 let mut exhaustion = Exhaustion::None;
@@ -77,7 +96,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::DeclareWithVal { pat, annotated_ty, val } => {
-                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = self.resolve_type_info(annotated_ty, ctx.symbols, ctx.types, ctx.errors);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 self.val_expr(*val, info.with_expected(ty), ctx.reborrow(), false);
@@ -92,42 +111,42 @@ impl<'a> LocalScope<'a> {
                 self.val_expr(*val, info.with_expected(info.ret), ctx, false);
             }
             ast::Expr::ReturnUnit { .. } => {
-                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Unit), self.span(expr, ctx.ast));
+                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Unit), self.span(expr_, ctx.ast));
             }
             ast::Expr::IntLiteral(span) => {
-                let lit = IntLiteral::parse(&self.scope.module.src()[span.range()]);
+                let lit = IntLiteral::parse(&self.module().src()[span.range()]);
                 let ty = lit.ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into()));
-                ctx.specify(info.expected, ty, span.in_mod(self.scope.module.id));
+                ctx.specify(info.expected, ty, span.in_mod(self.mod_id()));
                 use_hint = UseHint::Should;
             }
             ast::Expr::FloatLiteral(span) => {
-                let lit = FloatLiteral::parse(&self.scope.module.src()[span.range()]);
+                let lit = FloatLiteral::parse(&self.module().src()[span.range()]);
                 let ty = lit.ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into()));
-                ctx.specify(info.expected, ty, span.in_mod(self.scope.module.id));
+                ctx.specify(info.expected, ty, span.in_mod(self.mod_id()));
                 use_hint = UseHint::Should;
             }
             ast::Expr::StringLiteral(span) => {
                 use_hint = UseHint::Should;
                 let i8_ty = ctx.types.add(TypeInfo::Primitive(Primitive::I8));
                 let ty = TypeInfo::Pointer(i8_ty);
-                ctx.specify(info.expected, ty, span.in_mod(self.scope.module.id))
+                ctx.specify(info.expected, ty, span.in_mod(self.mod_id()))
             }
             ast::Expr::BoolLiteral { .. } => {
-                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), self.span(expr, ctx.ast));
+                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), self.span(expr_, ctx.ast));
                 use_hint = UseHint::Should;
             }
             ast::Expr::EnumLiteral { ident, .. } => {
-                let name = &self.scope.module.src()[ident.range()];
-                ctx.specify_enum_variant(info.expected, name, ident.in_mod(self.scope.module.id))
+                let name = &self.module().src()[ident.range()];
+                ctx.specify_enum_variant(info.expected, name, ident.in_mod(self.mod_id()))
             }
             ast::Expr::Record { .. } => todo!("record literals"),
             ast::Expr::Nested(_, inner) => return self.expr(*inner, info, ctx, hole_allowed),
             ast::Expr::Unit(_) => {
-                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
+                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr_, ctx.ast));
             }
             ast::Expr::Variable { span, id } => {
-                let name = &self.scope.module.src()[span.range()];
-                let resolved = self.resolve_local(name, *span, ctx.errors);
+                let name = &self.module().src()[span.range()];
+                let resolved = self.resolve_local(name, *span, ctx.symbols, ctx.errors);
                 let ident = match resolved {
                     LocalDefId::Def(DefId::Invalid) => {
                         ctx.types.invalidate(info.expected);
@@ -138,7 +157,7 @@ impl<'a> LocalScope<'a> {
 
                         let (_, ty, _) = ctx.symbols.get_global(id);
                         let global_ty = ty.as_info(ctx.types, |_| panic!("global type shouldn't be generic"));
-                        let span = self.span(expr, ctx.ast);
+                        let span = self.span(expr_, ctx.ast);
                         ctx.types.specify_or_merge(info.expected, global_ty, ctx.errors, span, ctx.symbols);
 
                         Ident::Global(id)
@@ -162,7 +181,7 @@ impl<'a> LocalScope<'a> {
                 ctx.set_ident(*id, ident);
             }
             ast::Expr::Hole(_) => if !hole_allowed {
-                ctx.errors.emit_span(Error::HoleLHSOnly, self.span(expr, ctx.ast));
+                ctx.errors.emit_span(Error::HoleLHSOnly, self.span(expr_, ctx.ast));
             }
             ast::Expr::Array(span, elems) => {
                 use_hint = UseHint::Should;
@@ -186,7 +205,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::If { cond, then, .. } => {
-                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
+                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr_, ctx.ast));
 
                 let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));
                 self.val_expr(*cond, info.with_expected(bool_ty), ctx.reborrow(), false);
@@ -214,12 +233,12 @@ impl<'a> LocalScope<'a> {
                 let mut all_noreturn = true;
                 let mut exhaustion = Exhaustion::None;
                 for [pat, branch] in extra.array_chunks() {
-                    let mut branch_scope = self.child(dmap::new());
+                    let mut branch_self = self.child(dmap::new());
                     
-                    branch_scope.pat(*pat, matched_ty, ctx.reborrow(), &mut exhaustion);
+                    branch_self.pat(*pat, matched_ty, ctx.reborrow(), &mut exhaustion);
 
                     let mut branch_noreturn = false;
-                    branch_scope.val_expr(*branch, info.with_noreturn(&mut branch_noreturn), ctx.reborrow(), false);
+                    branch_self.val_expr(*branch, info.with_noreturn(&mut branch_noreturn), ctx.reborrow(), false);
                     all_noreturn &= branch_noreturn;
                 }
                 if all_noreturn {
@@ -227,7 +246,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::While { start: _, cond, body } => {
-                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
+                ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr_, ctx.ast));
 
                 let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));
                 self.val_expr(*cond, info.with_expected(bool_ty), ctx.reborrow(), false);
@@ -237,7 +256,7 @@ impl<'a> LocalScope<'a> {
                 self.val_expr(*body, info.with_expected(body_ty).with_noreturn(&mut body_noreturn), ctx, true);
             }
             ast::Expr::FunctionCall(call) => {
-                return self.call(*call, expr, info, ctx);
+                return gen_call(self, *call, expr_, info, ctx);
             }
             ast::Expr::UnOp(_, op, val) => {
                 use_hint = UseHint::Should;
@@ -247,7 +266,7 @@ impl<'a> LocalScope<'a> {
                         self.val_expr(*val, info, ctx, false);
                     }
                     ast::UnOp::Not => {
-                        ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), self.span(expr, ctx.ast));
+                        ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), self.span(expr_, ctx.ast));
                         self.val_expr(*val, info, ctx, false);
                     }
                     ast::UnOp::Ref => {
@@ -266,7 +285,7 @@ impl<'a> LocalScope<'a> {
             }
             &ast::Expr::BinOp(op, l, r) => {
                 if let Operator::Assignment(_assign) = op {
-                    ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr, ctx.ast));
+                    ctx.specify(info.expected, TypeInfo::UNIT, self.span(expr_, ctx.ast));
                     let var_ty = ctx.types.add_unknown();
                     self.val_expr(r, info.with_expected(var_ty), ctx.reborrow(), false);
 
@@ -318,12 +337,12 @@ impl<'a> LocalScope<'a> {
                                     let ty = TypeInfo::MethodItem { function: *id, this_ty: left_ty };
                                     break ty.into();
                                 } else {
-                                    ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
+                                    ctx.errors.emit_span(Error::NonexistantMember, self.span(expr_, ctx.ast));
                                     break TypeInfo::Invalid.into();
                                 }
                             }
                             ResolvedTypeDef::Enum(_) => {
-                                ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
+                                ctx.errors.emit_span(Error::NonexistantMember, self.span(expr_, ctx.ast));
                                 break TypeInfo::Invalid.into();
                             }
                             ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
@@ -367,8 +386,7 @@ impl<'a> LocalScope<'a> {
                             break type_info.into();
                         }
                         TypeInfo::SymbolItem(DefId::Module(id)) => {
-                            let def = self.scope.module_scope(id)
-                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors);
+                            let def = self.resolve_in_module(id, name, name_span.in_mod(self.mod_id()), ctx.errors);
                             break TypeInfo::SymbolItem(def).into();
                         }
                         TypeInfo::LocalTypeItem(_) => {
@@ -384,14 +402,14 @@ impl<'a> LocalScope<'a> {
                         | TypeInfo::Int | TypeInfo::Float | TypeInfo::Primitive(_)
                         | TypeInfo::SymbolItem(_)
                         | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
-                            ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
+                            ctx.errors.emit_span(Error::NonexistantMember, self.span(expr_, ctx.ast));
                             break TypeInfo::Invalid.into();
                         }
                     }
                 };
                 ctx.types.specify_or_merge(
                     info.expected, member_ty,
-                    ctx.errors, self.span(expr, ctx.ast), &ctx.symbols,
+                    ctx.errors, self.span(expr_, ctx.ast), &ctx.symbols,
                 );
             }
             &ast::Expr::Index { expr, idx, .. } => {
@@ -410,7 +428,7 @@ impl<'a> LocalScope<'a> {
                     (0..idx).map(|_| TypeInfoOrIndex::Type(TypeInfo::Unknown))
                     .chain(std::iter::once(TypeInfoOrIndex::Idx(info.expected)))
                 );
-    
+
                 let tuple_ty = ctx.types.add(TypeInfo::Tuple(elem_types, TupleCountMode::AtLeast));
                 self.val_expr(expr, info.with_expected(tuple_ty), ctx, false);
             }
@@ -418,149 +436,223 @@ impl<'a> LocalScope<'a> {
                 // TODO: check casts properly, maybe defer check to end of function
                 let val_ty = ctx.types.add_unknown();
                 self.val_expr(*val, info.with_expected(val_ty), ctx.reborrow(), false);
-                let cast_info = self.resolve_type_info(ty, &ctx.symbols, ctx.types, ctx.errors);
+                let cast_info = self.resolve_type_info(ty, ctx.symbols, ctx.types, ctx.errors);
                 ctx.types.specify_or_merge(
                     info.expected, cast_info,
                     ctx.errors, span.in_mod(self.mod_id()), &ctx.symbols
                 );
             }
             ast::Expr::Root(_) => {
-                let ty = TypeInfo::SymbolItem(DefId::Module(self.scope.module.root));
-                ctx.specify(info.expected, ty, self.span(expr, ctx.ast));
+                let ty = TypeInfo::SymbolItem(DefId::Module(self.module().root));
+                ctx.specify(info.expected, ty, self.span(expr_, ctx.ast));
             }
             ast::Expr::Asm { .. } => todo!("inline asm is unsupported right now"),
         };
         Res::Val { use_hint, lval }
     }
 
-    fn call(&mut self, id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res {
-        
-        let call = &ctx.ast[id];
-        let called_ty = ctx.types.add_unknown();
-
-        _ = self.expr(call.called_expr, info.with_expected(called_ty), ctx.reborrow(), false);
-        let (res, call) = match ctx.types.get(called_ty) {
-            TypeInfo::SymbolItem(DefId::Function(func_id)) => {                
-                let call = self.call_func(func_id, ctx.reborrow(), None, call, call_expr, info);
-                
-                (Res::Val { use_hint: UseHint::Can, lval: false }, call)
-            }
-            TypeInfo::SymbolItem(DefId::Type(id)) => {
-                match ctx.symbols.get_type(id) {
-                    ResolvedTypeDef::Struct(def) => {
-                        if call.args.count as usize != def.members.len() {
-                            ctx.errors.emit_span(
-                                Error::InvalidArgCount {
-                                    expected: def.members.len() as _,
-                                    varargs: false,
-                                    found: call.args.count,
-                                },
-                                self.span(call_expr, ctx.ast)
-                            )
-                        }
-                        let generics = ctx.types.add_multiple_unknown(def.generic_count() as _);
-                        
-                        
-                        let arg_types = ctx.types.add_multiple_unknown(call.args.count);
-                        for (i, (_, ty)) in def.members.iter().enumerate() {
-                            let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
-                            ctx.types.replace_idx(arg_types.nth(i), param_ty);
-                            
-                        }
-                        for (arg, ty) in ctx.ast[call.args].iter().zip(arg_types.iter()) {
-                            self.val_expr(*arg, info.with_expected(ty), ctx.reborrow(), false);
-                        }
-
-                        ctx.specify(info.expected, TypeInfo::Resolved(id, generics), self.span(call_expr, ctx.ast));
-                        
-                        (
-                            Res::Val { use_hint: UseHint::Can, lval: false },
-                            ResolvedCall::Struct { type_id: id, generics }
-                        )
-                    }
-                    ResolvedTypeDef::Enum(_) => {
-                        ctx.errors.emit_span(
-                            Error::FunctionOrStructTypeExpected,
-                            ctx.ast[call.called_expr].span_in(&ctx.ast, self.scope.module.id),
-                        );
-                        (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
-                    }
-                    ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
-                } 
-            }
-            TypeInfo::MethodItem { function: id, this_ty } => {
-                let this = Some((this_ty, ctx.ast[call.called_expr].span(ctx.ast)));
-                let call = self.call_func(id, ctx.reborrow(), this, call, call_expr, info);
-                (Res::Val { use_hint: UseHint::Can, lval: false }, call)
-            }
-            _other => {
-                if !ctx.types.invalidate(called_ty) {
-                    ctx.errors.emit_span(
-                        Error::FunctionOrStructTypeExpected,
-                        ctx.ast[call.called_expr].span_in(&ctx.ast, self.scope.module.id)
-                    );
-                }
-                (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
-            }
+    fn pat(&mut self, pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exhaustion: &mut Exhaustion) {
+        ctx.symbols.expr_types[pat_expr.idx()] = expected;
+    
+        let expr = &ctx.ast[pat_expr];  
+        let int_lit = |exhaustion: &mut Exhaustion, mut ctx: Ctx, lit: IntLiteral, lit_span: TSpan, neg| {
+            exhaustion.exhaust_int(exhaust::SignedInt(lit.val, neg));
+            let int_ty = lit.ty
+                .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
+            ctx.specify(expected, int_ty, lit_span.in_mod(self.mod_id()));
         };
-        ctx.symbols.place_call(id, call);
-        res
-    }
-
-    fn call_func(
-        &mut self,
-        func_id: ast::FunctionId,
-        mut ctx: Ctx,
-        this: Option<(TypeTableIndex, TSpan)>,
-        call: &ast::Call,
-        call_expr: ExprRef,
-        mut info: ExprInfo
-    )
-    -> ResolvedCall {
-        let sig = ctx.symbols.get_func(func_id);
-
-        let generics = ctx.types.add_multiple_unknown(sig.generic_count() as _);
-        let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as usize));
-
-        let arg_count = call.args.count + this.is_some() as u32;
-
-        match sig.params.len().cmp(&(arg_count as usize)) {
-            std::cmp::Ordering::Less if sig.varargs => {}
-            std::cmp::Ordering::Equal => {}
-            _ => {
-                ctx.errors.emit_span(Error::InvalidArgCount {
-                    expected: sig.params.len() as _,
-                    varargs: sig.varargs,
-                    found: arg_count,
-                }, self.span(call_expr, &ctx.ast));
+        match expr {
+            &Expr::IntLiteral(lit_span) => {
+                let lit = IntLiteral::parse(&self.module().src()[lit_span.range()]);
+                int_lit(exhaustion, ctx, lit, lit_span, false);
             }
+            Expr::BoolLiteral { start: _, val } => {
+                exhaustion.exhaust_bool(*val);
+                ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, self.mod_id()));
+            }
+            Expr::EnumLiteral { ident, .. } => {
+                let name = &ctx.ast.src(self.mod_id()).0[ident.range()];
+                ctx.specify_enum_variant(expected, name, ident.in_mod(self.mod_id()));
+                exhaustion.exhaust_enum_variant(name.to_owned());
+            }
+            Expr::Nested(_, inner) => self.pat(*inner, expected, ctx, exhaustion),
+            Expr::Unit(span) => ctx.specify(expected, TypeInfo::UNIT, span.in_mod(self.mod_id())),
+            Expr::Variable { span, id } => {
+                let var_id = ctx.new_var(super::Var { ty: expected });
+                ctx.set_ident(*id, Ident::Var(var_id));
+                exhaustion.exhaust_full();
+                let name = self.module().src()[span.range()].to_owned();
+                self.define_var(name, var_id);
+            }
+            Expr::Hole(_) => exhaustion.exhaust_full(),
+            Expr::Tuple(_, _) => todo!(),
+    
+            Expr::FloatLiteral(_)
+            | Expr::Record { .. } // very useful to match on records
+            | Expr::StringLiteral(_) // definitely very important
+            | Expr::Array(_, _)
+            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
+            | Expr::FunctionCall { .. } => {
+                ctx.errors.emit_span(
+                    Error::NotAPattern { coming_soon: true },
+                    expr.span_in(&ctx.ast, self.mod_id())
+                );
+            }
+    
+            Expr::Block { .. }
+            | Expr::Declare { .. }
+            | Expr::DeclareWithVal { .. }
+            | Expr::Return { .. }
+            | Expr::ReturnUnit { .. }
+            | Expr::If { .. }
+            | Expr::IfElse { .. } 
+            | Expr::Match { .. } 
+            | Expr::While { .. } 
+            | Expr::UnOp(_, _, _) 
+            | Expr::BinOp(_, _, _) 
+            | Expr::Index { .. } 
+            | Expr::TupleIdx { .. } 
+            | Expr::Cast(_, _, _)
+            | Expr::Root(_) 
+            | Expr::Asm { .. } 
+            => {
+                ctx.errors.emit_span(
+                    Error::NotAPattern { coming_soon: false },
+                    expr.span_in(&ctx.ast, self.mod_id())
+                );
+            }
+            
         }
-
-        let ret = sig.return_type.as_info(ctx.types, on_generic);
-        
-        let call_span = self.span(call_expr, ctx.ast);
-        ctx.types.specify_or_merge(info.expected, ret, ctx.errors, call_span, &ctx.symbols);
-        
-        let params = sig.params
-            .iter()
-            .map(|(_, ty)| {
-                let ty = ty.as_info(ctx.types, on_generic);
-                ctx.types.add_info_or_idx(ty)
-            })
-            .collect::<Vec<_>>();
-
-        let mut params = params.into_iter();
-
-        if let Some((this, this_span)) = this {
-            let this_param = params.next().unwrap_or_else(|| ctx.types.add_unknown());
-            ctx.types.merge_dereffed(this, this_param, ctx.errors, this_span.in_mod(self.mod_id()), ctx.symbols);
-        }
-
-        for arg in &ctx.ast[call.args] {
-            let param_ty = params.next().unwrap_or_else(|| ctx.types.add_unknown());
-            self.val_expr(*arg, info.with_expected(param_ty), ctx.reborrow(), false);
-        }
-        ResolvedCall::Function { func_id, generics }
     }
+
+    fn resolve_type_info(&self, ty: &ast::UnresolvedType, symbols: &SymbolTable, types: &mut TypeTable, errors: &mut Errors) -> TypeInfoOrIndex;
 }
 
+fn gen_call(scope: &mut impl LocalScope, id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res {
+    let call = &ctx.ast[id];
+    let called_ty = ctx.types.add_unknown();
+
+    _ = scope.expr(call.called_expr, info.with_expected(called_ty), ctx.reborrow(), false);
+    let (res, call) = match ctx.types.get(called_ty) {
+        TypeInfo::SymbolItem(DefId::Function(func_id)) => {                
+            let call = call_func(scope, func_id, ctx.reborrow(), None, call, call_expr, info);
+            
+            (Res::Val { use_hint: UseHint::Can, lval: false }, call)
+        }
+        TypeInfo::SymbolItem(DefId::Type(id)) => {
+            match ctx.symbols.get_type(id) {
+                ResolvedTypeDef::Struct(def) => {
+                    if call.args.count as usize != def.members.len() {
+                        ctx.errors.emit_span(
+                            Error::InvalidArgCount {
+                                expected: def.members.len() as _,
+                                varargs: false,
+                                found: call.args.count,
+                            },
+                            scope.span(call_expr, ctx.ast)
+                        )
+                    }
+                    let generics = ctx.types.add_multiple_unknown(def.generic_count() as _);
+                    
+                    
+                    let arg_types = ctx.types.add_multiple_unknown(call.args.count);
+                    for (i, (_, ty)) in def.members.iter().enumerate() {
+                        let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
+                        ctx.types.replace_idx(arg_types.nth(i), param_ty);
+                        
+                    }
+                    for (arg, ty) in ctx.ast[call.args].iter().zip(arg_types.iter()) {
+                        scope.val_expr(*arg, info.with_expected(ty), ctx.reborrow(), false);
+                    }
+
+                    ctx.specify(info.expected, TypeInfo::Resolved(id, generics), scope.span(call_expr, ctx.ast));
+                    
+                    (
+                        Res::Val { use_hint: UseHint::Can, lval: false },
+                        ResolvedCall::Struct { type_id: id, generics }
+                    )
+                }
+                ResolvedTypeDef::Enum(_) => {
+                    ctx.errors.emit_span(
+                        Error::FunctionOrStructTypeExpected,
+                        ctx.ast[call.called_expr].span_in(&ctx.ast, scope.mod_id()),
+                    );
+                    (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
+                }
+                ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
+            } 
+        }
+        TypeInfo::MethodItem { function: id, this_ty } => {
+            let this = Some((this_ty, ctx.ast[call.called_expr].span(ctx.ast)));
+            let call = call_func(scope, id, ctx.reborrow(), this, call, call_expr, info);
+            (Res::Val { use_hint: UseHint::Can, lval: false }, call)
+        }
+        _other => {
+            if !ctx.types.invalidate(called_ty) {
+                ctx.errors.emit_span(
+                    Error::FunctionOrStructTypeExpected,
+                    ctx.ast[call.called_expr].span_in(&ctx.ast, scope.mod_id())
+                );
+            }
+            (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
+        }
+    };
+    ctx.symbols.place_call(id, call);
+    res
+}
+
+fn call_func(
+    scope: &mut impl LocalScope,
+    func_id: ast::FunctionId,
+    mut ctx: Ctx,
+    this: Option<(TypeTableIndex, TSpan)>,
+    call: &ast::Call,
+    call_expr: ExprRef,
+    mut info: ExprInfo
+)
+-> ResolvedCall {
+    let sig = ctx.symbols.get_func(func_id);
+
+    let generics = ctx.types.add_multiple_unknown(sig.generic_count() as _);
+    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as usize));
+
+    let arg_count = call.args.count + this.is_some() as u32;
+
+    match sig.params.len().cmp(&(arg_count as usize)) {
+        std::cmp::Ordering::Less if sig.varargs => {}
+        std::cmp::Ordering::Equal => {}
+        _ => {
+            ctx.errors.emit_span(Error::InvalidArgCount {
+                expected: sig.params.len() as _,
+                varargs: sig.varargs,
+                found: arg_count,
+            }, scope.span(call_expr, &ctx.ast));
+        }
+    }
+
+    let ret = sig.return_type.as_info(ctx.types, on_generic);
+    
+    let call_span = scope.span(call_expr, ctx.ast);
+    ctx.types.specify_or_merge(info.expected, ret, ctx.errors, call_span, &ctx.symbols);
+    
+    let params = sig.params
+        .iter()
+        .map(|(_, ty)| {
+            let ty = ty.as_info(ctx.types, on_generic);
+            ctx.types.add_info_or_idx(ty)
+        })
+        .collect::<Vec<_>>();
+
+    let mut params = params.into_iter();
+
+    if let Some((this, this_span)) = this {
+        let this_param = params.next().unwrap_or_else(|| ctx.types.add_unknown());
+        ctx.types.merge_dereffed(this, this_param, ctx.errors, this_span.in_mod(scope.mod_id()), ctx.symbols);
+    }
+
+    for arg in &ctx.ast[call.args] {
+        let param_ty = params.next().unwrap_or_else(|| ctx.types.add_unknown());
+        scope.val_expr(*arg, info.with_expected(param_ty), ctx.reborrow(), false);
+    }
+    ResolvedCall::Function { func_id, generics }
+}

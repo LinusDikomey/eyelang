@@ -267,7 +267,7 @@ pub enum Definition {
     Global(GlobalId),
 }
 
-id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId);
+id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId ConstId);
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {

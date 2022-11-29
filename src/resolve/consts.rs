@@ -1,8 +1,13 @@
 use std::fmt;
 
-use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId}};
+use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId, UnresolvedType, ExprRef}, error::Errors};
 
-use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::Type};
+use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, SymbolTable}, scope::Scope};
+
+pub enum ConstResult {
+    Val(ConstVal),
+    Symbol(ConstSymbol),
+}
 
 #[derive(Debug, Clone)]
 pub enum ConstVal {
@@ -14,8 +19,6 @@ pub enum ConstVal {
     String(Vec<u8>),
     EnumVariant(String),
     Bool(bool),
-    Symbol(ConstSymbol),
-    NotGenerated,
 }
 impl ConstVal {
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
@@ -27,8 +30,6 @@ impl ConstVal {
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
-            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
-            ConstVal::NotGenerated { .. } => panic!()
         }
     }
 
@@ -40,8 +41,6 @@ impl ConstVal {
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
-            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
-            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
             _ => false
         }
     }
@@ -56,8 +55,6 @@ impl fmt::Display for ConstVal {
             ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
             ConstVal::Bool(b) => write!(f, "{b}"),
-            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
-            ConstVal::NotGenerated => write!(f, "[not generated]"),
         }
     }
 }
@@ -65,11 +62,10 @@ impl fmt::Display for ConstVal {
 #[derive(Debug, Clone)]
 pub enum ConstSymbol {
     Func(FunctionId),
-    //GenericFunc(u32),
-    TraitFunc(TraitId, u32),
     Type(TypeId),
     TypeValue(Type),
     Trait(TraitId),
+    TraitFunc(TraitId, u32),
     LocalType(TypeTableIndex),
     Module(ModuleId),
 }

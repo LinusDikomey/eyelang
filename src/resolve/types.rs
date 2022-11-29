@@ -3,10 +3,10 @@ use color_format::cwriteln;
 
 use crate::{
     types::{Primitive, Layout, IntType},
-    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId}
+    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}
 };
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall};
+use super::{consts::ConstVal, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -206,10 +206,9 @@ impl SymbolTable {
         key
     }
     */
-    pub fn add_const(&mut self, c: ConstVal) -> SymbolKey {
-        let key = SymbolKey(self.consts.len() as u64);
+    pub fn add_const(&mut self, c: ConstVal) -> ConstId {
         self.consts.push(c);
-        key
+        ConstId::new(self.consts.len() as u64 - 1)
     }
     pub fn place_global(&mut self, id: GlobalId, name: String, ty: Type, val: Option<ConstVal>) {
         self.globals[id.idx()] = Some((name, ty, val));
@@ -242,12 +241,15 @@ pub enum DefId {
     Function(FunctionId),
     Type(TypeId),
     Trait(TraitId),
+    TraitFunc(TraitId, u32),
     Module(ModuleId),
     Global(GlobalId),
+    Const(ConstId),
     Generic(u8),
     Invalid,
     Unresolved { resolving: bool }
 }
+/*
 impl From<DefId> for ConstSymbol {
     fn from(value: DefId) -> Self {
         match value {
@@ -256,12 +258,14 @@ impl From<DefId> for ConstSymbol {
             DefId::Trait(id) => Self::Trait(id),
             DefId::Module(id) => Self::Module(id),
             DefId::Global(_id) => todo!(),
+            DefId::Const(_id) => todo!(),
             DefId::Generic(_id) => todo!(),
             DefId::Invalid => todo!(),
             DefId::Unresolved { .. } => unreachable!()
         }
     }
 }
+*/
 
 #[derive(Debug)]
 pub enum ResolvedTypeDef {

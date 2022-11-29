@@ -10,16 +10,15 @@ use crate::{
 
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
-    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}, const_val::ConstVal
+    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}, consts::ConstVal, expr::LocalScope
 };
 
-pub mod const_val;
+pub mod consts;
 mod scope;
 mod cross_resolve;
 pub mod types;
 pub mod type_info;
 mod expr;
-mod pat;
 mod exhaust;
 
 pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool)
@@ -41,7 +40,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     }
 
     // resolve cross-referencing defs: use statements, constants (all DefId::Unresolved)
-    cross_resolve::top_level(&mut module_scopes, ast, errors);
+    cross_resolve::top_level(&mut module_scopes, &mut symbols, ast, errors);
     
     // resolve types, function signatures
     for (module, scope) in ast.modules.iter().zip(&mut module_scopes) {
@@ -268,7 +267,7 @@ pub struct Var {
     ty: TypeTableIndex,
 }
 
-struct Ctx<'a> {
+pub struct Ctx<'a> {
     ast: &'a Ast,
     symbols: &'a mut SymbolTable,
     types: &'a mut TypeTable,
@@ -349,7 +348,7 @@ pub enum ResolvedCall {
     Invalid,
 }
 
-fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, generics_ctx: &[String], ctx: Ctx) {
+fn func_body<'a, 'src>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, generics_ctx: &[String], ctx: Ctx) {
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
     
