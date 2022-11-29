@@ -1,4 +1,4 @@
-use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{consts::ConstSymbol, type_info::TypeTableIndex}};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::ConstSymbol, type_info::TypeTableIndex}};
 
 use super::ConstVal;
 use crate::resolve::type_info::TypeInfo;

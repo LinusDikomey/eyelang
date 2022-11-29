@@ -1,6 +1,6 @@
-use crate::{ast::{ModuleId, self, TypeId, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}};
+use crate::{ast::{ModuleId, self, TypeId, ExprRef, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}};
 
-use super::{types::{DefId, SymbolTable, Type, TupleCountMode}, type_info::{TypeTableIndex, TypeInfoOrIndex, TypeInfo, TypeTable}, VarId, expr::LocalScope};
+use super::{types::{DefId, SymbolTable, Type, TupleCountMode}, type_info::{TypeTableIndex, TypeInfoOrIndex, TypeInfo, TypeTable}, VarId};
 
 #[derive(Clone, Copy)]
 pub struct ModuleCtx {
@@ -9,7 +9,7 @@ pub struct ModuleCtx {
     pub root: ModuleId,
 }
 impl ModuleCtx {
-    pub fn src<'a>(self) -> &'a str {
+    pub fn src(&self) -> &str {
         unsafe { &*self.src }
     }
 }
@@ -20,7 +20,7 @@ pub struct Scope<'a> {
     parent: Option<&'a Scope<'a>>,
     names: DHashMap<String, DefId>,
 }
-impl<'src> Scope<'static> {
+impl Scope<'static> {
     pub fn root(names: DHashMap<String, DefId>, module_ctx: ModuleCtx) -> Self {
         Self {
             module_scopes: &[],
@@ -34,26 +34,25 @@ impl<'src> Scope<'static> {
     }
 }
 impl<'a> Scope<'a> {
-    pub fn child(&self) -> ResolvedLocalScope<'_> {
-        let module_scopes = self.module_scopes;
-        let module = self.module;
-        ResolvedLocalScope {
-            parent: LocalOrGlobalScope::Global(self),
-            scope: Scope {
-                module_scopes,
-                module,
-                parent: Some(self),
-                names: dmap::new(),
-            },
-            locals: dmap::new(),
-        }
-    }
     pub fn child_scope(&self, names: DHashMap<String, DefId>) -> Scope<'_> {
         Scope {
             module_scopes: self.module_scopes,
             module: self.module,
             parent: Some(self),
             names,
+        }
+    }
+
+    pub fn child(&self) -> LocalScope<'_> {
+        LocalScope {
+            parent: LocalOrGlobalScope::Global(self),
+            scope: Scope {
+                module_scopes: self.module_scopes,
+                module: self.module,
+                parent: Some(self),
+                names: dmap::new(),
+            },
+            locals: dmap::new(),
         }
     }
 
@@ -152,8 +151,7 @@ impl<'a> Scope<'a> {
                         |id, errors| self.resolve_ty(id, symbols, errors)
                     ).map_or(Type::Invalid, |generics| Type::Id(id, generics)),
                     DefId::Generic(i) => Type::Generic(i),
-                    DefId::Function(_) | DefId::Trait(_) | DefId::TraitFunc(_, _) | DefId::Module(_)
-                    | DefId::Global(_) | DefId::Const(_) => {
+                    DefId::Function(_) | DefId::Trait(_) | DefId::Module(_) | DefId::Global(_) => {
                         errors.emit_span(Error::TypeExpected, path.span().in_mod(self.module.id));
                         Type::Invalid
                     }
@@ -248,38 +246,25 @@ impl<'a> ExprInfo<'a> {
 }
 
 
+
 #[derive(Clone, Copy, Debug)]
 pub enum LocalDefId {
     Def(DefId),
     Var(VarId),
     Type(TypeTableIndex),
 }
-pub enum LocalOrGlobalScope<'a> {
-    Local(&'a ResolvedLocalScope<'a>),
+enum LocalOrGlobalScope<'a> {
+    Local(&'a LocalScope<'a>),
     Global(&'a Scope<'a>)
 }
-pub struct ResolvedLocalScope<'a> {
+pub struct LocalScope<'a> {
     parent: LocalOrGlobalScope<'a>,
-    scope: Scope<'a>,
+    pub scope: Scope<'a>,
     pub locals: DHashMap<String, LocalDefId>,
 }
-impl<'a> LocalScope for ResolvedLocalScope<'a> {
-    type Child<'c> = ResolvedLocalScope<'c> where Self: 'c;
-
-    fn module(&self) -> ModuleCtx {
-        self.scope.module
-    }
-
-    fn define_var(&mut self, name: String, var_id: VarId) {
-        self.locals.insert(name, LocalDefId::Var(var_id));
-    }
-
-    fn resolve_in_module(&mut self, id: ModuleId, name: &str, name_span: Span, errors: &mut Errors) -> DefId {
-        self.scope.module_scope(id).resolve(name, name_span, errors)
-    }
-
-    fn child(&mut self, locals: DHashMap<String, LocalDefId>) -> Self::Child<'_> {
-        ResolvedLocalScope {
+impl<'a> LocalScope<'a> {
+    pub fn child(&'a self, locals: DHashMap<String, LocalDefId>) -> LocalScope<'a> {
+        LocalScope {
             parent: LocalOrGlobalScope::Local(self),
             scope: Scope {
                 module_scopes: self.scope.module_scopes,
@@ -290,12 +275,12 @@ impl<'a> LocalScope for ResolvedLocalScope<'a> {
             locals,
         }
     }
-
-    fn child_with_defs(&mut self, defs: &DHashMap<String, ast::Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) -> Self::Child<'_> {
+    pub fn child_with_defs(&'a self, defs: &DHashMap<String, ast::Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
+    -> LocalScope<'a> {
         let mut names = super::scope_defs(defs);
-        super::cross_resolve::local(defs, &mut names, &self.scope, symbols, ast, errors);
+        super::cross_resolve::local(defs, &mut names, &self.scope, ast, errors);
         
-        let mut scope = ResolvedLocalScope {
+        let mut scope = LocalScope {
             parent: LocalOrGlobalScope::Local(self),
             scope: Scope {
                 module_scopes: self.scope.module_scopes,
@@ -317,26 +302,40 @@ impl<'a> LocalScope for ResolvedLocalScope<'a> {
         scope
     }
 
-    fn resolve_local(&self, name: &str, name_span: TSpan, symbols: &SymbolTable, errors: &mut Errors) -> LocalDefId {
-        if let Some(local) = self.locals.get(name) {
-            *local
-        } else if let Some(def) = self.scope.names.get(name) {
-            LocalDefId::Def(*def)
-        } else {
-            match &self.parent {
-                LocalOrGlobalScope::Local(local) => local.resolve_local(name, name_span, symbols, errors),
-                LocalOrGlobalScope::Global(global) => LocalDefId::Def(
-                    global.resolve(name, name_span.in_mod(self.mod_id()), errors)
-                ),
+    pub fn mod_id(&self) -> ModuleId {
+        self.scope.module.id
+    }
+    pub fn define_var(&mut self, name: String, id: VarId) {
+        self.locals.insert(name, LocalDefId::Var(id));
+    }
+    pub fn add_generic(&mut self, name: String, ty: TypeTableIndex) {
+        self.locals.insert(name, LocalDefId::Type(ty));
+    }
+
+    pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors) -> LocalDefId {
+        let (root, middle, last) = path.segments(self.scope.module.src());
+        let Some(current_module) = self.scope.resolve_path_front(root, middle, errors) else {
+            return LocalDefId::Def(DefId::Invalid);
+        };
+
+        if let Some((segment, span)) = last {
+            if let Some(module) = current_module {
+                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span.in_mod(self.mod_id()), errors))
+            } else {
+                self.resolve_local(segment, span, errors)
             }
+        } else {
+            // should be fine to unwrap here since empty paths don't exist
+            LocalDefId::Def(DefId::Module(current_module.unwrap()))
         }
     }
 
-    fn resolve_type_info(&self, ty: &ast::UnresolvedType, symbols: &SymbolTable, types: &mut TypeTable, errors: &mut Errors) -> TypeInfoOrIndex {
+    pub fn resolve_type_info(&self, ty: &ast::UnresolvedType, symbols: &SymbolTable, types: &mut TypeTable, errors: &mut Errors)
+    -> TypeInfoOrIndex {
         TypeInfoOrIndex::Type(match ty {
             ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
             ast::UnresolvedType::Unresolved(path, generics) => {
-                let id = self.resolve_path(path, symbols, errors);
+                let id = self.resolve_path(path, errors);
                 match id {
                     LocalDefId::Type(idx) => {
                         if let Some((_, generics_span)) = generics {
@@ -357,8 +356,7 @@ impl<'a> LocalScope for ResolvedLocalScope<'a> {
                     }
                     LocalDefId::Def(DefId::Generic(i)) => TypeInfo::Generic(i),
                     LocalDefId::Var(_) | LocalDefId::Def(
-                        DefId::Function(_) | DefId::Module(_) | DefId::Trait(_) | DefId::TraitFunc(_, _)
-                        | DefId::Global(_) | DefId::Const(_)
+                        DefId::Function(_) | DefId::Module(_) | DefId::Trait(_) | DefId::Global(_)
                     ) => {
                         errors.emit_span(Error::TypeExpected, path.span().in_mod(self.mod_id()));
                         TypeInfo::Invalid
@@ -386,39 +384,23 @@ impl<'a> LocalScope for ResolvedLocalScope<'a> {
             ast::UnresolvedType::Infer(_) => TypeInfo::Unknown,
         })
     }
-}
 
-impl<'a> ResolvedLocalScope<'a> {
-    pub fn module(&self) -> ModuleCtx {
-        self.scope.module
-    }
-    pub fn mod_id(&self) -> ModuleId {
-        self.scope.module.id
-    }
-
-    pub fn module_scope(&self, id: ModuleId) -> &Scope<'static> {
-        self.scope.module_scope(id)
-    }
-
-    pub fn add_generic(&mut self, name: String, ty: TypeTableIndex) {
-        self.locals.insert(name, LocalDefId::Type(ty));
-    }
-
-    pub fn resolve_path(&self, path: &ast::IdentPath, symbols: &SymbolTable, errors: &mut Errors) -> LocalDefId {
-        let (root, middle, last) = path.segments(self.scope.module.src());
-        let Some(current_module) = self.scope.resolve_path_front(root, middle, errors) else {
-            return LocalDefId::Def(DefId::Invalid);
-        };
-
-        if let Some((segment, span)) = last {
-            if let Some(module) = current_module {
-                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span.in_mod(self.mod_id()), errors))
-            } else {
-                self.resolve_local(segment, span, symbols, errors)
-            }
+    pub fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors) -> LocalDefId {
+        if let Some(local) = self.locals.get(name) {
+            *local
+        } else if let Some(def) = self.scope.names.get(name) {
+            LocalDefId::Def(*def)
         } else {
-            // should be fine to unwrap here since empty paths don't exist
-            LocalDefId::Def(DefId::Module(current_module.unwrap()))
+            match self.parent {
+                LocalOrGlobalScope::Local(local) => local.resolve_local(name, name_span, errors),
+                LocalOrGlobalScope::Global(global) => LocalDefId::Def(
+                    global.resolve(name, name_span.in_mod(self.mod_id()), errors)
+                ),
+            }
         }
+    }
+
+    pub fn span(&self, expr: ExprRef, ast: &Ast) -> Span {
+        ast[expr].span_in(ast, self.scope.module.id)
     }
 }
