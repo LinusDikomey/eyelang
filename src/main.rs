@@ -306,7 +306,7 @@ impl fmt::Display for BackendStats {
 
 fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     let mut stats = Stats::default();
-    let (symbols, main, ast) = {
+    let (symbols, ir, main, ast) = {
         let debug_options = compile::Debug {
             tokens: args.tokens,
             reconstruct_src: args.reconstruct_src,
@@ -329,16 +329,13 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             errors.print(&ast);
         }
         match res {
-            Ok((symbols, main)) => (symbols, main, ast),
+            Ok((symbols, ir, main)) => (symbols, ir, main, ast),
             Err(()) => return true,
         }
     };
 
     let reduce_start_time = Instant::now();
-
-    let ir_functions = irgen::Functions::new();
-    let ir = ir_functions.finish_module(symbols, &ast, main);
-
+    let ir = ir.finish_module(symbols, &ast, main);
     stats.irgen += reduce_start_time.elapsed();
 
     if args.ir {

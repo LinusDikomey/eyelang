@@ -8,7 +8,13 @@ use crate::{
     irgen, ir::{builder::IrBuilder, Ref, self}, dmap,
 };
 
-use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, DefId, SymbolTable}, scope::{Scope, ExprInfo, ScopeId, Scopes}, Ctx, Ident};
+use super::{
+    type_info::{TypeTable, TypeInfo, TypeTableIndex},
+    types::{Type, DefId, SymbolTable},
+    scope::{ExprInfo, ScopeId, Scopes},
+    Ctx,
+    Ident,
+};
 
 #[derive(Debug, Clone)]
 pub enum ConstResult {
@@ -141,17 +147,21 @@ pub fn eval(
     symbols: &mut SymbolTable,
     ir: &mut irgen::Functions,
 ) -> ConstResult {
-    let mut scope = scopes.child(scope, dmap::new(), dmap::new(), false);
+    let scope = scopes.child(scope, dmap::new(), dmap::new(), false);
     
     let mut types = TypeTable::new(0);
 
-    let ty = scopes.resolve_type_info(scope,ty, &mut types, errors, symbols, ast, ir);
+    let ty = scopes.resolve_type_info(scope, ty, &mut types, errors, symbols, ast, ir);
     let ty = types.add_info_or_idx(ty);
 
     let mut idents = vec![Ident::Invalid; counts.idents as usize];
     let mut vars = vec![];
 
+    let before_error_count = errors.error_count();
+
     let ctx = Ctx {
+        scopes,
+        scope,
         ast,
         symbols,
         types: &mut types,
@@ -161,11 +171,16 @@ pub fn eval(
         ir,
     };
     let mut noreturn = false;
-    let res = scope.expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);
-    match res {
-        super::expr::Res::Val { .. } => {} // value is used so it's fine
-    }
+    _ = super::expr::check_expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);
     
+    if before_error_count < errors.error_count() {
+        // this is not a perfect solution but right now expressions with errors can result in crashed during irgen.
+        // For this reason, just return Invalid here.
+        
+        return ConstResult::Val(ConstVal::Invalid);
+    }
+
+
     let mut var_refs = vec![Ref::UNDEF; vars.len()];
 
     let mut builder = IrBuilder::new(types, vec![]);
@@ -174,7 +189,7 @@ pub fn eval(
         symbols: &symbols,
         var_refs: &mut var_refs,
         idents: &idents,
-        module: scope.mod_id(),
+        module: scopes[scope].module.id,
         functions: ir,
         function_generics: &[],
         member_accesses: &symbols.member_accesses,
@@ -188,7 +203,7 @@ pub fn eval(
     match ir::eval::eval(&builder, &[]) {
         Ok(val) => val,
         Err(err) => {
-            errors.emit_span(err, ast[expr].span_in(ast, scope.mod_id()));
+            errors.emit_span(err, ast[expr].span_in(ast, scopes[scope].module.id));
             ConstResult::Val(ConstVal::Invalid)
         }
     }

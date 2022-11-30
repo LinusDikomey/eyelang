@@ -21,14 +21,14 @@ macro_rules! int {
         ::color_format::ceprintln!("#r<internal irgen error> at #u<{}:{}:{}>",
             ::core::file!(), ::core::line!(), ::core::column!()
         );
-        ::std::process::exit(1)
+        panic!("internal error")
     }};
     ($($arg: tt)*) => {{
         ::color_format::ceprintln!("#r<internal irgen error>: {} at #u<{}:{}:{}>",
             format!($($arg)*),
             ::core::file!(), ::core::line!(), ::core::column!()
         );
-        ::std::process::exit(1)
+        panic!("internal error")
     }}
 }
 pub struct Ctx<'a> {
@@ -71,6 +71,7 @@ impl<'a> Index<MemberAccessId> for Ctx<'a> {
     }
 }
 
+#[derive(Debug)]
 enum FunctionIds {
     Simple(ir::FunctionId, CreateReason),
     Generic(DHashMap<Vec<Type>, (ir::FunctionId, CreateReason)>)
@@ -82,6 +83,7 @@ pub enum CreateReason {
     Runtime = 1,
 }
 
+#[derive(Debug)]
 pub struct Functions {
     // ir::FunctionId implied by position in functions_to_create
     functions_to_create: Vec<(FunctionId, Vec<Type>)>,
@@ -450,7 +452,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
         Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
         Expr::Unit(_) => Ref::UNIT,
-        Expr::Variable { id, .. } => {
+        Expr::Variable { id, span } => {
             match ctx.idents[id.idx()] {
                 resolve::Ident::Invalid => int!(),
                 resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),

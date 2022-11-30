@@ -1,5 +1,6 @@
 use std::{path::{Path, PathBuf}, time::{Instant, Duration}};
 use crate::{
+    irgen,
     log,
     ast::{self, Ast, ModuleId, Module, repr::Repr},
     error::{Error, Errors},
@@ -19,7 +20,7 @@ pub fn project(
     dependencies: DHashMap<String, PathBuf>,
     require_main_func: bool,
     stats: &mut Stats
-) -> (Result<(SymbolTable, Option<ast::FunctionId>), ()>, Ast, Errors) {
+) -> (Result<(SymbolTable, irgen::Functions, Option<ast::FunctionId>), ()>, Ast, Errors) {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
 
@@ -46,10 +47,10 @@ pub fn project(
     }
 
     let resolve_start_time = Instant::now();
-    let (symbols, main) = resolve::resolve_project(&ast, main_module, &mut errors, require_main_func);
+    let (symbols, ir_functions, main) = resolve::resolve_project(&ast, main_module, &mut errors, require_main_func);
     stats.resolve = resolve_start_time.elapsed();
     
-    (Ok((symbols, main)), ast, errors)
+    (Ok((symbols, ir_functions, main)), ast, errors)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
