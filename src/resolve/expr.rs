@@ -4,7 +4,8 @@ use crate::{
     token::{FloatLiteral, IntLiteral, Operator},
     types::Primitive,
     resolve::{exhaust::Exhaustion, types::ResolvedTypeDef},
-    dmap, span::TSpan
+    dmap, span::TSpan,
+    irgen,
 };
 
 use super::{
@@ -56,7 +57,7 @@ impl<'a> LocalScope<'a> {
 
         match &ctx.ast[expr] {
             ast::Expr::Block { span: _, items, defs } => {
-                let mut block_scope = self.child_with_defs(&ctx.ast[*defs], ctx.ast, ctx.symbols, ctx.errors);
+                let mut block_scope = self.child_with_defs(&ctx.ast[*defs], ctx.ast, ctx.symbols, ctx.errors, ctx.ir);
 
                 for item in &ctx.ast[*items] {
                     let expected = ctx.types.add_unknown();
@@ -67,7 +68,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::Declare { pat, annotated_ty } => {
-                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
+                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 let mut exhaustion = Exhaustion::None;
@@ -77,7 +78,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::DeclareWithVal { pat, annotated_ty, val } => {
-                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
+                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 self.val_expr(*val, info.with_expected(ty), ctx.reborrow(), false);
@@ -127,7 +128,7 @@ impl<'a> LocalScope<'a> {
             }
             ast::Expr::Variable { span, id } => {
                 let name = &self.scope.module.src()[span.range()];
-                let resolved = self.resolve_local(name, *span, ctx.errors, ctx.symbols, ctx.ast);
+                let resolved = self.resolve_local(name, *span, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
                 let ident = match resolved {
                     LocalDefId::Def(DefId::Invalid) => {
                         ctx.types.invalidate(info.expected);
@@ -142,6 +143,11 @@ impl<'a> LocalScope<'a> {
                         ctx.types.specify_or_merge(info.expected, global_ty, ctx.errors, span, ctx.symbols);
 
                         Ident::Global(id)
+                    }
+                    LocalDefId::Def(DefId::Const(const_id)) => {
+                        let ty = ctx.symbols.consts[const_id.idx()].type_info(ctx.types);
+                        ctx.specify(info.expected, ty, span.in_mod(self.mod_id()));
+                        Ident::Const(const_id)
                     }
                     LocalDefId::Def(def) => {
                         ctx.specify(info.expected, TypeInfo::SymbolItem(def), span.in_mod(self.mod_id()));
@@ -380,7 +386,7 @@ impl<'a> LocalScope<'a> {
                         }
                         TypeInfo::SymbolItem(DefId::Module(id)) => {
                             let def = self.scope.module_scope(id)
-                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors, ctx.symbols, ctx.ast);
+                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
                             break (MemberAccess::Symbol(def), TypeInfo::SymbolItem(def).into());
                         }
                         TypeInfo::LocalTypeItem(idx) => {
@@ -433,7 +439,7 @@ impl<'a> LocalScope<'a> {
                 // TODO: check casts properly, maybe defer check to end of function
                 let val_ty = ctx.types.add_unknown();
                 self.val_expr(*val, info.with_expected(val_ty), ctx.reborrow(), false);
-                let cast_info = self.resolve_type_info(ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
+                let cast_info = self.resolve_type_info(ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
                 ctx.types.specify_or_merge(
                     info.expected, cast_info,
                     ctx.errors, span.in_mod(self.mod_id()), &ctx.symbols

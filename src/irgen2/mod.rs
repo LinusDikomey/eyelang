@@ -10,6 +10,7 @@ use crate::{
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
+mod const_val;
 mod main_func;
 
 /// Macro for internal errors. Indicates that type checking went wrong or some internal assumption was broken
@@ -30,15 +31,15 @@ macro_rules! int {
         ::std::process::exit(1)
     }}
 }
-struct Ctx<'a> {
-    ast: &'a Ast,
-    symbols: &'a SymbolTable,
-    var_refs: &'a mut [Ref],
-    idents: &'a [resolve::Ident],
-    module: ModuleId,
-    functions: &'a mut Functions,
-    function_generics: &'a [Type],
-    member_accesses: &'a [MemberAccess],
+pub struct Ctx<'a> {
+    pub ast: &'a Ast,
+    pub symbols: &'a SymbolTable,
+    pub var_refs: &'a mut [Ref],
+    pub idents: &'a [resolve::Ident],
+    pub module: ModuleId,
+    pub functions: &'a mut Functions,
+    pub function_generics: &'a [Type],
+    pub member_accesses: &'a [MemberAccess],
 }
 impl<'a> Ctx<'a> {
     fn src(&self) -> &'a str {
@@ -317,13 +318,13 @@ fn gen_func(
 }
 
 #[derive(Clone, Copy)]
-enum Res {
+pub enum Res {
     Val(Ref),
     Var(Ref),
     Hole,
 }
 impl Res {
-    fn val(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+    pub fn val(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
         match self {
             Res::Val(r) => r,
             Res::Var(r) => ir.build_load(r, ty),
@@ -331,7 +332,7 @@ impl Res {
         }
     }
 
-    fn var(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+    pub fn var(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
         match self {
             Res::Val(r) => {
                 let var = ir.build_decl(ty);
@@ -357,7 +358,7 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
     }
 } 
 
-fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
+pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
     debug_assert_eq!(*noreturn, false, "generating expression with noreturn enabled means dead code will be generated");
     let r = match &ctx.ast[expr] {
         Expr::Block { items, .. } => {
@@ -459,6 +460,11 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let ty = ir.types.add_info_or_idx(ty);
                     let ptr_ty = ir.types.add(TypeInfo::Pointer(ty));
                     return Res::Var(ir.build_global(global_id, ptr_ty))
+                }
+                resolve::Ident::Const(const_id) => {
+                    let val = ctx.symbols.get_const(const_id);
+
+                    return const_val::build(ir, val, ctx[expr]);
                 }
             }
         }
@@ -1022,7 +1028,8 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
                     ir.build_store(var, pat_val);
                     ctx.var_refs[var_id.idx()] = var;
                 }
-                resolve::Ident::Global(_) => int!("global in pattern")
+                resolve::Ident::Global(_) => int!("global in pattern"),
+                resolve::Ident::Const(_) => int!("const in pattern"),
             }
             Ref::val(RefVal::True)
         }

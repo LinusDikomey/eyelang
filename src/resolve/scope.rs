@@ -1,4 +1,4 @@
-use crate::{ast::{ModuleId, self, TypeId, ExprRef, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}, parser::Counts};
+use crate::{ast::{ModuleId, self, TypeId, ExprRef, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}, parser::Counts, irgen};
 
 use super::{types::{DefId, SymbolTable, Type, TupleCountMode}, type_info::{TypeTableIndex, TypeInfoOrIndex, TypeInfo, TypeTable}, VarId, const_val};
 
@@ -80,7 +80,7 @@ impl<'a> Scope<'a> {
         unsafe { &(*self.module_scopes)[id.idx()] }
     }
 
-    pub fn resolve(&self, name: &str, name_span: Span, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast) -> DefId {
+    pub fn resolve(&self, name: &str, name_span: Span, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> DefId {
         // PERF: make non-recursive
         if let Some(id) = self.names.get(name) {
             match id {
@@ -88,16 +88,16 @@ impl<'a> Scope<'a> {
 
                 // TODO: when parent scopes are mutable somehow, update in self.names so resolval is cached :
                 UnresolvedDefId::Const { expr, ty, counts } => {
-                    match const_val::eval(*expr, ty, *counts, self, errors, ast, symbols) {
+                    match const_val::eval(*expr, ty, *counts, self, errors, ast, symbols, ir) {
                         const_val::ConstResult::Val(val) => DefId::Const(symbols.add_const(val)),
                         const_val::ConstResult::Symbol(def) => def.as_def_id(),
                     }
                 }
-                UnresolvedDefId::Use(path) => self.resolve_path(path, errors, symbols, ast),
+                UnresolvedDefId::Use(path) => self.resolve_path(path, errors, symbols, ast, ir),
             }
         } else {
             if let Some(parent) = self.parent {
-                return parent.resolve(name, name_span, errors, symbols, ast);
+                return parent.resolve(name, name_span, errors, symbols, ast, ir);
             } else {
                 errors.emit_span(Error::UnknownIdent, name_span);
                 DefId::Invalid
@@ -114,6 +114,7 @@ impl<'a> Scope<'a> {
         errors: &mut Errors,
         symbols: &mut SymbolTable,
         ast: &Ast,
+        ir_functions: &mut irgen::Functions,
     ) -> Option<Option<ModuleId>> {
         let mut current_module = if root.is_some() { Some(self.module.root) } else { None };
 
@@ -123,7 +124,7 @@ impl<'a> Scope<'a> {
             } else {
                 self
             };
-            match scope.resolve(segment, segment_span.in_mod(self.module.id), errors, symbols, ast) {
+            match scope.resolve(segment, segment_span.in_mod(self.module.id), errors, symbols, ast, ir_functions) {
                 DefId::Module(id) => current_module = Some(id),
                 _ => {
                     errors.emit_span(Error::ModuleExpected, segment_span.in_mod(self.module.id));
@@ -148,27 +149,27 @@ impl<'a> Scope<'a> {
     }
     */
 
-    pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast) -> DefId {
+    pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> DefId {
         let (root, middle, last) = path.segments(self.module.src());
-        let Some(current_module) = self.resolve_path_front(root, middle, errors, symbols, ast) else { return DefId::Invalid };
+        let Some(current_module) = self.resolve_path_front(root, middle, errors, symbols, ast, ir) else { return DefId::Invalid };
 
         if let Some((segment, span)) = last {
             if let Some(module) = current_module {
                 self.module_scope(module)
             } else {
                 self
-            }.resolve(segment, span.in_mod(self.module.id), errors, symbols, ast)
+            }.resolve(segment, span.in_mod(self.module.id), errors, symbols, ast, ir)
         } else {
             // should be fine to unwrap here since empty paths don't exist
             DefId::Module(current_module.unwrap())
         }
     }
 
-    pub fn resolve_ty(&self, ty: &ast::UnresolvedType, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast) -> Type {
+    pub fn resolve_ty(&self, ty: &ast::UnresolvedType, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> Type {
         match ty {
             ast::UnresolvedType::Primitive(p, _) => Type::Prim(*p),
             ast::UnresolvedType::Unresolved(path, generics) => {
-                match self.resolve_path(path, errors, symbols, ast) {                    
+                match self.resolve_path(path, errors, symbols, ast, ir) {                    
                     DefId::Type(id) => self.generic_type_instantiation(
                         path,
                         id,
@@ -176,7 +177,7 @@ impl<'a> Scope<'a> {
                         symbols,
                         errors,
                         None,
-                        |id, symbols, errors| self.resolve_ty(id, errors, symbols, ast)
+                        |id, symbols, errors| self.resolve_ty(id, errors, symbols, ast, ir)
                     ).map_or(Type::Invalid, |generics| Type::Id(id, generics)),
                     DefId::Generic(i) => Type::Generic(i),
                     DefId::Function(_) | DefId::Trait(_) | DefId::TraitFunc(_, _)
@@ -187,18 +188,18 @@ impl<'a> Scope<'a> {
                     DefId::Invalid => Type::Invalid
                 }
             }
-            ast::UnresolvedType::Pointer(inner) => Type::Pointer(Box::new(self.resolve_ty(&inner.0, errors, symbols, ast))),
+            ast::UnresolvedType::Pointer(inner) => Type::Pointer(Box::new(self.resolve_ty(&inner.0, errors, symbols, ast, ir))),
             ast::UnresolvedType::Array(inner) => {
                 let Some(count) = inner.2 else {
                     errors.emit_span(Error::ArraySizeCantBeInferredHere, inner.1.in_mod(self.module.id));
                     return Type::Invalid;
                 };
-                Type::Array(Box::new((self.resolve_ty(&inner.0, errors, symbols, ast), count)))
+                Type::Array(Box::new((self.resolve_ty(&inner.0, errors, symbols, ast, ir), count)))
             }
             ast::UnresolvedType::Tuple(members, _) => Type::Tuple(
                 members
                     .iter()
-                    .map(|ty| self.resolve_ty(ty, errors, symbols, ast))
+                    .map(|ty| self.resolve_ty(ty, errors, symbols, ast, ir))
                     .collect()
             ),
             ast::UnresolvedType::Infer(_) => {
@@ -303,8 +304,14 @@ impl<'a> LocalScope<'a> {
             locals,
         }
     }
-    pub fn child_with_defs(&'a self, defs: &DHashMap<String, ast::Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
-    -> LocalScope<'a> {
+    pub fn child_with_defs(
+        &'a self,
+        defs: &DHashMap<String, ast::Definition>,
+        ast: &Ast,
+        symbols: &mut SymbolTable,
+        errors: &mut Errors,
+        ir_functions: &mut irgen::Functions
+    ) -> LocalScope<'a> {
         let names = super::scope_defs(defs);
         //super::cross_resolve::local(defs, &mut names, &self.scope, ast, errors);
         
@@ -321,11 +328,11 @@ impl<'a> LocalScope<'a> {
         
         // resolve types, function signatures
         for (name, def) in defs {
-            super::resolve_def(name, def, ast, symbols, &mut scope.scope, errors);
+            super::resolve_def(name, def, ast, symbols, &mut scope.scope, errors, ir_functions);
         }
 
         // function bodies
-        super::scope_bodies(&scope.scope, defs, &ast, symbols, errors);
+        super::scope_bodies(&scope.scope, defs, &ast, symbols, errors, ir_functions);
 
         scope
     }
@@ -340,17 +347,17 @@ impl<'a> LocalScope<'a> {
         self.locals.insert(name, LocalDefId::Type(ty));
     }
 
-    pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast) -> LocalDefId {
+    pub fn resolve_path(&self, path: &ast::IdentPath, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> LocalDefId {
         let (root, middle, last) = path.segments(self.scope.module.src());
-        let Some(current_module) = self.scope.resolve_path_front(root, middle, errors, symbols, ast) else {
+        let Some(current_module) = self.scope.resolve_path_front(root, middle, errors, symbols, ast, ir) else {
             return LocalDefId::Def(DefId::Invalid);
         };
 
         if let Some((segment, span)) = last {
             if let Some(module) = current_module {
-                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span.in_mod(self.mod_id()), errors, symbols, ast))
+                LocalDefId::Def(self.scope.module_scope(module).resolve(segment, span.in_mod(self.mod_id()), errors, symbols, ast, ir))
             } else {
-                self.resolve_local(segment, span, errors, symbols, ast)
+                self.resolve_local(segment, span, errors, symbols, ast, ir)
             }
         } else {
             // should be fine to unwrap here since empty paths don't exist
@@ -358,12 +365,19 @@ impl<'a> LocalScope<'a> {
         }
     }
 
-    pub fn resolve_type_info(&self, ty: &ast::UnresolvedType, types: &mut TypeTable, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast)
-    -> TypeInfoOrIndex {
+    pub fn resolve_type_info(
+        &self,
+        ty: &ast::UnresolvedType,
+        types: &mut TypeTable,
+        errors: &mut Errors,
+        symbols: &mut SymbolTable,
+        ast: &Ast,
+        ir: &mut irgen::Functions
+    ) -> TypeInfoOrIndex {
         TypeInfoOrIndex::Type(match ty {
             ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
             ast::UnresolvedType::Unresolved(path, generics) => {
-                let id = self.resolve_path(path, errors, symbols, ast);
+                let id = self.resolve_path(path, errors, symbols, ast, ir);
                 match id {
                     LocalDefId::Type(idx) => {
                         if let Some((_, generics_span)) = generics {
@@ -375,7 +389,7 @@ impl<'a> LocalScope<'a> {
                     LocalDefId::Def(DefId::Type(id)) => {
                         self.scope.generic_type_instantiation(path, id, generics, symbols, errors,
                             Some(TypeInfoOrIndex::Type(TypeInfo::Unknown)),
-                            |ty, symbols, errors| self.resolve_type_info(ty, types, errors, symbols, ast)
+                            |ty, symbols, errors| self.resolve_type_info(ty, types, errors, symbols, ast, ir)
                         )
                         .map_or(
                             TypeInfo::Invalid,
@@ -394,17 +408,17 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::UnresolvedType::Pointer(inner) => {
-                let inner = self.resolve_type_info(&inner.0, types, errors, symbols, ast);
+                let inner = self.resolve_type_info(&inner.0, types, errors, symbols, ast, ir);
                 TypeInfo::Pointer(types.add_info_or_idx(inner))
             }
             ast::UnresolvedType::Array(inner) => {
-                let elem_ty = self.resolve_type_info(&inner.0, types, errors, symbols, ast);
+                let elem_ty = self.resolve_type_info(&inner.0, types, errors, symbols, ast, ir);
                 TypeInfo::Array(inner.2, types.add_info_or_idx(elem_ty))
             }
             ast::UnresolvedType::Tuple(elems, _) => {
                 let elems = elems
                     .iter()
-                    .map(|ty| self.resolve_type_info(ty, types, errors, symbols, ast))
+                    .map(|ty| self.resolve_type_info(ty, types, errors, symbols, ast, ir))
                     .collect::<Vec<_>>();
                 
                 TypeInfo::Tuple(types.add_multiple_info_or_index(elems), TupleCountMode::Exact)
@@ -413,7 +427,7 @@ impl<'a> LocalScope<'a> {
         })
     }
 
-    pub fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast) -> LocalDefId {
+    pub fn resolve_local(&self, name: &str, name_span: TSpan, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> LocalDefId {
         if let Some(local) = self.locals.get(name) {
             local.clone()
         } else if let Some(def) = self.scope.names.get(name) {
@@ -421,18 +435,18 @@ impl<'a> LocalScope<'a> {
                 UnresolvedDefId::Resolved(def) => LocalDefId::Def(*def),
                 // TODO: also update here in locals so resolval only happens once (when scope parents are mutable)
                 UnresolvedDefId::Const { expr, ty, counts } => {
-                    match const_val::eval(*expr, ty, *counts, &self.scope, errors, ast, symbols) {
+                    match const_val::eval(*expr, ty, *counts, &self.scope, errors, ast, symbols, ir) {
                         const_val::ConstResult::Val(val) => LocalDefId::Def(DefId::Const(symbols.add_const(val))),
                         const_val::ConstResult::Symbol(def) => LocalDefId::Def(def.as_def_id()),
                     }
                 }
-                UnresolvedDefId::Use(path) => self.resolve_path(path, errors, symbols, ast),
+                UnresolvedDefId::Use(path) => self.resolve_path(path, errors, symbols, ast, ir),
             }
         } else {
             match self.parent {
-                LocalOrGlobalScope::Local(local) => local.resolve_local(name, name_span, errors, symbols, ast),
+                LocalOrGlobalScope::Local(local) => local.resolve_local(name, name_span, errors, symbols, ast, ir),
                 LocalOrGlobalScope::Global(global) => LocalDefId::Def(
-                    global.resolve(name, name_span.in_mod(self.mod_id()), errors, symbols, ast)
+                    global.resolve(name, name_span.in_mod(self.mod_id()), errors, symbols, ast, ir)
                 ),
             }
         }

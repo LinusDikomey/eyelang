@@ -132,16 +132,6 @@ impl Type {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub struct SymbolKey(u64);
-impl SymbolKey {
-    pub const MISSING: Self = Self(u64::MAX);
-
-    pub fn idx(self) -> usize { self.0 as usize }
-    pub fn bytes(self) -> [u8; 8] { self.0.to_le_bytes() }
-    pub fn from_bytes(bytes: [u8; 8]) -> Self { Self(u64::from_le_bytes(bytes)) }
-}
-
 #[derive(Debug)]
 pub enum MaybeTypeDef {
     Some(ResolvedTypeDef),
@@ -237,13 +227,13 @@ impl SymbolTable {
         };
         def
     }
-    //pub fn get_func(&self, key: SymbolKey) -> &FunctionOrHeader { &self.funcs[key.idx()] }
-    //pub fn get_func_mut(&mut self, key: SymbolKey) -> &mut FunctionOrHeader { &mut self.funcs[key.idx()] }
-    pub fn get_const(&self, key: SymbolKey) -> &ConstVal { &self.consts[key.idx()] }
     pub fn get_global(&self, key: GlobalId) -> &(String, Type, Option<ConstVal>) {
         &self.globals[key.idx()].as_ref().unwrap()
     }
-    pub fn get_const_mut(&mut self, key: SymbolKey) -> &mut ConstVal { &mut self.consts[key.idx()] }
+
+    pub fn get_const(&self, id: ConstId) -> &ConstVal {
+        &self.consts[id.idx()]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,11 +1,12 @@
 use crate::{
-    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId},
+    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId},
     error::{Errors, Error},
     dmap::DHashMap,
     span::Span,
     parser::IdentId,
     resolve::types::ResolvedFunc,
-    types::Primitive
+    types::Primitive,
+    irgen,
 };
 
 use self::{
@@ -36,6 +37,8 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
         ast.member_access_count as usize,
     );
 
+    let mut ir_functions = irgen::Functions::new();
+
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
         let module_id = ModuleId::new(i as _);
@@ -56,7 +59,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     // resolve types, function signatures
     for (module, scope) in ast.modules.iter().zip(&mut module_scopes) {
         for (name, def) in &ast[module.definitions] {
-            resolve_def(name, def, ast, &mut symbols, scope, errors);
+            resolve_def(name, def, ast, &mut symbols, scope, errors, &mut ir_functions);
         }
     }
 
@@ -84,7 +87,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     // function bodies
     debug_assert_eq!(ast.modules.len(), module_scopes.len());
     for (module, scope) in ast.modules.iter().zip(&module_scopes) {
-        scope_bodies(scope, &ast[module.definitions], &ast, &mut symbols, errors);
+        scope_bodies(scope, &ast[module.definitions], &ast, &mut symbols, errors, &mut ir_functions);
     }
 
     (symbols, main)
@@ -110,9 +113,24 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, U
     }).collect()
 }
 
-fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
+fn scope_bodies(
+    scope: &Scope,
+    defs: &DHashMap<String, Definition>,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ir_functions: &mut irgen::Functions
+) {
 
-    fn gen_func_body(id: FunctionId, scope: &Scope, generics_ctx: &[String], ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
+    fn gen_func_body(
+        id: FunctionId,
+        scope: &Scope,
+        generics_ctx: &[String],
+        ast: &Ast,
+        symbols: &mut SymbolTable,
+        errors: &mut Errors,
+        ir_functions: &mut irgen::Functions
+    ) {
         
         let func = &ast[id];
         if let Some(body) = func.body {
@@ -128,6 +146,7 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
                 idents: &mut idents,
                 vars: &mut vars,
                 errors,
+                ir: ir_functions,
             });
 
             symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
@@ -141,7 +160,7 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
 
     for (_name, def) in defs {
         match def {
-            Definition::Function(func_id) => gen_func_body(*func_id, scope, &[], ast, symbols, errors),
+            Definition::Function(func_id) => gen_func_body(*func_id, scope, &[], ast, symbols, errors, ir_functions),
             Definition::Type(id) => {
                 match symbols.get_type(*id) {
                     ResolvedTypeDef::Struct(def) => {
@@ -149,7 +168,7 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
                         let generics = def.generics.clone();
                         // PERF: collecting here (ownership reasons)
                         for method_id in def.methods.values().copied().collect::<Vec<_>>() {
-                            gen_func_body(method_id, scope, &generics, ast, symbols, errors);
+                            gen_func_body(method_id, scope, &generics, ast, symbols, errors, ir_functions);
                         }
                         
                     }
@@ -164,22 +183,22 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
     }
 }
 
-fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors) {
+fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors, ir: &mut irgen::Functions) {
     match def {
         &Definition::Function(id) => {
-            let header = func_signature(name.to_owned(), 0, &ast[id], scope, symbols, errors, ast);
+            let header = func_signature(name.to_owned(), 0, &ast[id], scope, symbols, errors, ast, ir);
             symbols.place_func(id, header);
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
-                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, ast, symbols, errors)),
+                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scope, ast, symbols, errors, ir)),
                 TypeDef::Enum(e) => ResolvedTypeDef::Enum(enum_def(name.to_owned(), e, scope, symbols, errors)),
             };
             symbols.place_type(id, def);
         }
         &Definition::Global(id) => {
             let def = &ast[id];
-            let (ty, val) = global(def, ast, scope, symbols, errors);
+            let (ty, val) = global(def, ast, scope, symbols, errors, ir);
             symbols.place_global(id, name.to_owned(), ty, val);
         }
         Definition::Trait(_)
@@ -189,8 +208,16 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
     }
 }
 
-fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Function, scope: &Scope, symbols: &mut SymbolTable, errors: &mut Errors, ast: &Ast)
--> FunctionHeader {
+fn func_signature(
+    name: String,
+    inherited_generics_count: u8,
+    func: &ast::Function,
+    scope: &Scope,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ast: &Ast,
+    ir: &mut irgen::Functions,
+) -> FunctionHeader {
     let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
     let generic_defs = generics
         .iter()
@@ -200,10 +227,10 @@ fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Functi
     let scope = scope.signature_scope(generic_defs);
 
     let params = func.params.iter().map(|(name, ty, _, _)| {
-        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast))
+        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast, ir))
     }).collect();
 
-    let return_type = scope.resolve_ty(&func.return_type, errors, symbols, ast);
+    let return_type = scope.resolve_ty(&func.return_type, errors, symbols, ast, ir);
 
     FunctionHeader {
         name,
@@ -217,7 +244,7 @@ fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Functi
     }
 }
 
-fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors)
+fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors, ir: &mut irgen::Functions)
 -> Struct {    
     let names = def.generics.iter().enumerate().map(|(i, name_span)| {
         let name = &ast.src(scope.module.id).0[name_span.range()];
@@ -227,11 +254,11 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast:
     let scope = scope.child_scope(names);
     
     let members = def.members.iter().map(|(name, ty, _, _)| {
-        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast))
+        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast, ir))
     }).collect();
 
     let symbols = def.methods.iter().map(|(name, id)| {
-        let header = func_signature(name.to_owned(), def.generic_count(), &ast[*id], &scope, symbols, errors, ast);
+        let header = func_signature(name.to_owned(), def.generic_count(), &ast[*id], &scope, symbols, errors, ast, ir);
         symbols.place_func(*id, header);
         (name.clone(), *id)
     }).collect();
@@ -252,9 +279,9 @@ fn enum_def(name: String, def: &ast::EnumDefinition, _scope: &mut Scope, _symbol
     Enum { name, variants, generic_count: def.generic_count() }
 }
 
-fn global(def: &ast::GlobalDefinition, ast: &Ast, scope: &mut Scope, symbols: &mut SymbolTable, errors: &mut Errors)
+fn global(def: &ast::GlobalDefinition, ast: &Ast, scope: &mut Scope, symbols: &mut SymbolTable, errors: &mut Errors, ir: &mut irgen::Functions)
 -> (Type, Option<ConstVal>) {
-    let ty = scope.resolve_ty(&def.ty, errors, symbols, ast);
+    let ty = scope.resolve_ty(&def.ty, errors, symbols, ast, ir);
 
     if def.val.is_some() {
         todo!("globals with initial values")
@@ -268,6 +295,7 @@ pub enum Ident {
     Invalid,
     Var(VarId),
     Global(GlobalId),
+    Const(ConstId),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -290,6 +318,7 @@ struct Ctx<'a> {
     idents: &'a mut [Ident],
     vars: &'a mut Vec<Var>,
     errors: &'a mut Errors,
+    ir: &'a mut irgen::Functions,
 }
 impl<'a> Ctx<'a> {
     fn reborrow(&mut self) -> Ctx<'_> {
@@ -300,6 +329,7 @@ impl<'a> Ctx<'a> {
             idents: &mut *self.idents,
             vars: &mut *self.vars,
             errors: &mut *self.errors,
+            ir: &mut *self.ir,
         }
     }
     fn new_var(&mut self, var: Var) -> VarId {

@@ -1,7 +1,6 @@
-use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::ConstSymbol, type_info::TypeTableIndex}};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstResult}, type_info::TypeTableIndex}};
 
-use super::ConstVal;
-use crate::resolve::type_info::TypeInfo;
+use super::{ConstVal, builder::IrBuilder, types::IrType};
 
 #[derive(Clone, Debug)]
 enum LocalVal {
@@ -50,8 +49,7 @@ impl<'a> Drop for StackFrame<'a> {
 
 pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
-/*
-pub fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Error> {
+pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstResult, Error> {
     let mut stack = StackMem::new();
     unsafe {
         eval_internal(ir, params, stack.new_frame())
@@ -59,7 +57,7 @@ pub fn eval(ir: &super::IrBuilder, params: &[ConstVal]) -> Result<ConstVal, Erro
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
-unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstVal, Error> {
+unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstResult, Error> {
     let mut values = vec![LocalVal::Val(ConstVal::Invalid); ir.inst.len()];
 
     fn get_ref(values: &[LocalVal], r: Ref) -> ConstVal {
@@ -88,7 +86,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
             let r = get_ref(&values, $inst.data.bin_op.1);
 
             match &ir.ir_types[$inst.ty] {
-                TypeInfo::Primitive(p) if p.is_int() => {
+                IrType::Primitive(p) if p.is_int() => {
                     let ConstVal::Int(l_ty, l_val) = l else { panic!() };
                     let ConstVal::Int(r_ty, r_val) = r else { panic!() };
                     let ty = p.as_int().unwrap();
@@ -102,6 +100,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                     });
                     ConstVal::Int(Some(ty), l_val $op r_val)
                 }
+                /*
                 TypeInfo::Int => {
                     let ConstVal::Int(l_ty, l_val) = l else { panic!() };
                     let ConstVal::Int(r_ty, r_val) = r else { panic!() };
@@ -109,7 +108,8 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                     assert!(r_ty.is_none());
                     ConstVal::Int(None, l_val $op r_val)
                 }
-                TypeInfo::Primitive(p) if p.is_float() => {
+                */
+                IrType::Primitive(p) if p.is_float() => {
                     let ConstVal::Float(l_ty, l_val) = l else { panic!() };
                     let ConstVal::Float(r_ty, r_val) = r else { panic!() };
                     let ty = p.as_float().unwrap();
@@ -123,6 +123,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                     });
                     ConstVal::Float(Some(ty), l_val $op r_val)                        
                 }
+                /*
                 TypeInfo::Float => {
                     let ConstVal::Float(l_ty, l_val) = l else { panic!() };
                     let ConstVal::Float(r_ty, r_val) = r else { panic!() };
@@ -130,6 +131,7 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                     assert!(r_ty.is_none());
                     ConstVal::Float(None, l_val $op r_val)
                 }
+                */
                 t => panic!("Invalid type for binary operation: {t:?}")
             }
         }};
@@ -172,17 +174,17 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
             super::Tag::Param => todo!("should give pointer to param"), //params[inst.data.int32 as usize].clone(),
             super::Tag::Uninit => ConstVal::Invalid,
             super::Tag::Int => {
-                let int_ty = match ir.types[inst.ty] {
-                    TypeInfo::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
-                    TypeInfo::Int => None,
+                let int_ty = match ir.ir_types[inst.ty] {
+                    IrType::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
+                    //IrType::Int => None,
                     _ => panic!("invalid type in const eval")
                 };
                 ConstVal::Int(int_ty, inst.data.int as _)
             }
             super::Tag::LargeInt => {
-                let int_ty = match ir.types[inst.ty] {
-                    TypeInfo::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
-                    TypeInfo::Int => None,
+                let int_ty = match ir.ir_types[inst.ty] {
+                    IrType::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
+                    //IrType::Int => None,
                     _ => panic!("invalid type in const eval of float")
                 };
                 let bytes = &ir.extra[
@@ -197,9 +199,9 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
                 ConstVal::Int(int_ty, int)
             }
             super::Tag::Float => {
-                let float_ty = match &ir.types[inst.ty] {
-                    TypeInfo::Primitive(p) if p.is_float() => Some(p.as_float().unwrap()),
-                    TypeInfo::Float => None,
+                let float_ty = match &ir.ir_types[inst.ty] {
+                    IrType::Primitive(p) if p.is_float() => Some(p.as_float().unwrap()),
+                    //IrType::Float => None,
                     ty => panic!("invalid type in const eval of float: {ty:?}")
                 };
                 ConstVal::Float(float_ty, inst.data.float)
@@ -372,7 +374,5 @@ unsafe fn eval_internal(ir: &super::IrBuilder, _params: &[ConstVal], _frame: Sta
         });
         pos += 1;
     };
-    Ok(val)
+    Ok(ConstResult::Val(val))
 }
-
-*/

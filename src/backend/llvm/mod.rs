@@ -1,7 +1,6 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
 use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef, TypeRefs}}, resolve::{types::{ResolvedTypeDef, Type}, const_val::ConstVal, self}, ast::TypeId};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
-
 pub mod output;
 
 pub struct Module(LLVMModuleRef);

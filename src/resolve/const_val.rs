@@ -1,6 +1,12 @@
 use std::fmt;
 
-use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast}, error::Errors, parser::Counts};
+use crate::{
+    types::{IntType, FloatType, Primitive},
+    ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
+    error::Errors,
+    parser::Counts,
+    irgen, ir::{builder::IrBuilder, Ref, self},
+};
 
 use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, DefId, SymbolTable}, scope::{Scope, ExprInfo}, Ctx, Ident};
 
@@ -131,16 +137,15 @@ pub fn eval(
     scope: &Scope,
     errors: &mut Errors,
     ast: &Ast,
-    symbols: &mut SymbolTable
+    symbols: &mut SymbolTable,
+    ir: &mut irgen::Functions,
 ) -> ConstResult {
     let mut scope = scope.child();
     
     let mut types = TypeTable::new(0);
 
-    let ty = scope.resolve_type_info(ty, &mut types, errors, symbols, ast);
+    let ty = scope.resolve_type_info(ty, &mut types, errors, symbols, ast, ir);
     let ty = types.add_info_or_idx(ty);
-
-    let mut noreturn = false;
 
     let mut idents = vec![Ident::Invalid; counts.idents as usize];
     let mut vars = vec![];
@@ -152,11 +157,39 @@ pub fn eval(
         idents: &mut idents,
         vars: &mut vars,
         errors,
+        ir,
     };
-    let res = scope.expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn  }, ctx, false);
+    let mut noreturn = false;
+    let res = scope.expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);
     match res {
         super::expr::Res::Val { .. } => {} // value is used so it's fine
     }
     
-    todo!("const eval")
+    let mut var_refs = vec![Ref::UNDEF; vars.len()];
+
+    let mut builder = IrBuilder::new(types, vec![]);
+    let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
+        ast,
+        symbols: &symbols,
+        var_refs: &mut var_refs,
+        idents: &idents,
+        module: scope.mod_id(),
+        functions: ir,
+        function_generics: &[],
+        member_accesses: &symbols.member_accesses,
+    }, &mut noreturn);
+    let val = res.val(&mut builder, ty);
+
+    if !noreturn {
+        builder.build_ret(val);
+    }
+
+    match ir::eval::eval(&builder, &[]) {
+        Ok(val) => val,
+        Err(err) => {
+            errors.emit_span(err, ast[expr].span_in(ast, scope.mod_id()));
+            ConstResult::Val(ConstVal::Invalid)
+        }
+    }
+
 }
