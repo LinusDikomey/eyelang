@@ -1,8 +1,14 @@
 use std::fmt;
 
-use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId}};
+use crate::{types::{IntType, FloatType, Primitive}, ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast}, error::Errors, parser::Counts};
 
-use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::Type};
+use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, DefId, SymbolTable}, scope::{Scope, ExprInfo}, Ctx, Ident};
+
+#[derive(Debug, Clone)]
+pub enum ConstResult {
+    Val(ConstVal),
+    Symbol(ConstSymbol),
+}
 
 #[derive(Debug, Clone)]
 pub enum ConstVal {
@@ -66,10 +72,10 @@ impl fmt::Display for ConstVal {
 pub enum ConstSymbol {
     Func(FunctionId),
     //GenericFunc(u32),
-    TraitFunc(TraitId, u32),
     Type(TypeId),
     TypeValue(Type),
     Trait(TraitId),
+    TraitFunc(TraitId, u32),
     LocalType(TypeTableIndex),
     Module(ModuleId),
 }
@@ -105,4 +111,52 @@ impl ConstSymbol {
             _ => false,
         }
     }
+    pub fn as_def_id(&self) -> DefId {
+        match self {
+            &ConstSymbol::Func(id) => DefId::Function(id),
+            &ConstSymbol::Type(id) => DefId::Type(id),
+            ConstSymbol::TypeValue(_) => todo!(),
+            &ConstSymbol::Trait(id) => DefId::Trait(id),
+            &ConstSymbol::TraitFunc(id, idx) => DefId::TraitFunc(id, idx),
+            ConstSymbol::LocalType(_) => todo!(),
+            &ConstSymbol::Module(id) => DefId::Module(id),
+        }
+    }
+}
+
+pub fn eval(
+    expr: ExprRef,
+    ty: &UnresolvedType,
+    counts: Counts,
+    scope: &Scope,
+    errors: &mut Errors,
+    ast: &Ast,
+    symbols: &mut SymbolTable
+) -> ConstResult {
+    let mut scope = scope.child();
+    
+    let mut types = TypeTable::new(0);
+
+    let ty = scope.resolve_type_info(ty, &mut types, errors, symbols, ast);
+    let ty = types.add_info_or_idx(ty);
+
+    let mut noreturn = false;
+
+    let mut idents = vec![Ident::Invalid; counts.idents as usize];
+    let mut vars = vec![];
+
+    let ctx = Ctx {
+        ast,
+        symbols,
+        types: &mut types,
+        idents: &mut idents,
+        vars: &mut vars,
+        errors,
+    };
+    let res = scope.expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn  }, ctx, false);
+    match res {
+        super::expr::Res::Val { .. } => {} // value is used so it's fine
+    }
+    
+    todo!("const eval")
 }

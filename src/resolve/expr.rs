@@ -9,11 +9,11 @@ use crate::{
 
 use super::{
     Ctx,
-    type_info::{TypeInfo, TypeInfoOrIndex, TypeTableIndex},
+    type_info::{TypeInfo, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices},
     Ident,
     ResolvedCall,
     scope::{LocalScope, ExprInfo, LocalDefId},
-    types::{DefId, TupleCountMode}
+    types::{DefId, TupleCountMode}, MemberAccess
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -67,7 +67,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::Declare { pat, annotated_ty } => {
-                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 let mut exhaustion = Exhaustion::None;
@@ -77,7 +77,7 @@ impl<'a> LocalScope<'a> {
                 }
             }
             ast::Expr::DeclareWithVal { pat, annotated_ty, val } => {
-                let ty = self.resolve_type_info(annotated_ty, &ctx.symbols, ctx.types, ctx.errors);
+                let ty = self.resolve_type_info(annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
                 let ty = ctx.types.add_info_or_idx(ty);
 
                 self.val_expr(*val, info.with_expected(ty), ctx.reborrow(), false);
@@ -127,7 +127,7 @@ impl<'a> LocalScope<'a> {
             }
             ast::Expr::Variable { span, id } => {
                 let name = &self.scope.module.src()[span.range()];
-                let resolved = self.resolve_local(name, *span, ctx.errors);
+                let resolved = self.resolve_local(name, *span, ctx.errors, ctx.symbols, ctx.ast);
                 let ident = match resolved {
                     LocalDefId::Def(DefId::Invalid) => {
                         ctx.types.invalidate(info.expected);
@@ -297,7 +297,7 @@ impl<'a> LocalScope<'a> {
                     }
                 }
             }
-            &ast::Expr::MemberAccess { left, name: name_span } => {
+            &ast::Expr::MemberAccess { left, name: name_span, id } => {
                 let name = &ctx.ast.src(self.mod_id()).0[name_span.range()];
                 use_hint = UseHint::Should;
                 lval = true;
@@ -305,76 +305,93 @@ impl<'a> LocalScope<'a> {
                 let Res::Val { .. } = self.expr(left, info.with_expected(left_ty), ctx.reborrow(), false);
                 // auto deref
                 let mut deref_ty = ctx.types.get(left_ty);
-                let member_ty: TypeInfoOrIndex = loop {
+                let (member_access, ty) = loop {
                     deref_ty = match deref_ty {
                         TypeInfo::Pointer(inner) => ctx.types.get(inner),
                         TypeInfo::Resolved(id, generics) => match ctx.symbols.get_type(id) {
                             ResolvedTypeDef::Struct(s) => {
-                                let member = s.members.iter().find(|(member_name, _)| member_name == name);
-                                if let Some((_, ty)) = member {
+                                let member = s.members
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, (member_name, _))| member_name == name);
+                                if let Some((i, (_, ty))) = member {
                                     let ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
-                                    break ty;
+                                    break (MemberAccess::StructMember(i as _), ty);
                                 } else if let Some(id) = s.methods.get(name) {
                                     let ty = TypeInfo::MethodItem { function: *id, this_ty: left_ty };
-                                    break ty.into();
+                                    break (MemberAccess::Method(*id), ty.into());
                                 } else {
                                     ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                                    break TypeInfo::Invalid.into();
+                                    break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                                 }
                             }
                             ResolvedTypeDef::Enum(_) => {
                                 ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                                break TypeInfo::Invalid.into();
+                                break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                             }
                             ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                         }
                         TypeInfo::Unknown => {
                             ctx.errors.emit_span(Error::TypeMustBeKnownHere, self.span(left, ctx.ast));
-                            break TypeInfo::Invalid.into();
+                            break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                         }
                         TypeInfo::Invalid => {
-                            break TypeInfo::Invalid.into();
+                            break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                         }
                         TypeInfo::Generic(_) => todo!("generic member checking (traits?)"),
                         TypeInfo::SymbolItem(DefId::Type(id)) => {
                             match name {
-                                "size" | "align" => {
-                                    break TypeInfo::Primitive(Primitive::U64).into();
+                                "size" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), self.span(expr, ctx.ast));
+                                    break (MemberAccess::Size(id), TypeInfo::Primitive(Primitive::U64).into());
+                                }
+                                "align" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), self.span(expr, ctx.ast));
+                                    break (MemberAccess::Align(id), TypeInfo::Primitive(Primitive::U64).into());
                                 }
                                 _ => {}
                             }
-                            let type_info = match ctx.symbols.get_type(id) {
+                            match ctx.symbols.get_type(id) {
                                 ResolvedTypeDef::Struct(def) => match def.methods.get(name) {
-                                    Some(method) => {
-                                        TypeInfo::SymbolItem(DefId::Function(*method))
-                                    }
+                                    Some(method) => break (
+                                        MemberAccess::Symbol(DefId::Function(*method)),
+                                        TypeInfo::SymbolItem(DefId::Function(*method)).into()
+                                    ),
                                     None => {
                                         ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(self.mod_id()));
-                                        TypeInfo::Invalid
+                                        break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                                     }
                                 }
                                 ResolvedTypeDef::Enum(def) => {
                                     match def.variants.get(name) {
-                                        Some(variant) => TypeInfo::EnumItem(id, *variant),
+                                        Some(variant) => break (
+                                            MemberAccess::EnumItem(id, *variant),
+                                             // TODO: generic enums
+                                            TypeInfo::Resolved(id, TypeTableIndices::EMPTY).into(),
+                                        ),
                                         None => {
                                             ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(self.mod_id()));
-                                            TypeInfo::Invalid
+                                            break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                                         }
                                     }
                                 }
                                 ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                             };
-                            break type_info.into();
                         }
                         TypeInfo::SymbolItem(DefId::Module(id)) => {
                             let def = self.scope.module_scope(id)
-                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors);
-                            break TypeInfo::SymbolItem(def).into();
+                                .resolve(name, name_span.in_mod(self.mod_id()), ctx.errors, ctx.symbols, ctx.ast);
+                            break (MemberAccess::Symbol(def), TypeInfo::SymbolItem(def).into());
                         }
-                        TypeInfo::LocalTypeItem(_) => {
+                        TypeInfo::LocalTypeItem(idx) => {
                             match name {
-                                "size" | "align" => {
-                                    break TypeInfo::Primitive(Primitive::U64).into();
+                                "size" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), self.span(expr, ctx.ast));
+                                    break (MemberAccess::LocalSize(idx), TypeInfo::Primitive(Primitive::U64).into());
+                                }
+                                "align" => {
+                                    ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), self.span(expr, ctx.ast));
+                                    break (MemberAccess::LocalAlign(idx), TypeInfo::Primitive(Primitive::U64).into());
                                 }
                                 _ => todo!("member access on generics")
                             }
@@ -385,14 +402,12 @@ impl<'a> LocalScope<'a> {
                         | TypeInfo::SymbolItem(_)
                         | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
                             ctx.errors.emit_span(Error::NonexistantMember, self.span(expr, ctx.ast));
-                            break TypeInfo::Invalid.into();
+                            break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                         }
                     }
                 };
-                ctx.types.specify_or_merge(
-                    info.expected, member_ty,
-                    ctx.errors, self.span(expr, ctx.ast), &ctx.symbols,
-                );
+                ctx.symbols.member_accesses[id.idx()] = member_access;
+                ctx.types.specify_or_merge(info.expected, ty, ctx.errors, self.span(expr, ctx.ast), ctx.symbols);
             }
             &ast::Expr::Index { expr, idx, .. } => {
                 lval = true;
@@ -418,7 +433,7 @@ impl<'a> LocalScope<'a> {
                 // TODO: check casts properly, maybe defer check to end of function
                 let val_ty = ctx.types.add_unknown();
                 self.val_expr(*val, info.with_expected(val_ty), ctx.reborrow(), false);
-                let cast_info = self.resolve_type_info(ty, &ctx.symbols, ctx.types, ctx.errors);
+                let cast_info = self.resolve_type_info(ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast);
                 ctx.types.specify_or_merge(
                     info.expected, cast_info,
                     ctx.errors, span.in_mod(self.mod_id()), &ctx.symbols

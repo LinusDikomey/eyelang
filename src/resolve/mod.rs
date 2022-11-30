@@ -10,7 +10,9 @@ use crate::{
 
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
-    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex}, scope::{ModuleCtx, Scope, ExprInfo}, const_val::ConstVal
+    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex},
+    scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId},
+    const_val::ConstVal
 };
 
 pub mod const_val;
@@ -24,7 +26,15 @@ mod exhaust;
 
 pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool)
 -> (SymbolTable, Option<FunctionId>) {
-    let mut symbols = SymbolTable::new(ast.functions.len(), ast.expr_count(), &ast.types, ast.traits.len(), ast.calls.len(), ast.globals.len());
+    let mut symbols = SymbolTable::new(
+        ast.functions.len(),
+        ast.expr_count(),
+        &ast.types,
+        ast.traits.len(),
+        ast.calls.len(),
+        ast.globals.len(),
+        ast.member_access_count as usize,
+    );
 
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
     let mut module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
@@ -41,7 +51,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     }
 
     // resolve cross-referencing defs: use statements, constants (all DefId::Unresolved)
-    cross_resolve::top_level(&mut module_scopes, ast, errors);
+    // cross_resolve::top_level(&mut module_scopes, ast, errors);
     
     // resolve types, function signatures
     for (module, scope) in ast.modules.iter().zip(&mut module_scopes) {
@@ -51,7 +61,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     }
 
     let main = require_main.then_some(()).and_then(|()| {
-        if let Some(DefId::Function(id)) = module_scopes[main_module.idx()].get_def("main") {
+        if let Some(&UnresolvedDefId::Resolved(DefId::Function(id))) = module_scopes[main_module.idx()].get_def("main") {
             let main = symbols.get_func(id);
             if main.varargs || main.params.len() != 0 {
                 errors.emit_span(Error::MainArgs, ast.functions[id.idx()].span.in_mod(main_module));
@@ -81,15 +91,20 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
 }
 
 /// add all order independent definitions to a scope
-fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, DefId> {
+fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, UnresolvedDefId> {
     defs.iter().map(|(name, def)| {
         let def_id = match def {
-            &Definition::Function(id) => DefId::Function(id),
-            &Definition::Type(id) => DefId::Type(id),
-            &Definition::Trait(id) => DefId::Trait(id),
-            &Definition::Module(id) => DefId::Module(id),
-            Definition::Use(_) | Definition::Const(_, _) => DefId::Unresolved { resolving: false }, // added later
-            &Definition::Global(id) => DefId::Global(id),
+            &Definition::Function(id) => UnresolvedDefId::Resolved(DefId::Function(id)),
+            &Definition::Type(id) => UnresolvedDefId::Resolved(DefId::Type(id)),
+            &Definition::Trait(id) => UnresolvedDefId::Resolved(DefId::Trait(id)),
+            &Definition::Module(id) => UnresolvedDefId::Resolved(DefId::Module(id)),
+            &Definition::Use(path) => UnresolvedDefId::Use(path),
+            Definition::Const { ty, val, counts } => UnresolvedDefId::Const {
+                expr: *val,
+                ty: ty.clone(),
+                counts: *counts,
+            },
+            &Definition::Global(id) => UnresolvedDefId::Resolved(DefId::Global(id)),
         };
         (name.clone(), def_id)
     }).collect()
@@ -98,15 +113,14 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, D
 fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
 
     fn gen_func_body(id: FunctionId, scope: &Scope, generics_ctx: &[String], ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors) {
-        let mut expr_types = vec![TypeTableIndex::NONE; ast.expr_count()];
-
+        
         let func = &ast[id];
         if let Some(body) = func.body {
             let generic_count = symbols.get_func(id).generic_count();
         
             let mut types = TypeTable::new(generic_count);
             let mut vars = vec![];
-            let mut idents = vec![Ident::Invalid; func.ident_count as usize];
+            let mut idents = vec![Ident::Invalid; func.counts.idents as usize];
             func_body(body, id, scope, generics_ctx, Ctx {
                 ast,
                 symbols,
@@ -114,7 +128,6 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
                 idents: &mut idents,
                 vars: &mut vars,
                 errors,
-                expr_types: &mut expr_types,
             });
 
             symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
@@ -146,7 +159,7 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
                 
             }
             Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
-            | Definition::Const(_, _) | Definition::Global(_) => {}
+            | Definition::Const { .. } | Definition::Global(_) => {}
         }
     }
 }
@@ -154,7 +167,8 @@ fn scope_bodies(scope: &Scope, defs: &DHashMap<String, Definition>, ast: &Ast, s
 fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTable, scope: &mut Scope, errors: &mut Errors) {
     match def {
         &Definition::Function(id) => {
-            symbols.place_func(id, func_signature(name.to_owned(), 0, &ast[id], scope, symbols, errors));
+            let header = func_signature(name.to_owned(), 0, &ast[id], scope, symbols, errors, ast);
+            symbols.place_func(id, header);
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
@@ -171,25 +185,25 @@ fn resolve_def(name: &str, def: &Definition, ast: &Ast, symbols: &mut SymbolTabl
         Definition::Trait(_)
         | Definition::Module(_)
         | Definition::Use(_)
-        | Definition::Const(_, _) => {}
+        | Definition::Const { .. } => {}
     }
 }
 
-fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Function, scope: &Scope, symbols: &SymbolTable, errors: &mut Errors)
+fn func_signature(name: String, inherited_generics_count: u8, func: &ast::Function, scope: &Scope, symbols: &mut SymbolTable, errors: &mut Errors, ast: &Ast)
 -> FunctionHeader {
     let generics: Vec<String> = func.generics.iter().map(|span| scope.module.src()[span.range()].to_owned()).collect();
     let generic_defs = generics
         .iter()
         .enumerate()
-        .map(|(i, name)| (name.clone(), DefId::Generic(i as u8)))
+        .map(|(i, name)| (name.clone(), UnresolvedDefId::Resolved(DefId::Generic(i as u8))))
         .collect();
     let scope = scope.signature_scope(generic_defs);
 
     let params = func.params.iter().map(|(name, ty, _, _)| {
-        (name.clone(), scope.resolve_ty(ty, symbols, errors))
+        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast))
     }).collect();
 
-    let return_type = scope.resolve_ty(&func.return_type, symbols, errors);
+    let return_type = scope.resolve_ty(&func.return_type, errors, symbols, ast);
 
     FunctionHeader {
         name,
@@ -207,17 +221,18 @@ fn struct_def(name: String, def: &ast::StructDefinition, scope: &mut Scope, ast:
 -> Struct {    
     let names = def.generics.iter().enumerate().map(|(i, name_span)| {
         let name = &ast.src(scope.module.id).0[name_span.range()];
-        (name.to_owned(), DefId::Generic(i as u8))
+        (name.to_owned(), UnresolvedDefId::Resolved(DefId::Generic(i as u8)))
     }).collect();
 
     let scope = scope.child_scope(names);
     
     let members = def.members.iter().map(|(name, ty, _, _)| {
-        (name.clone(), scope.resolve_ty(ty, symbols, errors))
+        (name.clone(), scope.resolve_ty(ty, errors, symbols, ast))
     }).collect();
 
     let symbols = def.methods.iter().map(|(name, id)| {
-        symbols.place_func(*id, func_signature(name.to_owned(), def.generic_count(), &ast[*id], &scope, symbols, errors));
+        let header = func_signature(name.to_owned(), def.generic_count(), &ast[*id], &scope, symbols, errors, ast);
+        symbols.place_func(*id, header);
         (name.clone(), *id)
     }).collect();
 
@@ -237,9 +252,9 @@ fn enum_def(name: String, def: &ast::EnumDefinition, _scope: &mut Scope, _symbol
     Enum { name, variants, generic_count: def.generic_count() }
 }
 
-fn global(def: &ast::GlobalDefinition, _ast: &Ast, scope: &mut Scope, symbols: &mut SymbolTable, errors: &mut Errors)
+fn global(def: &ast::GlobalDefinition, ast: &Ast, scope: &mut Scope, symbols: &mut SymbolTable, errors: &mut Errors)
 -> (Type, Option<ConstVal>) {
-    let ty = scope.resolve_ty(&def.ty, symbols, errors);
+    let ty = scope.resolve_ty(&def.ty, errors, symbols, ast);
 
     if def.val.is_some() {
         todo!("globals with initial values")
@@ -275,7 +290,6 @@ struct Ctx<'a> {
     idents: &'a mut [Ident],
     vars: &'a mut Vec<Var>,
     errors: &'a mut Errors,
-    expr_types: &'a mut [TypeTableIndex],
 }
 impl<'a> Ctx<'a> {
     fn reborrow(&mut self) -> Ctx<'_> {
@@ -286,7 +300,6 @@ impl<'a> Ctx<'a> {
             idents: &mut *self.idents,
             vars: &mut *self.vars,
             errors: &mut *self.errors,
-            expr_types: &mut *self.expr_types,
         }
     }
     fn new_var(&mut self, var: Var) -> VarId {
@@ -346,6 +359,19 @@ impl<'a> Ctx<'a> {
 pub enum ResolvedCall {
     Function { func_id: FunctionId, generics: TypeTableIndices },
     Struct { type_id: TypeId, generics: TypeTableIndices },
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MemberAccess {
+    Size(TypeId),
+    Align(TypeId),
+    LocalSize(TypeTableIndex),
+    LocalAlign(TypeTableIndex),
+    StructMember(u32),
+    Symbol(DefId),
+    Method(FunctionId),
+    EnumItem(TypeId, u32),
     Invalid,
 }
 

@@ -88,7 +88,7 @@ impl Definition {
         if !matches!(self, Self::Use(_)) {
             c.write_start(name);
         }
-        if !matches!(self, Self::Global(_) | Self::Const(_, _) | Self::Use(_)) {
+        if !matches!(self, Self::Global(_) | Self::Const { .. } | Self::Use(_)) {
             c.write_add(" :: ");
         }
         match self {
@@ -103,7 +103,7 @@ impl Definition {
                 c.write_add(" as ");
                 c.write_add(name);
             }
-            Self::Const(ty, expr) => {
+            Self::Const { ty, val, counts: _ } => {
                 if let UnresolvedType::Infer(_) = ty {
                     c.write_add(" :: ");
                 }  else {
@@ -111,7 +111,7 @@ impl Definition {
                     ty.repr(c);
                     c.write_add(" : ");
                 }
-                c.ast()[*expr].repr(c);
+                c.ast()[*val].repr(c);
             }
             Self::Global(id) => {
                 let global = &c.ast()[*id];
@@ -119,7 +119,7 @@ impl Definition {
                 c.write_add(name);
                 c.write_add(": ");
                 global.ty.repr(c);
-                if let Some(val) = global.val {
+                if let Some((val, _)) = global.val {
                     c.write_add(" = ");
                     c.ast()[val].repr(c);
                 }
@@ -395,7 +395,7 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*r].repr(c);
                 c.write_add(")");
             }
-            Self::MemberAccess { left, name } => {
+            Self::MemberAccess { left, name, id: _ } => {
                 ast[*left].repr(c);
                 c.char('.');
                 c.write_add(c.src(*name));

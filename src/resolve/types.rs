@@ -3,10 +3,10 @@ use color_format::cwriteln;
 
 use crate::{
     types::{Primitive, Layout, IntType},
-    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId}
+    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}
 };
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall};
+use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall, MemberAccess};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -159,9 +159,18 @@ pub struct SymbolTable {
     pub globals: Vec<Option<(String, Type, Option<ConstVal>)>>,
     pub expr_types: Vec<TypeTableIndex>,
     pub calls: Vec<Option<ResolvedCall>>,
+    pub member_accesses: Vec<MemberAccess>,
 }
 impl SymbolTable {
-    pub fn new(func_count: usize, expr_count: usize, types: &[TypeDef], trait_count: usize, call_count: usize, global_count: usize) -> Self {
+    pub fn new(
+        func_count: usize,
+        expr_count: usize,
+        types: &[TypeDef],
+        trait_count: usize,
+        call_count: usize,
+        global_count: usize,
+        member_access_count: usize
+    ) -> Self {
         Self {
             funcs: (0..func_count).map(|_| None).collect(),
             types: types
@@ -173,6 +182,7 @@ impl SymbolTable {
             globals: vec![None; global_count],
             expr_types: vec![TypeTableIndex::NONE; expr_count],
             calls: vec![None; call_count],
+            member_accesses: vec![MemberAccess::Invalid; member_access_count],
         }
     }   
     pub fn place_func(&mut self, id: FunctionId, func: FunctionHeader) {
@@ -206,10 +216,9 @@ impl SymbolTable {
         key
     }
     */
-    pub fn add_const(&mut self, c: ConstVal) -> SymbolKey {
-        let key = SymbolKey(self.consts.len() as u64);
+    pub fn add_const(&mut self, c: ConstVal) -> ConstId {
         self.consts.push(c);
-        key
+        ConstId::new((self.consts.len() - 1) as u64)
     }
     pub fn place_global(&mut self, id: GlobalId, name: String, ty: Type, val: Option<ConstVal>) {
         self.globals[id.idx()] = Some((name, ty, val));
@@ -242,11 +251,12 @@ pub enum DefId {
     Function(FunctionId),
     Type(TypeId),
     Trait(TraitId),
+    TraitFunc(TraitId, u32),
     Module(ModuleId),
     Global(GlobalId),
+    Const(ConstId),
     Generic(u8),
     Invalid,
-    Unresolved { resolving: bool }
 }
 impl From<DefId> for ConstSymbol {
     fn from(value: DefId) -> Self {
@@ -254,11 +264,12 @@ impl From<DefId> for ConstSymbol {
             DefId::Function(id) => Self::Func(id),
             DefId::Type(id) => Self::Type(id),
             DefId::Trait(id) => Self::Trait(id),
+            DefId::TraitFunc(id, idx) => Self::TraitFunc(id, idx),
             DefId::Module(id) => Self::Module(id),
             DefId::Global(_id) => todo!(),
+            DefId::Const(_id) => todo!(),
             DefId::Generic(_id) => todo!(),
             DefId::Invalid => todo!(),
-            DefId::Unresolved { .. } => unreachable!()
         }
     }
 }

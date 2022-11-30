@@ -3,7 +3,7 @@ use crate::{
     token::Operator,
     types::Primitive,
     span::{TSpan, Span},
-    dmap::{self, DHashMap}, parser::IdentId, help::id,
+    dmap::{self, DHashMap}, parser::{IdentId, Counts}, help::id,
 };
 
 pub mod repr;
@@ -19,6 +19,7 @@ pub struct Ast {
     pub traits: Vec<TraitDefinition>,
     pub globals: Vec<GlobalDefinition>,
     pub calls: Vec<Call>,
+    pub member_access_count: u64,
 }
 impl Ast {
     pub fn new() -> Self {
@@ -33,6 +34,7 @@ impl Ast {
             traits: Vec::new(),
             globals: Vec::new(),
             calls: Vec::new(),
+            member_access_count: 0,
         }
     }
     pub fn expr_count(&self) -> usize {
@@ -103,6 +105,11 @@ impl Ast {
     pub fn add_call(&mut self, call: Call) -> CallId {
         self.calls.push(call);
         CallId((self.calls.len() - 1) as _)
+    }
+
+    pub fn member_access_id(&mut self) -> MemberAccessId {
+        self.member_access_count += 1;
+        MemberAccessId(self.member_access_count - 1)
     }
     
     pub fn src(&self, id: ModuleId) -> (&str, &Path) {
@@ -263,11 +270,15 @@ pub enum Definition {
     Trait(TraitId),
     Module(ModuleId),
     Use(IdentPath),
-    Const(UnresolvedType, ExprRef),
+    Const {
+        ty: UnresolvedType,
+        val: ExprRef,
+        counts: Counts,
+    },
     Global(GlobalId),
 }
 
-id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId);
+id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId ConstId MemberAccessId);
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
@@ -302,7 +313,7 @@ pub struct TraitDefinition {
 
 pub struct GlobalDefinition {
     pub ty: UnresolvedType,
-    pub val: Option<ExprRef>,
+    pub val: Option<(ExprRef, Counts)>,
 }
 
 #[derive(Debug, Clone)]
@@ -313,7 +324,7 @@ pub struct Function {
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprRef>,
-    pub ident_count: u32,
+    pub counts: Counts,
     pub span: TSpan,
 }
 
@@ -379,7 +390,7 @@ pub enum Expr {
     FunctionCall(CallId),
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
-    MemberAccess { left: ExprRef, name: TSpan },
+    MemberAccess { left: ExprRef, name: TSpan, id: MemberAccessId },
     Index { expr: ExprRef, idx: ExprRef, end: u32 },
     TupleIdx { expr: ExprRef, idx: u32, end: u32 },
     Cast(TSpan, UnresolvedType, ExprRef),
@@ -431,7 +442,7 @@ impl Expr {
                 TSpan::new(*start_or_end, e(expr))
             }
             Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
-            Expr::MemberAccess { left, name } => TSpan::new(s(left), name.end),
+            Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::TupleIdx { expr, idx: _, end } => TSpan { start: s(expr), end: *end },
             Expr::Root(start) => TSpan::new(*start, *start + 3),
@@ -470,7 +481,7 @@ impl UnOp {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IdentPath(TSpan); // just save the span and reparse when it is resolved
 
 impl IdentPath {

@@ -2,7 +2,7 @@ use crate::{ast::{ModuleId, Ast, Definition}, span::TSpan, error::{Errors, Error
 
 use super::{scope::Scope, types::DefId};
 
-
+/*
 
 pub(super) fn top_level(module_scopes: &mut [Scope<'static>], ast: &Ast, errors: &mut Errors) {
     for i in 0..module_scopes.len() {
@@ -184,3 +184,6 @@ fn cross_resolve_local(
         other => *other
     }
 }
+
+
+*/

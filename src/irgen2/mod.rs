@@ -1,13 +1,13 @@
 use std::ops::Index;
 
 use crate::{
-    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra},
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId},
     resolve::{
-        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum, DefId},
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum},
         self,
-        type_info::{TypeTableIndex, TypeInfo}, VarId},
+        type_info::{TypeTableIndex, TypeInfo}, VarId, MemberAccess},
     ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
-    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::{Primitive, Layout}, dmap::{DHashMap, self}
+    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
 mod main_func;
@@ -35,10 +35,10 @@ struct Ctx<'a> {
     symbols: &'a SymbolTable,
     var_refs: &'a mut [Ref],
     idents: &'a [resolve::Ident],
-    //ident_refs: &'a mut [Ref],
     module: ModuleId,
     functions: &'a mut Functions,
     function_generics: &'a [Type],
+    member_accesses: &'a [MemberAccess],
 }
 impl<'a> Ctx<'a> {
     fn src(&self) -> &'a str {
@@ -62,29 +62,58 @@ impl<'a> Index<VarId> for Ctx<'a> {
         &self.var_refs[index.idx()]
     }
 }
+impl<'a> Index<MemberAccessId> for Ctx<'a> {
+    type Output = MemberAccess;
 
-enum FunctionIds {
-    Simple(ir::FunctionId),
-    Generic(DHashMap<Vec<Type>, ir::FunctionId>)
+    fn index(&self, index: MemberAccessId) -> &Self::Output {
+        &self.member_accesses[index.idx()]
+    }
 }
 
-struct Functions {
+enum FunctionIds {
+    Simple(ir::FunctionId, CreateReason),
+    Generic(DHashMap<Vec<Type>, (ir::FunctionId, CreateReason)>)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
+pub enum CreateReason {
+    Comptime = 0,
+    Runtime = 1,
+}
+
+pub struct Functions {
     // ir::FunctionId implied by position in functions_to_create
     functions_to_create: Vec<(FunctionId, Vec<Type>)>,
+    funcs: Vec<Option<Function>>,
     ids: DHashMap<FunctionId, FunctionIds>, 
 }
 impl Functions {
-    fn get(&mut self, function: FunctionId, symbols: &SymbolTable, generic_args: Vec<Type>) -> ir::FunctionId {
+    pub fn new() -> Self {
+        Self {
+            functions_to_create: vec![],
+            funcs: vec![],
+            ids: dmap::new(),
+        }
+    }
+    pub fn get(&mut self, function: FunctionId, symbols: &SymbolTable, generic_args: Vec<Type>, create_reason: CreateReason) -> ir::FunctionId {
         if let Some(ids) = self.ids.get_mut(&function) {
             match ids {
-                FunctionIds::Simple(id) => *id,
+                FunctionIds::Simple(id, prev_create_reason) => {
+                    if create_reason > *prev_create_reason {
+                        *prev_create_reason = create_reason;
+                    }
+                    *id
+                }
                 FunctionIds::Generic(generic) => {
-                    if let Some(id) = generic.get(generic_args.as_slice()) {
+                    if let Some((id, prev_create_reason)) = generic.get_mut(generic_args.as_slice()) {
+                        if create_reason > *prev_create_reason {
+                            *prev_create_reason = create_reason;
+                        }
                         *id
                     } else {
                         let id = ir::FunctionId::new(self.functions_to_create.len() as u64);
-                        self.functions_to_create.push((function, generic_args.clone()));
-                        generic.insert(generic_args, id);
+                        self.functions_to_create.push((function, generic_args.clone()), );
+                        generic.insert(generic_args, (id, create_reason));
 
                         id
                     }
@@ -96,35 +125,27 @@ impl Functions {
                 debug_assert_eq!(generic_args.len(), symbols.get_func(function).generic_count() as usize);
                 self.functions_to_create.push((function, generic_args.clone()));
                 let mut map = dmap::with_capacity(1);
-                map.insert(generic_args, id);
+                map.insert(generic_args, (id, create_reason));
                 FunctionIds::Generic(map)
             } else {
                 debug_assert!(generic_args.is_empty());
                 self.functions_to_create.push((function, generic_args));
-                FunctionIds::Simple(id)
+                FunctionIds::Simple(id, create_reason)
             };
             self.ids.insert(function, entry);
 
             id
         }
     }
-}
-
-pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::Module {
-    let mut functions = Functions {
-        functions_to_create: main.map_or(Vec::new(), |main| vec![(main, vec![])]),
-        ids: dmap::new(),
-    };
-
-    let mut funcs: Vec<Function> = Vec::with_capacity(1);
-    
-    let mut i = 0;
-    while i < functions.functions_to_create.len() {
-        assert_eq!(i, funcs.len());
+    pub fn get_ir<'a>(&'a mut self, id: ir::FunctionId, symbols: &SymbolTable, ast: &Ast) -> &'a Function {
+        // if let gives a lifetime error here for some reason
+        if self.funcs.get(id.idx()).map_or(false, |item| item.is_some()) {
+            return self.funcs[id.idx()].as_ref().unwrap();
+        }
 
         // PERF: cloning here
-        let (id, generic_instance) = functions.functions_to_create[i].clone();
-        let generic_header = symbols.get_func(id);
+        let (ast_id, generic_instance) = self.functions_to_create[id.idx()].clone();
+        let generic_header = symbols.get_func(ast_id);
 
         let mut name = generic_header.name.to_owned();
         if generic_instance.len() > 0 {
@@ -159,38 +180,57 @@ pub fn reduce(ast: &Ast, symbols: SymbolTable, main: Option<FunctionId>) -> ir::
         let func = gen_func(
             header,
             generic_header.resolved_body.as_ref(),
-            &ast,
+            ast,
             &symbols,
-            &mut functions,
+            self,
             &generic_instance
         );
 
-        funcs.push(func);
-        i += 1;
+        if self.funcs.len() <= id.idx() {
+            self.funcs.resize_with(id.idx() + 1, || None);
+        }
+
+        self.funcs[id.idx()] = Some(func);
+        self.funcs[id.idx()].as_ref().unwrap()
     }
+    pub fn finish_module(mut self, symbols: SymbolTable, ast: &Ast, main: Option<FunctionId>) -> ir::Module {
+        
+        let main_id = main.map(|main| {
+            self.get(main, &symbols, vec![], CreateReason::Runtime)
+        });
+        
+        let mut i: u64 = 0;
+        while (i as usize) < self.functions_to_create.len() {
+            self.get_ir(ir::FunctionId::new(i), &symbols, ast);
+            i += 1;
+        }
 
-    let types = symbols.types.into_iter().map(|(name, def)| {
-        let MaybeTypeDef::Some(ty) = def else { int!() };
-        (name, ty)
-    }).collect();
+        let mut finished_functions = Vec::with_capacity(self.funcs.len() + main_id.is_some() as usize);
+        finished_functions.extend(self.funcs.into_iter().map(|func| func.unwrap()));
 
-    let globals = symbols.globals;
+        if let Some(main_id) = main_id {
+            // main is always at idx 0
+    
+            finished_functions[main_id.idx()].header.name = "eyemain".to_owned();
+            let return_type = finished_functions[main_id.idx()].header.return_type.clone();
+    
+            let func = main_func::main_wrapper(main_id, finished_functions[main_id.idx()].header.module, return_type);
+            finished_functions.push(func);
+        }
+        
+        let types = symbols.types.into_iter().map(|(name, def)| {
+            let MaybeTypeDef::Some(ty) = def else { int!() };
+            (name, ty)
+        }).collect();
+    
+        let globals = symbols.globals;
 
-    if let Some(_main) = main {
-        // main is always at idx 0
-
-        funcs[0].header.name = "eyemain".to_owned();
-        let return_type = funcs[0].header.return_type.clone();
-
-        let func = main_func::main_wrapper(ir::FunctionId::new(0), funcs[0].header.module, return_type);
-        funcs.push(func);
-    }
-
-    ir::Module {
-        name: "MainModule".to_owned(),
-        funcs,
-        globals: globals.into_iter().map(|global| global.unwrap()).collect(),
-        types,
+        ir::Module {
+            name: "MainModule".to_owned(),
+            funcs: finished_functions,
+            globals: globals.into_iter().map(|global| global.unwrap()).collect(),
+            types,
+        }
     }
 }
 
@@ -261,6 +301,7 @@ fn gen_func(
         module: header.module,
         functions,
         function_generics: generics,
+        member_accesses: &symbols.member_accesses,
     }, &mut noreturn);
     if !noreturn {  
         if header.return_type == Type::Prim(Primitive::Unit) {
@@ -670,7 +711,8 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let ty = ctx[expr];
                     
                     let generics = generics.iter().map(|idx| ir.types.get(idx).finalize(&ir.types).instantiate_generics(ctx.function_generics)).collect();
-                    let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics);
+                    // TODO: proper create reason? Can be a problem if function is first created for comptime but used at runtime
+                    let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics, CreateReason::Runtime);
                     let call_val = ir.build_call(ir_func_id, args, ty);
 
                     if func_noreturn {
@@ -800,44 +842,39 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                 ir.build_bin_op(op, l, r, ty)
             }
         }
-        &Expr::MemberAccess { left, name } => {
-            let layout_val = |ir: &mut IrBuilder, layout: Layout| {
-                let name = ctx.src_at(name);
-                let val = match name {
-                    "size" => layout.size,
-                    "align" => layout.alignment,
-                    name => int!("expected size/align but found '{name}'")
-                };
+        &Expr::MemberAccess { left, name: _, id } => {
+            let layout_val = |ir: &mut IrBuilder, val: u64| {
                 let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 ir.build_int(val, ty)
             };
-            match ir.types.get(ctx[expr]) {
-                // layout (size/align) of type ids
-                TypeInfo::Primitive(Primitive::U64)
-                    if matches!(ir.types.get(ctx[left]), TypeInfo::SymbolItem(DefId::Type(_)))
-                => {
-                    let TypeInfo::SymbolItem(DefId::Type(type_id)) = ir.types.get(ctx[left]) else { int!() };
-                    let layout = ctx.symbols.get_type(type_id).layout(
+            match ctx[id] {
+                MemberAccess::Size(id) => {
+                    let layout = ctx.symbols.get_type(id).layout(
                         |id| ctx.symbols.get_type(id),
                         &[]
                     );
-                    layout_val(ir, layout)
+                    layout_val(ir, layout.size)
                 }
-                // layout (size/align) of local types
-                TypeInfo::Primitive(Primitive::U64)
-                    if matches!(ir.types.get(ctx[left]), TypeInfo::LocalTypeItem(_))
-                => {
-                    let TypeInfo::LocalTypeItem(idx) = ir.types.get(ctx[left]) else { int!() };
-                    let layout = ir.ir_types.info_to_ty(ir.types[idx], &ir.types).layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
-                    layout_val(ir, layout)
+                MemberAccess::Align(id) => {
+                    let layout = ctx.symbols.get_type(id).layout(
+                        |id| ctx.symbols.get_type(id),
+                        &[]
+                    );
+                    layout_val(ir, layout.alignment)
                 }
-                TypeInfo::EnumItem(id, variant) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
-                    ir.build_int(variant as u64, int_ty)
+                MemberAccess::LocalSize(idx) => {
+                    let layout = ir.ir_types
+                        .info_to_ty(ir.types[idx], &ir.types)
+                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    layout_val(ir, layout.size)
                 }
-                TypeInfo::MethodItem { .. } | TypeInfo::SymbolItem(_) => Ref::UNDEF,
-                _ => {
+                MemberAccess::LocalAlign(idx) => {
+                    let layout = ir.ir_types
+                        .info_to_ty(ir.types[idx], &ir.types)
+                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    layout_val(ir, layout.alignment)
+                }
+                MemberAccess::StructMember(member_idx) => {
                     let mut member_ty = ir.types.get(ctx[left]);
                     let mut l_ptr_count = 0u32;
                     let (id, generics) = loop {
@@ -861,15 +898,6 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
 
                     if *noreturn { return Res::Val(Ref::UNDEF) }
 
-                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(id) else { int!() };
-                    let name = ctx.src_at(name);
-                    let member_idx = def.members
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (member_name, _))| member_name == name)
-                        .unwrap()
-                        .0 as u32;
-
                     if l_ptr_count == 0 {
                         return Res::Val(ir.build_value(left, member_idx, ctx[expr]))
                     }
@@ -887,6 +915,13 @@ fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
                     let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
                     return Res::Var(ir.build_member_int(left, member_idx, member_ptr_ty));
                 }
+                MemberAccess::Symbol(_) | MemberAccess::Method(_) => Ref::UNDEF,
+                MemberAccess::EnumItem(id, variant) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
+                    ir.build_int(variant as u64, int_ty)
+                }
+                MemberAccess::Invalid => todo!(),
             }
         }
         &Expr::Index { expr: val, idx, .. } => {

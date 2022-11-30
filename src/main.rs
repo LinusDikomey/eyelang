@@ -335,7 +335,10 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
     };
 
     let reduce_start_time = Instant::now();
-    let ir = irgen::reduce(&ast, symbols, main);
+
+    let ir_functions = irgen::Functions::new();
+    let ir = ir_functions.finish_module(symbols, &ast, main);
+
     stats.irgen += reduce_start_time.elapsed();
 
     if args.ir {
