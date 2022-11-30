@@ -12,7 +12,7 @@ use crate::{
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
     type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex},
-    scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId},
+    scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
     const_val::ConstVal
 };
 
@@ -47,11 +47,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
         Scope::root(names, module_ctx)
     }).collect();   
     
-    // set scope pointers
-    let module_scopes_ptr: *const [Scope] = module_scopes.as_slice();
-    for scope in &mut module_scopes {
-        scope.set_module_scopes_ptr(module_scopes_ptr);
-    }
+    let mut scopes = Scopes::new(module_scopes);
 
     // resolve cross-referencing defs: use statements, constants (all DefId::Unresolved)
     // cross_resolve::top_level(&mut module_scopes, ast, errors);
@@ -64,7 +60,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     }
 
     let main = require_main.then_some(()).and_then(|()| {
-        if let Some(&UnresolvedDefId::Resolved(DefId::Function(id))) = module_scopes[main_module.idx()].get_def("main") {
+        if let Some(&UnresolvedDefId::Resolved(DefId::Function(id))) = scopes[ScopeId::module(main_module)].get_def("main") {
             let main = symbols.get_func(id);
             if main.varargs || main.params.len() != 0 {
                 errors.emit_span(Error::MainArgs, ast.functions[id.idx()].span.in_mod(main_module));
@@ -114,7 +110,8 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, U
 }
 
 fn scope_bodies(
-    scope: &Scope,
+    scopes: &mut Scopes,
+    scope: ScopeId,
     defs: &DHashMap<String, Definition>,
     ast: &Ast,
     symbols: &mut SymbolTable,
@@ -124,7 +121,8 @@ fn scope_bodies(
 
     fn gen_func_body(
         id: FunctionId,
-        scope: &Scope,
+        scopes: &mut Scopes,
+        scope: ScopeId,
         generics_ctx: &[String],
         ast: &Ast,
         symbols: &mut SymbolTable,
@@ -139,7 +137,7 @@ fn scope_bodies(
             let mut types = TypeTable::new(generic_count);
             let mut vars = vec![];
             let mut idents = vec![Ident::Invalid; func.counts.idents as usize];
-            func_body(body, id, scope, generics_ctx, Ctx {
+            func_body(body, id, scopes, scope, generics_ctx, Ctx {
                 ast,
                 symbols,
                 types: &mut types,
@@ -160,7 +158,7 @@ fn scope_bodies(
 
     for (_name, def) in defs {
         match def {
-            Definition::Function(func_id) => gen_func_body(*func_id, scope, &[], ast, symbols, errors, ir_functions),
+            Definition::Function(func_id) => gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions),
             Definition::Type(id) => {
                 match symbols.get_type(*id) {
                     ResolvedTypeDef::Struct(def) => {
@@ -168,7 +166,7 @@ fn scope_bodies(
                         let generics = def.generics.clone();
                         // PERF: collecting here (ownership reasons)
                         for method_id in def.methods.values().copied().collect::<Vec<_>>() {
-                            gen_func_body(method_id, scope, &generics, ast, symbols, errors, ir_functions);
+                            gen_func_body(method_id, scopes, scope, &generics, ast, symbols, errors, ir_functions);
                         }
                         
                     }
@@ -405,7 +403,7 @@ pub enum MemberAccess {
     Invalid,
 }
 
-fn func_body<'a>(body: ExprRef, func_id: FunctionId, scope: &'a Scope<'a>, generics_ctx: &[String], ctx: Ctx) {
+fn func_body<'a>(body: ExprRef, func_id: FunctionId, scopes: &mut Scopes, id: ScopeId, generics_ctx: &[String], ctx: Ctx) {
     let mut scope = scope.child();
     let signature = ctx.symbols.get_func(func_id);
     

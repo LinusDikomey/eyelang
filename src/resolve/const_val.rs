@@ -5,10 +5,10 @@ use crate::{
     ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self},
+    irgen, ir::{builder::IrBuilder, Ref, self}, dmap,
 };
 
-use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, DefId, SymbolTable}, scope::{Scope, ExprInfo}, Ctx, Ident};
+use super::{type_info::{TypeTable, TypeInfo, TypeTableIndex}, types::{Type, DefId, SymbolTable}, scope::{Scope, ExprInfo, ScopeId, Scopes}, Ctx, Ident};
 
 #[derive(Debug, Clone)]
 pub enum ConstResult {
@@ -134,17 +134,18 @@ pub fn eval(
     expr: ExprRef,
     ty: &UnresolvedType,
     counts: Counts,
-    scope: &Scope,
+    scopes: &mut Scopes,
+    scope: ScopeId,
     errors: &mut Errors,
     ast: &Ast,
     symbols: &mut SymbolTable,
     ir: &mut irgen::Functions,
 ) -> ConstResult {
-    let mut scope = scope.child();
+    let mut scope = scopes.child(scope, dmap::new(), dmap::new(), false);
     
     let mut types = TypeTable::new(0);
 
-    let ty = scope.resolve_type_info(ty, &mut types, errors, symbols, ast, ir);
+    let ty = scopes.resolve_type_info(scope,ty, &mut types, errors, symbols, ast, ir);
     let ty = types.add_info_or_idx(ty);
 
     let mut idents = vec![Ident::Invalid; counts.idents as usize];
