@@ -33,7 +33,6 @@ pub enum ConstVal {
     EnumVariant(String),
     Bool(bool),
     Symbol(ConstSymbol),
-    NotGenerated,
 }
 impl ConstVal {
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
@@ -46,7 +45,6 @@ impl ConstVal {
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
             ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
-            ConstVal::NotGenerated { .. } => panic!()
         }
     }
 
@@ -59,7 +57,6 @@ impl ConstVal {
             (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
             (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
-            (Self::NotGenerated { .. }, Self::NotGenerated { .. }) => panic!(),
             _ => false
         }
     }
@@ -75,7 +72,6 @@ impl fmt::Display for ConstVal {
             ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
             ConstVal::Bool(b) => write!(f, "{b}"),
             ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
-            ConstVal::NotGenerated => write!(f, "[not generated]"),
         }
     }
 }

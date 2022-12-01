@@ -422,14 +422,6 @@ pub enum TypeTableIdxOrInfo {
     Idx(TypeTableIndex),
     Info(TypeInfo),
 }
-impl TypeTableIdxOrInfo {
-    pub fn into_idx(self, types: &mut TypeTable) -> TypeTableIndex {
-        match self {
-            TypeTableIdxOrInfo::Idx(idx) => idx,
-            TypeTableIdxOrInfo::Info(info) => types.add(info),
-        }
-    }
-}
 impl From<TypeTableIndex> for TypeTableIdxOrInfo {
     fn from(idx: TypeTableIndex) -> Self { Self::Idx(idx) }
 }

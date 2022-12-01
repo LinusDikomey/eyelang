@@ -66,11 +66,11 @@ impl fmt::Display for Module {
         }
         for func in &self.funcs {
             if func.ir.is_none() {
-                cwriteln!(f, "#m<extern> #r<{}>{}", func.header.name, func.display(info))?;
+                cwriteln!(f, "#m<extern> #r<{}>{}", func.name, func.display(info))?;
             } else {
                 cwriteln!(f, "#b<begin> #r<{name}>{}#b<end> #r<{name}>\n",
                     func.display(info),
-                    name = func.header.name
+                    name = func.name
                 )?;
             }
         }
@@ -141,15 +141,15 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { func, info } = self;
         write!(f, "(")?;
-        write_delimited_with(f, &func.header.params,
+        write_delimited_with(f, &func.params,
             |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param.display(*info)), ", ")?;
-        if func.header.varargs {
-            if !func.header.params.is_empty() {
+        if func.varargs {
+            if !func.params.is_empty() {
                 write!(f, ", ")?;
             }
             write!(f, "...")?;
         }
-        cwriteln!(f, ") -#> #m<{}>", func.header.return_type.display(*info))?;
+        cwriteln!(f, ") -#> #m<{}>", func.return_type.display(*info))?;
 
         if let Some(ir) = &func.ir {
             write!(f, "{}", ir.display(*info))?;
@@ -194,7 +194,6 @@ impl fmt::Display for TypeDefDisplay<'_> {
         match def {
             ResolvedTypeDef::Struct(s) => write!(f, "{}", s.display(*info)),
             ResolvedTypeDef::Enum(e) => write!(f, "{e}"),
-            ResolvedTypeDef::NotGenerated { .. } => write!(f, "not generated")
         }
     }
 }
@@ -304,7 +303,7 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
                 ref_bytes.copy_from_slice(&extra[begin..begin+4]);
                 Ref::from_bytes(ref_bytes)
             });
-            cwrite!(f, "#r<{}>(", info.funcs[func.idx()].header.name)?;
+            cwrite!(f, "#r<{}>(", info.funcs[func.idx()].name)?;
             write_delimited_with(f, refs, |f, r| write_ref(f, r), ", ")?;
             cwrite!(f, ")")
         }

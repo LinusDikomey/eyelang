@@ -174,7 +174,6 @@ fn scope_bodies(
                         
                     }
                     ResolvedTypeDef::Enum(_) => {}
-                    ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                 }
                 
             }
@@ -291,8 +290,14 @@ fn struct_def(name: String, def: &ast::StructDefinition, scopes: &mut Scopes, sc
     }
 }
 
-fn enum_def(name: String, def: &ast::EnumDefinition, scopes: &mut Scopes, scope: ScopeId, _symbols: &SymbolTable, _errors: &mut Errors)
--> Enum {
+fn enum_def(
+    name: String,
+    def: &ast::EnumDefinition,
+    _scopes: &mut Scopes,
+    _scope: ScopeId,
+    _symbols: &SymbolTable,
+    _errors: &mut Errors
+) -> Enum {
     let variants = def.variants.iter().enumerate().map(|(i, (_, name))| (name.clone(), i as _)).collect();
     Enum { name, variants, generic_count: def.generic_count() }
 }
@@ -480,6 +485,4 @@ fn func_body<'a>(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mu
 
     let mut noreturn = false;
     val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx.reborrow(), false);
-
-    dbg!(&ctx.types);
 }

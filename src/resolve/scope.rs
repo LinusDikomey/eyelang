@@ -118,7 +118,7 @@ impl Scopes {
         let names = super::scope_defs(defs);
         //super::cross_resolve::local(defs, &mut names, &self.scope, ast, errors);
         
-        let mut scope = self.add(Scope {
+        let scope = self.add(Scope {
             parent: Some(ParentScope { id: parent, can_see_locals: true }),
             module: self[parent].module,
             names,
@@ -180,9 +180,6 @@ impl Scopes {
         }
         
     }
-
-    fn module_scope(&self, module: ModuleId) -> &Scope { &self.scopes[module.idx()] }
-    fn module_scope_mut(&mut self, module: ModuleId) -> &mut Scope { &mut self.scopes[module.idx()] }
 
     /// Resolves everything in a path except the last segment.
     /// Returns None if the path was invalid and Some(None) if the path is simply empty.
@@ -462,7 +459,7 @@ impl<'a> ExprInfo<'a> {
     pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
         ExprInfo { expected: self.expected, ret: self.ret, noreturn }
     }
-    pub fn reborrow(&mut self) -> ExprInfo<'_> {
+    pub fn _reborrow(&mut self) -> ExprInfo<'_> {
         ExprInfo { expected: self.expected, ret: self.ret, noreturn: &mut *self.noreturn }
     }
 }

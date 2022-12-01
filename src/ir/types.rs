@@ -51,7 +51,7 @@ impl IrTypes {
             TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
             TypeInfo::Array(None, _) | TypeInfo::Invalid
             | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } 
-            | TypeInfo::EnumItem(_, _) | TypeInfo::LocalTypeItem(_)
+            | TypeInfo::LocalTypeItem(_)
                 => panic!("Invalid type supplied while buiding ir: {info:?}"),
         }
     }
@@ -177,7 +177,7 @@ impl TypeRefs {
     pub fn len(self) -> usize {
         self.count as usize
     }
-    pub fn nth(self, idx: u32) -> TypeRef {
+    pub fn _nth(self, idx: u32) -> TypeRef {
         debug_assert!(idx < self.count);
         TypeRef(self.idx + idx)
     }

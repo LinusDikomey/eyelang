@@ -31,7 +31,7 @@ pub fn val_expr(
     expr: ExprRef,
     mut info: ExprInfo,
 ) -> Ref {
-    reduce_expr(scope, ctx, ir, &ctx.ast[expr], info.reborrow())
+    reduce_expr(scope, ctx, ir, &ctx.ast[expr], info)
         .get_or_load(ir, &ctx.ctx, info.expected, &mut ctx.errors, ctx.ast[expr].span(ctx.ast).in_mod(ctx.module))
 }
 
@@ -44,7 +44,7 @@ pub(super) fn reduce_expr(
 ) -> ExprResult {
     let expected = info.expected;
     reduce_expr_any(
-        scope, ctx, ir, expr, info.reborrow(),
+        scope, ctx, ir, expr, info,
         |ir| ir.build_decl(expected), // declare new var
     ).0
 }
@@ -58,7 +58,7 @@ fn reduce_unused_expr(
 ) {
     let expected = info.expected;
     if reduce_expr_any(
-        scope, ctx, ir, expr, info.reborrow(),
+        scope, ctx, ir, expr, info,
         |ir| ir.build_decl(expected), // declare new var
     ).1 {
         ctx.errors.emit_span(Error::UnusedStatementValue, expr.span(ctx.ast).in_mod(ctx.module));

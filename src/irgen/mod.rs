@@ -3,7 +3,7 @@ use std::ops::Index;
 use crate::{
     ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId},
     resolve::{
-        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum},
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
         self,
         type_info::{TypeTableIndex, TypeInfo}, VarId, MemberAccess},
     ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
@@ -166,22 +166,18 @@ impl Functions {
             name.push(']');
         }
 
-        // TODO: FunctionHeader type just for ir
-        let header = FunctionHeader {
-            name,
-            inherited_generic_count: generic_header.inherited_generic_count,
-            generics: vec![],
-            params: generic_header.params
-                .iter()
-                .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_instance)))
-                .collect(),
-            varargs: generic_header.varargs,
-            return_type: generic_header.return_type.instantiate_generics(&generic_instance),
-            resolved_body: None,
-            module: generic_header.module
-        };
+        let params = generic_header.params
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_instance)))
+            .collect();
+        
+        let return_type = generic_header.return_type.instantiate_generics(&generic_instance);
         let func = gen_func(
-            header,
+            name,
+            params,
+            generic_header.varargs,
+            return_type,
+            generic_header.module,
             generic_header.resolved_body.as_ref(),
             ast,
             &symbols,
@@ -198,8 +194,11 @@ impl Functions {
     }
     pub fn finish_module(mut self, symbols: SymbolTable, ast: &Ast, main: Option<FunctionId>) -> ir::Module {
         
-        let main_id = main.map(|main| {
-            self.get(main, &symbols, vec![], CreateReason::Runtime)
+        let main_function = main.map(|main| {
+            (
+                self.get(main, &symbols, vec![], CreateReason::Runtime),
+                symbols.get_func(main).module,
+            )
         });
         
         let mut i: u64 = 0;
@@ -208,16 +207,16 @@ impl Functions {
             i += 1;
         }
 
-        let mut finished_functions = Vec::with_capacity(self.funcs.len() + main_id.is_some() as usize);
+        let mut finished_functions = Vec::with_capacity(self.funcs.len() + main_function.is_some() as usize);
         finished_functions.extend(self.funcs.into_iter().map(|func| func.unwrap()));
 
-        if let Some(main_id) = main_id {
+        if let Some((main_id, main_module)) = main_function {
             // main is always at idx 0
     
-            finished_functions[main_id.idx()].header.name = "eyemain".to_owned();
-            let return_type = finished_functions[main_id.idx()].header.return_type.clone();
+            finished_functions[main_id.idx()].name = "eyemain".to_owned();
+            let return_type = finished_functions[main_id.idx()].return_type.clone();
     
-            let func = main_func::main_wrapper(main_id, finished_functions[main_id.idx()].header.module, return_type);
+            let func = main_func::main_wrapper(main_id, main_module, return_type);
             finished_functions.push(func);
         }
         
@@ -238,7 +237,11 @@ impl Functions {
 }
 
 fn gen_func(
-    header: FunctionHeader,
+    name: String,
+    params: Vec<(String, Type)>,
+    varargs: bool,
+    return_type: Type,
+    module: ModuleId,
     body: Option<&ResolvedFunc>,
     ast: &Ast,
     symbols: &SymbolTable,
@@ -247,25 +250,17 @@ fn gen_func(
 )
 -> Function {
     let Some(body) = body else {
-        return Function { header, ir: None }
+        return Function {
+            name,
+            params,
+            varargs,
+            return_type,
+            ir: None,
+        }
     };
 
     // PERF: cloning type table here might be a problem
     let types = body.types.clone();
-    
-    /*
-    // replace Generic(n) TypeInfo with the specific type.
-    for (i, (idx, ty)) in body.generics.iter().zip(generics).enumerate() {
-        let info = ty.as_info(&mut types, |i| body.generics.nth(i as usize).into());
-        #[cfg(debug_assertions)]
-        {
-            match types.get(idx) {
-                TypeInfo::Generic(i2) if i == i2 as usize => {}
-                ty => int!("unexpected type {ty:?} when Generic({i}) was expected")
-            }
-        }
-        types.replace_idx(body.generics.nth(i), info);
-    }*/
     
     let mut builder = IrBuilder::new(types, Vec::with_capacity(body.types.generics().len()));
     
@@ -280,14 +275,9 @@ fn gen_func(
         builder.ir_types.add_generic_instance_ty(ir_type);
     }
 
-    // reserve generics types
-    //let generic_infos = builder.types.add_multiple_unknown(generics.len() as u32);
-
-    
-
     let mut var_refs = vec![Ref::UNDEF; body.vars.len()];
 
-    for (i, (_, param_ty)) in header.params.iter().enumerate() {
+    for (i, (_, param_ty)) in params.iter().enumerate() {
         let ty = param_ty.as_info(&mut builder.types, |i| body.types.generics().nth(i as usize).into());
         let ty = builder.types.add_info_or_idx(ty);
         let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
@@ -301,13 +291,13 @@ fn gen_func(
         symbols,
         var_refs: &mut var_refs,
         idents: &body.idents,
-        module: header.module,
+        module: module,
         functions,
         function_generics: generics,
         member_accesses: &symbols.member_accesses,
     }, &mut noreturn);
     if !noreturn {  
-        if header.return_type == Type::Prim(Primitive::Unit) {
+        if return_type == Type::Prim(Primitive::Unit) {
             builder.build_ret_undef();
         } else {
             let val = body_res.val(&mut builder, symbols.expr_types[body.body.idx()]);
@@ -316,7 +306,13 @@ fn gen_func(
     }
 
     let ir = builder.finish();
-    Function { header, ir: Some(ir) }
+    Function {
+        name,
+        params,
+        varargs,
+        return_type,
+        ir: Some(ir),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -386,10 +382,9 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             Ref::UNIT
         }
         Expr::Return { val, .. } => {
-            let zero_sized = ir.types
-                .get(ctx[*val])
-                .finalize(&ir.types)
-                .layout(|id| ctx.symbols.get_type(id), &[])
+            let ir_type = ir.ir_types.add_info(ir.types.get(ctx[*val]), &ir.types);
+            let zero_sized = ir.ir_types[ir_type]
+                .layout(&ir.ir_types, |id| ctx.symbols.get_type(id))
                 .size == 0;
 
             if zero_sized {
@@ -452,7 +447,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
         Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
         Expr::Unit(_) => Ref::UNIT,
-        Expr::Variable { id, span } => {
+        Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
                 resolve::Ident::Invalid => int!(),
                 resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),

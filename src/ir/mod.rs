@@ -1,6 +1,6 @@
 use std::fmt;
 use color_format::*;
-use crate::{resolve::{types::{FunctionHeader, Type, ResolvedTypeDef}, const_val::ConstVal}, help::id};
+use crate::{resolve::{types::{Type, ResolvedTypeDef}, const_val::ConstVal}, help::id};
 
 pub mod builder;
 pub mod eval;
@@ -16,7 +16,10 @@ id!(u64, 8: FunctionId);
 
 #[derive(Debug)]
 pub struct Function {
-    pub header: FunctionHeader,
+    pub name: String,
+    pub params: Vec<(String, Type)>,
+    pub varargs: bool,
+    pub return_type: Type,
     pub ir: Option<FunctionIr>
 }
 

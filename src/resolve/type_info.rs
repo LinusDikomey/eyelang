@@ -65,10 +65,6 @@ impl TypeTable {
     pub fn update_type(&mut self, idx: TypeTableIndex, ty: TypeInfo) {
         let idx = self.find(idx).0;
         self.types[idx.idx()] = TypeInfoOrIndex::Type(ty);
-    }   
-
-    pub fn is_invalid(&self, idx: TypeTableIndex) -> bool {
-        matches!(self.find(idx).1, TypeInfo::Invalid)
     }
 
     /// sets the type `ty` points to to `Invalid` and returns `true` if the type wasn't invalid before.
@@ -376,9 +372,6 @@ impl TypeTableIndex {
     pub fn idx(self) -> usize {
         self.0 as usize
     }
-    pub fn is_present(self) -> bool {
-        self.0 != u32::MAX
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -412,33 +405,6 @@ impl TypeTableNames {
     }
 }
 
-#[derive(Debug)]
-pub struct FinalTypeTable {
-    types: Vec<Type>,
-}
-impl FinalTypeTable {
-    pub fn get(&self, idx: TypeTableIndex) -> &Type {
-        assert!(idx.0 != u32::MAX, "Tried to get none-type table index");
-        // for generic types this will get a bit more complicated but the base
-        // principle of indexing into the Vec should stay
-        &self.types[idx.idx()]
-    }
-}
-impl Index<TypeTableIndex> for FinalTypeTable {
-    type Output = Type;
-
-    fn index(&self, index: TypeTableIndex) -> &Self::Output {
-        &self.types[index.idx()]
-    }
-}
-impl Index<TypeTableIndices> for FinalTypeTable {
-    type Output = [Type];
-
-    fn index(&self, index: TypeTableIndices) -> &Self::Output {
-        &self.types[index.idx as usize..index.idx as usize + index.count as usize]
-    }
-}
-
 /// A type that may not be (completely) known yet.
 #[derive(Clone, Copy, Debug)]
 pub enum TypeInfo {
@@ -456,7 +422,6 @@ pub enum TypeInfo {
         function: FunctionId,
         this_ty: TypeTableIndex,
     },
-    EnumItem(TypeId, u32),
     LocalTypeItem(TypeTableIndex),
     Generic(u8),
     Invalid,
@@ -532,22 +497,12 @@ impl TypeInfo {
                 symbols.get_func(function).name,
                 types[this_ty].as_string(types, symbols)
             ).into(),
-            TypeInfo::EnumItem(id, variant) => {
-                let ResolvedTypeDef::Enum(def) = symbols.get_type(id) else { unreachable!() };
-                format!(
-                    "<variant {}.{}>",
-                    def.name,
-                    def.variants.iter().find(|(_, v)| **v == variant).unwrap().0
-                ).into()
-            }
             TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
             TypeInfo::LocalTypeItem(idx) => format!("<type {}>", types.get(idx).as_string(types, symbols)).into(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
     }
-    pub fn is_invalid(&self) -> bool {
-        matches!(self, TypeInfo::Invalid)
-    }
+    
     pub fn finalize(self, types: &TypeTable) -> Type {
         match self {
             Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
@@ -580,7 +535,7 @@ impl TypeInfo {
                 other => other.finalize(types),
             }
             Self::SymbolItem(_) | Self::MethodItem { .. }
-            | Self::EnumItem(_, _)  | TypeInfo::LocalTypeItem(_) => Type::Invalid,
+            | TypeInfo::LocalTypeItem(_) => Type::Invalid,
         }
     }
 }
@@ -747,7 +702,7 @@ fn merge_infos(
             }
         }
         Invalid => Some(Invalid), // invalid type 'spreading'
-        MethodItem { .. } | EnumItem(_, _) => todo!("merge {ty:?} with {other:?}"),
+        MethodItem { .. } => todo!("merge {ty:?} with {other:?}"), // might be unreachable?
         LocalTypeItem(t1) => {
             let LocalTypeItem(t2) = other else { return None };
             match merge_infos(types.get(t1), types.get(t2), types, symbols) {
@@ -764,14 +719,6 @@ fn merge_infos(
 pub enum TypeInfoOrIndex {
     Type(TypeInfo),
     Idx(TypeTableIndex),
-}
-impl TypeInfoOrIndex {
-    pub fn into_info(self, types: &TypeTable) -> TypeInfo {
-        match self {
-            TypeInfoOrIndex::Type(info) => info,
-            TypeInfoOrIndex::Idx(idx) => types.get(idx),
-        }
-    }
 }
 impl From<TypeInfo> for TypeInfoOrIndex {
     fn from(info: TypeInfo) -> Self {

@@ -46,21 +46,6 @@ impl Type {
             Type::Invalid => Layout::ZERO,
         }
     }
-    pub fn is_zero_sized(&self, types: &[(String, ResolvedTypeDef)], generics: &[Type]) -> bool {
-        match self {
-            Type::Prim(p) => p.layout().size == 0,
-            Type::Id(key, generics) => types[key.idx()].1.is_zero_sized(types, generics),
-            Type::Pointer(_) => false,
-            Type::Array(array) => {
-                let (inner, size) = &**array;
-                *size == 0 || inner.is_zero_sized(types, generics)
-            }
-            Type::Enum(variants) => variants.len() < 2,
-            Type::Tuple(elems) => elems.iter().all(|ty| ty.is_zero_sized(types, generics)),
-            Type::Generic(idx) => generics[*idx as usize].is_zero_sized(types, generics),
-            Type::Invalid => true,
-        }
-    }
 
     pub fn as_info(&self, types: &mut TypeTable, on_generic: impl Fn(u8) -> TypeInfoOrIndex + Copy) -> TypeInfoOrIndex {
         TypeInfoOrIndex::Type(match self {
@@ -268,21 +253,18 @@ impl From<DefId> for ConstSymbol {
 pub enum ResolvedTypeDef {
     Struct(Struct),
     Enum(Enum),
-    NotGenerated { name: String, generic_count: u8, generating: bool },
 }
 impl ResolvedTypeDef {
     pub fn name(&self) -> &str {
         match self {
             Self::Struct(s) => &s.name,
             Self::Enum(e) => &e.name,
-            Self::NotGenerated { name, .. } => &name,
         }
     }
     pub fn generic_count(&self) -> u8 {
         match self {
             Self::Struct(struct_) => struct_.generic_count(),
             Self::Enum(enum_) => enum_.generic_count,
-            Self::NotGenerated { generic_count, .. } => *generic_count
         }
     }
     pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
@@ -302,15 +284,6 @@ impl ResolvedTypeDef {
             Self::Enum(enum_) => {
                 enum_._layout()
             }
-            Self::NotGenerated { .. }
-                => panic!("layout of NotGenerated types should not be requested"),
-        }
-    }
-    pub fn is_zero_sized(&self, types: &[(String, ResolvedTypeDef)], generics: &[Type]) -> bool {
-        match self {
-            Self::Struct(def) => def.members.iter().all(|(_, member)| member.is_zero_sized(types, generics)),
-            Self::Enum(def) => def.variants.len() < 2,
-            Self::NotGenerated { .. } => unreachable!()
         }
     }
 }

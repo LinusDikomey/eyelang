@@ -1,4 +1,4 @@
-use crate::{ast::{ExprRef, Expr, UnOp}, token::{IntLiteral, Operator, FloatLiteral}, span::TSpan, error::Error, types::Primitive};
+use crate::{ast::{ExprRef, Expr, UnOp}, token::IntLiteral, span::TSpan, error::Error, types::Primitive};
 
 use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident};
 

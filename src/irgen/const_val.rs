@@ -30,6 +30,5 @@ pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeTableIndex) -> Res {
         ConstVal::EnumVariant(_) => todo!(),
         ConstVal::Bool(_) => todo!(),
         ConstVal::Symbol(_) => todo!(),
-        ConstVal::NotGenerated => todo!(),
     }
 }

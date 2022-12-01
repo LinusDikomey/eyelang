@@ -335,7 +335,6 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                             ctx.errors.emit_span(Error::NonexistantMember, ctx.span(expr));
                             break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                         }
-                        ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                     }
                     TypeInfo::Unknown => {
                         ctx.errors.emit_span(Error::TypeMustBeKnownHere, ctx.span(left));
@@ -381,7 +380,6 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                                     }
                                 }
                             }
-                            ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
                         };
                     }
                     TypeInfo::SymbolItem(DefId::Module(id)) => {
@@ -410,7 +408,6 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                         }
                     }
                     TypeInfo::SymbolItem(DefId::Function(_)) | TypeInfo::MethodItem { .. }
-                    | TypeInfo::EnumItem(_, _)
                     | TypeInfo::Int | TypeInfo::Float | TypeInfo::Primitive(_)
                     | TypeInfo::SymbolItem(_)
                     | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
@@ -513,7 +510,6 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
                     );
                     (Res::Val { use_hint: UseHint::Can, lval: false }, ResolvedCall::Invalid)
                 }
-                ResolvedTypeDef::NotGenerated { .. } => unreachable!(),
             } 
         }
         TypeInfo::MethodItem { function: id, this_ty } => {

@@ -63,7 +63,6 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                         TypeInstance::Generic(dmap::new())
                     }
                 }
-                ResolvedTypeDef::NotGenerated { .. } => unreachable!()
             }
         })
         .collect::<Vec<_>>();
@@ -79,7 +78,6 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                     LLVMStructSetBody(struct_ty, members.as_mut_ptr(), members.len() as u32, FALSE);
             }
             ResolvedTypeDef::Enum(_) => continue, // nothing to do, just an int right now
-            ResolvedTypeDef::NotGenerated { .. } => unreachable!()
         }
     }
 
@@ -92,23 +90,23 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
         .map(|(i, func)| {
             let ir_func = &module.funcs[i];
             let (ret, mut params) = if ir_func.ir.is_some() {
-                let ret = llvm_global_ty(ctx, &func.header.return_type, module, &mut types);
-                let params = func.header.params.iter()
+                let ret = llvm_global_ty(ctx, &func.return_type, module, &mut types);
+                let params = func.params.iter()
                     .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
                     .collect::<Vec<_>>();
                 (ret, params)
             } else {
-                let ret = llvm_global_ty(ctx, &func.header.return_type, module, &mut types);
-                let params = func.header.params.iter()
+                let ret = llvm_global_ty(ctx, &func.return_type, module, &mut types);
+                let params = func.params.iter()
                     .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
                     .collect::<Vec<_>>();
                 (ret, params)
             };
             
             
-            let varargs = llvm_bool(func.header.varargs);
+            let varargs = llvm_bool(func.varargs);
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
-            let name = ffi::CString::new(func.header.name.as_bytes()).unwrap();
+            let name = ffi::CString::new(func.name.as_bytes()).unwrap();
             (LLVMAddFunction(llvm_module, name.as_ptr(), func_ty), func_ty)
         })
         .collect::<Vec<_>>();
@@ -186,7 +184,7 @@ unsafe fn build_func(
     funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
 ) {
-    crate::log!("-------------------- Building LLVM IR for func {}", func.header.name);
+    crate::log!("-------------------- Building LLVM IR for func {}", func.name);
     let blocks = ir.blocks.iter()
         .map(|_| LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE) )
         .collect::<Vec<_>>();
@@ -269,15 +267,15 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::RetUndef => {
-                if is_resolved_void_type(&func.header.return_type) {
+                if is_resolved_void_type(&func.return_type) {
                     LLVMBuildRetVoid(builder)
                 } else {
-                    let val = LLVMGetUndef(llvm_global_ty(ctx, &func.header.return_type, module, types));
+                    let val = LLVMGetUndef(llvm_global_ty(ctx, &func.return_type, module, types));
                     LLVMBuildRet(builder, val)
                 }
             }
             ir::Tag::Param => {
-                let llvm_ty = llvm_global_ty(ctx, &func.header.params[data.int32 as usize].1, module, types);
+                let llvm_ty = llvm_global_ty(ctx, &func.params[data.int32 as usize].1, module, types);
                 let param_var = LLVMBuildAlloca(builder, llvm_ty, NONE);
                 let val = LLVMGetParam(llvm_func, data.int32);
                 LLVMBuildStore(builder, val, param_var);
@@ -716,7 +714,6 @@ unsafe fn get_id_ty(id: TypeId, generics: &[Type], ctx: LLVMContextRef, module: 
                     ResolvedTypeDef::Enum(def) => {
                         int_from_variant_count(ctx, def.variants.len())
                     }
-                    ResolvedTypeDef::NotGenerated { .. } => unreachable!()
                 };
 
                 let TypeInstance::Generic(map) = &mut instances[id.idx()] else { unreachable!() };
@@ -854,7 +851,6 @@ unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ConstVal) -> Opt
         ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
         ConstVal::EnumVariant(_val) => todo!("static enum values"),
         &ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
-        ConstVal::Symbol(_) | ConstVal::NotGenerated { .. }
-            => unreachable!("This shouldn't reach codegen"),
+        ConstVal::Symbol(_) => unreachable!("This shouldn't reach codegen"),
     })
 }
