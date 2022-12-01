@@ -29,7 +29,6 @@ mod types;
 #[cfg(feature = "llvm-backend")]
 extern crate llvm_sys as llvm;
 
-use clap::StructOpt;
 use color_format::*;
 use std::{
     fmt,
@@ -52,7 +51,7 @@ macro_rules! log {
 }
 pub(crate) use log;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 enum Cmd {
     /// Check a file or project for errors and warnings.
     Check,
@@ -83,7 +82,7 @@ impl Default for Cmd {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ArgEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Backend {
     // Run with the llvm backend
     #[cfg(feature = "llvm-backend")]
@@ -115,7 +114,7 @@ impl Default for Backend {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Args {
-    #[clap(arg_enum)]
+    #[clap(value_enum)]
     cmd: Cmd,
     file: Option<String>,
 
@@ -172,7 +171,7 @@ pub struct Args {
 
     #[cfg_attr(
         feature = "llvm-backend",
-        clap(short, long, arg_enum, default_value_t = Backend::LLVM)
+        clap(short, long, value_enum, default_value_t = Backend::LLVM)
     )]
     #[cfg_attr(
         not(feature = "llvm-backend"),
@@ -182,7 +181,7 @@ pub struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
+    let args: Args = clap::Parser::parse();
     DEBUG_INFER.store(args.debug_infer, std::sync::atomic::Ordering::Relaxed);
     LOG.store(args.log, std::sync::atomic::Ordering::Relaxed);
     CRASH_ON_ERROR.store(args.crash_on_error, std::sync::atomic::Ordering::Relaxed);

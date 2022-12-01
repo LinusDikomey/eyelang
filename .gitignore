@@ -5,4 +5,5 @@
 /eyebuild
 /.vscode
 build
-/tmp.eye
+/tmp*.eye
+/.cargo
