@@ -2,7 +2,7 @@ use crate::{
     ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId},
     error::{Errors, Error},
     dmap::{DHashMap, self},
-    span::Span,
+    span::{Span, TSpan},
     parser::IdentId,
     resolve::types::ResolvedFunc,
     types::Primitive,
@@ -396,7 +396,11 @@ impl<'a> Ctx<'a> {
     }
     fn scope(&self) -> &Scope {
         &self.scopes[self.scope]
-    }    
+    }
+
+    fn src(&self, span: TSpan) -> &str {
+        &self.ast.src(self.scopes[self.scope].module.id).0[span.range()]
+    }
 
     pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: Span) {
         // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons

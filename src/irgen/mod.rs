@@ -988,6 +988,19 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
             let int_val = int_literal(lit, ty, ir);
             ir.build_bin_op(BinOp::Eq, pat_val, int_val, bool_ty)
         }
+        Expr::UnOp(_, UnOp::Neg, val) => {
+            let val = &ctx.ast[*val];
+            match val {
+                Expr::IntLiteral(lit_span) => {
+                    let lit = IntLiteral::parse(ctx.src_at(*lit_span));
+                    let val = int_literal(lit, ty, ir);
+                    let val = ir.build_neg(val, ty);
+                    ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty)
+                }
+                Expr::FloatLiteral(_) => todo!(),
+                _ => int!()
+            }
+        }
         Expr::FloatLiteral(_) => todo!(),
         Expr::BoolLiteral { val, .. } => {
             let val = if *val {
@@ -1031,7 +1044,36 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
             Ref::val(RefVal::True)
         }
         Expr::Hole(_) => Ref::val(RefVal::True),
-        Expr::BinOp(Operator::Range | Operator::RangeExclusive, _l, _r) => todo!(),
+        &Expr::BinOp(op @ (Operator::Range | Operator::RangeExclusive), l, r) => {
+            let mut side = |expr| match ctx.ast[expr] {
+                Expr::IntLiteral(span) => {
+                    let lit = IntLiteral::parse(ctx.src_at(span));
+                    int_literal(lit, ty, ir)
+                }
+                Expr::FloatLiteral(span) => {
+                    let lit = FloatLiteral::parse(ctx.src_at(span));
+                    ir.build_float(lit.val, ty)
+                }
+                Expr::UnOp(_, UnOp::Neg, inner) if let Expr::IntLiteral(span) = ctx.ast[inner] => {
+                    let lit = IntLiteral::parse(ctx.src_at(span));
+                    int_literal(lit, ty, ir)
+                }
+                Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(span) = ctx.ast[inner] => {
+                    let lit = FloatLiteral::parse(ctx.src_at(span));
+                    ir.build_float(-lit.val, ty)
+                }
+                _ => int!()
+            };
+            let l = side(l);
+            let r = side(r);
+
+            
+            let left_check = ir.build_bin_op(BinOp::GE, pat_val, l, bool_ty);
+            let right_op = if op == Operator::RangeExclusive { BinOp::LT } else { BinOp::LE };
+            let right_check = ir.build_bin_op(right_op, pat_val, r, bool_ty);
+
+            ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty)
+        }
         Expr::Tuple(_, items) => {
             let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
             let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));

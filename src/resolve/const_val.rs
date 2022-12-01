@@ -17,9 +17,18 @@ use super::{
 };
 
 #[derive(Debug, Clone)]
-pub enum ConstResult {
+pub enum ConstItem {
     Val(ConstVal),
     Symbol(ConstSymbol),
+}
+impl ConstItem {
+    pub fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
+        match (self, other) {
+            (ConstItem::Val(a), ConstItem::Val(b)) => a.equal_to(b),
+            (ConstItem::Symbol(a), ConstItem::Symbol(b)) => a.equal_to(b, types),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -32,7 +41,6 @@ pub enum ConstVal {
     String(Vec<u8>),
     EnumVariant(String),
     Bool(bool),
-    Symbol(ConstSymbol),
 }
 impl ConstVal {
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
@@ -44,11 +52,10 @@ impl ConstVal {
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
-            ConstVal::Symbol(_) => TypeInfo::Primitive(Primitive::Type),
         }
     }
 
-    pub fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
+    pub fn equal_to(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Unit, Self::Unit) => true,
             (Self::Int(_, l0), Self::Int(_, r0)) => l0 == r0,
@@ -56,7 +63,6 @@ impl ConstVal {
             (Self::String(l0), Self::String(r0)) => l0 == r0,
             (Self::EnumVariant(l0), Self::EnumVariant(r0)) => l0 == r0,
             (Self::Bool(l0), Self::Bool(r0)) => l0 == r0,
-            (Self::Symbol(l), Self::Symbol(r)) => l.equal_to(r, types),
             _ => false
         }
     }
@@ -71,7 +77,6 @@ impl fmt::Display for ConstVal {
             ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
             ConstVal::Bool(b) => write!(f, "{b}"),
-            ConstVal::Symbol(symbol) => write!(f, "{symbol:?}"),
         }
     }
 }
@@ -142,7 +147,7 @@ pub fn eval(
     ast: &Ast,
     symbols: &mut SymbolTable,
     ir: &mut irgen::Functions,
-) -> ConstResult {
+) -> ConstItem {
     let scope = scopes.child(scope, dmap::new(), dmap::new(), false);
     
     let mut types = TypeTable::new(0);
@@ -173,7 +178,7 @@ pub fn eval(
         // this is not a perfect solution but right now expressions with errors can result in crashed during irgen.
         // For this reason, just return Invalid here.
         
-        return ConstResult::Val(ConstVal::Invalid);
+        return ConstItem::Val(ConstVal::Invalid);
     }
 
 
@@ -200,7 +205,7 @@ pub fn eval(
         Ok(val) => val,
         Err(err) => {
             errors.emit_span(err, ast[expr].span_in(ast, scopes[scope].module.id));
-            ConstResult::Val(ConstVal::Invalid)
+            ConstItem::Val(ConstVal::Invalid)
         }
     }
 

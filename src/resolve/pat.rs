@@ -1,4 +1,4 @@
-use crate::{ast::{ExprRef, Expr, UnOp}, token::IntLiteral, span::TSpan, error::Error, types::Primitive};
+use crate::{ast::{ExprRef, Expr, UnOp}, token::{IntLiteral, Operator}, span::TSpan, error::Error, types::Primitive};
 
 use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident};
 
@@ -53,8 +53,7 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
             ctx.scopes[ctx.scope].define_var(name, var_id);
         }
         Expr::Hole(_) => exhaustion.exhaust_full(),
-        /*
-        Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => {
+        &Expr::BinOp(Operator::Range | Operator::RangeExclusive, l, r) => {
             enum Kind {
                 Int(exhaust::SignedInt),
                 Float,
@@ -65,50 +64,36 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
                 match expr {
                     &Expr::IntLiteral(l) => {
                         let lit = IntLiteral::parse(ctx.src(l));
-                        (
-                            Kind::Int(exhaust::SignedInt(lit.val, false)),
-                            int_literal(lit, l, ir, expected, ctx),
-                        )
+                        ctx.specify(expected, TypeInfo::Int, ctx.span(expr_ref));
+                        Kind::Int(exhaust::SignedInt(lit.val, false))
                     }
-                    &Expr::FloatLiteral(l) => {
-                        let lit = FloatLiteral::parse(ctx.src(l));
-                        ir.specify(expected, TypeInfo::Float, &mut ctx.errors, expr.span(ctx.ast), &ctx.ctx);
-                        (
-                            Kind::Float,
-                            ir.build_float(lit.val, expected)
-                        )
+                    &Expr::FloatLiteral(_) => {
+                        ctx.specify(expected, TypeInfo::Float, ctx.span(expr_ref));
+                        Kind::Float
                     }
                     &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::IntLiteral(l) = ctx.ast[inner] => {
                         let lit = IntLiteral::parse(ctx.src(l));
-                        let unsigned_val = int_literal(lit, l, ir, expected, ctx);
-                        (
-                            Kind::Int(exhaust::SignedInt(lit.val, true)),
-                            ir.build_neg(unsigned_val, expected),
-                        )
+                        ctx.specify(expected, TypeInfo::Int, ctx.span(expr_ref));
+                        Kind::Int(exhaust::SignedInt(lit.val, true))
                     }
-                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(l) = ctx.ast[inner] => {
-                        let lit = FloatLiteral::parse(&ctx.scope().module.src()[l.range()]);
-                        ctx.specify(expected, TypeInfo::Float, ctx.span(pat_expr));
+                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(_) = ctx.ast[inner] => {
+                        ctx.specify(expected, TypeInfo::Float, ctx.span(expr_ref));
+                        Kind::Float
                     }
                     _ => {
                         ctx.errors.emit_span(Error::NotAPatternRangeValue, ctx.span(pat_expr));
-                        ir.invalidate(expected);
-                        (
-                            Kind::Invalid,
-                            Ref::UNDEF
-                        )
+                        ctx.types.invalidate(expected);
+                        Kind::Invalid
                     }
                 }
             };
-            let (l, l_ref) = range_side(l);
-            let (r, r_ref) = range_side(r);
+            let l = range_side(l);
+            let r = range_side(r);
             match (l, r) {
                 (Kind::Int(l), Kind::Int(r)) => _ = exhaustion.exhaust_int_range(l, r),
                 _ => ()
             }
         }
-        */
-        
         Expr::Tuple(_, _)
         | Expr::FloatLiteral(_)
         | Expr::Record { .. } // very useful to match on records

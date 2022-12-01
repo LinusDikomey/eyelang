@@ -1,11 +1,11 @@
-use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstResult}, type_info::TypeTableIndex}};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstItem}, type_info::TypeTableIndex}};
 
 use super::{ConstVal, builder::IrBuilder, types::IrType};
 
 #[derive(Clone, Debug)]
 enum LocalVal {
-    Val(ConstVal),
-    Var(ConstVal),
+    Val(ConstItem),
+    Var(ConstItem),
 }
 
 struct StackMem {
@@ -49,7 +49,7 @@ impl<'a> Drop for StackFrame<'a> {
 
 pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
-pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstResult, Error> {
+pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstItem, Error> {
     let mut stack = StackMem::new();
     unsafe {
         eval_internal(ir, params, stack.new_frame())
@@ -57,22 +57,22 @@ pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstResult, Error> {
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
-unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstResult, Error> {
-    let mut values = vec![LocalVal::Val(ConstVal::Invalid); ir.inst.len()];
+unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstItem, Error> {
+    let mut values = vec![LocalVal::Val(ConstItem::Val(ConstVal::Invalid)); ir.inst.len()];
 
-    fn get_ref(values: &[LocalVal], r: Ref) -> ConstVal {
+    fn get_ref(values: &[LocalVal], r: Ref) -> ConstItem {
         if let Some(r) = r.into_ref() {
             match &values[r as usize] {
                 LocalVal::Val(v) => v.clone(),
                 LocalVal::Var(_) => panic!("Unexpected variable reference"),
             }
         } else {
-            match r.into_val().unwrap() {
+            ConstItem::Val(match r.into_val().unwrap() {
                 crate::ir::RefVal::True => ConstVal::Bool(true),
                 crate::ir::RefVal::False => ConstVal::Bool(false),
                 crate::ir::RefVal::Unit => ConstVal::Unit,
                 crate::ir::RefVal::Undef => ConstVal::Invalid,
-            }
+            })
         }
     }
     let mut pos: u32 = 0;
@@ -87,8 +87,8 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
 
             match &ir.ir_types[$inst.ty] {
                 IrType::Primitive(p) if p.is_int() => {
-                    let ConstVal::Int(l_ty, l_val) = l else { panic!() };
-                    let ConstVal::Int(r_ty, r_val) = r else { panic!() };
+                    let ConstItem::Val(ConstVal::Int(l_ty, l_val)) = l else { panic!() };
+                    let ConstItem::Val(ConstVal::Int(r_ty, r_val)) = r else { panic!() };
                     let ty = p.as_int().unwrap();
                     assert!(match l_ty {
                         Some(t) => t == ty,
@@ -98,7 +98,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                         Some(t) => t == ty,
                         None => true
                     });
-                    ConstVal::Int(Some(ty), l_val $op r_val)
+                    ConstItem::Val(ConstVal::Int(Some(ty), l_val $op r_val))
                 }
                 /*
                 TypeInfo::Int => {
@@ -110,8 +110,8 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                 }
                 */
                 IrType::Primitive(p) if p.is_float() => {
-                    let ConstVal::Float(l_ty, l_val) = l else { panic!() };
-                    let ConstVal::Float(r_ty, r_val) = r else { panic!() };
+                    let ConstItem::Val(ConstVal::Float(l_ty, l_val)) = l else { panic!() };
+                    let ConstItem::Val(ConstVal::Float(r_ty, r_val)) = r else { panic!() };
                     let ty = p.as_float().unwrap();
                     debug_assert!(match l_ty {
                         Some(t) => t == ty,
@@ -121,7 +121,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                         Some(t) => t == ty,
                         None => true
                     });
-                    ConstVal::Float(Some(ty), l_val $op r_val)                        
+                    ConstItem::Val(ConstVal::Float(Some(ty), l_val $op r_val))                        
                 }
                 /*
                 TypeInfo::Float => {
@@ -138,10 +138,10 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
     }
     macro_rules! cmp_op {
         ($op: tt, $inst: expr) => {{
-            let l = get_ref(&values, $inst.data.bin_op.0);
-            let r = get_ref(&values, $inst.data.bin_op.1);
+            let ConstItem::Val(l) = get_ref(&values, $inst.data.bin_op.0) else { unreachable!() };
+            let ConstItem::Val(r) = get_ref(&values, $inst.data.bin_op.1) else { unreachable!() };
 
-            match (l, r) {
+            ConstItem::Val(match (l, r) {
                 (ConstVal::Int(l_ty, l_val), ConstVal::Int(r_ty, r_val)) => {
                     debug_assert!(match (l_ty, r_ty) {
                         (Some(l), Some(r)) => l == r,
@@ -157,7 +157,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                     ConstVal::Bool(l_val $op r_val)
                 }
                 (l, r) => panic!("Invalid values for comparison: {l}, {r}")
-            }
+            })
         }};
     }
 
@@ -167,19 +167,19 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             super::Tag::BlockBegin => {
                 previous_block = current_block;
                 current_block = inst.data.block;
-                ConstVal::Invalid
+                ConstItem::Val(ConstVal::Invalid)
             }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
-            super::Tag::RetUndef => break ConstVal::Invalid, // could this also be unit?
-            super::Tag::Param => todo!("should give pointer to param"), //params[inst.data.int32 as usize].clone(),
-            super::Tag::Uninit => ConstVal::Invalid,
+            super::Tag::RetUndef => break ConstItem::Val(ConstVal::Invalid),
+            super::Tag::Param => todo!("should give pointer to param"),
+            super::Tag::Uninit => ConstItem::Val(ConstVal::Invalid),
             super::Tag::Int => {
                 let int_ty = match ir.ir_types[inst.ty] {
                     IrType::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
                     //IrType::Int => None,
                     _ => panic!("invalid type in const eval")
                 };
-                ConstVal::Int(int_ty, inst.data.int as _)
+                ConstItem::Val(ConstVal::Int(int_ty, inst.data.int as _))
             }
             super::Tag::LargeInt => {
                 let int_ty = match ir.ir_types[inst.ty] {
@@ -196,7 +196,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                 let int = u128::from_le_bytes(bytes_arr)
                     .try_into()
                     .expect("integer value too large for const evaluator");
-                ConstVal::Int(int_ty, int)
+                    ConstItem::Val(ConstVal::Int(int_ty, int))
             }
             super::Tag::Float => {
                 let float_ty = match &ir.ir_types[inst.ty] {
@@ -204,24 +204,24 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                     //IrType::Float => None,
                     ty => panic!("invalid type in const eval of float: {ty:?}")
                 };
-                ConstVal::Float(float_ty, inst.data.float)
+                ConstItem::Val(ConstVal::Float(float_ty, inst.data.float))
             }
             super::Tag::Func => {
-                ConstVal::Symbol(ConstSymbol::Func(inst.data.func_symbol))
+                ConstItem::Symbol(ConstSymbol::Func(inst.data.func_symbol))
             }
             super::Tag::TraitFunc => {
                 let mut buf = [0; 8];
                 buf.copy_from_slice(&ir.extra[inst.data.trait_func.0 as usize .. inst.data.trait_func.0 as usize + 8]);
 
-                ConstVal::Symbol(ConstSymbol::TraitFunc(TraitId::from_bytes(buf), inst.data.trait_func.1))
+                ConstItem::Symbol(ConstSymbol::TraitFunc(TraitId::from_bytes(buf), inst.data.trait_func.1))
             }
-            super::Tag::Type => ConstVal::Symbol(ConstSymbol::Type(inst.data.type_symbol)),
-            super::Tag::Trait => ConstVal::Symbol(ConstSymbol::Trait(inst.data.trait_symbol)),
-            super::Tag::LocalType => ConstVal::Symbol(ConstSymbol::LocalType(TypeTableIndex(inst.data.int32))),
-            super::Tag::Module => ConstVal::Symbol(ConstSymbol::Module(ModuleId::new(inst.data.int32))),
+            super::Tag::Type => ConstItem::Symbol(ConstSymbol::Type(inst.data.type_symbol)),
+            super::Tag::Trait => ConstItem::Symbol(ConstSymbol::Trait(inst.data.trait_symbol)),
+            super::Tag::LocalType => ConstItem::Symbol(ConstSymbol::LocalType(TypeTableIndex(inst.data.int32))),
+            super::Tag::Module => ConstItem::Symbol(ConstSymbol::Module(ModuleId::new(inst.data.int32))),
 
             super::Tag::Decl => {
-                values[pos as usize] = LocalVal::Var(ConstVal::Invalid);
+                values[pos as usize] = LocalVal::Var(ConstItem::Val(ConstVal::Invalid));
                 pos += 1;
                 continue;
             }
@@ -240,30 +240,30 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                     LocalVal::Var(current_val) => *current_val = val,
                     LocalVal::Val(_) => panic!("can't store in val")
                 }
-                ConstVal::Invalid
+                ConstItem::Val(ConstVal::Invalid)
             }
             super::Tag::String => {
                 let string = ir.extra[
                     inst.data.extra_len.0 as usize
                     .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
                 ].to_vec();
-                ConstVal::String(string)
+                ConstItem::Val(ConstVal::String(string))
             }
             super::Tag::Call => {
                 todo!();
             }
             super::Tag::Neg => {
-                match get_ref(&values, inst.data.un_op) {
-                    ConstVal::Invalid => ConstVal::Invalid,
-                    ConstVal::Int(ty, val) => ConstVal::Int(ty, -val),
-                    ConstVal::Float(ty, val) => ConstVal::Float(ty, -val),
+                ConstItem::Val(match get_ref(&values, inst.data.un_op) {
+                    ConstItem::Val(ConstVal::Invalid) => ConstVal::Invalid,
+                    ConstItem::Val(ConstVal::Int(ty, val)) => ConstVal::Int(ty, -val),
+                    ConstItem::Val(ConstVal::Float(ty, val)) => ConstVal::Float(ty, -val),
                     _ => panic!("Invalid value to negate")
-                }
+                })
             }
             super::Tag::Not => {
                 let val = get_ref(&values, inst.data.un_op);
-                let ConstVal::Bool(b) = val else { panic!("Invalid value for not") };
-                ConstVal::Bool(!b)
+                let ConstItem::Val(ConstVal::Bool(b)) = val else { panic!("Invalid value for not") };
+                ConstItem::Val(ConstVal::Bool(!b))
             }
             super::Tag::Global => todo!(),
             super::Tag::Add => bin_op!(+, inst),
@@ -272,29 +272,29 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             super::Tag::Div => bin_op!(/, inst),
             super::Tag::Mod => bin_op!(%, inst),
             super::Tag::Or => {
-                let (ConstVal::Bool(l), ConstVal::Bool(r)) = (
+                let (ConstItem::Val(ConstVal::Bool(l)), ConstItem::Val(ConstVal::Bool(r))) = (
                     get_ref(&values, inst.data.bin_op.0),
                     get_ref(&values, inst.data.bin_op.1)
                 ) else { panic!("Invalid values for or") };
-                ConstVal::Bool(l || r)
+                ConstItem::Val(ConstVal::Bool(l || r))
             }
             super::Tag::And => {
-                let (ConstVal::Bool(l), ConstVal::Bool(r)) = (
+                let (ConstItem::Val(ConstVal::Bool(l)), ConstItem::Val(ConstVal::Bool(r))) = (
                     get_ref(&values, inst.data.bin_op.0),
                     get_ref(&values, inst.data.bin_op.1)
                 ) else { panic!("Invalid values for and") };
-                ConstVal::Bool(l && r)
+                ConstItem::Val(ConstVal::Bool(l && r))
             }
             //TODO: eq/ne should probably be implemented for more types
             super::Tag::Eq => {
                 let l = get_ref(&values, inst.data.bin_op.0);
                 let r = get_ref(&values, inst.data.bin_op.1);
-                ConstVal::Bool(l.equal_to(&r, &ir.types))
+                ConstItem::Val(ConstVal::Bool(l.equal_to(&r, &ir.types)))
             }
             super::Tag::NE => {
                 let l = get_ref(&values, inst.data.bin_op.0);
                 let r = get_ref(&values, inst.data.bin_op.1);
-                ConstVal::Bool(!l.equal_to(&r, &ir.types))
+                ConstItem::Val(ConstVal::Bool(!l.equal_to(&r, &ir.types)))
             }
             super::Tag::LT => cmp_op!(< , inst),
             super::Tag::GT => cmp_op!(> , inst),
@@ -333,7 +333,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                 continue;
             }
             super::Tag::Branch => {
-                let ConstVal::Bool(val) = get_ref(&values, inst.data.ref_int.0)
+                let ConstItem::Val(ConstVal::Bool(val)) = get_ref(&values, inst.data.ref_int.0)
                     else { panic!("bool expected") };
                 let i = inst.data.ref_int.1 as usize;
                 let mut bytes = [0; 4];
@@ -374,5 +374,5 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
         });
         pos += 1;
     };
-    Ok(ConstResult::Val(val))
+    Ok(val)
 }

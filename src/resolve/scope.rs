@@ -148,8 +148,8 @@ impl Scopes {
                             def_id, UnresolvedDefId::Resolving,
                         ) else { unreachable!() };
                         let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
-                            const_val::ConstResult::Val(val) => DefId::Const(symbols.add_const(val)),
-                            const_val::ConstResult::Symbol(def) => def.as_def_id(),
+                            const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
+                            const_val::ConstItem::Symbol(def) => def.as_def_id(),
                         };
                         self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
                         def
@@ -408,8 +408,8 @@ impl Scopes {
                         def, UnresolvedDefId::Resolving
                     ) else { unreachable!() };
                     let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
-                        const_val::ConstResult::Val(val) => DefId::Const(symbols.add_const(val)),
-                        const_val::ConstResult::Symbol(def) => def.as_def_id(),
+                        const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
+                        const_val::ConstItem::Symbol(def) => def.as_def_id(),
                     };
                     *self[scope].names.get_mut(name).unwrap() = UnresolvedDefId::Resolved(def);
                     LocalDefId::Def(def)

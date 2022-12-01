@@ -851,6 +851,5 @@ unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ConstVal) -> Opt
         ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
         ConstVal::EnumVariant(_val) => todo!("static enum values"),
         &ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
-        ConstVal::Symbol(_) => unreachable!("This shouldn't reach codegen"),
     })
 }

@@ -1,4 +1,4 @@
-use crate::{ir::{builder::IrBuilder, Ref}, resolve::{const_val::ConstVal, type_info::TypeTableIndex}};
+use crate::{ir::{builder::IrBuilder, Ref, RefVal}, resolve::{const_val::ConstVal, type_info::TypeTableIndex}};
 
 use super::Res;
 
@@ -25,10 +25,9 @@ pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeTableIndex) -> Res {
                 Res::Val(abs_ref)
             }
         }
-        ConstVal::Float(_, _) => todo!(),
-        ConstVal::String(_) => todo!(),
-        ConstVal::EnumVariant(_) => todo!(),
-        ConstVal::Bool(_) => todo!(),
-        ConstVal::Symbol(_) => todo!(),
+        ConstVal::Float(_, val) => Res::Val(ir.build_float(*val, ty)),
+        ConstVal::String(bytes) => Res::Val(ir.build_string(&bytes,true, ty)),
+        ConstVal::EnumVariant(_variant) => todo!(),
+        &ConstVal::Bool(b) => Res::Val(Ref::val(if b { RefVal::True } else { RefVal::False })),
     }
 }
