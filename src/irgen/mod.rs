@@ -6,7 +6,7 @@ use crate::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
         self,
         type_info::{TypeTableIndex, TypeInfo}, VarId, MemberAccess},
-    ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
+    ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable}, Ref, RefVal, types::IrTypes},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
@@ -262,7 +262,7 @@ fn gen_func(
     // PERF: cloning type table here might be a problem
     let types = body.types.clone();
     
-    let mut builder = IrBuilder::new(types, Vec::with_capacity(body.types.generics().len()));
+    let mut builder = IrBuilder::new(types, IrTypes::new(Vec::with_capacity(body.types.generics().len())));
     
     debug_assert_eq!(body.types.generics().len(), generics.len());
     for ty in generics.iter() {
@@ -322,7 +322,7 @@ pub enum Res {
     Hole,
 }
 impl Res {
-    pub fn val(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+    pub fn val<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeTableIndex) -> Ref {
         match self {
             Res::Val(r) => r,
             Res::Var(r) => ir.build_load(r, ty),
@@ -330,7 +330,7 @@ impl Res {
         }
     }
 
-    pub fn var(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+    pub fn var<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeTableIndex) -> Ref {
         match self {
             Res::Val(r) => {
                 let var = ir.build_decl(ty);
@@ -343,7 +343,7 @@ impl Res {
     }
 }
 
-fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
+fn val_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
     let res = gen_expr(ir, expr, ctx, noreturn);
     if *noreturn {
         Ref::UNDEF
@@ -356,7 +356,7 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
     }
 } 
 
-pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
+pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
     debug_assert_eq!(*noreturn, false, "generating expression with noreturn enabled means dead code will be generated");
     let r = match &ctx.ast[expr] {
         Expr::Block { items, .. } => {
@@ -383,9 +383,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
         }
         Expr::Return { val, .. } => {
             let ir_type = ir.ir_types.add_info(ir.types.get(ctx[*val]), &ir.types);
-            let zero_sized = ir.ir_types[ir_type]
-                .layout(&ir.ir_types, |id| ctx.symbols.get_type(id))
-                .size == 0;
+            let zero_sized = ir.ir_types.layout(&ir.ir_types[ir_type], |id| ctx.symbols.get_type(id)).size == 0;
 
             if zero_sized {
                 ir.build_ret_undef();
@@ -846,10 +844,10 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             }
         }
         &Expr::MemberAccess { left, name: _, id } => {
-            let layout_val = |ir: &mut IrBuilder, val: u64| {
+            fn layout_val<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, val: u64) -> Ref {
                 let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
                 ir.build_int(val, ty)
-            };
+            }
             match ctx[id] {
                 MemberAccess::Size(id) => {
                     let layout = ctx.symbols.get_type(id).layout(
@@ -866,15 +864,13 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     layout_val(ir, layout.alignment)
                 }
                 MemberAccess::LocalSize(idx) => {
-                    let layout = ir.ir_types
-                        .info_to_ty(ir.types[idx], &ir.types)
-                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    let ir_ty = ir.ir_types.info_to_ty(ir.types[idx], &ir.types);
+                    let layout = ir.ir_types.layout(&ir_ty, |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.size)
                 }
                 MemberAccess::LocalAlign(idx) => {
-                    let layout = ir.ir_types
-                        .info_to_ty(ir.types[idx], &ir.types)
-                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    let ir_ty = ir.ir_types.info_to_ty(ir.types[idx], &ir.types);
+                    let layout = ir.ir_types.layout(&ir_ty, |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.alignment)
                 }
                 MemberAccess::StructMember(member_idx) => {
@@ -981,7 +977,14 @@ fn string_literal(span: TSpan, src: &str) -> String {
         .replace("\\\"", "\"")
 }
 
-fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, bool_ty: TypeTableIndex, ctx: &mut Ctx) -> Ref {
+fn gen_pat<IrTypes: IrTypeTable>(
+    ir: &mut IrBuilder<IrTypes>,
+    pat: ExprRef,
+    pat_val: Ref,
+    ty: TypeTableIndex,
+    bool_ty: TypeTableIndex,
+    ctx: &mut Ctx
+) -> Ref {
     match &ctx.ast[pat] {
         Expr::IntLiteral(lit) => {
             let lit = IntLiteral::parse(&ctx.src()[lit.range()]);
@@ -1112,7 +1115,7 @@ fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, b
     }
 }
 
-fn int_literal(lit: IntLiteral, ty: TypeTableIndex, ir: &mut IrBuilder) -> Ref {
+fn int_literal<IrTypes: IrTypeTable>(lit: IntLiteral, ty: TypeTableIndex, ir: &mut IrBuilder<IrTypes>) -> Ref {
     // TODO: check int type for overflow
     if lit.val <= std::u64::MAX as u128 {
         ir.build_int(lit.val as u64, ty)

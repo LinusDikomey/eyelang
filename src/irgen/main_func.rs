@@ -1,11 +1,11 @@
-use crate::{resolve::{types::Type, type_info::{TypeInfo, TypeTable}}, ir::{Function, builder::IrBuilder, FunctionId}, types::{Primitive, IntType}, ast::ModuleId};
+use crate::{resolve::{types::Type, type_info::{TypeInfo, TypeTable}}, ir::{Function, builder::IrBuilder, FunctionId, types::IrTypes}, types::{Primitive, IntType}, ast::ModuleId};
 
 
 /// Add hidden function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
 pub fn main_wrapper(eye_main: FunctionId, _module: ModuleId, main_return_ty: Type) -> Function {
-    let mut builder = IrBuilder::new(TypeTable::new(0), vec![]);
+    let mut builder = IrBuilder::new(TypeTable::new(0), IrTypes::new(vec![]));
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {

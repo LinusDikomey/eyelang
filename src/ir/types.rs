@@ -2,6 +2,8 @@ use std::ops::Index;
 
 use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type, ResolvedTypeDef}, self}};
 
+use super::builder::IrTypeTable;
+
 #[derive(Debug)]
 pub struct IrTypes {
     types: Vec<IrType>,
@@ -20,40 +22,6 @@ impl IrTypes {
     pub fn add(&mut self, ty: IrType) -> TypeRef {
         self.types.push(ty);
         TypeRef((self.types.len() - 1) as u32)
-    }
-    pub fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> IrType {
-        match info {
-            TypeInfo::Int => IrType::Primitive(Primitive::I32),
-            TypeInfo::Float => IrType::Primitive(Primitive::F32),
-            TypeInfo::Primitive(p) => IrType::Primitive(p),
-            TypeInfo::Resolved(id, generics) => {
-                let generic_idx = self.types.len();
-                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(generics.len()));
-                
-                for (i, ty) in generics.iter().enumerate() {
-                    self.types[generic_idx + i] = self.info_to_ty(types.get(ty), types);
-                }
-
-                IrType::Id(id, TypeRefs { idx: generic_idx as _, count: generics.len() as _ })
-            }
-            TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
-            TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
-            TypeInfo::Enum(names) => IrType::Primitive(Enum::int_ty_from_variant_count(names.count()).into()),
-            TypeInfo::Tuple(elems, _) => {
-                let elems_idx = self.types.len();
-                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(elems.len()));
-                for (i, ty) in elems.iter().enumerate() {
-                    self.types[elems_idx + i] = self.info_to_ty(types.get(ty), types);
-                }
-                IrType::Tuple(TypeRefs { idx: elems_idx as _, count: elems.len() as _ })
-            }
-            TypeInfo::Generic(i) => self.generic_instances[i as usize],
-            TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
-            TypeInfo::Array(None, _) | TypeInfo::Invalid
-            | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } 
-            | TypeInfo::LocalTypeItem(_)
-                => panic!("Invalid type supplied while buiding ir: {info:?}"),
-        }
     }
     pub fn resolved_to_ty(&mut self, ty: &Type, on_generic: impl Fn(u8) -> TypeRef + Copy) -> IrType {
         match ty {
@@ -91,9 +59,52 @@ impl IrTypes {
             resolve::types::Type::Invalid => unreachable!("invalid 'Type' encountered during irgen"),
         }
     }
-    pub fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef {
+}
+impl IrTypeTable for IrTypes {
+    type Type = IrType;
+    fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> IrType {
+        match info {
+            TypeInfo::Int => IrType::Primitive(Primitive::I32),
+            TypeInfo::Float => IrType::Primitive(Primitive::F32),
+            TypeInfo::Primitive(p) => IrType::Primitive(p),
+            TypeInfo::Resolved(id, generics) => {
+                let generic_idx = self.types.len();
+                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(generics.len()));
+                
+                for (i, ty) in generics.iter().enumerate() {
+                    self.types[generic_idx + i] = self.info_to_ty(types.get(ty), types);
+                }
+
+                IrType::Id(id, TypeRefs { idx: generic_idx as _, count: generics.len() as _ })
+            }
+            TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
+            TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
+            TypeInfo::Enum(names) => IrType::Primitive(Enum::int_ty_from_variant_count(names.count()).into()),
+            TypeInfo::Tuple(elems, _) => {
+                let elems_idx = self.types.len();
+                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(elems.len()));
+                for (i, ty) in elems.iter().enumerate() {
+                    self.types[elems_idx + i] = self.info_to_ty(types.get(ty), types);
+                }
+                IrType::Tuple(TypeRefs { idx: elems_idx as _, count: elems.len() as _ })
+            }
+            TypeInfo::Generic(i) => self.generic_instances[i as usize],
+            TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
+            TypeInfo::Array(None, _) | TypeInfo::Invalid
+            | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } 
+            | TypeInfo::LocalTypeItem(_)
+                => panic!("Invalid type supplied while buiding ir: {info:?}"),
+        }
+    }
+    fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef {
         let ty = self.info_to_ty(info, types);
         self.add(ty)
+    }
+    fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
+        self.add(IrType::Ptr(pointee))
+    }
+    fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout {
+        ty.layout(self, get_type)
     }
 }
 impl Index<TypeRef> for IrTypes {
@@ -161,13 +172,19 @@ pub struct TypeRef(u32);
 impl TypeRef {
     pub const NONE: Self = Self(u32::MAX);
 
+    pub fn new(idx: u32) -> Self {
+        Self(idx)
+    }
     pub fn is_present(self) -> bool {
         self.0 != u32::MAX
+    }
+    pub fn idx(self) -> usize {
+        self.0 as usize
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TypeRefs { idx: u32, count: u32 }
+pub struct TypeRefs { pub idx: u32, pub count: u32 }
 impl TypeRefs {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
     

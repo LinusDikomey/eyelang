@@ -24,10 +24,10 @@ pub struct Function {
 }
 
 #[derive(Debug)]
-pub struct FunctionIr {
+pub struct FunctionIr<Types = IrTypes> {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
-    pub types: IrTypes,
+    pub types: Types,
     pub blocks: Vec<u32>,
 }
 

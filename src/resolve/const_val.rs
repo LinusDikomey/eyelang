@@ -5,7 +5,7 @@ use crate::{
     ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self}, dmap,
+    irgen, ir::{builder::IrBuilder, Ref, self, eval::ConstIrTypes}, dmap,
 };
 
 use super::{
@@ -93,22 +93,6 @@ pub enum ConstSymbol {
     Module(ModuleId),
 }
 impl ConstSymbol {
-    /*pub fn add_instruction(&self, ir: &mut IrBuilder, symbols: &SymbolTable, ty: TypeTableIndex, errors: &mut Errors, span: Span) -> Ref {
-        ir.specify(ty, TypeInfo::Symbol, errors, TSpan::new(span.start, span.end), symbols);
-        match self {
-            &ConstSymbol::Func(symbol) => ir.build_func(symbol, ty),
-            ConstSymbol::GenericFunc(_) => todo!(),
-            &ConstSymbol::TraitFunc(trait_symbol, func_idx) => {
-                ir.build_trait_func(trait_symbol, func_idx, ty)
-            }
-            &ConstSymbol::Type(symbol) => ir.build_type(symbol, ty),
-            ConstSymbol::TypeValue(_ty) => todo!(),
-            &ConstSymbol::Trait(symbol) => ir.build_trait(symbol, ty),
-            &ConstSymbol::LocalType(idx) => ir.build_local_type(idx, ty),
-            &ConstSymbol::Module(module_id) => ir.build_module(module_id, ty),
-        }
-    }
-    */
     pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
         match (self, other) {
             (Self::Func(l), Self::Func(r)) => l == r,
@@ -184,7 +168,7 @@ pub fn eval(
 
     let mut var_refs = vec![Ref::UNDEF; vars.len()];
 
-    let mut builder = IrBuilder::new(types, vec![]);
+    let mut builder = IrBuilder::new(types, ConstIrTypes::new());
     let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
         ast,
         symbols: &symbols,

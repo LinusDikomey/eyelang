@@ -1,10 +1,12 @@
+use std::ops::Index;
+
 use crate::{
-    ast::GlobalId,
+    ast::{GlobalId, TypeId},
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
-    types::Primitive, resolve::type_info::{TypeTable, TypeTableIndex, TypeInfo},
+    types::{Primitive, Layout}, resolve::{type_info::{TypeTable, TypeTableIndex, TypeInfo}, types::ResolvedTypeDef},
 };
 
-use super::{RefVal, FunctionId, types::{IrTypes, TypeRef, IrType}};
+use super::{RefVal, FunctionId, types::TypeRef};
 
 pub enum BinOp {
     Add,
@@ -25,8 +27,16 @@ pub enum BinOp {
     GE,
 }
 
+pub trait IrTypeTable : Index<TypeRef, Output = Self::Type> {
+    type Type;
+    fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type;
+    fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;
+    fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef;
+    fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout;
+}
+
 #[derive(Debug)]
-pub struct IrBuilder {
+pub struct IrBuilder<IrTypes: IrTypeTable = super::types::IrTypes> {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
@@ -36,8 +46,8 @@ pub struct IrBuilder {
     pub types: TypeTable,
     pub ir_types: IrTypes,
 }
-impl IrBuilder {
-    pub fn new(types: TypeTable, generic_instances: Vec<IrType>) -> Self {
+impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
+    pub fn new(types: TypeTable, ir_types: IrTypes) -> Self {
         Self {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
@@ -51,7 +61,7 @@ impl IrBuilder {
             blocks: vec![0],
             extra: Vec::new(),
             types,
-            ir_types: IrTypes::new(generic_instances)
+            ir_types,
         }
     }
 
@@ -182,7 +192,7 @@ impl IrBuilder {
         BlockIndex(self.current_block)
     }
 
-    pub fn finish(self) -> FunctionIr {
+    pub fn finish(self) -> FunctionIr<IrTypes> {
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
@@ -275,7 +285,7 @@ impl IrBuilder {
             TypeTableIdxOrInfo::Info(info) => info,
         };
         let ty = self.ir_types.add_info(ty_info, &self.types);
-        let ptr_ty = self.ir_types.add(IrType::Ptr(ty));
+        let ptr_ty = self.ir_types.add_ptr_ty(ty);
         self.add_ir_typed(Data { ty }, Tag::Decl, ptr_ty)
     }
 

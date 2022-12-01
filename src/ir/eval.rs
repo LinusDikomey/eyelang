@@ -1,6 +1,93 @@
-use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstItem}, type_info::TypeTableIndex}};
+use std::ops::Index;
 
-use super::{ConstVal, builder::IrBuilder, types::IrType};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstItem}, type_info::{TypeTableIndex, TypeInfo, TypeTable}, types::ResolvedTypeDef}, types::{Primitive, Layout}};
+
+use super::{ConstVal, builder::{IrBuilder, IrTypeTable}, types::{IrType, TypeRef, TypeRefs}};
+
+
+#[derive(Clone, Copy, Debug)]
+pub enum ConstIrType {
+    Ty(IrType),
+    Int,
+    Float,
+    EnumVariant,
+}
+
+pub struct ConstIrTypes {
+    types: Vec<ConstIrType>,
+}
+impl ConstIrTypes {
+    pub fn new() -> Self {
+        Self { types: vec![] }
+    }
+    fn add(&mut self, ty: ConstIrType) -> TypeRef {
+        self.types.push(ty);
+        TypeRef::new((self.types.len() - 1) as _)
+    }
+}
+impl Index<TypeRef> for ConstIrTypes {
+    type Output = ConstIrType;
+
+    fn index(&self, index: TypeRef) -> &Self::Output {
+        &self.types[index.idx()]
+    }
+}
+impl IrTypeTable for ConstIrTypes {
+    type Type = ConstIrType;
+
+    fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type {
+        ConstIrType::Ty(match info {
+            TypeInfo::Int => return ConstIrType::Int,
+            TypeInfo::Float => return ConstIrType::Float,
+            TypeInfo::Primitive(p) => IrType::Primitive(p),
+            TypeInfo::Resolved(id, generics) => {
+                let generic_idx = self.types.len();
+                self.types.extend(
+                    std::iter::repeat(ConstIrType::Ty(IrType::Primitive(Primitive::Unit)))
+                        .take(generics.len())
+                );
+                
+                for (i, ty) in generics.iter().enumerate() {
+                    self.types[generic_idx + i] = self.info_to_ty(types.get(ty), types);
+                }
+
+                IrType::Id(id, TypeRefs { idx: generic_idx as _, count: generics.len() as _ })
+            }
+            TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
+            TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
+            TypeInfo::Enum(_) => return ConstIrType::EnumVariant,
+            TypeInfo::Tuple(elems, _) => {
+                let elems_idx = self.types.len();
+                self.types.extend(
+                    std::iter::repeat(ConstIrType::Ty(IrType::Primitive(Primitive::Unit)))
+                        .take(elems.len())
+                );
+                for (i, ty) in elems.iter().enumerate() {
+                    self.types[elems_idx + i] = self.info_to_ty(types.get(ty), types);
+                }
+                IrType::Tuple(TypeRefs { idx: elems_idx as _, count: elems.len() as _ })
+            }
+            TypeInfo::Generic(_) => unreachable!(), // when functions can be called at comptime
+            TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
+            TypeInfo::Array(None, _) | TypeInfo::Invalid
+            | TypeInfo::SymbolItem(_) | TypeInfo::MethodItem { .. } 
+            | TypeInfo::LocalTypeItem(_)
+                => panic!("Invalid type supplied while buiding ir: {info:?}"),
+        })
+    }
+    fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef {
+        let ty = self.info_to_ty(info, types);
+        self.add(ty)
+    }
+    fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
+        self.add(ConstIrType::Ty(IrType::Ptr(pointee)))
+    }
+    fn layout<'a, F: Fn(crate::ast::TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, _ty: &Self::Type, _get_type: F) -> Layout {
+        eprintln!("TODO: compile-time layout is not set properly and will result in unexpected behaviour");
+        // TODO: set to 1 for now
+        Layout { size: 1, alignment: 1 }
+    }
+}
 
 #[derive(Clone, Debug)]
 enum LocalVal {
@@ -49,7 +136,7 @@ impl<'a> Drop for StackFrame<'a> {
 
 pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
-pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstItem, Error> {
+pub fn eval(ir: &IrBuilder<ConstIrTypes>, params: &[ConstVal]) -> Result<ConstItem, Error> {
     let mut stack = StackMem::new();
     unsafe {
         eval_internal(ir, params, stack.new_frame())
@@ -57,7 +144,7 @@ pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstItem, Error> {
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
-unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstItem, Error> {
+unsafe fn eval_internal(ir: &IrBuilder<ConstIrTypes>, _params: &[ConstVal], _frame: StackFrame) -> Result<ConstItem, Error> {
     let mut values = vec![LocalVal::Val(ConstItem::Val(ConstVal::Invalid)); ir.inst.len()];
 
     fn get_ref(values: &[LocalVal], r: Ref) -> ConstItem {
@@ -86,7 +173,7 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             let r = get_ref(&values, $inst.data.bin_op.1);
 
             match &ir.ir_types[$inst.ty] {
-                IrType::Primitive(p) if p.is_int() => {
+                ConstIrType::Ty(IrType::Primitive(p)) if p.is_int() => {
                     let ConstItem::Val(ConstVal::Int(l_ty, l_val)) = l else { panic!() };
                     let ConstItem::Val(ConstVal::Int(r_ty, r_val)) = r else { panic!() };
                     let ty = p.as_int().unwrap();
@@ -100,16 +187,14 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                     });
                     ConstItem::Val(ConstVal::Int(Some(ty), l_val $op r_val))
                 }
-                /*
-                TypeInfo::Int => {
-                    let ConstVal::Int(l_ty, l_val) = l else { panic!() };
-                    let ConstVal::Int(r_ty, r_val) = r else { panic!() };
+                ConstIrType::Int => {
+                    let ConstItem::Val(ConstVal::Int(l_ty, l_val)) = l else { panic!() };
+                    let ConstItem::Val(ConstVal::Int(r_ty, r_val)) = r else { panic!() };
                     assert!(l_ty.is_none());
                     assert!(r_ty.is_none());
-                    ConstVal::Int(None, l_val $op r_val)
+                    ConstItem::Val(ConstVal::Int(None, l_val $op r_val))
                 }
-                */
-                IrType::Primitive(p) if p.is_float() => {
+                ConstIrType::Ty(IrType::Primitive(p)) if p.is_float() => {
                     let ConstItem::Val(ConstVal::Float(l_ty, l_val)) = l else { panic!() };
                     let ConstItem::Val(ConstVal::Float(r_ty, r_val)) = r else { panic!() };
                     let ty = p.as_float().unwrap();
@@ -123,15 +208,13 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                     });
                     ConstItem::Val(ConstVal::Float(Some(ty), l_val $op r_val))                        
                 }
-                /*
-                TypeInfo::Float => {
-                    let ConstVal::Float(l_ty, l_val) = l else { panic!() };
-                    let ConstVal::Float(r_ty, r_val) = r else { panic!() };
+                ConstIrType::Float => {
+                    let ConstItem::Val(ConstVal::Float(l_ty, l_val)) = l else { panic!() };
+                    let ConstItem::Val(ConstVal::Float(r_ty, r_val)) = r else { panic!() };
                     assert!(l_ty.is_none());
                     assert!(r_ty.is_none());
-                    ConstVal::Float(None, l_val $op r_val)
+                    ConstItem::Val(ConstVal::Float(None, l_val $op r_val))
                 }
-                */
                 t => panic!("Invalid type for binary operation: {t:?}")
             }
         }};
@@ -175,16 +258,16 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             super::Tag::Uninit => ConstItem::Val(ConstVal::Invalid),
             super::Tag::Int => {
                 let int_ty = match ir.ir_types[inst.ty] {
-                    IrType::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
-                    //IrType::Int => None,
+                    ConstIrType::Ty(IrType::Primitive(p)) if p.is_int() => Some(p.as_int().unwrap()),
+                    ConstIrType::Int => None,
                     _ => panic!("invalid type in const eval")
                 };
                 ConstItem::Val(ConstVal::Int(int_ty, inst.data.int as _))
             }
             super::Tag::LargeInt => {
                 let int_ty = match ir.ir_types[inst.ty] {
-                    IrType::Primitive(p) if p.is_int() => Some(p.as_int().unwrap()),
-                    //IrType::Int => None,
+                    ConstIrType::Ty(IrType::Primitive(p)) if p.is_int() => Some(p.as_int().unwrap()),
+                    ConstIrType::Int => None,
                     _ => panic!("invalid type in const eval of float")
                 };
                 let bytes = &ir.extra[
@@ -200,8 +283,8 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             }
             super::Tag::Float => {
                 let float_ty = match &ir.ir_types[inst.ty] {
-                    IrType::Primitive(p) if p.is_float() => Some(p.as_float().unwrap()),
-                    //IrType::Float => None,
+                    ConstIrType::Ty(IrType::Primitive(p)) if p.is_float() => Some(p.as_float().unwrap()),
+                    ConstIrType::Float => None,
                     ty => panic!("invalid type in const eval of float: {ty:?}")
                 };
                 ConstItem::Val(ConstVal::Float(float_ty, inst.data.float))
