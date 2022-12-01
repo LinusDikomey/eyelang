@@ -1,953 +1,983 @@
-use std::{ptr::NonNull, mem};
+use std::ops::Index;
 
 use crate::{
-    ast::{self, Expr, ModuleId, ExprRef, IdentPath, UnresolvedType},
-    error::{Error, Errors, EyeResult},
-    token::IntLiteral,
-    types::{Primitive, IntType},
-    span::{Span, TSpan},
-    dmap::{self, DHashMap}, resolve::types::SymbolTable,
-}; 
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId},
+    resolve::{
+        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, FunctionHeader, Type, ResolvedFunc, Enum},
+        self,
+        type_info::{TypeTableIndex, TypeInfo}, VarId, MemberAccess},
+    ir::{self, Function, builder::{IrBuilder, BinOp}, Ref, RefVal},
+    token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
+};
 
-mod call;
-mod const_eval;
-mod expr;
-mod pat;
+mod const_val;
+mod main_func;
 
-pub use crate::ir::builder::IrBuilder;
-
-pub struct GenCtx<'s> {
-    pub ast: &'s ast::Ast,
-    pub symbols: &'s SymbolTable,
+/// Macro for internal errors. Indicates that type checking went wrong or some internal assumption was broken
+macro_rules! int {
+    () => {{
+        
+        line!();
+        ::color_format::ceprintln!("#r<internal irgen error> at #u<{}:{}:{}>",
+            ::core::file!(), ::core::line!(), ::core::column!()
+        );
+        panic!("internal error")
+    }};
+    ($($arg: tt)*) => {{
+        ::color_format::ceprintln!("#r<internal irgen error>: {} at #u<{}:{}:{}>",
+            format!($($arg)*),
+            ::core::file!(), ::core::line!(), ::core::column!()
+        );
+        panic!("internal error")
+    }}
+}
+pub struct Ctx<'a> {
+    pub ast: &'a Ast,
+    pub symbols: &'a SymbolTable,
+    pub var_refs: &'a mut [Ref],
+    pub idents: &'a [resolve::Ident],
     pub module: ModuleId,
-    pub errors: Errors,
+    pub functions: &'a mut Functions,
+    pub function_generics: &'a [Type],
+    pub member_accesses: &'a [MemberAccess],
 }
-impl<'s> GenCtx<'s> {
-    pub fn span(&self, expr: &Expr) -> Span {
-        expr.span_in(self.ast, self.module)
+impl<'a> Ctx<'a> {
+    fn src(&self) -> &'a str {
+        &self.ast.sources[self.module.idx()].0
     }
-    pub fn ref_span(&self, expr: ExprRef) -> Span {
-        self.ast[expr].span_in(self.ast, self.module)
-    }
-    pub fn src(&self, span: TSpan) -> &str {
-        &self.ast.sources[self.module.idx()].0[span.range()]
+    fn src_at(&self, span: TSpan) -> &'a str {
+        &self.src()[span.range()]
     }
 }
+impl<'a> Index<ExprRef> for Ctx<'a> {
+    type Output = TypeTableIndex;
 
-#[derive(Clone, Debug)]
-pub struct Globals(pub Vec<DHashMap<String, Symbol>>);
-impl Globals {
-    pub fn get_ref(&self) -> GlobalsRef {
-        GlobalsRef(&self.0)
+    fn index(&self, index: ExprRef) -> &Self::Output {
+        &self.symbols.expr_types[index.idx()]
     }
 }
-impl Globals {
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &Symbol)> {
-        self.0.iter().flat_map(|it| it.iter())
-    }
-    pub fn _shrink_to_fit(&mut self) {
-        self.0.shrink_to_fit();
-        for map in &mut self.0 {
-            map.shrink_to_fit();
-        }
-    }
-}
-impl std::ops::Index<ModuleId> for Globals {
-    type Output = DHashMap<String, Symbol>;
+impl<'a> Index<VarId> for Ctx<'a> {
+    type Output = Ref;
 
-    fn index(&self, index: ModuleId) -> &Self::Output {
-        &self.0[index.idx()]
+    fn index(&self, index: VarId) -> &Self::Output {
+        &self.var_refs[index.idx()]
     }
 }
-impl std::ops::IndexMut<ModuleId> for Globals {
-    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
-        &mut self.0[index.idx()]
-    }
-}
+impl<'a> Index<MemberAccessId> for Ctx<'a> {
+    type Output = MemberAccess;
 
-/// For passing arround a reference to globals. More efficient than &Globals.
-#[derive(Clone, Copy)]
-pub struct GlobalsRef<'a>(&'a [DHashMap<String, Symbol>]);
-impl std::ops::Index<ModuleId> for GlobalsRef<'_> {
-    type Output = DHashMap<String, Symbol>;
-    fn index(&self, index: ModuleId) -> &Self::Output {
-        &self.0[index.idx()]
+    fn index(&self, index: MemberAccessId) -> &Self::Output {
+        &self.member_accesses[index.idx()]
     }
 }
 
 #[derive(Debug)]
-enum ExprResult {
-    // not actually a value of the specified type but a pointer.
-    // Necessary for assignments/patterns etc and to save loads/stores.
-    VarRef(Ref),
-    Val(Ref),
-
-    // Ignore the result (underscore token: _). Used mostly in lhs.
-    Hole,
-
-    /// method call on a variable: x.method
-    Method {
-        self_val: Ref,
-        self_ty: TypeTableIndex,
-        method_symbol: StructMemberSymbol
-    },
-    
-    Symbol(ConstSymbol),
+enum FunctionIds {
+    Simple(ir::FunctionId, CreateReason),
+    Generic(DHashMap<Vec<Type>, (ir::FunctionId, CreateReason)>)
 }
-impl ExprResult {
-    const UNDEF: Self = Self::Val(Ref::UNDEF);
 
-    pub fn get_or_load(
-        self,
-        ir: &mut IrBuilder,
-        ctx: &TypingCtx,
-        ty: TypeTableIndex,
-        errors: &mut Errors,
-        span: Span,
-    ) -> Ref {
-        match self {
-            ExprResult::VarRef(var) => {
-                ir.build_load(var, ty)
-            }
-            ExprResult::Val(val) => val,
-            ExprResult::Hole => {
-                errors.emit_span(Error::ExpectedValueFoundHole, span);
-                Ref::UNDEF
-            }
-            ExprResult::Method { .. } => {
-                errors.emit_span(Error::ExpectedValueFoundFunction, span);
-                Ref::UNDEF
-            }
-            ExprResult::Symbol(symbol) => {
-                symbol.add_instruction(ir, ctx, ty, errors, span)
-            }
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
+pub enum CreateReason {
+    Comptime = 0,
+    Runtime = 1,
+}
+
+#[derive(Debug)]
+pub struct Functions {
+    // ir::FunctionId implied by position in functions_to_create
+    functions_to_create: Vec<(FunctionId, Vec<Type>)>,
+    funcs: Vec<Option<Function>>,
+    ids: DHashMap<FunctionId, FunctionIds>, 
+}
+impl Functions {
+    pub fn new() -> Self {
+        Self {
+            functions_to_create: vec![],
+            funcs: vec![],
+            ids: dmap::new(),
         }
     }
-}
+    pub fn get(&mut self, function: FunctionId, symbols: &SymbolTable, generic_args: Vec<Type>, create_reason: CreateReason) -> ir::FunctionId {
+        if let Some(ids) = self.ids.get_mut(&function) {
+            match ids {
+                FunctionIds::Simple(id, prev_create_reason) => {
+                    if create_reason > *prev_create_reason {
+                        *prev_create_reason = create_reason;
+                    }
+                    *id
+                }
+                FunctionIds::Generic(generic) => {
+                    if let Some((id, prev_create_reason)) = generic.get_mut(generic_args.as_slice()) {
+                        if create_reason > *prev_create_reason {
+                            *prev_create_reason = create_reason;
+                        }
+                        *id
+                    } else {
+                        let id = ir::FunctionId::new(self.functions_to_create.len() as u64);
+                        self.functions_to_create.push((function, generic_args.clone()), );
+                        generic.insert(generic_args, (id, create_reason));
 
-pub fn reduce(ast: &ast::Ast, main_module: ModuleId, mut errors: Errors, require_main_func: bool)
--> (Result<(ir::Module, Globals), ()>, Errors) {
-    let mut ctx = TypingCtx::new();
-    //let mut globals = types2::gen_globals(ast, &mut ctx, &mut errors);
-    let mut globals = Globals((0..ast.modules.len()).map(|_| dmap::new()).collect());
-
-    for (id, module) in ast.modules.iter().enumerate() {
-        let id = ModuleId::new(id as u32);
-        let mut gen_ctx = GenCtx { ctx, globals, ast, module: id, errors };
-        let mut scope = Scope::module(id);
-
-        generate_bodies(&mut scope, &ast[module.definitions], &mut gen_ctx);
-        globals = gen_ctx.globals;
-        errors = gen_ctx.errors;
-        ctx = gen_ctx.ctx;
-    }
-    if errors.has_errors() {
-        return (Err(()), errors);
-    }
-
-    
-    let main = if require_main_func {
-        if let Some(&Symbol::Func(func)) = globals[main_module].get("main") {
-            let mut gen_ctx = GenCtx { ctx, globals, ast, module: main_module, errors };
-
-            let FunctionOrHeader::Func(eye_main) = &mut gen_ctx.ctx.funcs[func.idx()] else { unreachable!() };
-            debug_assert_eq!(eye_main.header.name, "main");
-            eye_main.header.name = "eyemain".to_owned();
-            
-            let return_type = eye_main.header.return_type.clone();
-            let res = main_wrapper(func, &mut gen_ctx, return_type);
-
-            errors = gen_ctx.errors;
-            globals = gen_ctx.globals;
-            ctx = gen_ctx.ctx;
-
-            match res {
-                Ok(main) => Some(main),
-                Err(err) => {
-                    errors.emit_err(err);
-                    return (Err(()), errors)
+                        id
+                    }
                 }
             }
         } else {
-            return (Err(()), errors);
-        }
-    } else { None };
-
-    let global_vars: Vec<_> = globals.iter().filter_map(|(name, symbol)| {
-        match symbol {
-            Symbol::GlobalVar(key) => {
-                let (ty, initial_val) = ctx.get_global(*key);
-                Some((name.clone(), ty.clone(), initial_val.clone()))
-            }
-            _ => None
-        }
-    }).collect();
-
-    let funcs = ctx
-        .funcs
-        .into_iter()
-        .map(|func| match func {
-            FunctionOrHeader::Header(_) => panic!("Function was not generated"),
-            FunctionOrHeader::Func(func) => func,
-        });
-
-    let funcs = if let Some(main) = main {
-        funcs.chain(std::iter::once(main)).collect()
-    } else {
-        funcs.collect()
-    };
-    (
-        Ok((
-            ir::Module {
-                name: "MainModule".to_owned(),
-                funcs,
-                globals: global_vars,
-                types: ctx.types,
-            },
-            globals
-        )),
-        errors,
-    )
-}
-
-/// Add hidden function wrapping and calling main to handle exit codes properly.
-/// This will return the main functions exit code casted to i32 if it is an integer.
-/// If the main returns unit, it will always return 0.
-fn main_wrapper(eye_main: SymbolKey, ctx: &mut GenCtx, main_return_ty: Type) -> EyeResult<Function> {
-    let mut builder = IrBuilder::new(ctx.module);
-    //let extra = builder.extra_data(&eye_main.bytes());
-
-    let main_return = match main_return_ty {
-        Type::Prim(Primitive::Unit) => None,
-        Type::Prim(p) if p.is_int() => Some(p.as_int().unwrap()),
-        _ => {
-            let ty_string = main_return_ty.display_fn(|key| &ctx.ctx.funcs[key.idx()].header().name).to_string();
-            return Err(Error::InvalidMainReturnType(ty_string).at_span(Span::_todo(ctx.module)))
-        }
-    };
-
-    let main_ret_ty = builder.types.add(
-        main_return.map_or(TypeInfo::UNIT, |int_ty| TypeInfo::Primitive(int_ty.into()))
-    );
-    let i32_ty = builder.types.add(TypeInfo::Primitive(Primitive::I32));
-
-    let main_val = builder.build_call(eye_main, [], main_ret_ty);
-    let exit_code = match main_return {
-        Some(IntType::I32) => main_val,
-        Some(_) => builder.build_cast(main_val, i32_ty),
-        None => builder.build_int(0, i32_ty)
-    };
-    builder.build_ret(exit_code);
-    
-    let ir = builder.finish(ctx);
-
-    Ok(Function {
-        header: FunctionHeader {
-            name: "main".to_owned(),
-            params: vec![],
-            varargs: false,
-            return_type: Type::Prim(Primitive::I32)
-        },
-        ir: Some(ir)
-    })
-}
-
-fn generate_bodies(
-    scope: &mut Scope,
-    defs: &DHashMap<String, ast::Definition>,
-    gen_ctx: &mut GenCtx,
-) {
-    for (name, def) in defs {
-        if scope.get_scope_symbol(gen_ctx.globals.get_ref(), name).is_some() { continue }
-        gen_definition(name, def, scope, gen_ctx,
-            |scope, name, symbol, ctx| scope.add_symbol(name, symbol, &mut ctx.globals));
-    }
-}
-
-fn gen_definition(
-    name: &str,
-    def: &ast::Definition,
-    scope: &mut Scope,
-    ctx: &mut GenCtx,
-    add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
-) -> Symbol {
-    match def {
-        // TODO: extra_generics should be passed to func_def for generic functions in generic functions
-        ast::Definition::Function(func) => func_def(func, name, scope, ctx, vec![], add_symbol),
-        ast::Definition::Struct(def) => {
-            let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
-            add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
-            gen_struct(def, ctx, scope, key);
-            Symbol::Type(key)
-        }
-        ast::Definition::Enum(def) => {
-            let key = ctx.ctx.add_proto_ty(name.to_owned(), def.generics.len() as _);
-            add_symbol(scope, name.to_owned(), Symbol::Type(key), ctx);
-            gen_enum(def, ctx, scope, key);
-            Symbol::Type(key)
-        }
-        ast::Definition::Trait(def) => {
-            let trait_ = gen_trait(def, ctx, scope);
-            let symbol = Symbol::Trait(ctx.ctx.add_trait(trait_));
-            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
-            symbol
-        }
-        ast::Definition::Module(id) => {
-            add_symbol(scope, name.to_owned(), Symbol::Module(*id), ctx);
-            Symbol::Module(*id)
-        }
-        ast::Definition::Use(path) => {
-            let symbol = resolve_path(path, ctx, scope);
-            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
-            symbol
-        },
-        ast::Definition::Const(ty, expr) => {
-            let key = ctx.ctx.add_const(ConstVal::NotGenerated);
-            add_symbol(scope, name.to_owned(), Symbol::Const(key), ctx);
-            let val = match scope.eval_const(ctx, Some(ty), *expr) {
-                Ok(val) => val,
-                Err(err) => {
-                    ctx.errors.emit_err(err);
-                    ConstVal::Invalid
-                }
+            let id = ir::FunctionId::new(self.functions_to_create.len() as u64);
+            let entry = if symbols.get_func(function).generic_count() != 0 {
+                debug_assert_eq!(generic_args.len(), symbols.get_func(function).generic_count() as usize);
+                self.functions_to_create.push((function, generic_args.clone()));
+                let mut map = dmap::with_capacity(1);
+                map.insert(generic_args, (id, create_reason));
+                FunctionIds::Generic(map)
+            } else {
+                debug_assert!(generic_args.is_empty());
+                self.functions_to_create.push((function, generic_args));
+                FunctionIds::Simple(id, create_reason)
             };
-            ctx.ctx.consts[key.idx()] = val;
-            Symbol::Const(key)
-        }
-        ast::Definition::Global(ty, val) => {
-            let ty = scope.resolve_uninferred_type(ty, ctx);
-            assert!(val.is_none(), "TODO: Globals with initial values are unsupported right now");
-            let symbol = Symbol::GlobalVar(ctx.ctx.add_global(ty, None));
-            add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
-            symbol
+            self.ids.insert(function, entry);
+
+            id
         }
     }
-}
-
-fn func_def(func: &ast::Function, name: &str, scope: &mut Scope, ctx: &mut GenCtx,
-    extra_generics: Vec<String>,
-    add_symbol: impl FnOnce(&mut Scope, String, Symbol, &mut GenCtx)
-) -> Symbol {
-    if func.generics.is_empty() && extra_generics.len() == 0 {
-        let func_info = gen_func_header(name.to_owned(), func, scope, ctx);
-        let header = FunctionOrHeader::Header(func_info);
-        let key = ctx.ctx.add_func(header);
-        add_symbol(scope, name.to_owned(), Symbol::Func(key), ctx);
-        gen_func_body(func, key, scope, ctx, []);
-        Symbol::Func(key)
-    } else {
-        if func.generics.len() + extra_generics.len() > u8::MAX as usize {
-            ctx.errors.emit_span(Error::TooManyGenerics(func.generics.len()), func.span.in_mod(ctx.module));
-        }
-        let mut symbols = dmap::new();
-        for (i, name) in func.generics.iter().enumerate() {
-            let name = ctx.src(*name);
-            symbols.insert(name.to_owned(), Symbol::Generic((extra_generics.len() + i) as u8));
-        }
-        let defs = dmap::new();
-
-        let mut func_scope = scope.child(&mut symbols, &defs);
-        let header = gen_func_header(name.to_owned(), func, &mut func_scope, ctx);
-        crate::log!("Header of {}: {:?}", name, header);
-        // TODO: PERF: cloning here is kind of ugly
-
-        let mut generics = extra_generics;
-        for name in &func.generics {
-            generics.push(ctx.src(*name).to_owned());
+    pub fn get_ir<'a>(&'a mut self, id: ir::FunctionId, symbols: &SymbolTable, ast: &Ast) -> &'a Function {
+        // if let gives a lifetime error here for some reason
+        if self.funcs.get(id.idx()).map_or(false, |item| item.is_some()) {
+            return self.funcs[id.idx()].as_ref().unwrap();
         }
 
-        let symbol = Symbol::GenericFunc(ctx.ctx.add_generic_func(GenericFunc {
-            name: name.to_owned(),
-            header, 
-            def: func.clone(), // PERF: cloning is suboptimal here
-            generics,
-            instantiations: dmap::new(),
-            module: ctx.module,
-        }));
-        add_symbol(scope, name.to_owned(), symbol.clone(), ctx);
-        symbol
-    }
-}
+        // PERF: cloning here
+        let (ast_id, generic_instance) = self.functions_to_create[id.idx()].clone();
+        let generic_header = symbols.get_func(ast_id);
 
-fn gen_func_header(name: String, func: &ast::Function, scope: &mut Scope, ctx: &mut GenCtx)
--> FunctionHeader {
-    let params = func.params.iter()
-        .map(|(name, unresolved, _, _)| {
-            let ty = scope.resolve_uninferred_type(unresolved, ctx);
-            (name.clone(), ty)
-        })
-        .collect();
-    let return_type = scope.resolve_uninferred_type(&func.return_type, ctx);
-
-    FunctionHeader {
-        name,
-        params,
-        varargs: func.varargs,
-        return_type,
-    }
-}
-pub fn gen_func_body<'a>(def: &ast::Function, key: SymbolKey, scope: &mut Scope, ctx: &mut GenCtx,
-    generics: impl IntoIterator<Item = (&'a str, Type)>
-) {
-    let func_idx = key.idx();
-    let header = match &ctx.ctx.funcs[func_idx] {
-        FunctionOrHeader::Func(_) => {
-            // this might happen in the future when functions need to know other function's bodies
-            unreachable!("Function shouldn't already be defined here")
-        }
-        FunctionOrHeader::Header(header) => header.clone(),
-    };
-    let ir = def.body.as_ref().map(|body| {
-        let mut builder = IrBuilder::new(ctx.module);
-        let mut scope_symbols = dmap::with_capacity(header.params.len() + def.generics.len());
-        
-        for (name, generic) in generics.into_iter() {
-            scope_symbols.insert(name.to_owned(), Symbol::TypeValue(generic));
-        }
-        for (i, (name, ty)) in header.params.iter().enumerate() {
-            let info = ty.as_info(&mut builder.types);
-            let ty = builder.types.add(info);
-            let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
-            let param = builder.build_param(i as u32, ptr_ty);
-            scope_symbols.insert(name.clone(), Symbol::Var { ty, var: param });
-        }
-        let scope_defs = dmap::new();
-        let mut scope: Scope<'_> = scope.child(&mut scope_symbols, &scope_defs);
-        let return_type = header.return_type.as_info(&mut builder.types);
-        let expected = builder.types.add(return_type);
-        let mut noreturn = false;
-        let val = expr::val_expr(&mut scope, ctx, &mut builder, *body,
-            expr::ExprInfo { expected, ret: expected, noreturn: &mut noreturn });
-        if !noreturn {
-            if header.return_type == Type::Prim(Primitive::Unit) {
-                builder.build_ret(Ref::UNIT);
-            } else if !ctx.ast[*body].is_block() {
-                builder.build_ret(val);
-            } else {
-                ctx.errors.emit_span(Error::MissingReturnValue, ctx.ref_span(*body));
+        let mut name = generic_header.name.to_owned();
+        if generic_instance.len() > 0 {
+            name.push('[');
+            let mut first = true;
+            for ty in &generic_instance {
+                if first {
+                    first = false;
+                } else {
+                    name.push(',');
+                }
+                use std::fmt::Write;
+                write!(name, "{}", ty.display_fn(|key| symbols.get_type(key).name())).unwrap();
             }
-        } else if !builder.currently_terminated() {
-            builder.build_ret_undef();
+            name.push(']');
         }
-        builder.finish(ctx)
-    });
 
-    ctx.ctx.funcs[func_idx] = FunctionOrHeader::Func(Function {
-        header,
-        ir,
-    });
-}
+        // TODO: FunctionHeader type just for ir
+        let header = FunctionHeader {
+            name,
+            inherited_generic_count: generic_header.inherited_generic_count,
+            generics: vec![],
+            params: generic_header.params
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.instantiate_generics(&generic_instance)))
+                .collect(),
+            varargs: generic_header.varargs,
+            return_type: generic_header.return_type.instantiate_generics(&generic_instance),
+            resolved_body: None,
+            module: generic_header.module
+        };
+        let func = gen_func(
+            header,
+            generic_header.resolved_body.as_ref(),
+            ast,
+            &symbols,
+            self,
+            &generic_instance
+        );
 
-fn gen_struct(
-    def: &ast::StructDefinition,
-    ctx: &mut GenCtx,
-    scope: &mut Scope,
-    key: SymbolKey,
-) {
-    if def.generics.len() > u8::MAX as _ {
-        ctx.errors.emit_span(Error::TooManyGenerics(def.generics.len()), Span::_todo(ctx.module));
+        if self.funcs.len() <= id.idx() {
+            self.funcs.resize_with(id.idx() + 1, || None);
+        }
+
+        self.funcs[id.idx()] = Some(func);
+        self.funcs[id.idx()].as_ref().unwrap()
     }
-    let mut symbols = def.generics.iter()
-        .enumerate()
-        .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
-        .collect();
-    let scope_defs = dmap::new();
-    let mut scope = scope.child(&mut symbols, &scope_defs);
-
-    let members = def.members.iter().map(|(name, unresolved, _start, _end)| {
-        let ty = scope.resolve_uninferred_type(unresolved, ctx);
-        (
-            name.clone(),
-            ty,
-        )
-    }).collect::<Vec<_>>();
-
-    let loc = ctx.ctx.get_type_mut(key);
-    let TypeDef::NotGenerated { name, .. } = loc else { unreachable!() };
-    let name = mem::take(name);
-    *loc = TypeDef::Struct(Struct {
-        name,
-        members,
-        symbols: dmap::with_capacity(def.members.len()),
-        generic_count: def.generics.len() as u8,
-    });
-
-    for (method_name, method) in &def.methods {
-        let generics = def.generics
-            .iter()
-            .map(|span| ctx.src(*span).to_owned())
-            .collect();
-        func_def(method, &method_name, &mut scope, ctx, generics,
-            |scope, name, symbol, ctx| {
-                scope.add_symbol(name, symbol.clone(), &mut ctx.globals);
-                let TypeDef::Struct(Struct { symbols, .. }) = ctx.ctx.get_type_mut(key) else {
-                    unreachable!()
-                };
-
-                let symbol = match symbol {
-                    Symbol::Func(s) => StructMemberSymbol::Func(s),
-                    Symbol::GenericFunc(s) => StructMemberSymbol::GenericFunc(s),
-                    _ => unreachable!()
-                };
-                symbols.insert(method_name.clone(), symbol);
+    pub fn finish_module(mut self, symbols: SymbolTable, ast: &Ast, main: Option<FunctionId>) -> ir::Module {
+        
+        let main_id = main.map(|main| {
+            self.get(main, &symbols, vec![], CreateReason::Runtime)
         });
-    }
-}
+        
+        let mut i: u64 = 0;
+        while (i as usize) < self.functions_to_create.len() {
+            self.get_ir(ir::FunctionId::new(i), &symbols, ast);
+            i += 1;
+        }
 
-fn gen_enum(
-    def: &ast::EnumDefinition,
-    ctx: &mut GenCtx,
-    scope: &mut Scope,
-    key: SymbolKey,
-) {
-    let mut generic_symbols = def.generics.iter()
-    .enumerate()
-    .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
-    .collect();
-    let scope_defs = dmap::new();
-    let mut _scope = scope.child(&mut generic_symbols, &scope_defs);
+        let mut finished_functions = Vec::with_capacity(self.funcs.len() + main_id.is_some() as usize);
+        finished_functions.extend(self.funcs.into_iter().map(|func| func.unwrap()));
 
-    let variants = def.variants.iter()
-        .enumerate()
-        .map(|(idx, (_span, name))| (name.clone(), idx as u32))
-        .collect();
-
-    let loc = ctx.ctx.get_type_mut(key);
-    let TypeDef::NotGenerated { name, .. } = loc else { unreachable!() };
-    let name = mem::take(name);
-    *loc = TypeDef::Enum(Enum {
-        name,
-        variants,
-        generic_count: def.generics.len() as u8,
-    });
-}
-
-fn gen_trait(
-    def: &ast::TraitDefinition,
-    ctx: &mut GenCtx,
-    scope: &mut Scope,
-) -> TraitDef {
-    let mut generic_symbols = def.generics.iter()
-    .enumerate()
-    .map(|(i, span)| (ctx.src(*span).to_owned(), Symbol::Generic(i as u8)))
-    .collect();
-    let scope_defs = dmap::new();
-    let mut scope = scope.child(&mut generic_symbols, &scope_defs);
-
-
-    let functions = def.functions.iter()
-        .enumerate()
-        .map(|(i, (name, (_span, func)))| (
-            name.clone(),
-            (i as u32, gen_func_header(name.to_owned(), func, &mut scope, ctx))
-        ))
-        .collect();
-    TraitDef { functions }
-}
-
-fn resolve_path(path: &IdentPath, ctx: &mut GenCtx, scope: &mut Scope) -> Symbol {
-    enum State {
-        Local,
-        Module(ModuleId)
-    }
-    let (root, segments, last) = path.segments(ctx.ast.src(ctx.module).0);
-    let mut state = if root.is_some() { State::Module(ctx.ast[ctx.module].root_module) } else { State::Local };
+        if let Some(main_id) = main_id {
+            // main is always at idx 0
     
-    for (segment, segment_span) in segments {
-        let symbol = match state {
-            State::Local => scope.resolve(segment, ctx),
-            State::Module(id) => ctx.resolve_module_symbol(id, segment)
-        };
-        match symbol {
-            Some(Symbol::Module(id)) => state = State::Module(id),
-            Some(_) => {
-                ctx.errors.emit_span(Error::ModuleExpected, segment_span.in_mod(ctx.module));
-                return Symbol::Invalid
-            }
-            None => {
-                ctx.errors.emit_span(Error::UnknownModule, segment_span.in_mod(ctx.module));
-                return Symbol::Invalid
-            }
+            finished_functions[main_id.idx()].header.name = "eyemain".to_owned();
+            let return_type = finished_functions[main_id.idx()].header.return_type.clone();
+    
+            let func = main_func::main_wrapper(main_id, finished_functions[main_id.idx()].header.module, return_type);
+            finished_functions.push(func);
         }
-    }
+        
+        let types = symbols.types.into_iter().map(|(name, def)| {
+            let MaybeTypeDef::Some(ty) = def else { int!() };
+            (name, ty)
+        }).collect();
+    
+        let globals = symbols.globals;
 
-    if let Some((last, last_span)) = last {
-        let symbol = match state {
-            State::Local => scope.resolve(last, ctx),
-            State::Module(id) => ctx.resolve_module_symbol(id, last)
-        };
-        if let Some(symbol) = symbol {
-            symbol
-        } else {
-            ctx.errors.emit_span(Error::UnknownIdent, last_span.in_mod(ctx.module));
-            Symbol::Invalid
+        ir::Module {
+            name: "MainModule".to_owned(),
+            funcs: finished_functions,
+            globals: globals.into_iter().map(|global| global.unwrap()).collect(),
+            types,
         }
-    } else {
-        // there can't be no last symbol and not a single module because then there wouldn't be any path.
-        let State::Module(id) = state else { unreachable!() };
-        Symbol::Module(id)
     }
 }
 
-pub enum Scope<'a> {
-    Module(ModuleId),
-    Local {
-        parent: NonNull<Scope<'a>>, // &'a mut Scope<'a> I tried this multiple times with references and it should be possible but it isn't
-        symbols: &'a mut DHashMap<String, Symbol>,
-        defs: &'a DHashMap<String, ast::Definition>,
-    }
-}
-impl<'s> Scope<'s> {
-    pub fn module(module: ModuleId) -> Self {
-        Self::Module(module)
-    }
-    /*pub fn reborrow<'n>(&mut self) -> Scope<'n> where 's: 'n {
-        match self {
-            Self::Module(id) => Scope::Module(*id),
-            Self::Local { parent, symbols, defs } => Scope::Local { parent: &mut *parent, symbols, defs }
+fn gen_func(
+    header: FunctionHeader,
+    body: Option<&ResolvedFunc>,
+    ast: &Ast,
+    symbols: &SymbolTable,
+    functions: &mut Functions,
+    generics: &[Type]
+)
+-> Function {
+    let Some(body) = body else {
+        return Function { header, ir: None }
+    };
+
+    // PERF: cloning type table here might be a problem
+    let types = body.types.clone();
+    
+    /*
+    // replace Generic(n) TypeInfo with the specific type.
+    for (i, (idx, ty)) in body.generics.iter().zip(generics).enumerate() {
+        let info = ty.as_info(&mut types, |i| body.generics.nth(i as usize).into());
+        #[cfg(debug_assertions)]
+        {
+            match types.get(idx) {
+                TypeInfo::Generic(i2) if i == i2 as usize => {}
+                ty => int!("unexpected type {ty:?} when Generic({i}) was expected")
+            }
         }
+        types.replace_idx(body.generics.nth(i), info);
     }*/
-    pub fn child<'c>(
-        &'c mut self,
-        symbols: &'c mut DHashMap<String, Symbol>,
-        defs: &'c DHashMap<String, ast::Definition>
-    ) -> Scope<'c>
-    where 's: 'c {
-        Scope::Local {
-            parent: self.into(),
-            symbols,
-            defs,
-        }
-    }
-    fn get_scope_symbol<'a>(&'a self, globals: GlobalsRef<'a>, name: &str) -> Option<Symbol> {
-        match self {
-            Self::Module(id) => &globals[*id],
-            Self::Local { symbols, .. } => *symbols
-        }.get(name).cloned()
-    }
-    fn add_symbol(&mut self, name: String, symbol: Symbol, globals: &mut Globals) {
-        let prev = match self {
-            Self::Module(id) => &mut globals[*id],
-            Self::Local { symbols, .. } => *symbols
-        }.insert(name, symbol);
-        debug_assert!(prev.is_none(), "symbol added multiple times");
-    }
-    fn resolve(&mut self, name: &str, ctx: &mut GenCtx) -> Option<Symbol> {
-        let mut current = self;
-        loop {
-            match current {
-                &mut Scope::Module(id) => return ctx.resolve_module_symbol(id, name),
-                Scope::Local { parent: _, symbols, defs } => {
-                    if let Some(symbol) = symbols.get(name).cloned()
-                    .or_else(|| defs.get(name).map(|def| gen_definition(name, def, current, ctx,
-                        |scope, name, symbol, ctx| scope.add_symbol(name, symbol, &mut ctx.globals)
-                    )))
-                    {
-                        return Some(symbol);
-                    } else {
-                        let Scope::Local { parent, .. } = current else { unreachable!() };
-                        current = unsafe { parent.as_mut() };
-                    }
-                }
-            }
-        }
-    }
-        
-
-    fn resolve_type(&mut self, unresolved: &UnresolvedType, types: &mut TypeTable, ctx: &mut GenCtx)
-    -> Result<TypeInfo, Error> {
-        // TODO: using ctx.module might lead to bugs in multiple places here
-        match unresolved {
-            ast::UnresolvedType::Primitive(p, _) => Ok(TypeInfo::Primitive(*p)),
-            ast::UnresolvedType::Unresolved(path, generics) => {
-                let (root, iter, last) = path.segments(ctx.ast.src(ctx.module).0);
-                // no last segment means it must point to the root module
-                let Some(last) = last else { return Err(Error::TypeExpected) };
-                
-                enum ModuleOrLocal {
-                    Module(ModuleId),
-                    Local
-                }
-                
-                let mut current_module = if root.is_some() {
-                    ModuleOrLocal::Module(ctx.ast[ctx.module].root_module)
-                } else {
-                    ModuleOrLocal::Local
-                };
-
-                for segment in iter {
-                    let look_from = match current_module {
-                        ModuleOrLocal::Module(m) => m,
-                        ModuleOrLocal::Local => ctx.module
-                    };
-                    match ctx.globals[look_from].get(segment.0) {
-                        Some(Symbol::Module(m)) => current_module = ModuleOrLocal::Module(*m),
-                        Some(_) => panic!("1"),//return Err(Error::ModuleExpected),
-                        None => return Err(Error::UnknownModule)
-                    }
-                }
-                let mut resolve_generics = |ctx: &mut GenCtx, s: &mut Scope, key: SymbolKey| {
-                    let generic_count = ctx.ctx.get_type(key).generic_count();
-                    Ok(if let Some((generics, _)) = generics {
-                        if generics.len() != generic_count as usize {
-                            return Err(Error::InvalidGenericCount {
-                                expected: generic_count,
-                                found: generics.len() as u8
-                            })
-                        }
-                        let generics = generics.iter()
-                            .map(|ty| s.resolve_type(ty, types, ctx))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        types.add_multiple(
-                            generics
-                        )
-                    } else {
-                        types.add_multiple_unknown(generic_count as _)
-                    })
-                };
-                let resolved = match current_module {
-                    ModuleOrLocal::Module(m) => ctx.globals[m]
-                        .get(last.0)
-                        .ok_or(Error::UnknownIdent)?.clone(),
-                    ModuleOrLocal::Local => self.resolve(last.0, ctx).ok_or(Error::UnknownIdent)?
-                };
-
-                match resolved  {
-                    Symbol::Type(ty) => {
-                        let generics = resolve_generics(ctx, self, ty)?;
-                        Ok(TypeInfo::Resolved(ty, generics))
-                    }
-                    Symbol::Const(key) => {
-                        match ctx.ctx.get_const(key) {
-                            &ConstVal::Symbol(ConstSymbol::Type(key)) => {
-                                let generics = resolve_generics(ctx, self, key)?;
-                                Ok(TypeInfo::Resolved(key, generics))
-                            }
-                            _ => Err(Error::TypeExpected)
-                        }
-                    }
-                    Symbol::TypeValue(ty) => {
-                        Ok(ty.as_info(types))
-                    }
-                    _ => Err(Error::TypeExpected)
-                } 
-            }
-            ast::UnresolvedType::Pointer(ptr) => {
-                let (inner, _) = &**ptr;
-                let inner = self.resolve_type(inner, types, ctx)?;
-                Ok(TypeInfo::Pointer(types.add(inner)))
-            }
-            ast::UnresolvedType::Array(array) => {
-                let (inner, _, count) = &**array;
-                let inner = self.resolve_type(inner, types, ctx)?;
-                let inner = types.add(inner);
-                Ok(TypeInfo::Array(*count, inner))
-            }
-            ast::UnresolvedType::Tuple(elems, _) => {
-                let elems = elems.iter().map(|ty| self.resolve_type(ty, types, ctx)).collect::<Result<Vec<_>, _>>()?;
-                Ok(TypeInfo::Tuple(types.add_multiple(elems), ir::TupleCountMode::Exact))
-            }
-            ast::UnresolvedType::Infer(_) => Ok(TypeInfo::Unknown)
-        }
+    
+    let mut builder = IrBuilder::new(types, Vec::with_capacity(body.types.generics().len()));
+    
+    debug_assert_eq!(body.types.generics().len(), generics.len());
+    for ty in generics.iter() {
+        let info = ty.as_info(&mut builder.types, |_| unreachable!()); // TODO: is this really unreachable?
+        let info = match info {
+            resolve::type_info::TypeInfoOrIndex::Type(ty) => ty,
+            resolve::type_info::TypeInfoOrIndex::Idx(idx) => builder.types.get(idx),
+        };
+        let ir_type = builder.ir_types.info_to_ty(info, &builder.types);
+        builder.ir_types.add_generic_instance_ty(ir_type);
     }
 
-    // fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx) -> Type { panic!() }
-    fn resolve_uninferred_type(&mut self, unresolved: &UnresolvedType, ctx: &mut GenCtx)
-    -> Type {
-        match unresolved {
-            ast::UnresolvedType::Primitive(p, _) => Type::Prim(*p),
-            ast::UnresolvedType::Unresolved(path, generics) => {
-                let (root, iter, last) = path.segments(ctx.ast.src(ctx.module).0);
-                // no last segment means it must point to the root module
-                let Some(last) = last else {
-                    ctx.errors.emit_span(Error::TypeExpected, unresolved.span().in_mod(ctx.module));
-                    return Type::Invalid
-                };
-                
-                enum ModuleOrLocal {
-                    Module(ModuleId),
-                    Local
-                }
-                
-                let mut current_module = if root.is_some() {
-                    ModuleOrLocal::Module(ctx.ast[ctx.module].root_module)
-                } else {
-                    ModuleOrLocal::Local
-                };
+    // reserve generics types
+    //let generic_infos = builder.types.add_multiple_unknown(generics.len() as u32);
 
-                for segment in iter {
-                    let look_from = match current_module {
-                        ModuleOrLocal::Module(m) => m,
-                        ModuleOrLocal::Local => ctx.module
-                    };
-                    match ctx.resolve_module_symbol(look_from, segment.0) {
-                        Some(Symbol::Module(m)) => current_module = ModuleOrLocal::Module(m),
-                        Some(_) => {
-                            ctx.errors.emit_span(Error::ModuleExpected, segment.1.in_mod(ctx.module));
-                            return Type::Invalid
-                        }
-                        None => {
-                            ctx.errors.emit_err(Error::UnknownModule.at_span(segment.1.in_mod(ctx.module)));
-                            return Type::Invalid;
-                        }
-                    }
-                }
-                let resolve_generics = |ctx: &mut GenCtx, s: &mut Scope, key: SymbolKey| {
-                    let generic_count = ctx.ctx.get_type(key).generic_count();
-                    Ok(if let Some((generics, _)) = generics {
-                        if generics.len() != generic_count as usize {
-                            ctx.errors.emit_span(Error::InvalidGenericCount {
-                                expected: generic_count,
-                                found: generics.len() as u8
-                            }, unresolved.span().in_mod(ctx.module));
-                            return Err(())
-                        }
-                        generics.iter()
-                            .map(|ty| s.resolve_uninferred_type(ty, ctx))
-                            .collect::<Vec<_>>()
-                    } else if generic_count != 0 {
-                        ctx.errors.emit_span(
-                            Error::InvalidGenericCount { expected: generic_count, found: 0 },
-                            unresolved.span().in_mod(ctx.module)
-                        );
-                        return Err(())
-                    } else {
-                        Vec::new()
-                    })
-                };
-                match current_module {
-                    ModuleOrLocal::Module(m) => match ctx.globals[m]
-                        .get(last.0) {
-                            None => {
-                                ctx.errors.emit_span(Error::UnknownIdent, last.1.in_mod(ctx.module));
-                                Type::Invalid
-                            }
-                            Some(&Symbol::Type(ty)) => {
-                                if let Ok(generics) = resolve_generics(ctx, self, ty) {
-                                    Type::Id(ty, generics)
-                                } else {
-                                    Type::Invalid
-                                }
-                                // let Ok(generics) = resolve_generics(ctx, self, ty) else { return Type::Invalid };
-                                // Type::Id(ty, generics)
-                            }
-                            Some(Symbol::Const(key)) => {
-                                if let &ConstVal::Symbol(ConstSymbol::Type(key)) = ctx.ctx.get_const(*key) {
-                                    if let Ok(generics) = resolve_generics(ctx, self, key) {
-                                        Type::Id(key, generics)
-                                    } else {
-                                        Type::Invalid
-                                    }
-                                } else {
-                                    ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
-                                    Type::Invalid
-                                }
-                            }
-                            _ => {
-                                ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
-                                Type::Invalid
-                            }
-                        },
-                    ModuleOrLocal::Local => match self.resolve(last.0, ctx) {
-                        Some(Symbol::Type(ty)) => {
-                            if let Ok(generics) = resolve_generics(ctx, self, ty) {
-                                Type::Id(ty, generics)
-                            } else {
-                                Type::Invalid
-                            }
-                        }
-                        Some(Symbol::Generic(i)) => Type::Generic(i),
-                        None => {
-                            ctx.errors.emit_span(Error::UnknownIdent, last.1.in_mod(ctx.module));
-                            Type::Invalid
-                        }
-                        _ => {
-                            ctx.errors.emit_span(Error::TypeExpected, last.1.in_mod(ctx.module));
-                            Type::Invalid
-                        }
-                    }
-                }
-            }
-            ast::UnresolvedType::Pointer(ptr) => {
-                let (inner, _) = &**ptr;
-                let inner = self.resolve_uninferred_type(inner, ctx);
-                Type::Pointer(Box::new(inner))
-            }
-            ast::UnresolvedType::Array(array) => {
-                let (inner, _, count) = &**array;
-                let inner = self.resolve_uninferred_type(inner, ctx);
-                let Some(count) = count else {
-                    ctx.errors.emit_span(Error::ArraySizeCantBeInferredHere, unresolved.span().in_mod(ctx.module));
-                    return Type::Invalid
-                };
-                Type::Array(Box::new((inner, *count)))
-            }
-            ast::UnresolvedType::Tuple(elems, _) => {
-                let elems = elems.iter().map(|ty| self.resolve_uninferred_type(ty, ctx)).collect::<Vec<_>>();
-                Type::Tuple(elems)
-            }
-            ast::UnresolvedType::Infer(_) => {
-                ctx.errors.emit_span(Error::InferredTypeNotAllowedHere, unresolved.span().in_mod(ctx.module));
-                Type::Invalid
-            }
-        }
+    
+
+    let mut var_refs = vec![Ref::UNDEF; body.vars.len()];
+
+    for (i, (_, param_ty)) in header.params.iter().enumerate() {
+        let ty = param_ty.as_info(&mut builder.types, |i| body.types.generics().nth(i as usize).into());
+        let ty = builder.types.add_info_or_idx(ty);
+        let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
+        var_refs[i] = builder.build_param(i as u32, ptr_ty);
     }
 
-    pub fn declare_var(&mut self, ir: &mut IrBuilder, name: String, ty: TypeTableIndex) -> Ref {
-        let var = ir.build_decl(ty);
-        match self {
-            Scope::Module(_) => unreachable!("There shouldn't be variables defined in the global scope"),
-            Scope::Local { symbols, .. } => {
-                symbols.insert(name, Symbol::Var { ty, var  });
-            }
-        }
-        var
-    }
+    let mut noreturn = false;
 
-    fn get_or_gen_const<'a>(ctx: &'a mut GenCtx, key: SymbolKey, span: TSpan) -> &'a ConstVal {
-        if let ConstVal::NotGenerated = ctx.ctx.get_const_mut(key) {
-            ctx.errors.emit_span(Error::RecursiveDefinition, span.in_mod(ctx.module));
-            ctx.ctx.consts[key.idx()] = ConstVal::Invalid;
-        }
-        &ctx.ctx.consts[key.idx()]
-    }
-
-    // move to types.rs
-    fn eval_const(&mut self, ctx: &mut GenCtx, ty: Option<&UnresolvedType>, val: ExprRef)
-    -> EyeResult<ConstVal> {
-        let err_count = ctx.errors.error_count();
-        let mut builder = IrBuilder::new(ctx.module);
-        let expected = ty.map_or(Ok(TypeInfo::Unknown),
-            |t| self.resolve_type(t, &mut builder.types, ctx).map_err(|e| e.at_span(t.span().in_mod(ctx.module))))?;
-        let expected_info = builder.types.add(expected);
-        let mut noreturn = false;
-        let r = expr::val_expr(self, ctx, &mut builder, val, expr::ExprInfo {
-            expected: expected_info,
-            ret: expected_info,
-            noreturn: &mut noreturn,
-        });
-        if !noreturn {
-            if matches!(expected, TypeInfo::Primitive(Primitive::Unit)) {
-                builder.build_ret(Ref::UNIT);
-            } else if !ctx.ast[val].is_block() {
-                builder.build_ret(r);
-            } else {
-                ctx.errors.emit_span(Error::MissingReturnValue, ctx.ref_span(val));
-            }
-        } else if !builder.currently_terminated() {
+    let body_res = gen_expr(&mut builder, body.body, &mut Ctx {
+        ast,
+        symbols,
+        var_refs: &mut var_refs,
+        idents: &body.idents,
+        module: header.module,
+        functions,
+        function_generics: generics,
+        member_accesses: &symbols.member_accesses,
+    }, &mut noreturn);
+    if !noreturn {  
+        if header.return_type == Type::Prim(Primitive::Unit) {
             builder.build_ret_undef();
+        } else {
+            let val = body_res.val(&mut builder, symbols.expr_types[body.body.idx()]);
+            builder.build_ret(val);
         }
+    }
 
-        if err_count != ctx.errors.error_count() {
-            eprintln!("Errors found while evaluating constant: {:?}", ctx.errors);
+    let ir = builder.finish();
+    Function { header, ir: Some(ir) }
+}
+
+#[derive(Clone, Copy)]
+pub enum Res {
+    Val(Ref),
+    Var(Ref),
+    Hole,
+}
+impl Res {
+    pub fn val(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+        match self {
+            Res::Val(r) => r,
+            Res::Var(r) => ir.build_load(r, ty),
+            Res::Hole => int!(),
         }
-        
-        ir::eval::eval(&builder, &[])
-            .map_err(|err| err.at_span(ctx.ref_span(val)))
+    }
+
+    pub fn var(self, ir: &mut IrBuilder, ty: TypeTableIndex) -> Ref {
+        match self {
+            Res::Val(r) => {
+                let var = ir.build_decl(ty);
+                ir.build_store(var, r);
+                var
+            }
+            Res::Var(r) => r,
+            Res::Hole => int!(),
+        }
     }
 }
 
-pub fn string_literal(span: TSpan, src: &str) -> String {
+fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
+    let res = gen_expr(ir, expr, ctx, noreturn);
+    if *noreturn {
+        Ref::UNDEF
+    } else {
+        match res {
+            Res::Val(r) => r,
+            Res::Var(r) => ir.build_load(r, ctx[expr]),
+            Res::Hole => int!(),
+        }
+    }
+} 
+
+pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
+    debug_assert_eq!(*noreturn, false, "generating expression with noreturn enabled means dead code will be generated");
+    let r = match &ctx.ast[expr] {
+        Expr::Block { items, .. } => {
+            for item in &ctx.ast[*items] {
+                gen_expr(ir, *item, ctx, noreturn);
+                if *noreturn { break }
+            }
+            Ref::UNIT
+        }
+        Expr::Declare { pat, .. } => {
+            let ty = ctx[*pat];
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            gen_pat(ir, *pat, Ref::UNDEF, ty, bool_ty, ctx);
+            Ref::UNIT
+        }
+        Expr::DeclareWithVal { pat, val, .. } => {
+            let ty = ctx[*pat];
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let val = val_expr(ir, *val, ctx, noreturn);
+            if ! *noreturn {
+                gen_pat(ir, *pat, val, ty, bool_ty, ctx);
+            }
+            Ref::UNIT
+        }
+        Expr::Return { val, .. } => {
+            let zero_sized = ir.types
+                .get(ctx[*val])
+                .finalize(&ir.types)
+                .layout(|id| ctx.symbols.get_type(id), &[])
+                .size == 0;
+
+            if zero_sized {
+                ir.build_ret_undef();
+            } else {
+                let val = val_expr(ir, *val, ctx, noreturn);
+                if !*noreturn {
+                    ir.build_ret(val);
+                }
+            }
+            *noreturn = true;
+            Ref::UNDEF
+        }
+        Expr::ReturnUnit { .. } => {
+            ir.build_ret_undef();
+            *noreturn = true;
+            Ref::UNDEF
+        }
+        Expr::IntLiteral(span) => {
+            let lit = IntLiteral::parse(&ctx.src()[span.range()]);
+            let ty = ctx[expr];
+            int_literal(lit, ty, ir)
+        }
+        Expr::FloatLiteral(span) => {
+            let lit = FloatLiteral::parse(&ctx.src()[span.range()]);
+            let ty = ctx[expr];
+            ir.build_float(lit.val, ty)
+        }
+        Expr::StringLiteral(span) => {
+            let lit = string_literal(*span, ctx.src());
+            let ty = ctx[expr];
+            ir.build_string(lit.as_bytes(), true, ty)
+        }
+        Expr::BoolLiteral { val, .. } => if *val { Ref::val(RefVal::True) } else { Ref::val(RefVal::False) }
+        &Expr::EnumLiteral { ident, .. } => {
+            let name = ctx.src_at(ident);
+            let (variant, int_ty) = match ir.types.get(ctx[expr]) {
+                TypeInfo::Resolved(id, _generics) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    (def.variants[name], def.int_ty())
+                }
+                TypeInfo::Enum(variants) => {
+                    let variants = ir.types.get_names(variants);
+                    let variant = variants
+                        .iter()
+                        .enumerate()
+                        .find(|(_, s)| s.as_str() == name)
+                        .unwrap()
+                        .0 as u32;
+
+                    (variant, Enum::int_ty_from_variant_count(variants.len() as u32))
+
+                }
+                _ => int!()
+            };
+            let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
+            ir.build_int(variant as u64, ty)
+
+        }
+        Expr::Record { .. } => todo!(),
+        Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
+        Expr::Unit(_) => Ref::UNIT,
+        Expr::Variable { id, span } => {
+            match ctx.idents[id.idx()] {
+                resolve::Ident::Invalid => int!(),
+                resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),
+                resolve::Ident::Global(global_id) => {
+                    let ty = &ctx.symbols.get_global(global_id).1;
+                    let ty = ty.as_info(&mut ir.types, |_| int!());
+                    let ty = ir.types.add_info_or_idx(ty);
+                    let ptr_ty = ir.types.add(TypeInfo::Pointer(ty));
+                    return Res::Var(ir.build_global(global_id, ptr_ty))
+                }
+                resolve::Ident::Const(const_id) => {
+                    let val = ctx.symbols.get_const(const_id);
+
+                    return const_val::build(ir, val, ctx[expr]);
+                }
+            }
+        }
+        Expr::Hole(_) => return Res::Hole,
+        &Expr::Array(_, values) => {
+            let array_var = ir.build_decl(ctx[expr]);
+            let TypeInfo::Array(_, member_ty) = ir.types.get(ctx[expr]) else { int!() };
+            let member_ptr_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+
+            for (i, value) in ctx.ast[values].iter().enumerate() {
+                let val = val_expr(ir, *value, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let ptr = ir.build_member_int(array_var, i as u32, member_ptr_ty);
+                ir.build_store(ptr, val);
+            }
+            return Res::Var(array_var);
+        }
+        &Expr::Tuple(_, values) => {
+            let tuple_var = ir.build_decl(ctx[expr]);
+
+            for (i, value) in ctx.ast[values].iter().enumerate() {
+                let val = val_expr(ir, *value, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[*value]));
+                let ptr = ir.build_member_int(tuple_var, i as u32, member_ptr_ty);
+                ir.build_store(ptr, val);
+            }
+            return Res::Var(tuple_var);
+        }
+        &Expr::If { cond, then, .. } => {
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let then_block = ir.create_block();
+            let after_block = ir.create_block();
+            ir.build_branch(cond, then_block, after_block);
+            
+            ir.begin_block(then_block);
+            let mut then_noreturn = false;
+            gen_expr(ir, then, ctx, &mut then_noreturn);
+            if !then_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(after_block);
+            Ref::UNIT
+        }
+        &Expr::IfElse { cond, then, else_, .. } => {
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            
+            let then_block = ir.create_block();
+            let else_block = ir.create_block();
+            let after_block = ir.create_block();
+
+            ir.build_branch(cond, then_block, else_block);
+            
+            ir.begin_block(then_block);
+            let mut then_noreturn = false;
+            let then_val = val_expr(ir, then, ctx, &mut then_noreturn);
+            let then_exit = ir.current_block();
+
+            if !then_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(else_block);
+            let mut else_noreturn = false;
+            let else_val = val_expr(ir, else_, ctx, &mut else_noreturn);
+            let else_exit = ir.current_block();
+
+            if !else_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(after_block);
+            
+            if then_noreturn && else_noreturn {
+                *noreturn = true;
+                Ref::UNDEF
+            } else if then_noreturn {
+                else_val
+            } else if else_noreturn {
+                then_val
+            } else {
+                let ty = ctx[expr];
+                ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
+            }
+        }
+        &Expr::Match { span: _, val, extra_branches, branch_count } => {
+            let matched = val_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            let extra = &ctx.ast[ExprExtra { idx: extra_branches, count: branch_count * 2 }];
+            let mut all_noreturn = true;
+            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+
+            let after_block = ir.create_block();
+
+            let mut phi_vals = vec![];
+
+            for (i, [pat, branch]) in extra.array_chunks().enumerate() {
+                let matches = gen_pat(ir, *pat, matched, ctx[val], bool_ty, ctx);
+
+                if let Some(RefVal::False) = matches.into_val() {
+                    // branch never matches, do nothing
+                } else if let Some(RefVal::True) = matches.into_val() {
+                    let mut branch_noreturn = false;    
+                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
+                    all_noreturn &= branch_noreturn;
+                    
+                    if !branch_noreturn {
+                        ir.build_goto(after_block);
+                        phi_vals.push((ir.current_block(), branch_val));
+                    }
+                    break; // branches after this won't be reached as this branch always matches
+                } else {
+                    let next_block = if i as u32 == branch_count - 1 {
+                        None
+                    } else {
+                        let on_match = ir.create_block();
+                        let next = ir.create_block();
+                        ir.build_branch(matches, on_match, next);
+                        ir.begin_block(on_match);
+                        Some(next)
+                    };
+                
+                    let mut branch_noreturn = false;    
+                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
+                    all_noreturn &= branch_noreturn;
+
+                    if !branch_noreturn {
+                        ir.build_goto(after_block);
+                        phi_vals.push((ir.current_block(), branch_val));
+                    }
+                    if let Some(next) = next_block {
+                        ir.begin_block(next);
+                    }
+                }
+
+            }
+            ir.begin_block(after_block);
+            *noreturn = all_noreturn;
+            if all_noreturn {
+                Ref::UNDEF
+            } else {
+                match phi_vals.as_slice() {
+                    [(_, r)] => *r, // don't build a phi when only one branch yields a value
+                    _ => ir.build_phi(phi_vals, ctx[expr])
+                }
+            }
+        }
+        &Expr::While { cond, body, .. } => {
+            let cond_block = ir.create_block();
+            let body_block = ir.create_block();
+            let after_block = ir.create_block();
+            
+            ir.build_goto(cond_block);
+            
+            ir.begin_block(cond_block);
+            let cond = val_expr(ir, cond, ctx, noreturn);
+            ir.build_branch(cond, body_block, after_block);
+            
+            ir.begin_block(body_block);
+            let mut body_noreturn = false;
+            gen_expr(ir, body, ctx, &mut body_noreturn);
+            if !body_noreturn {
+                ir.build_goto(cond_block);
+            }
+            ir.begin_block(after_block);
+
+            Ref::UNIT
+        }
+        Expr::FunctionCall(call_id) => {
+            let call = &ctx.ast.calls[call_id.idx()];
+            match &ctx.symbols.calls[call_id.idx()].unwrap() {
+                resolve::ResolvedCall::Function { func_id, generics } => {
+                    let func = ctx.symbols.get_func(*func_id);
+
+                    let this_arg = if let TypeInfo::MethodItem { this_ty, .. } = ir.types.get(ctx[call.called_expr]) {
+                        let mut ptr_count = 0u32;
+                        let mut current_ty = this_ty;
+                        
+                        while let TypeInfo::Pointer(pointee) = ir.types[current_ty] {
+                            current_ty = pointee;
+                            ptr_count += 1;
+                        }
+                        let Expr::MemberAccess { left: this_expr, .. } = ctx.ast[call.called_expr] else { int!() };
+                        let mut req_ptr_count = 0u32;
+                        let mut cur_req_ty = &ctx.symbols.get_func(*func_id).params.first().unwrap().1;
+                        while let Type::Pointer(pointee) = cur_req_ty {
+                            cur_req_ty = pointee;
+                            req_ptr_count += 1;
+                        }
+                        
+                        let (mut val, val_is_var) = match gen_expr(ir, this_expr, ctx, noreturn) {
+                            Res::Val(v) => (v, false),
+                            Res::Var(v) => {
+                                ptr_count += 1;
+                                (v, true)
+                            }
+                            Res::Hole => int!(),
+                        };
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+                        if req_ptr_count < ptr_count {
+                            if val_is_var {
+                                val = ir.build_load(val, this_ty);
+                                ptr_count -= 1;
+                            }
+                            let mut loaded_ty = this_ty;
+                            while req_ptr_count < ptr_count {
+                                let TypeInfo::Pointer(pointee) = ir.types[loaded_ty] else { int!() };
+                                loaded_ty = pointee;
+                                val = ir.build_load(val, loaded_ty);
+                                ptr_count -= 1;
+                            }
+                        } else if req_ptr_count > ptr_count { 
+                            let mut current_ref_ty = if val_is_var {
+                                ir.types.add(TypeInfo::Pointer(this_ty))
+                            } else {
+                                this_ty
+                            };
+                            while req_ptr_count > ptr_count {
+                                current_ref_ty = ir.types.add(TypeInfo::Pointer(current_ref_ty));
+                                let var = ir.build_decl(current_ref_ty);
+                                ir.build_store(var, val);
+                                val = var;
+                                ptr_count += 1;
+                            }
+                        }
+                        Some(val)
+                    } else {
+                        None
+                    };
+
+
+                    // PERF: reuse buffer here (maybe by pre-reserving in extra_refs buffer in ir)
+                    let mut args = Vec::with_capacity(call.args.count as usize + this_arg.is_some() as usize);
+                    if let Some(this) = this_arg {
+                        args.push(this);
+                    }
+                    for arg in &ctx.ast[call.args] {
+                        let arg_val = val_expr(ir, *arg, ctx, noreturn);
+                        if *noreturn {
+                            return Res::Val(Ref::UNDEF)
+                        }
+                        args.push(arg_val);
+                    }
+
+                    let func_noreturn = func.return_type == Type::Prim(Primitive::Never);
+                    let ty = ctx[expr];
+                    
+                    let generics = generics.iter().map(|idx| ir.types.get(idx).finalize(&ir.types).instantiate_generics(ctx.function_generics)).collect();
+                    // TODO: proper create reason? Can be a problem if function is first created for comptime but used at runtime
+                    let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics, CreateReason::Runtime);
+                    let call_val = ir.build_call(ir_func_id, args, ty);
+
+                    if func_noreturn {
+                        *noreturn = true;
+                        ir.build_ret_undef();
+                    }
+                    call_val
+                }
+                resolve::ResolvedCall::Struct { type_id, .. } => {
+                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(*type_id) else { int!() };
+                    debug_assert_eq!(def.members.len(), call.args.count as usize);
+                    let ty = ctx[expr];
+
+                    let var = ir.build_decl(ty);
+
+                    for (i, arg) in ctx.ast[call.args].iter().enumerate() {
+                        let member_val = val_expr(ir, *arg, ctx, noreturn);
+                        if *noreturn {
+                            return Res::Val(Ref::UNDEF)
+                        }
+                        let arg_ty = ctx[*arg];
+
+
+                        let member_ptr = ir.build_member_int(var, i as u32, arg_ty);
+                        ir.build_store(member_ptr, member_val);
+                    }
+
+                    return Res::Var(var)
+                }
+                resolve::ResolvedCall::Invalid => int!(),
+            }
+        }
+        &Expr::UnOp(_, op, val) => {
+            match op {
+                UnOp::Neg => {
+                    let ty = ctx[val];
+                    let val = val_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    ir.build_neg(val, ty)
+                }
+                UnOp::Not => {
+                    let ty = ctx[val];
+                    let val = val_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    ir.build_not(val, ty)
+                }
+                UnOp::Ref => {
+                    let TypeInfo::Pointer(ty) = ir.types.get(ctx[expr]) else { int!() };
+                    let val = gen_expr(ir, val, ctx, noreturn);
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+                    match val {
+                        Res::Val(r) => {
+                            let temp = ir.build_decl(ty);
+                            ir.build_store(temp, r);
+                            temp
+                        }
+                        Res::Var(r) => r,
+                        Res::Hole => int!(),
+                    }
+                }
+                UnOp::Deref => {
+                    let r = val_expr(ir, val, ctx, noreturn);
+                    return Res::Var(r);
+                }
+            }
+        }
+        &Expr::BinOp(op, l, r) => {
+            if let Operator::Assignment(assign) = op {
+                let rval = val_expr(ir, r, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                // TODO: special assign lval expr here? Doesn't support patterns but also not exprs
+                let lval = gen_expr(ir, l, ctx, noreturn);
+                let var = match lval {
+                    Res::Val(_) => int!(),
+                    Res::Var(v) => v,
+                    Res::Hole => {
+                        return Res::Val(Ref::UNIT);
+                    }
+                };
+                let op = match assign {
+                    AssignType::Assign => {
+                        ir.build_store(var, rval);
+                        return Res::Val(Ref::UNIT);
+                    }
+                    AssignType::AddAssign => BinOp::Add,
+                    AssignType::SubAssign => BinOp::Sub,
+                    AssignType::MulAssign => BinOp::Mul,
+                    AssignType::DivAssign => BinOp::Div,
+                    AssignType::ModAssign => BinOp::Mod,
+                };
+                let ty = ctx[r];
+                let loaded = ir.build_load(var, ty);
+                let val = ir.build_bin_op(op, loaded, rval, ty);
+                ir.build_store(var, val);
+                Ref::UNIT
+            } else {
+                let l = val_expr(ir, l, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let r = val_expr(ir, r, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let op = match op {
+                    Operator::Add => BinOp::Add,
+                    Operator::Sub => BinOp::Sub,
+                    Operator::Mul => BinOp::Mul,
+                    Operator::Div => BinOp::Div,
+                    Operator::Mod => BinOp::Mod,
+                    
+                    Operator::Or => BinOp::Or,
+                    Operator::And => BinOp::And,
+                    
+                    Operator::Equals => BinOp::Eq,
+                    Operator::NotEquals => BinOp::NE,
+                    
+                    Operator::LT => BinOp::LT,
+                    Operator::GT => BinOp::GT,
+                    Operator::LE => BinOp::LE,
+                    Operator::GE => BinOp::GE,
+                    Operator::Range | Operator::RangeExclusive => {
+                        todo!("range expressions")
+                    }
+                    
+                    Operator::Assignment(_) => int!(),
+                };
+
+                let ty = ctx[expr];
+                ir.build_bin_op(op, l, r, ty)
+            }
+        }
+        &Expr::MemberAccess { left, name: _, id } => {
+            let layout_val = |ir: &mut IrBuilder, val: u64| {
+                let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+                ir.build_int(val, ty)
+            };
+            match ctx[id] {
+                MemberAccess::Size(id) => {
+                    let layout = ctx.symbols.get_type(id).layout(
+                        |id| ctx.symbols.get_type(id),
+                        &[]
+                    );
+                    layout_val(ir, layout.size)
+                }
+                MemberAccess::Align(id) => {
+                    let layout = ctx.symbols.get_type(id).layout(
+                        |id| ctx.symbols.get_type(id),
+                        &[]
+                    );
+                    layout_val(ir, layout.alignment)
+                }
+                MemberAccess::LocalSize(idx) => {
+                    let layout = ir.ir_types
+                        .info_to_ty(ir.types[idx], &ir.types)
+                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    layout_val(ir, layout.size)
+                }
+                MemberAccess::LocalAlign(idx) => {
+                    let layout = ir.ir_types
+                        .info_to_ty(ir.types[idx], &ir.types)
+                        .layout(&ir.ir_types, |id| ctx.symbols.get_type(id));
+                    layout_val(ir, layout.alignment)
+                }
+                MemberAccess::StructMember(member_idx) => {
+                    let mut member_ty = ir.types.get(ctx[left]);
+                    let mut l_ptr_count = 0u32;
+                    let (id, generics) = loop {
+                        match member_ty {
+                            TypeInfo::Pointer(pointee) => {
+                                l_ptr_count += 1;
+                                member_ty = ir.types.get(pointee);
+                            }
+                            TypeInfo::Resolved(id, generics) => break (id, generics),
+                            _ => int!()
+                        }
+                    };
+                    let mut left = match gen_expr(ir, left, ctx, noreturn) {
+                        Res::Val(v) => v,
+                        Res::Var(v) => {
+                            l_ptr_count += 1;
+                            v
+                        }
+                        Res::Hole => int!()
+                    };
+
+                    if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                    if l_ptr_count == 0 {
+                        return Res::Val(ir.build_value(left, member_idx, ctx[expr]))
+                    }
+                    let mut ptr_ty = ir.types.add(TypeInfo::Resolved(id, generics));
+                    for _ in 0..l_ptr_count {
+                        ptr_ty = ir.types.add(TypeInfo::Pointer(ptr_ty));
+                    }
+                    while l_ptr_count > 1 {
+                        let TypeInfo::Pointer(loaded_ty) = ir.types.get(ptr_ty) else { unreachable!() };
+                        left = ir.build_load(left, loaded_ty);
+                        ptr_ty = loaded_ty;
+                        l_ptr_count -= 1;
+                    }
+
+                    let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+                    return Res::Var(ir.build_member_int(left, member_idx, member_ptr_ty));
+                }
+                MemberAccess::Symbol(_) | MemberAccess::Method(_) => Ref::UNDEF,
+                MemberAccess::EnumItem(id, variant) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
+                    ir.build_int(variant as u64, int_ty)
+                }
+                MemberAccess::Invalid => todo!(),
+            }
+        }
+        &Expr::Index { expr: val, idx, .. } => {
+            let res = gen_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let var = res.var(ir, ctx[val]);
+
+            let member = val_expr(ir, idx, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            let ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+            return Res::Var(ir.build_member(var, member, ty));
+        }
+        &Expr::TupleIdx { expr: val, idx, .. } => {
+            let res = gen_expr(ir, val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+
+            let member_ty = ctx[expr];
+            match res {
+                Res::Val(r) => ir.build_value(r, idx, member_ty),
+                Res::Var(r) => {
+                    let pointer_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+                    return Res::Var(ir.build_member_int(r, idx, pointer_ty))
+                }
+                Res::Hole => int!(),
+            }
+
+        }
+        Expr::Cast(_, _, val) => {
+            let val = val_expr(ir, *val, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+
+            // let from_ty = ctx[val];
+            let target_ty = ctx[expr];
+
+            // TODO: handle cast here instead of in the backend?
+            ir.build_cast(val, target_ty)
+
+        }
+        Expr::Root(_) => int!(),
+        Expr::Asm { .. } => todo!("inline asm codegen"),
+    };
+    Res::Val(r)
+}
+
+fn string_literal(span: TSpan, src: &str) -> String {
+    // PERF a little suboptimal
     src[span.start as usize + 1 .. span.end as usize]
         .replace("\\n", "\n")
         .replace("\\t", "\t")
@@ -956,24 +986,100 @@ pub fn string_literal(span: TSpan, src: &str) -> String {
         .replace("\\\"", "\"")
 }
 
-fn int_literal(lit: IntLiteral, span: TSpan, ir: &mut IrBuilder, expected: TypeTableIndex, ctx: &mut GenCtx) -> Ref {
-    // TODO: check int type for overflow
-    let int_ty = lit
-        .ty
-        .map_or(TypeInfo::Int, |int_ty| TypeInfo::Primitive(int_ty.into()));
-    ir.specify(expected, int_ty, &mut ctx.errors, span, &ctx.ctx);
-    
-    if lit.val <= std::u64::MAX as u128 {
-        ir.build_int(lit.val as u64, expected)
-    } else {
-        ir.build_large_int(lit.val, expected)
+fn gen_pat(ir: &mut IrBuilder, pat: ExprRef, pat_val: Ref, ty: TypeTableIndex, bool_ty: TypeTableIndex, ctx: &mut Ctx) -> Ref {
+    match &ctx.ast[pat] {
+        Expr::IntLiteral(lit) => {
+            let lit = IntLiteral::parse(&ctx.src()[lit.range()]);
+            let int_val = int_literal(lit, ty, ir);
+            ir.build_bin_op(BinOp::Eq, pat_val, int_val, bool_ty)
+        }
+        Expr::FloatLiteral(_) => todo!(),
+        Expr::BoolLiteral { val, .. } => {
+            let val = if *val {
+                Ref::val(RefVal::True)
+            } else {
+                Ref::val(RefVal::False)
+            };
+            ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty)
+        }
+        Expr::EnumLiteral { ident, .. } => {
+            let name = ctx.src_at(*ident);
+            let ordinal = match ir.types.get(ty) {
+                TypeInfo::Enum(variants) => ir.types.get_names(variants)
+                    .iter()
+                    .enumerate()
+                    .find(|(_, n)| n.as_str() == name)
+                    .unwrap()
+                    .0 as u64,
+                TypeInfo::Resolved(id, _generics) => {
+                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    *def.variants.get(name).unwrap() as u64
+                }
+                _ => int!()
+            };
+            let i = ir.build_int(ordinal, ty);
+            ir.build_bin_op(BinOp::Eq, pat_val, i, bool_ty)
+        }
+        Expr::Nested(_, inner) => gen_pat(ir, *inner, pat_val, ty, bool_ty, ctx),
+        Expr::Unit(_) => Ref::val(RefVal::True),
+        Expr::Variable { id, .. } => {
+            match ctx.idents[id.idx()] {
+                resolve::Ident::Invalid => int!(),
+                resolve::Ident::Var(var_id) => {
+                    let var = ir.build_decl(ty);
+                    ir.build_store(var, pat_val);
+                    ctx.var_refs[var_id.idx()] = var;
+                }
+                resolve::Ident::Global(_) => int!("global in pattern"),
+                resolve::Ident::Const(_) => int!("const in pattern"),
+            }
+            Ref::val(RefVal::True)
+        }
+        Expr::Hole(_) => Ref::val(RefVal::True),
+        Expr::BinOp(Operator::Range | Operator::RangeExclusive, _l, _r) => todo!(),
+        Expr::Tuple(_, items) => {
+            let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
+            let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
+            let mut matches_bool = Ref::val(RefVal::True);
+            for (i, (item, item_ty)) in ctx.ast[*items].iter().zip(types.iter()).enumerate() {
+                let i_val = ir.build_int(i as u64, i32_ty);
+                let item_val = ir.build_member(pat_val, i_val, item_ty);
+                let item_matches = gen_pat(ir, *item, item_val, item_ty, bool_ty, ctx);
+                matches_bool = ir.build_bin_op(BinOp::And, matches_bool, item_matches, item_ty);
+            }
+            matches_bool
+        }
+
+        Expr::Record { .. } // very useful to match on records
+            | Expr::StringLiteral(_) // TODO definitely very important
+            | Expr::Block { .. }
+            | Expr::Declare { .. }
+            | Expr::DeclareWithVal { .. }
+            | Expr::Return { .. }
+            | Expr::ReturnUnit { .. }
+            | Expr::Array(_, _)
+            | Expr::If { .. } 
+            | Expr::IfElse { .. } 
+            | Expr::Match { .. } 
+            | Expr::While { .. } 
+            | Expr::FunctionCall { .. } 
+            | Expr::UnOp(_, _, _) 
+            | Expr::BinOp(_, _, _) 
+            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
+            | Expr::Index { .. } 
+            | Expr::TupleIdx { .. } 
+            | Expr::Cast(_, _, _)
+            | Expr::Root(_) 
+            | Expr::Asm { .. } 
+            => int!(),
     }
 }
 
-fn gen_string(string: &str, ir: &mut IrBuilder, expected: TypeTableIndex, span: TSpan, errors: &mut Errors,
-    ctx: &TypingCtx) -> Ref {
-    let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
-    ir.specify(expected, TypeInfo::Pointer(i8_ty), errors, span, ctx);
-        
-    ir.build_string(string.as_bytes(), true, expected)
+fn int_literal(lit: IntLiteral, ty: TypeTableIndex, ir: &mut IrBuilder) -> Ref {
+    // TODO: check int type for overflow
+    if lit.val <= std::u64::MAX as u128 {
+        ir.build_int(lit.val as u64, ty)
+    } else {
+        ir.build_large_int(lit.val, ty)
+    }
 }

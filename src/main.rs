@@ -15,9 +15,7 @@ mod dmap;
 mod error;
 mod help;
 mod ir;
-//mod irgen;
-mod irgen2;
-pub(crate) use irgen2 as irgen;
+mod irgen;
 mod lexer;
 mod link;
 #[cfg(feature = "lsp")]

@@ -448,7 +448,7 @@ pub enum MemberAccess {
 
 fn func_body<'a>(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mut ctx: Ctx) {
     let scope = ctx.scopes.child(ctx.scope, dmap::new(), dmap::new(), false);
-    let ctx = ctx.with_scope(scope);
+    let mut ctx = ctx.with_scope(scope);
     let signature = ctx.symbols.get_func(func_id);
     
     let generics = ctx.types.generics();
@@ -479,5 +479,7 @@ fn func_body<'a>(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mu
     let expected = ctx.types.add_info_or_idx(return_type_info);
 
     let mut noreturn = false;
-    val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx, false);
+    val_expr(body, ExprInfo { expected, ret: expected, noreturn: &mut noreturn }, ctx.reborrow(), false);
+
+    dbg!(&ctx.types);
 }

@@ -30,6 +30,13 @@ List :: struct[T] {
         this^.len += 1
     }
 
+    get :: fn(this *List[T], idx u64) -> T {
+        if this^.len <= idx {
+            root.panic("List index out of bounds")
+        }
+        ret ptr_add(this^.buf, idx)^
+    }
+
     printf_all :: fn(this *List[T], fmt *i8) {
         i := 0
         printf("[")

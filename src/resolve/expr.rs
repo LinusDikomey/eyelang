@@ -92,6 +92,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
         }
         ast::Expr::ReturnUnit { .. } => {
             ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Unit), ctx.span(expr));
+            ctx.specify(info.ret, TypeInfo::UNIT, ctx.span(expr));
         }
         ast::Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ctx.scopes[ctx.scope].module.src()[span.range()]);
