@@ -1114,11 +1114,9 @@ fn gen_pat<IrTypes: IrTypeTable>(
         }
         Expr::Tuple(_, items) => {
             let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
-            let i32_ty = ir.types.add(TypeInfo::Primitive(Primitive::I32));
             let mut matches_bool = Ref::val(RefVal::True);
             for (i, (item, item_ty)) in ctx.ast[*items].iter().zip(types.iter()).enumerate() {
-                let i_val = ir.build_int(i as u64, i32_ty);
-                let item_val = ir.build_member(pat_val, i_val, item_ty);
+                let item_val = ir.build_value(pat_val, i as u32, item_ty);
                 let item_matches = gen_pat(ir, *item, item_val, item_ty, bool_ty, ctx);
                 matches_bool = ir.build_bin_op(BinOp::And, matches_bool, item_matches, item_ty);
             }
@@ -1126,7 +1124,6 @@ fn gen_pat<IrTypes: IrTypeTable>(
         }
 
         Expr::Record { .. } // very useful to match on records
-            | Expr::StringLiteral(_) // TODO definitely very important
             | Expr::Block { .. }
             | Expr::Declare { .. }
             | Expr::DeclareWithVal { .. }

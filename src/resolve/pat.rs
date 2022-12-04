@@ -1,6 +1,6 @@
 use crate::{ast::{ExprRef, Expr, UnOp}, token::{IntLiteral, Operator}, span::TSpan, error::Error, types::Primitive};
 
-use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident};
+use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident, types::TupleCountMode};
 
 pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exhaustion: &mut Exhaustion) {
     ctx.symbols.expr_types[pat_expr.idx()] = expected;
@@ -106,10 +106,34 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
                 _ => ()
             }
         }
-        Expr::Tuple(_, _)
-        | Expr::FloatLiteral(_)
+        &Expr::Tuple(span, members) => {
+            let member_types = ctx.types.add_multiple_unknown(members.count);
+            ctx.specify(expected, TypeInfo::Tuple(member_types, TupleCountMode::Exact), span.in_mod(ctx.scope().module.id));
+            let do_exhaust_checks = match exhaustion {
+                Exhaustion::Full | Exhaustion::Invalid => true,
+                Exhaustion::None => {
+                    *exhaustion = Exhaustion::Tuple(vec![Exhaustion::None; members.count as usize]);
+                    true
+                }
+                Exhaustion::Tuple(_) => true,
+                _ => {
+                    *exhaustion = Exhaustion::Invalid;
+                    false
+                }
+            };
+            for (i, (&item_pat, ty)) in ctx.ast[members].into_iter().zip(member_types.iter()).enumerate() {
+                if do_exhaust_checks {
+                    let Exhaustion::Tuple(members) = exhaustion else { unreachable!() };
+                    pat(item_pat, ty, ctx.reborrow(), &mut members[i]);
+                } else {
+                    pat(item_pat, ty, ctx.reborrow(), &mut Exhaustion::Full);
+                };
+            }
+        }
+
+
+        Expr::FloatLiteral(_)
         | Expr::Record { .. } // very useful to match on records
-        | Expr::StringLiteral(_) // definitely very important
         | Expr::Array(_, _)
         | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
         | Expr::FunctionCall { .. } => {

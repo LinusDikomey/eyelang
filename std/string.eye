@@ -4,6 +4,7 @@ use root.c.malloc
 use root.c.memcpy
 use root.c.printf
 use root.c.exit
+use root.panic
 
 # represents a string slice
 str :: struct {
@@ -12,13 +13,25 @@ str :: struct {
 
     from_cstr :: fn(ptr *i8) -> str: str(ptr, len(ptr))
     
+    is_empty :: fn(this str) -> bool: this.len == 0
+
+    eq :: fn(this str, other str) -> bool {
+        if this.len != other.len: ret false
+        i := 0
+        while i < this.len {
+            if this.byte(i) != other.byte(i): ret false
+            i += 1
+        }
+        ret true
+    }
+
     slice :: fn(this str, start u64, end u64) -> str {
         if end > this.len {
             printf("[PANIC]: string slice out of range: %d..%d > %d\n".ptr, start, end, this.len)
             exit(1)
         }
         if start > end: start = end
-        str(ptr_add(this.ptr, start), end - start)
+        ret str(ptr_add(this.ptr, start), end - start)
     }
 
     byte :: fn(this str, index u64) -> u8 {
@@ -29,14 +42,28 @@ str :: struct {
         ret ptr_add(this.ptr, index)^ as u8
     }
 
-    eq :: fn(this str, other str) -> bool {
-        if this.len != other.len: ret false
+    split :: fn(this str, pat str) -> Split {
+        if pat.len == 0: panic("empty pattern supplied to split")
+        ret Split(this, pat)
+    }
+
+    parse :: fn(this str) -> i64 {
+        ASCII_ZERO :: 48
+        ASCII_MINUS :: 45
+
+        negate := false
+        x := 0
         i := 0
         while i < this.len {
-            if this.byte(i) != other.byte(i): ret false
+            b := this.byte(i)
+            if b == ASCII_MINUS and x == 0: negate = !negate
+            else if b >= ASCII_ZERO and b <= ASCII_ZERO + 9 {
+                x *= 10
+                x += (b - ASCII_ZERO) as _
+            }
             i += 1
         }
-        ret true
+        ret if negate: -x else x
     }
 }
 
@@ -81,4 +108,32 @@ lines :: fn(s *i8) -> List[*i8] {
 
 
     ret list
+}
+
+Split :: struct {
+    string str
+    pat str
+
+    # Returns the next match and true or an empty string and false otherwise.
+    # This will become an Option when sum types are ready.
+    next :: fn(this *Split) -> (bool, str) {
+        if this.string.len == 0: ret (false, "")
+        i := 0
+        matched := 0
+        while i < this.string.len {
+            if this.string.byte(i) == this.pat.byte(matched) {
+                matched += 1
+                if matched == this.pat.len {
+                    s := this.string.slice(0, i+1-matched)
+                    this.string = this.string.slice(i+1, this.string.len)
+                    ret (true, s)
+                }
+            } else matched = 0
+            i += 1
+        }
+
+        s := this.string
+        this.string = this.string.slice(this.string.len, this.string.len)
+        ret (true, s)
+    }
 }
