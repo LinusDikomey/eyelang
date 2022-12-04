@@ -402,7 +402,7 @@ impl<'a> Parser<'a> {
                 let member_type = p.parse_type()?;
                 let end = member_type.span().end;
                 members.push((member_name.to_owned(), member_type, ident.start, end));
-                Ok(Delimit::Yes)
+                Ok(Delimit::OptionalIfNewLine)
             }
         })?;
         Ok(StructDefinition {

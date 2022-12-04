@@ -57,8 +57,8 @@ fn check(uri: lsp_types::Url, sender: Sender<Message>) -> Result<(), LspError> {
     debug(format!("validation path: {path:?}"));
     let debug = crate::compile::Debug::default();
     let mut dependencies = crate::dmap::new();
-    dependencies.insert("std".to_owned(), crate::std_path());
-    let (_, ast, errors) = crate::compile::project(&path, debug, dependencies, true, &mut crate::Stats::default());
+    dependencies.insert("std".to_owned(), crate::compile::Dependency { path: crate::std_path(), is_std: true });
+    let (_, ast, errors) = crate::compile::project(&path, debug, dependencies, true, &mut crate::Stats::default(), false);
     let diagnostics = if errors.error_count() > 0 {
         errors.get_errors().iter().map(|error| {
             Diagnostic {

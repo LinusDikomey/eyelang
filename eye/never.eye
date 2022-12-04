@@ -1,5 +1,6 @@
 use std.c.printf
 use std.c.exit
+use std.print
 
 main :: fn {
     # exit() can coerce into any type because it never returns
@@ -18,7 +19,7 @@ if_never :: fn -> f32 {
 
     if 1 > 2 {
         exit(7)
-        printf("This won't even end up in the IR")
+        print("This won't even end up in the IR")
     }
 
     ret 3.5

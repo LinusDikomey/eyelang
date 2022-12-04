@@ -1,6 +1,7 @@
 
 # fn printf(fmt *i8, ...) i32 extern
 use std.c.printf
+use std.print
 
 Point :: struct { x i32, y i32 }
 

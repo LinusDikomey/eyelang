@@ -108,9 +108,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
         }
         ast::Expr::StringLiteral(span) => {
             use_hint = UseHint::Should;
-            let i8_ty = ctx.types.add(TypeInfo::Primitive(Primitive::I8));
-            let ty = TypeInfo::Pointer(i8_ty);
-            ctx.specify(info.expected, ty, span.in_mod(ctx.scope().module.id))
+            ctx.specify(info.expected, ctx.symbols.builtins.str_info(), span.in_mod(ctx.scope().module.id))
         }
         ast::Expr::BoolLiteral { .. } => {
             use_hint = UseHint::Should;
@@ -174,6 +172,8 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             ctx.set_ident(*id, ident);
         }
         ast::Expr::Hole(_) => if !hole_allowed {
+            lval = true;
+            
             ctx.errors.emit_span(Error::HoleLHSOnly, ctx.span(expr));
         }
         ast::Expr::Array(span, elems) => {
@@ -525,7 +525,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
             (Res::Val { use_hint: UseHint::Can, lval: false }, call)
         }
         _other => {
-            if !ctx.types.invalidate(called_ty) {
+            if ctx.types.invalidate(called_ty) {
                 ctx.errors.emit_span(
                     Error::FunctionOrStructTypeExpected,
                     ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id)

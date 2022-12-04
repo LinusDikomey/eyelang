@@ -48,9 +48,12 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
                 pat(*arg, ty, ctx.reborrow(), &mut variant_exhaustion);
             }
 
-
             ctx.specify_enum_variant(expected, name, ident.in_mod(ctx.scopes[ctx.scope].module.id), arg_types);
             exhaustion.exhaust_enum_variant(name.to_owned());
+        }
+        Expr::StringLiteral(_) => {
+            ctx.specify(expected, ctx.symbols.builtins.str_info(), ctx.span(pat_expr));
+            // TODO: exhaust for duplicate match arms
         }
         Expr::Nested(_, inner) => pat(*inner, expected, ctx, exhaustion),
         Expr::Unit(span) => ctx.specify(expected, TypeInfo::UNIT, span.in_mod(ctx.scopes[ctx.scope].module.id)),

@@ -310,8 +310,10 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             reconstruct_src: args.reconstruct_src,
         };
         let mut dependencies = dmap::new();
-        if !args.nostd {
-            dependencies.insert("std".to_owned(), std_path());
+        let is_std = if let Some(name) = path.file_name() { name == "std" } else { false };
+        
+        if !args.nostd && !is_std {
+            dependencies.insert("std".to_owned(), compile::Dependency { path: std_path(), is_std: true });
         }
         let (res, ast, errors) = compile::project(
             path,
@@ -319,6 +321,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             dependencies,
             !args.emit_obj && !args.lib,
             &mut stats,
+            is_std,
         );
         if errors.error_count() > 0 {
             errors.print(&ast);

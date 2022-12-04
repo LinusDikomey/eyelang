@@ -2,7 +2,7 @@
 use root.Point
 
 add :: fn(x i32, y i32) -> i32 {
-    root.printf("Hello From Add\n")
+    root.print("Hello From Add\n")
     ret x + y
 }
 

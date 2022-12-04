@@ -1,24 +1,25 @@
+use string.str
 
-print :: fn(s *i8) {
-    c.printf("%s", s)
+print :: fn(s str) { 
+    c.printf("%.*s".ptr, i32(s.len), s.ptr)
 }
-println :: fn(s *i8) {
-    c.printf("%s\n", s)
+println :: fn(s str) {
+    c.printf("%.*s\n".ptr, i32(s.len), s.ptr)
 }
 
 skip_char :: fn {
     tmp: u64 = 0
-    c.scanf("%c", (&tmp) as *i8)
+    c.scanf("%c".ptr, (&tmp) as *i8)
 }
 
-readline :: fn -> *i8 {
-    line := c.malloc(1024)
-    c.scanf("%1023[^\n]", line)
+readline :: fn -> str {
+    line: *i8 = c.malloc(1024)
+    c.scanf("%1023[^\n]".ptr, line)
     skip_char()
-    ret line
+    ret str.from_cstr(line)
 }
 
-input :: fn(msg *i8) -> *i8 {
+input :: fn(msg str) -> str {
     print(msg)
     line := readline()
     ret line
@@ -27,7 +28,7 @@ input :: fn(msg *i8) -> *i8 {
 int_to_string :: fn(i i32) -> *i8 {
     max_len := 10
     buffer := c.malloc(max_len)
-    c.snprintf(buffer, max_len, "%d", i)
+    c.snprintf(buffer, max_len, "%d".ptr, i)
     ret buffer
 }
 
@@ -67,8 +68,8 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
     ret buf
 }
 
-panic :: fn(msg *i8) -> ! {
-    c.printf("PANIC: %s\n", msg)
+panic :: fn(msg str) -> ! {
+    c.printf("[PANIC]: %.*s\n".ptr, i32(msg.len), msg.ptr)
     c.exit(1)
 }
 

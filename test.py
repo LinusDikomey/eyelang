@@ -5,7 +5,8 @@ import time
 from sys import stdout
 
 build = ['cargo', 'build']
-run_cmd = ['./target/debug/eyelang', 'run']
+eye_path = './target/debug/eyelang'
+run_cmd = [eye_path, 'run']
 tmp_file = 'tmp_test.eye'
 
 GREEN = '\033[1;32m'
@@ -15,6 +16,7 @@ R = '\033[1;0m'
 
 def main():
     start_time = time.time()
+    
     total, errors = test_files()
     total2, errors2 = test_readme()
     total += total2
@@ -34,7 +36,13 @@ def test_files():
         print(f'{RED}An error occurred while compiling{R}')
         exit(1)
     print(f'{CYAN}Running tests ...{R}')
-    return walk('eye')
+    total = 1
+    errors = 0
+    if not check_std(): errors += 1
+    tmp_total, tmp_errors = walk('eye')
+    total += tmp_total
+    errors += tmp_errors
+    return total, errors
     
     
 
@@ -54,9 +62,9 @@ def test_readme():
                 temp_code_file.write(current_source)
                 temp_code_file.close()
                 
-                print(f'Testing README block #{block_count}', end = '')
+                print(f'Testing README block #{block_count} ...', end = '')
                 out, stderr, exit_code = run(tmp_file)
-                padding = ' ' * max(0, 32 - len(f'{block_count}'))
+                padding = ' ' * max(0, 28 - len(f'{block_count}'))
                 if exit_code != 0:
                     print(f'{padding}{RED}[ERR]{R}')
                     print(f'{RED}Output{R}:\n{out}')
@@ -151,7 +159,19 @@ def run(eye_file, input = ''):
     res = subprocess.run(run_cmd + [eye_file], capture_output=True, input=input)
     return res.stdout.decode('utf-8', 'replace'), res.stderr.decode('utf-8', 'replace'), res.returncode
 
+def check_std():
+    text = 'std library ...'
+    pad = ' ' * (54 - len(text))
+    print(f'{text}{pad}', end='')
 
+    res = subprocess.run([eye_path, 'check', 'std', '--lib'], capture_output=True)
+    if res.returncode == 0:
+        print(f'{GREEN}[OK]{R}')
+        return True
+    else:
+        print(f'{RED}[ERR]{R}')
+        print(res.stdout.decode('utf-8', 'replace'))
+        return False
     
 if __name__ == '__main__':
     main()

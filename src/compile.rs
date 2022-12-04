@@ -14,43 +14,55 @@ pub struct Debug {
     pub reconstruct_src: bool,
 }
 
+pub struct Dependency {
+    pub path: PathBuf,
+    pub is_std: bool,
+}
+
 pub fn project(
     module_path: &Path,
     debug: Debug,
-    dependencies: DHashMap<String, PathBuf>,
+    dependencies: DHashMap<String, Dependency>,
     require_main_func: bool,
-    stats: &mut Stats
+    stats: &mut Stats,
+    is_std: bool,
 ) -> (Result<(SymbolTable, irgen::Functions, Option<ast::FunctionId>), ()>, Ast, Errors) {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
-
-    let main_module = ast.add_empty_root_module(module_path.to_owned());
+    
+    
+    let main_mod = ast.add_empty_root_module(module_path.to_owned());
     if module_path.is_dir() {
-        tree(module_path, &mut ast, &mut errors, main_module, main_module, TreeType::Main, debug, stats);
+        tree(module_path, &mut ast, &mut errors, main_mod, main_mod, TreeType::Main, debug, stats);
     } else {
-        file(module_path, &mut ast, &mut errors, main_module, main_module, debug, stats);
+        file(module_path, &mut ast, &mut errors, main_mod, main_mod, debug, stats);
     }
     
-    for (name, path) in dependencies {
-        let root = ast.add_empty_root_module(path.clone());
-        if path.is_dir() {
-            tree(&path, &mut ast, &mut errors, root, root, TreeType::Main, debug, stats);
-        } else {
-            file(&path, &mut ast, &mut errors, root, root, debug, stats)
+    let mut std_mod = is_std.then_some(main_mod);
+    
+    for (name, dep) in dependencies {
+        let root = ast.add_empty_root_module(dep.path.clone());
+        if dep.is_std {
+            std_mod = Some(root);
         }
-        let defs = ast[main_module].definitions;
+        if dep.path.is_dir() {
+            tree(&dep.path, &mut ast, &mut errors, root, root, TreeType::Main, debug, stats);
+        } else {
+            file(&dep.path, &mut ast, &mut errors, root, root, debug, stats)
+        }
+        let defs = ast[main_mod].definitions;
         let prev = ast[defs].insert(name.clone(), ast::Definition::Module(root));
 
         if prev.is_some() {
-            errors.emit_span(Error::DuplicateDependency(name), Span::new(0, 0, main_module));
+            errors.emit_span(Error::DuplicateDependency(name), Span::new(0, 0, main_mod));
         }
     }
 
     let resolve_start_time = Instant::now();
-    let (symbols, ir_functions, main) = resolve::resolve_project(&ast, main_module, &mut errors, require_main_func);
+    let (symbols, ir_funs, main) = resolve::resolve_project(&ast, main_mod, &mut errors, require_main_func, std_mod);
     stats.resolve = resolve_start_time.elapsed();
     
-    (Ok((symbols, ir_functions, main)), ast, errors)
+    (Ok((symbols, ir_funs, main)), ast, errors)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

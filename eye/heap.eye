@@ -3,7 +3,7 @@ use std.c
 Vec3 :: struct { x f64, y f64, z f64 }
 
 print_vec3 :: fn(v *Vec3) {
-    c.printf("Vec3: [%.1f, %.1f, %.1f]\n", v^.x, v^.y, v^.z)
+    c.printf("Vec3: [%.1f, %.1f, %.1f]\n".ptr, v^.x, v^.y, v^.z)
 }
 
 main :: fn {

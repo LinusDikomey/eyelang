@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type, ResolvedTypeDef}, self}};
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{type_info::{TypeInfo, TypeTable}, types::{Enum, Type, ResolvedTypeDef}, self}, irgen::CreateReason};
 
 use super::builder::IrTypeTable;
 
@@ -61,6 +61,7 @@ impl IrTypes {
     }
 }
 impl IrTypeTable for IrTypes {
+    const CREATE_REASON: CreateReason = CreateReason::Runtime;
     type Type = IrType;
     fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> IrType {
         match info {

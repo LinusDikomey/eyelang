@@ -13,13 +13,13 @@ memcpy :: fn(dest *i8, src *i8, n u64) extern
 atoi :: fn(s *i8) -> i32 extern
 
 
-FileHandle :: struct { ptr u64 }
+FILE :: struct { }
 
-INVALID_FILE :: fn -> FileHandle: FileHandle(0)
+INVALID_FILE :: fn -> *FILE: 0 as *FILE
 
-fopen :: fn(path *i8, mode *i8) -> FileHandle extern
-fclose :: fn(handle FileHandle) -> i32 extern
-fread :: fn(ptr *i8, size u64, count u64, stream FileHandle ) -> u64 extern
+fopen :: fn(path *i8, mode *i8) -> *FILE extern
+fclose :: fn(handle *FILE) -> i32 extern
+fread :: fn(ptr *i8, size u64, count u64, stream *FILE ) -> u64 extern
 
 sleep :: fn(seconds u32) extern
 

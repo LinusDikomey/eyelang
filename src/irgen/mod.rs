@@ -5,7 +5,7 @@ use crate::{
     resolve::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
         self,
-        type_info::{TypeTableIndex, TypeInfo}, VarId, MemberAccess},
+        type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId, MemberAccess},
     ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable}, Ref, RefVal, types::IrTypes},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
@@ -412,9 +412,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             ir.build_float(lit.val, ty)
         }
         Expr::StringLiteral(span) => {
-            let lit = string_literal(*span, ctx.src());
-            let ty = ctx[expr];
-            ir.build_string(lit.as_bytes(), true, ty)
+            return Res::Var(string_literal(ir, *span, ctx));
         }
         Expr::BoolLiteral { val, .. } => if *val { Ref::val(RefVal::True) } else { Ref::val(RefVal::False) }
         &Expr::EnumLiteral { ident, .. } => {
@@ -972,14 +970,33 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
     Res::Val(r)
 }
 
-fn string_literal(span: TSpan, src: &str) -> String {
+fn string_literal<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, span: TSpan, ctx: &mut Ctx) -> Ref {
     // PERF a little suboptimal
-    src[span.start as usize + 1 .. span.end as usize]
+    let lit = ctx.src()[span.start as usize + 1 .. span.end as usize]
         .replace("\\n", "\n")
         .replace("\\t", "\t")
         .replace("\\r", "\r")
         .replace("\\0", "\0")
-        .replace("\\\"", "\"")
+        .replace("\\\"", "\"");
+
+    let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
+    let i8_ptr_ty = ir.types.add(TypeInfo::Pointer(i8_ty));
+    let i8_ptr_ptr_ty = ir.types.add(TypeInfo::Pointer(i8_ptr_ty));
+
+    let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+    let u64_ptr_ty = ir.types.add(TypeInfo::Pointer(u64_ty));
+
+    let ptr = ir.build_string(lit.as_bytes(), true, i8_ptr_ty);
+    let len = ir.build_int(lit.len() as u64, u64_ty);
+    
+    let str_struct = ir.build_decl(ctx.symbols.builtins.str_info());
+    
+    let ptr_ref = ir.build_member_int(str_struct, 0, i8_ptr_ptr_ty);
+    ir.build_store(ptr_ref, ptr);
+    
+    let len_ref = ir.build_member_int(str_struct, 1, u64_ptr_ty);
+    ir.build_store(len_ref, len);
+    return str_struct
 }
 
 fn gen_pat<IrTypes: IrTypeTable>(
@@ -1041,6 +1058,13 @@ fn gen_pat<IrTypes: IrTypeTable>(
             } else {
                 Ref::val(RefVal::True)
             }
+        }
+        Expr::StringLiteral(span) => {
+            let lit = string_literal(ir, *span, ctx);
+            let str_ty = ir.types.add(TypeInfo::Resolved(ctx.symbols.builtins.str_type, TypeTableIndices::EMPTY));
+            let lit_val = ir.build_load(lit,  str_ty);
+            let str_eq = ctx.functions.get(ctx.symbols.builtins.str_eq, ctx.symbols, vec![], IrTypes::CREATE_REASON);
+            ir.build_call(str_eq, [pat_val, lit_val], bool_ty)
         }
         Expr::Nested(_, inner) => gen_pat(ir, *inner, pat_val, ty, bool_ty, ctx),
         Expr::Unit(_) => Ref::val(RefVal::True),

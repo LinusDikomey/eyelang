@@ -11,7 +11,7 @@ main :: fn {
         .Banana: "a banana",
         .Pineapple: "a pineapple", # comma is optional for the last match arm
     }
-    printf("I'm eating %s\n", text)
+    printf("I'm eating %s\n".ptr, text)
 
     num := 3
     s := match num {

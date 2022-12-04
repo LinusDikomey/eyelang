@@ -2,6 +2,43 @@ use root.list.List
 use root.ptr_add
 use root.c.malloc
 use root.c.memcpy
+use root.c.printf
+use root.c.exit
+
+# represents a string slice
+str :: struct {
+    ptr *i8
+    len u64
+
+    from_cstr :: fn(ptr *i8) -> str: str(ptr, len(ptr))
+    
+    slice :: fn(this str, start u64, end u64) -> str {
+        if end > this.len {
+            printf("[PANIC]: string slice out of range: %d..%d > %d\n".ptr, start, end, this.len)
+            exit(1)
+        }
+        if start > end: start = end
+        str(ptr_add(this.ptr, start), end - start)
+    }
+
+    byte :: fn(this str, index u64) -> u8 {
+        if index >= this.len {
+            printf("[PANIC]: str byte index out of range: %d >= %d".ptr, index, this.len)
+            exit(1)
+        }
+        ret ptr_add(this.ptr, index)^ as u8
+    }
+
+    eq :: fn(this str, other str) -> bool {
+        if this.len != other.len: ret false
+        i := 0
+        while i < this.len {
+            if this.byte(i) != other.byte(i): ret false
+            i += 1
+        }
+        ret true
+    }
+}
 
 NEWLINE: i8 : 10
 CARRIAGE_RETURN: i8 : 13

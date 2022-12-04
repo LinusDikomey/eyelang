@@ -6,7 +6,7 @@ use crate::{
     dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}
 };
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall, MemberAccess};
+use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall, MemberAccess, std_builtins::Builtins};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -141,6 +141,7 @@ pub enum MaybeTypeDef {
 
 #[derive(Debug)]
 pub struct SymbolTable {
+    pub builtins: Builtins,
     pub funcs: Vec<Option<FunctionHeader>>,
     pub types: Vec<(String, MaybeTypeDef)>,
     pub traits: Vec<Option<TraitDef>>,
@@ -152,6 +153,7 @@ pub struct SymbolTable {
 }
 impl SymbolTable {
     pub fn new(
+        builtins: Builtins,
         func_count: usize,
         expr_count: usize,
         types: &[TypeDef],
@@ -161,6 +163,7 @@ impl SymbolTable {
         member_access_count: usize
     ) -> Self {
         Self {
+            builtins,
             funcs: (0..func_count).map(|_| None).collect(),
             types: types
                 .iter()

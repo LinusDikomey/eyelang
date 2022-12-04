@@ -8,5 +8,5 @@ main :: fn {
 
     other_pointer = ptr
 
-    printf("Values are: %d, %f\n", x.0, x.1)
+    printf("Values are: %d, %f\n".ptr, x.0, x.1)
 }

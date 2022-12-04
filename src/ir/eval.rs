@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstItem}, type_info::{TypeTableIndex, TypeInfo, TypeTable}, types::ResolvedTypeDef}, types::{Primitive, Layout}};
+use crate::{ir::{Ref, BlockIndex}, error::Error, ast::{ModuleId, TraitId}, resolve::{const_val::{ConstSymbol, ConstItem}, type_info::{TypeTableIndex, TypeInfo, TypeTable}, types::ResolvedTypeDef}, types::{Primitive, Layout}, irgen::CreateReason};
 
 use super::{ConstVal, builder::{IrBuilder, IrTypeTable}, types::{IrType, TypeRef, TypeRefs}};
 
@@ -33,6 +33,7 @@ impl Index<TypeRef> for ConstIrTypes {
     }
 }
 impl IrTypeTable for ConstIrTypes {
+    const CREATE_REASON: CreateReason = CreateReason::Comptime;
     type Type = ConstIrType;
 
     fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type {

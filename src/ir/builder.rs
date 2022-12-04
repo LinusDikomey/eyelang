@@ -3,7 +3,7 @@ use std::ops::Index;
 use crate::{
     ast::{GlobalId, TypeId},
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
-    types::{Primitive, Layout}, resolve::{type_info::{TypeTable, TypeTableIndex, TypeInfo}, types::ResolvedTypeDef},
+    types::{Primitive, Layout}, resolve::{type_info::{TypeTable, TypeTableIndex, TypeInfo}, types::ResolvedTypeDef}, irgen::CreateReason,
 };
 
 use super::{RefVal, FunctionId, types::TypeRef};
@@ -28,6 +28,7 @@ pub enum BinOp {
 }
 
 pub trait IrTypeTable : Index<TypeRef, Output = Self::Type> {
+    const CREATE_REASON: CreateReason;
     type Type;
     fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type;
     fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;

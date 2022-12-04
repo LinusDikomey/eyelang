@@ -13,29 +13,20 @@ use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
     type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex},
     scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
-    const_val::ConstVal, expr::val_expr
+    const_val::ConstVal, expr::val_expr, std_builtins::Builtins
 };
 
 pub mod const_val;
 mod scope;
+pub mod std_builtins;
 pub mod types;
 pub mod type_info;
 mod expr;
 mod pat;
 mod exhaust;
 
-pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool)
+pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool, std: Option<ModuleId>)
 -> (SymbolTable, irgen::Functions, Option<FunctionId>) {
-    let mut symbols = SymbolTable::new(
-        ast.functions.len(),
-        ast.expr_count(),
-        &ast.types,
-        ast.traits.len(),
-        ast.calls.len(),
-        ast.globals.len(),
-        ast.member_access_count as usize,
-    );
-
     let mut ir_functions = irgen::Functions::new();
 
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
@@ -48,9 +39,23 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     
     let mut scopes = Scopes::new(module_scopes);
 
-    // resolve cross-referencing defs: use statements, constants (all DefId::Unresolved)
-    // cross_resolve::top_level(&mut module_scopes, ast, errors);
-    
+    let builtins = if let Some(std) = std {
+        Builtins::resolve(&mut scopes, std, ast)
+    } else {
+        panic!("compiling without std is not supported right now because builtins are required");
+    };
+
+    let mut symbols = SymbolTable::new(
+        builtins,
+        ast.functions.len(),
+        ast.expr_count(),
+        &ast.types,
+        ast.traits.len(),
+        ast.calls.len(),
+        ast.globals.len(),
+        ast.member_access_count as usize,
+    );
+
     // resolve types, function signatures
     for (i, module) in ast.modules.iter().enumerate() {
         let scope = ScopeId::module(ModuleId::new(i as _));
@@ -191,7 +196,7 @@ fn resolve_def(
     scopes: &mut Scopes,
     scope: ScopeId,
     errors: &mut Errors,
-    ir: &mut irgen::Functions
+    ir: &mut irgen::Functions,
 ) {
     match def {
         &Definition::Function(id) => {
@@ -469,8 +474,9 @@ impl<'a> Ctx<'a> {
                         None => self.errors.emit_span(Error::NonexistantEnumVariant, span),
                     }
                 } else {
+                    let found = ty.as_string(&self.types, &self.symbols).into_owned();
                     self.errors.emit_span(Error::MismatchedType {
-                        expected: "an enum".to_string(), found: "a non-enum type".to_owned()
+                        expected: "an enum".to_string(), found
                     }, span);
                 }
             }

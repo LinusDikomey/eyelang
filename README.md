@@ -20,7 +20,7 @@ main :: fn {
     x := 3
     y := 2 * x + 3
     y += 1
-    std.c.printf("X is %d and y is %d\n", x, y)
+    std.c.printf("X is %d and y is %d\n".ptr, x, y)
 }
 ```
 
@@ -33,7 +33,7 @@ add_pointer_values :: fn(x *i32, y *i32) -> i32: x^ + y^
 main :: fn {
     x := 5
     y := 7
-    printf("Result: %d\n", add_pointer_values(&x, &y))
+    printf("Result: %d\n".ptr, add_pointer_values(&x, &y))
 }
 ```
 
@@ -44,7 +44,7 @@ add :: fn(x i64, y i64) -> i64: x + y
 main :: fn {
     x := 3 # x is inferred to have type i64
     pointer := &x
-    std.c.printf("Result: %d\n", if 1 < 2: add(pointer^, 4) else -1)
+    std.c.printf("Result: %d\n".ptr, if 1 < 2: add(pointer^, 4) else -1)
 }
 ```
 ### Constants
@@ -53,7 +53,7 @@ main :: fn {
 A :: 40 + 2
 
 main :: fn {
-    std.c.printf("%d\n", A) # prints 42
+    std.c.printf("%d\n".ptr, A) # prints 42
 
     # can be assigned to any integer
     x: u8 = A
@@ -73,7 +73,7 @@ use std.c
 Vec3 :: struct { x f64, y f64, z f64 }
 
 print_vec3 :: fn(v *Vec3) {
-    c.printf("Vec3: [%.1f, %.1f, %.1f]\n", v^.x, v^.y, v^.z)
+    c.printf("Vec3: [%.1f, %.1f, %.1f]\n".ptr, v^.x, v^.y, v^.z)
 }
 
 main :: fn {
@@ -87,22 +87,25 @@ main :: fn {
 This is all a bit awkward right now because there is no switch/match and no string equality with ==.
 Despite the enum type being completely inferred here, an exhaustive switch would work pretty well.
 ```rust
+use std.print
+
 main :: fn {
-    use std.streq # compare strings
     color := .NoColor
     inp := std.input("Which color do you want? ")
-    if streq(inp, "red"): color = .Red
-        else if streq(inp, "green"): color = .Green
-        else if streq(inp, "blue"): color = .Blue
+    if inp.eq("red"): color = .Red
+        else if inp.eq("green"): color = .Green
+        else if inp.eq("blue"): color = .Blue
     
     if color == .NoColor:
-        std.c.printf("You didn't select a valid color")
-    else std.c.printf("Your color is %s!\n",
-        if color == .Red: "Red"
-        else if color == .Green: "Green"
-        else if color == .Blue: "Blue"
-        else "No Color"
-    )
+        print("You didn't select a valid color")
+    else {
+        std.c.printf("Your color is %s!\n".ptr,
+            if color == .Red: "Red"
+            else if color == .Green: "Green"
+            else if color == .Blue: "Blue"
+            else "No Color"
+        )
+    }
 }
 ```
 
