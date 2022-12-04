@@ -2,12 +2,12 @@ use std::{ops::Index, borrow::Cow};
 
 use crate::{resolve::types::{TupleCountMode, ResolvedTypeDef}, error::{Errors, Error}, span::Span, types::Primitive, ast::{TypeId, FunctionId}};
 
-use super::types::{Type, SymbolTable, DefId};
+use super::types::{Type, SymbolTable, DefId, Enum};
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIndex>,
-    names: Vec<String>,
+    enum_variants: Vec<(String, TypeTableIndices)>,
     generics: TypeTableIndices,
 }
 impl TypeTable {
@@ -17,7 +17,7 @@ impl TypeTable {
         let generics = TypeTableIndices { idx: 0, count: generic_count as _ };
         let s = Self {
             types,
-            names: Vec::new(),
+            enum_variants: Vec::new(),
             generics,
         };
         s.ty_dbg("Creating type table", ());
@@ -150,6 +150,24 @@ impl TypeTable {
 
         self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(ty);
     }
+    pub fn specify_resolved_type(
+        &mut self,
+        idx: TypeTableIndex,
+        other: &Type,
+        errors: &mut Errors,
+        span: Span,
+        symbols: &SymbolTable,
+    ) {
+        // PERF: this function converts Type to TypeInfo for now but making an explicit implementation for type
+        // will save performance and won't add unnecessary entries to the type table.
+        let other_info = match other.as_info(self, |_| unreachable!()) {
+            TypeInfoOrIndex::Type(ty) => ty,
+            TypeInfoOrIndex::Idx(idx) => self.find(idx).1,
+        };
+
+        self.specify(idx, other_info, errors, span, symbols)
+    }
+
     pub fn specify_or_merge(
         &mut self,
         idx: TypeTableIndex,
@@ -185,8 +203,8 @@ impl TypeTable {
         if a.idx() == b.idx() {
             return Ok(());
         }
-        let (curr_a_idx, a_ty) = self.find(a);
-        let (curr_b_idx, b_ty) = self.find(b);
+        let (curr_a_idx, a_ty) = self.find_optimizing(a);
+        let (curr_b_idx, b_ty) = self.find_optimizing(b);
         if curr_a_idx.idx() == curr_b_idx.idx() {
             return Ok(());
         }
@@ -243,34 +261,38 @@ impl TypeTable {
         self.types[idx.idx()] = entry;
     }
 
-    pub fn add_names(&mut self, names: impl IntoIterator<Item = String>) -> TypeTableNames {
-        let idx = self.names.len();
-        self.names.extend(names);
-        TypeTableNames {
-            idx: idx as u32,
-            count: (self.names.len() - idx) as u32,
-        }
+    pub fn reserve_enum_variants(&mut self, count: usize) -> EnumVariants {
+        let idx = self.enum_variants.len() as u32;
+        self.enum_variants.extend(std::iter::repeat((String::new(), TypeTableIndices::EMPTY)).take(count));
+        EnumVariants { idx, count: count as _ }
     }
-    pub fn _remove_names(&mut self, names: TypeTableNames) {
-        self.names
-            .drain(names.idx as usize..names.idx as usize + names.count as usize);
+    pub fn replace_enum_variant(&mut self, idx: usize, name: String, args: TypeTableIndices) {
+        self.enum_variants[idx] = (name, args);
     }
 
-    pub fn get_names(&self, names: TypeTableNames) -> &[String] {
-        &self.names[names.idx as usize..names.idx as usize + names.count as usize]
+    pub fn add_enum_variants(&mut self, names: impl IntoIterator<Item = (String, TypeTableIndices)>) -> EnumVariants {
+        let idx = self.enum_variants.len() as u32;
+        self.enum_variants.extend(names);
+        let count = self.enum_variants.len() as u32 - idx;
+        EnumVariants { idx, count }
     }
+
+    pub fn get_enum_variants(&self, variants: EnumVariants) -> &[(String, TypeTableIndices)] {
+        &self.enum_variants[variants.idx as usize .. variants.idx as usize + variants.count as usize]
+    }
+
     #[must_use = "Range should be used to update"]
-    pub fn extend_names(
+    pub fn extend_enum_variants(
         &mut self,
-        idx: TypeTableNames,
-        names: impl IntoIterator<Item = String>,
-    ) -> TypeTableNames {
-        let prev_len = self.names.len();
-        let insert_at = idx.idx as usize + idx.count as usize;
-        self.names.splice(insert_at..insert_at, names);
-        TypeTableNames {
-            idx: idx.idx,
-            count: idx.count + (self.names.len() - prev_len) as u32,
+        variants: EnumVariants,
+        new_variants: impl IntoIterator<Item = (String, TypeTableIndices)>,
+    ) -> EnumVariants {
+        let prev_len = self.enum_variants.len();
+        let insert_at = variants.idx as usize + variants.count as usize;
+        self.enum_variants.splice(insert_at..insert_at, new_variants);
+        EnumVariants {
+            idx: variants.idx,
+            count: variants.count + (self.enum_variants.len() - prev_len) as u32,
         }
     }
 
@@ -404,6 +426,16 @@ impl TypeTableNames {
         self.count
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub struct EnumVariants {
+    idx: u32,
+    count: u32,
+}
+impl EnumVariants {
+    pub fn count(self) -> u32 {
+        self.count
+    }
+}
 
 /// A type that may not be (completely) known yet.
 #[derive(Clone, Copy, Debug)]
@@ -415,7 +447,7 @@ pub enum TypeInfo {
     Resolved(TypeId, TypeTableIndices),
     Pointer(TypeTableIndex),
     Array(Option<u32>, TypeTableIndex),
-    Enum(TypeTableNames),
+    Enum(EnumVariants),
     Tuple(TypeTableIndices, TupleCountMode),
     SymbolItem(DefId),
     MethodItem {
@@ -459,10 +491,23 @@ impl TypeInfo {
             .into(),
             TypeInfo::Enum(variants) => {
                 let mut s = "[".to_owned();
-                for (i, t) in types.get_names(variants).iter().enumerate() {
-                    s += t;
-                    if i != variants.count as usize - 1 {
-                        s += ", ";
+                for (i, (name, variant_types)) in types.get_enum_variants(variants).iter().enumerate() {
+                    s += name;
+                    if variant_types.len() > 0 {
+                        s += "(";
+                        let mut first = true;
+                        for ty in variant_types.iter() {
+                            if first {
+                                first = false;
+                            } else {
+                                s += ",";
+                            }
+                            s += types[ty].as_string(types, symbols).as_ref();
+                        }
+                        s += ")";
+                    }
+                    if i != variants.count() as usize - 1 {
+                        s += ",";
                     }
                 }
                 s.push(']');
@@ -523,7 +568,18 @@ impl TypeInfo {
                     Type::Array(Box::new((inner, size)))
                 })
             }
-            Self::Enum(idx) => Type::Enum(types.get_names(idx).to_vec()),
+            Self::Enum(variants) => Type::Enum(
+                types.get_enum_variants(variants)
+                    .iter()
+                    .map(|(name, variant_types)| (
+                        name.clone(),
+                        variant_types
+                            .iter()
+                            .map(|ty_idx| types[ty_idx].finalize(types))
+                            .collect()
+                    ))
+                    .collect()
+            ),
             Self::Tuple(inners, _) => Type::Tuple(
                 inners
                     .iter()
@@ -590,11 +646,8 @@ fn merge_infos(
                     .all(|(a, b)|types.try_merge(a, b, symbols).is_ok())
             }
         } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
-            if let Enum(names) = other {
-                !types
-                    .get_names(names)
-                    .iter()
-                    .any(|name| !def.variants.contains_key(name))
+            if let Enum(variants) = other {
+                merge_implicit_and_explicit_enum(def, variants, types, symbols)
             } else {
                 false
             }
@@ -632,14 +685,17 @@ fn merge_infos(
             };
             Some(Array(new_size, inner))
         }
-        Enum(names) => {
-            let Enum(other_names) = other else { return None };
-            let a = types.get_names(names);
-            let b = types.get_names(other_names);
-            let new_variants: Vec<_> = b.iter().filter(|s| !a.contains(s)).cloned().collect();
-            types.ty_dbg("New variants after merging", (&new_variants, a, b));
-            let merged_variants = types.extend_names(names, new_variants);
-            Some(Enum(merged_variants))
+        Enum(variants) => {
+            match other {
+                Enum(other_variants) => {
+                    merge_implicit_enums(variants, other_variants, types, symbols)
+                }
+                Resolved(id, _generics) => {
+                    let ResolvedTypeDef::Enum(def) = symbols.get_type(id) else { return None };
+                    merge_implicit_and_explicit_enum(def, variants, types, symbols).then_some(other)
+                }
+                _ => None
+            }
         }
         Tuple(a_elems, a_count_mode) => {
             use TupleCountMode::{AtLeast, Exact};
@@ -713,6 +769,60 @@ fn merge_infos(
             }
         }
     }
+}
+
+fn merge_implicit_and_explicit_enum(def: &Enum, variants: EnumVariants, types: &mut TypeTable, symbols: &SymbolTable)
+-> bool {
+    for i in variants.idx .. variants.idx + variants.count {
+        let (name, arg_types) = &types.enum_variants[i as usize];
+        let Some((_, def_arg_types)) = def.variants.get(name) else { return false };
+        
+        if def_arg_types.len() != arg_types.len() { return false }
+
+        for (a, b) in arg_types.iter().zip(def_arg_types) {
+            let (a_idx, a_ty) = types.find(a);
+            let b_ty = match b.as_info(types, |_| unreachable!()) {
+                TypeInfoOrIndex::Type(ty) => ty,
+                TypeInfoOrIndex::Idx(idx) => types.find(idx).1,
+            };
+
+            match merge_infos(a_ty, b_ty, types, symbols) {
+                Some(new_ty) => {
+                    types.replace_idx(a_idx, new_ty.into());
+                }
+                None => return false
+            }
+        }
+    }
+    true
+}
+
+fn merge_implicit_enums(a: EnumVariants, b: EnumVariants, types: &mut TypeTable, symbols: &SymbolTable) -> Option<TypeInfo> {
+    let (larger, smaller) = if a.count > b.count { (a, b) } else { (b, a) };
+    
+    let mut new_variants = Vec::with_capacity((larger.count - smaller.count) as usize);
+
+    for smaller_idx in 0..smaller.count {
+        let (name, arg_types) = &types.get_enum_variants(smaller)[smaller_idx as usize];
+        let arg_types = *arg_types;
+
+        match types.get_enum_variants(larger).iter().find(|(other_name, _)| other_name == name) {
+            Some((_, other_arg_types)) => {
+                // variant is already in larger, unify the argument types
+                if arg_types.len() != other_arg_types.len() {
+                    return None;
+                }
+                for (a, b) in arg_types.iter().zip(other_arg_types.iter()) {
+                    if let Err(_) = types.try_merge(a, b, symbols) {
+                        return None; // argument merge fails -> fail merge
+                    }
+                }
+            }
+            None => new_variants.push((name.clone(), arg_types)) // add new variant to larger
+        }
+    }
+    
+    Some(TypeInfo::Enum(types.extend_enum_variants(larger, new_variants)))
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -297,7 +297,7 @@ impl StructDefinition {
 pub struct EnumDefinition {
     pub name: String,
     pub generics: Vec<TSpan>,
-    pub variants: Vec<(TSpan, String)>,
+    pub variants: Vec<(TSpan, String, Vec<UnresolvedType>)>,
 }
 impl EnumDefinition {
     pub fn generic_count(&self) -> u8 {
@@ -350,7 +350,7 @@ pub enum Expr {
     FloatLiteral(TSpan),
     StringLiteral(TSpan),
     BoolLiteral { start: u32, val: bool },
-    EnumLiteral { dot: u32, ident: TSpan },
+    EnumLiteral { dot: u32, ident: TSpan, args: ExprExtra },
     Record {
         span: TSpan,
         names: Vec<TSpan>,
@@ -427,7 +427,7 @@ impl Expr {
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::ReturnUnit { start } => TSpan::new(*start, start+2),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
-            Expr::EnumLiteral { dot, ident } => TSpan::new(*dot, ident.end),
+            Expr::EnumLiteral { dot, ident, .. } => TSpan::new(*dot, ident.end),
             &Expr::Hole(start) => TSpan::new(start, start),
             Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
             Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),

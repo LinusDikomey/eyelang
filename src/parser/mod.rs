@@ -289,21 +289,8 @@ impl<'a> Parser<'a> {
                             .step_if(TokenType::Keyword(Keyword::Enum))
                             .is_some()
                         {
-                            let generics = self.parse_optional_generics()?;
-
-                            self.toks.step_expect(TokenType::LBrace)?;
-                            let mut variants = Vec::new();
-                            while self.toks.step_if(TokenType::RBrace).is_none() {
-                                let tok = self.toks.step_expect(TokenType::Ident)?;
-                                let span = tok.span();
-                                let variant = tok.get_val(self.src).to_owned();
-                                variants.push((span, variant));
-                            }
-                            Definition::Type(self.ast.add_type(TypeDef::Enum(EnumDefinition {
-                                name: name.to_owned(),
-                                generics: generics.map_or(Vec::new(), |g| g.1),
-                                variants,
-                            })))
+                            let def = self.enum_definition(name.to_owned())?;
+                            Definition::Type(self.ast.add_type(TypeDef::Enum(def)))
                         } else if let Some(trait_tok) =
                             self.toks.step_if(TokenType::Keyword(Keyword::Trait))
                         {
@@ -423,6 +410,36 @@ impl<'a> Parser<'a> {
             generics: generics.map_or(Vec::new(), |g| g.1),
             members,
             methods,
+        })
+    }
+
+    fn enum_definition(&mut self, name: String) -> EyeResult<EnumDefinition> {
+        let generics = self.parse_optional_generics()?;
+
+        self.toks.step_expect(TokenType::LBrace)?;
+        let mut variants = Vec::new();
+        while self.toks.step_if(TokenType::RBrace).is_none() {
+            let tok = self.toks.step_expect(TokenType::Ident)?;
+            let mut span = tok.span();
+            let variant = tok.get_val(self.src).to_owned();
+            let args = self.toks.step_if(TokenType::LParen).map_or_else(
+                || Ok(Vec::new()),
+                |_| {
+                    let mut args = vec![];
+                    span.end = self.parse_delimited(
+                        TokenType::Comma,
+                        TokenType::RParen,
+                        |p| Ok(args.push(p.parse_type()?))
+                    )?.end;
+                    Ok(args)
+                }
+            )?;
+            variants.push((span, variant, args));
+        }
+        Ok(EnumDefinition {
+            name,
+            generics: generics.map_or(Vec::new(), |g| g.1),
+            variants,
         })
     }
     
@@ -693,7 +710,9 @@ impl<'a> Parser<'a> {
                 let tok = self.toks.step()?;
                 match_or_unexpected! {tok, self.toks.module,
                     TokenType::Ident = TokenType::Ident => {
-                        Expr::EnumLiteral { dot: start, ident: tok.span() }
+                        let args = self.parse_enum_args(counts)?;
+                        let args = self.ast.add_extra(&args);
+                        Expr::EnumLiteral { dot: start, ident: tok.span(), args }
                     },
                     TokenType::LBrace = TokenType::LBrace => {
                         self.parse_record(tok, counts)?
@@ -977,5 +996,18 @@ impl<'a> Parser<'a> {
                 Ok((types, TSpan::new(l_bracket.start, r_bracket.end)))
             })
             .transpose()
+    }
+
+    fn parse_enum_args(&mut self, counts: &mut Counts) -> EyeResult<Vec<ExprRef>> {
+        let mut args = vec![];
+        if self.toks.peek().is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line) {
+            self.toks.step_assert(TokenType::LParen);
+            self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                args.push(p.parse_expr(counts)?);
+                Ok(Delimit::OptionalIfNewLine)
+            })?;
+        }
+
+        Ok(args)
     }
 }

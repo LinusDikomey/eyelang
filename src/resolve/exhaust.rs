@@ -20,6 +20,7 @@ pub enum Exhaustion {
         true_: bool,
         false_: bool,
     },
+    // TODO: check argument exhaustion
     Enum(HashSet<String, dmap::DeterministicState>),
     Tuple(Vec<Exhaustion>),
     Invalid,
@@ -56,7 +57,9 @@ impl Exhaustion {
             }
             Exhaustion::Enum(exhausted_variants) => {
                 match ty {
-                    Some(Type::Enum(variants)) => variants.iter().all(|v| exhausted_variants.contains(v)),
+                    Some(Type::Enum(variants)) => variants
+                        .iter()
+                        .all(|(name, _args)| exhausted_variants.contains(name)),
                     Some(Type::Id(symbol, _generics)) => {
                         match &symbols.get_type(*symbol) {
                             ResolvedTypeDef::Enum(enum_def) => {

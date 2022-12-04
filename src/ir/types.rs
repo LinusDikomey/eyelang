@@ -44,7 +44,7 @@ impl IrTypes {
                 IrType::Array(self.add(elem_ty), b.1)
             }
             resolve::types::Type::Enum(variants) => IrType::Primitive(
-                Enum::int_ty_from_variant_count(variants.len() as _).into()
+                Enum::int_ty_from_variant_count(variants.len() as _).map_or(Primitive::Unit, Into::into)
             ),
             resolve::types::Type::Tuple(elems) => {
                 let idx = self.types.len() as u32;
@@ -79,7 +79,9 @@ impl IrTypeTable for IrTypes {
             }
             TypeInfo::Pointer(pointee) => IrType::Ptr(self.add_info(types.get(pointee), types)),
             TypeInfo::Array(Some(count), elem) => IrType::Array(self.add_info(types.get(elem), types), count),
-            TypeInfo::Enum(names) => IrType::Primitive(Enum::int_ty_from_variant_count(names.count()).into()),
+            TypeInfo::Enum(names) => IrType::Primitive(
+                Enum::int_ty_from_variant_count(names.count()).map_or(Primitive::Unit, Into::into)
+            ),
             TypeInfo::Tuple(elems, _) => {
                 let elems_idx = self.types.len();
                 self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Unit)).take(elems.len()));
@@ -148,7 +150,7 @@ impl IrType {
                 let mut layout = Layout { size: 0, alignment: 1 };
                 for ty in elems.iter() {
                     let ty = &types[ty];
-                    layout = layout.accumulate(ty.layout(types, get_type));
+                    layout.accumulate(ty.layout(types, get_type));
                 }
                 layout
             }

@@ -38,9 +38,18 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
             exhaustion.exhaust_bool(*val);
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, ctx.scopes[ctx.scope].module.id));
         }
-        Expr::EnumLiteral { ident, .. } => {
+        Expr::EnumLiteral { ident, args, .. } => {
             let name = &ctx.ast.src(ctx.scopes[ctx.scope].module.id).0[ident.range()];
-            ctx.specify_enum_variant(expected, name, ident.in_mod(ctx.scopes[ctx.scope].module.id));
+
+            let arg_types = ctx.types.add_multiple_unknown(args.count);
+
+            for (arg, ty) in ctx.ast[*args].iter().zip(arg_types.iter()) {
+                let mut variant_exhaustion = Exhaustion::None; // TODO: enum variant data exhaustion
+                pat(*arg, ty, ctx.reborrow(), &mut variant_exhaustion);
+            }
+
+
+            ctx.specify_enum_variant(expected, name, ident.in_mod(ctx.scopes[ctx.scope].module.id), arg_types);
             exhaustion.exhaust_enum_variant(name.to_owned());
         }
         Expr::Nested(_, inner) => pat(*inner, expected, ctx, exhaustion),

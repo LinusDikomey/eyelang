@@ -1,5 +1,5 @@
 use core::fmt;
-use color_format::cwriteln;
+use color_format::{cwriteln, cwrite};
 
 use crate::{
     types::{Primitive, Layout, IntType},
@@ -15,7 +15,7 @@ pub enum Type {
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
     //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
-    Enum(Vec<String>),
+    Enum(Vec<(String, Vec<Type>)>),
     Tuple(Vec<Type>),
     /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
@@ -40,10 +40,14 @@ impl Type {
             }
             Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
-                tuple.iter().fold(Layout::ZERO, |l, ty| l.accumulate(ty.layout(ctx, generics)))
+                let mut l = Layout::EMPTY;
+                for ty in tuple {
+                    l.accumulate(ty.layout(ctx, generics))
+                }
+                l
             }
             Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
-            Type::Invalid => Layout::ZERO,
+            Type::Invalid => Layout::EMPTY,
         }
     }
 
@@ -79,8 +83,18 @@ impl Type {
                 let inner = ty.as_info(types, on_generic);
                 TypeInfo::Array(Some(*count), types.add_info_or_idx(inner))
             }
-            Self::Enum(variants) =>
-                TypeInfo::Enum(types.add_names(variants.as_slice().iter().cloned())),
+            Self::Enum(variants) => {
+                let enum_variants = types.reserve_enum_variants(variants.len());
+                for (i, (name, variant_types)) in variants.iter().enumerate() {
+                    let arg_types = types.add_multiple_unknown(variant_types.len() as u32);
+                    for (i, ty) in variant_types.iter().enumerate() {
+                        let info = ty.as_info(types, on_generic);
+                        types.replace_idx(TypeTableIndex(i as u32), info);
+                    }
+                    types.replace_enum_variant(i, name.clone(), arg_types);
+                }
+                TypeInfo::Enum(enum_variants)
+            }
             Self::Tuple(elems) => {
                 let infos = elems.iter().map(|ty| ty.as_info(types, on_generic)).collect::<Vec<_>>();
                 TypeInfo::Tuple(types.add_multiple_info_or_index(infos), TupleCountMode::Exact)
@@ -351,7 +365,7 @@ pub struct TraitDef {
 #[derive(Debug, Clone)]
 pub struct Enum {
     pub name: String,
-    pub variants: DHashMap<String, u32>,
+    pub variants: DHashMap<String, (u32, Vec<Type>)>,
     pub generic_count: u8,
 }
 impl Enum {
@@ -368,25 +382,36 @@ impl Enum {
     pub fn _layout(&self) -> Layout {
         Self::_layout_from_variant_count(self.variants.len())
     }
-    pub fn int_ty(&self) -> IntType {
+    pub fn int_ty(&self) -> Option<IntType> {
         Self::int_ty_from_variant_count(self.variants.len() as u32)
     }
 
-    pub fn int_ty_from_variant_count(variant_count: u32) -> IntType {
-        match ((variant_count - 1).ilog2() as u64 + 1).div_ceil(8) {
+    pub fn int_ty_from_variant_count(variant_count: u32) -> Option<IntType> {
+        if variant_count < 2 { return None }
+        Some(match ((variant_count - 1).ilog2() as u64 + 1).div_ceil(8) {
             1 => IntType::U8,
             2 => IntType::U16,
             3 | 4 => IntType::U32,
             5..=8 => IntType::U64,
             _ => unreachable!()
-        }
+        })
     }
     
 }
 impl fmt::Display for Enum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (variant, variant_val) in &self.variants {
-            cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
+        for (variant, (variant_val, variant_types)) in &self.variants {
+            if variant_types.is_empty() {
+                cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
+            } else {
+                cwrite!(f, "  #m<{}>", variant)?;
+
+                for ty in variant_types {
+                    write!(f, "TODO: render types here")?;
+                }
+
+                cwriteln!(f, " = #c<{}>", variant_val)?;
+            }
         }
         Ok(())
     }

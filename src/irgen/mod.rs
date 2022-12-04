@@ -419,17 +419,18 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         Expr::BoolLiteral { val, .. } => if *val { Ref::val(RefVal::True) } else { Ref::val(RefVal::False) }
         &Expr::EnumLiteral { ident, .. } => {
             let name = ctx.src_at(ident);
+            // TODO: enums with args
             let (variant, int_ty) = match ir.types.get(ctx[expr]) {
                 TypeInfo::Resolved(id, _generics) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    (def.variants[name], def.int_ty())
+                    (def.variants[name].0, def.int_ty())
                 }
                 TypeInfo::Enum(variants) => {
-                    let variants = ir.types.get_names(variants);
+                    let variants = ir.types.get_enum_variants(variants);
                     let variant = variants
                         .iter()
                         .enumerate()
-                        .find(|(_, s)| s.as_str() == name)
+                        .find(|(_, (s, _))| s.as_str() == name)
                         .unwrap()
                         .0 as u32;
 
@@ -438,9 +439,13 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 }
                 _ => int!()
             };
-            let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
-            ir.build_int(variant as u64, ty)
-
+            if let Some(int_ty) = int_ty {
+                let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
+                ir.build_int(variant as u64, ty)
+            } else {
+                // type only has one variant and is reduced to unit
+                Ref::UNIT
+            }
         }
         Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
@@ -735,9 +740,9 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                             return Res::Val(Ref::UNDEF)
                         }
                         let arg_ty = ctx[*arg];
+                        let arg_ptr_ty = ir.types.add(TypeInfo::Pointer(arg_ty));
 
-
-                        let member_ptr = ir.build_member_int(var, i as u32, arg_ty);
+                        let member_ptr = ir.build_member_int(var, i as u32, arg_ptr_ty);
                         ir.build_store(member_ptr, member_val);
                     }
 
@@ -917,7 +922,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 MemberAccess::Symbol(_) | MemberAccess::Method(_) => Ref::UNDEF,
                 MemberAccess::EnumItem(id, variant) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().into()));
+                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().map_or(Primitive::Unit, Into::into)));
                     ir.build_int(variant as u64, int_ty)
                 }
                 MemberAccess::Invalid => todo!(),
@@ -1016,20 +1021,26 @@ fn gen_pat<IrTypes: IrTypeTable>(
         Expr::EnumLiteral { ident, .. } => {
             let name = ctx.src_at(*ident);
             let ordinal = match ir.types.get(ty) {
-                TypeInfo::Enum(variants) => ir.types.get_names(variants)
+                TypeInfo::Enum(variants) => (variants.count() > 1).then(|| ir.types.get_enum_variants(variants)
                     .iter()
                     .enumerate()
-                    .find(|(_, n)| n.as_str() == name)
+                    .find(|(_, (other_name, _))| other_name.as_str() == name)
                     .unwrap()
-                    .0 as u64,
+                    .0 as u64
+                ),
                 TypeInfo::Resolved(id, _generics) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    *def.variants.get(name).unwrap() as u64
+                    // TODO: enums with args
+                    (def.variants.len() > 1).then(|| def.variants.get(name).unwrap().0 as u64)
                 }
                 _ => int!()
             };
-            let i = ir.build_int(ordinal, ty);
-            ir.build_bin_op(BinOp::Eq, pat_val, i, bool_ty)
+            if let Some(ordinal) = ordinal {
+                let i = ir.build_int(ordinal, ty);
+                ir.build_bin_op(BinOp::Eq, pat_val, i, bool_ty)
+            } else {
+                Ref::val(RefVal::True)
+            }
         }
         Expr::Nested(_, inner) => gen_pat(ir, *inner, pat_val, ty, bool_ty, ctx),
         Expr::Unit(_) => Ref::val(RefVal::True),

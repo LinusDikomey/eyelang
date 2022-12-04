@@ -186,9 +186,19 @@ impl EnumDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("enum {\n");
         let child = c.child();
-        for (_, name) in &self.variants {
+        for (_, name, args) in &self.variants {
             child.begin_line();
             child.write_add(name.as_str());
+            if args.len() > 0 {
+                child.write_add("(");
+                for (i, arg) in args.iter().enumerate() {
+                    if i != 0 {
+                        child.write_add(", ");
+                    }
+                    arg.repr(&child);
+                }
+                child.write_add(")");
+            }
         }
         c.write_start("}");
     }
@@ -255,9 +265,16 @@ impl<C: Representer> Repr<C> for Expr {
             Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) 
                 => c.write_add(c.src(*span)),
             Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
-            Self::EnumLiteral { dot: _, ident } => {
+            Self::EnumLiteral { dot: _, ident, args } => {
                 c.char('.');
                 c.write_add(c.src(*ident));
+                if args.count > 0 {
+                    c.char('(');
+                    for arg in ast[*args].iter().copied() {
+                        ast[arg].repr(c);
+                    }
+                    c.char(')');
+                }
             }
             Self::Record { span: _, names, values } => {
                 c.write_add(".{ ");

@@ -200,8 +200,12 @@ fn resolve_def(
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
-                TypeDef::Struct(s) => ResolvedTypeDef::Struct(struct_def(name.to_owned(), s, scopes, scope, ast, symbols, errors, ir)),
-                TypeDef::Enum(e) => ResolvedTypeDef::Enum(enum_def(name.to_owned(), e, scopes, scope, symbols, errors)),
+                TypeDef::Struct(s) => ResolvedTypeDef::Struct(
+                    struct_def(name.to_owned(), s, scopes, scope, ast, symbols, errors, ir)
+                ),
+                TypeDef::Enum(e) => ResolvedTypeDef::Enum(
+                    enum_def(name.to_owned(), e, scopes, scope, ast, symbols, errors, ir)
+                ),
             };
             symbols.place_type(id, def);
         }
@@ -258,8 +262,16 @@ fn func_signature(
     }
 }
 
-fn struct_def(name: String, def: &ast::StructDefinition, scopes: &mut Scopes, scope: ScopeId, ast: &Ast, symbols: &mut SymbolTable, errors: &mut Errors, ir: &mut irgen::Functions)
--> Struct {    
+fn struct_def(
+    name: String,
+    def: &ast::StructDefinition,
+    scopes: &mut Scopes,
+    scope: ScopeId,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ir: &mut irgen::Functions
+) -> Struct {    
     let names = def.generics.iter().enumerate().map(|(i, name_span)| {
         let name = &ast.src(scopes[scope].module.id).0[name_span.range()];
         (name.to_owned(), UnresolvedDefId::Resolved(DefId::Generic(i as u8)))
@@ -293,12 +305,21 @@ fn struct_def(name: String, def: &ast::StructDefinition, scopes: &mut Scopes, sc
 fn enum_def(
     name: String,
     def: &ast::EnumDefinition,
-    _scopes: &mut Scopes,
-    _scope: ScopeId,
-    _symbols: &SymbolTable,
-    _errors: &mut Errors
+    scopes: &mut Scopes,
+    scope: ScopeId,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ir: &mut irgen::Functions,
 ) -> Enum {
-    let variants = def.variants.iter().enumerate().map(|(i, (_, name))| (name.clone(), i as _)).collect();
+    let variants = def.variants
+        .iter()
+        .enumerate()
+        .map(|(i, (_, name, args))| (
+            name.clone(),
+            (i as _, args.iter().map(|ty| scopes.resolve_ty(scope, ty, errors, symbols, ast, ir)).collect())
+        ))
+        .collect();
     Enum { name, variants, generic_count: def.generic_count() }
 }
 
@@ -402,33 +423,63 @@ impl<'a> Ctx<'a> {
         &self.ast.src(self.scopes[self.scope].module.id).0[span.range()]
     }
 
-    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, name_span: Span) {
+    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, span: Span, args: TypeTableIndices) {
         // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
         let (idx, ty) = self.types.find_optimizing(idx);
         match ty {
-            TypeInfo::Enum(names) => {
-                if !self.types.get_names(names).iter().any(|s| *s == name) {
-                    let new_names = self.types.extend_names(names, std::iter::once(name.to_owned()));
-                    self.types.update_type(idx, TypeInfo::Enum(new_names));
+            TypeInfo::Enum(variants) => {
+                match self.types.get_enum_variants(variants).iter().find(|(other_name, _)| other_name.as_str() == name) {
+                    Some((_, other_args)) => {
+                        if args.len() != other_args.len() {
+                            self.errors.emit_span(Error::MismatchedType {
+                                expected: format!("enum variant with {} args", other_args.len()),
+                                found: format!("enum variang with {} args", args.len())
+                            }, span);
+                            return;
+                        }
+                        for (a, b) in args.iter().zip(other_args.iter()) {
+                            self.merge(a, b, span);
+                        }
+                    }
+                    None => {
+                        let new_variants = self.types.extend_enum_variants(
+                            variants,
+                            std::iter::once((name.to_owned(), args))
+                        );
+                        self.types.update_type(idx, TypeInfo::Enum(new_variants));
+                    }
                 }
             }
             TypeInfo::Resolved(id, _generics) => {
+                // TODO: enum generics
                 if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
-                    if def.variants.get(name).is_none() {
-                        self.errors.emit_span(Error::NonexistantEnumVariant, name_span);
+                    match def.variants.get(name) {
+                        Some((_, other_args)) => {
+                            if args.len() != other_args.len() {
+                                self.errors.emit_span(Error::MismatchedType {
+                                    expected: format!("enum variant with {} args", other_args.len()),
+                                    found: format!("enum variang with {} args", args.len())
+                                }, span);
+                                return;
+                            }
+                            for (arg_idx, ty) in args.iter().zip(other_args) {
+                                self.types.specify_resolved_type(arg_idx, ty, self.errors, span, &self.symbols);
+                            }
+                        }
+                        None => self.errors.emit_span(Error::NonexistantEnumVariant, span),
                     }
                 } else {
                     self.errors.emit_span(Error::MismatchedType {
                         expected: "an enum".to_string(), found: "a non-enum type".to_owned()
-                    }, name_span);
+                    }, span);
                 }
             }
             _ => {
-                let variant = self.types.add_names(std::iter::once(name.to_owned()));
+                let variant = self.types.add_enum_variants(std::iter::once((name.to_owned(), args)));
                 self.specify(
                     idx,
                     TypeInfo::Enum(variant),
-                    name_span,
+                    span,
                 );
             }
         }

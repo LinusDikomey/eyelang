@@ -82,6 +82,7 @@ impl Type {
     pub fn display<'a>(&'a self, info: Info<'a>) -> impl fmt::Display + 'a {
         self.display_fn(|key| &info.types[key.idx()].0)
     }
+    #[must_use]
     pub fn display_fn<'a, F: Fn(TypeId) -> &'a str>(&'a self, type_name: F) -> TypeDisplay<'a, F> {
         TypeDisplay { ty: self, type_name }
     }
@@ -112,7 +113,18 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
                 write!(f, "[{}; {}]", ty.display_fn(*type_name), count)
             }
             Type::Enum(variants) => {
-                write_delimited(f, variants, " | ")?;
+                write_delimited_with(f, variants, |f, (name, arg_types)| {
+                    write!(f, "name")?;
+                    if arg_types.len() > 0 {
+                        write!(f, "(")?;
+                        write_delimited_with(f, arg_types,
+                            |f, ty| write!(f, "{}", ty.display_fn(self.type_name)),
+                            ", "
+                        )?;
+                        write!(f, ")")?;
+                    }
+                    Ok(())
+                }, " | ")?;
                 Ok(())
             }
             Type::Tuple(elems) => {

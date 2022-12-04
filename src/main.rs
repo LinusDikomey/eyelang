@@ -5,6 +5,7 @@
     array_chunks,
     iter_intersperse,
     if_let_guard,
+    is_some_and,
 )]
 #![warn(unused_qualifications)]
 

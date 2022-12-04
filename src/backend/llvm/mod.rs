@@ -1,5 +1,5 @@
 use llvm::{core::*, prelude::*, LLVMRealPredicate::*, LLVMIntPredicate::*, LLVMModule};
-use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef, TypeRefs}}, resolve::{types::{ResolvedTypeDef, Type}, const_val::ConstVal, self}, ast::TypeId};
+use crate::{dmap::{self, DHashMap}, types::Primitive, BackendStats, ir::{self, types::{IrType, IrTypes, TypeRef, TypeRefs}}, resolve::{types::{ResolvedTypeDef, Type, Enum}, const_val::ConstVal, self}, ast::TypeId};
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 pub mod output;
 
@@ -674,8 +674,10 @@ unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeR
     if count < 2 {
         LLVMVoidTypeInContext(ctx)
     } else {
-        let bit_size = (count-1).ilog2() + 1;
-        LLVMIntTypeInContext(ctx, bit_size)
+        llvm_primitive_ty(
+            ctx,
+            Enum::int_ty_from_variant_count(count as _).map_or(Primitive::Unit, |ty| ty.into())
+        )
     }
 }
 

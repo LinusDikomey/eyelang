@@ -113,12 +113,19 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             ctx.specify(info.expected, ty, span.in_mod(ctx.scope().module.id))
         }
         ast::Expr::BoolLiteral { .. } => {
-            ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), ctx.span(expr));
             use_hint = UseHint::Should;
+            
+            ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), ctx.span(expr));
         }
-        ast::Expr::EnumLiteral { ident, .. } => {
+        ast::Expr::EnumLiteral { ident, args, dot: _ } => {
+            use_hint = UseHint::Should;
+
             let name = &ctx.scope().module.src()[ident.range()];
-            ctx.specify_enum_variant(info.expected, name, ident.in_mod(ctx.scope().module.id))
+            let arg_types = ctx.types.add_multiple_unknown(args.count);
+            for (i, arg) in ctx.ast[*args].iter().enumerate() {
+                val_expr(*arg, info.with_expected(arg_types.nth(i)), ctx.reborrow(), false);
+            }
+            ctx.specify_enum_variant(info.expected, name, ident.in_mod(ctx.scope().module.id), arg_types)
         }
         ast::Expr::Record { .. } => todo!("record literals"),
         ast::Expr::Nested(_, inner) => return check_expr(*inner, info, ctx, hole_allowed),
@@ -370,7 +377,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                             ResolvedTypeDef::Enum(def) => {
                                 match def.variants.get(name) {
                                     Some(variant) => break (
-                                        MemberAccess::EnumItem(id, *variant),
+                                        MemberAccess::EnumItem(id, variant.0),
                                             // TODO: generic enums
                                         TypeInfo::Resolved(id, TypeTableIndices::EMPTY).into(),
                                     ),

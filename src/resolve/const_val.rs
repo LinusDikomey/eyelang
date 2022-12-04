@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    type_info::{TypeTable, TypeInfo, TypeTableIndex},
+    type_info::{TypeTable, TypeInfo, TypeTableIndex, TypeTableIndices},
     types::{Type, DefId, SymbolTable},
     scope::{ExprInfo, ScopeId, Scopes},
     Ctx,
@@ -39,7 +39,7 @@ pub enum ConstVal {
     Int(Option<IntType>, i128),
     Float(Option<FloatType>, f64),
     String(Vec<u8>),
-    EnumVariant(String),
+    EnumVariant(String), // TODO: enum variant args
     Bool(bool),
 }
 impl ConstVal {
@@ -50,7 +50,9 @@ impl ConstVal {
             ConstVal::Int(ty, _) => ty.map_or(TypeInfo::Int, |ty| TypeInfo::Primitive(ty.into())),
             ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
-            ConstVal::EnumVariant(name) => TypeInfo::Enum(types.add_names(std::iter::once(name.clone()))),
+            ConstVal::EnumVariant(name) => TypeInfo::Enum(
+                types.add_enum_variants(std::iter::once((name.clone(), TypeTableIndices::EMPTY)))
+            ),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
         }
     }
