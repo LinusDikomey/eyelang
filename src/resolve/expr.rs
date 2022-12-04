@@ -54,7 +54,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
     let mut lval = false;
 
     match &ctx.ast[expr] {
-        ast::Expr::Block { span: _, items, defs } => {
+        ast::Expr::Block { span, items, defs } => {
             let block_scope = ctx.scopes.child_with_defs(ctx.scope, &ctx.ast[*defs], ctx.ast, ctx.symbols, ctx.errors, ctx.ir);
 
             for item in &ctx.ast[*items] {
@@ -63,6 +63,9 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                 if res.should_use() == UseHint::Should {
                     ctx.errors.emit_span(Error::UnusedExpressionValue, ctx.span(*item));
                 }
+            }
+            if !*info.noreturn {
+                ctx.specify(info.expected, TypeInfo::UNIT, span.in_mod(ctx.scope().module.id));
             }
         }
         ast::Expr::Declare { pat, annotated_ty } => {
@@ -89,10 +92,12 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
         }
         ast::Expr::Return { val, .. } => {
             val_expr(*val, info.with_expected(info.ret), ctx, false);
+            info.mark_noreturn();
         }
         ast::Expr::ReturnUnit { .. } => {
             ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Unit), ctx.span(expr));
             ctx.specify(info.ret, TypeInfo::UNIT, ctx.span(expr));
+            info.mark_noreturn();
         }
         ast::Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ctx.scopes[ctx.scope].module.src()[span.range()]);
@@ -202,9 +207,10 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
 
             let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));
             val_expr(*cond, info.with_expected(bool_ty), ctx.reborrow(), false);
-
+            
             let then_ty = ctx.types.add_unknown();
-            val_expr(*then, info.with_expected(then_ty), ctx, true);
+            let mut then_noreturn = *info.noreturn;
+            val_expr(*then, info.with_expected(then_ty).with_noreturn(&mut then_noreturn), ctx, true);
         }
         ast::Expr::IfElse { cond, then, else_, .. } => {
             let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));

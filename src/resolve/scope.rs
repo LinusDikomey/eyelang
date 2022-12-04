@@ -453,7 +453,7 @@ impl<'a> ExprInfo<'a> {
     pub fn mark_noreturn(&mut self) {
         *self.noreturn = true;
     }
-    pub fn with_expected(&mut self, expected: TypeTableIndex) -> ExprInfo {
+    pub fn with_expected(&mut self, expected: TypeTableIndex) -> ExprInfo<'_> {
         ExprInfo { expected, ret: self.ret, noreturn: self.noreturn }
     }
     pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
