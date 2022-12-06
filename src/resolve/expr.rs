@@ -13,7 +13,7 @@ use super::{
     Ident,
     ResolvedCall,
     scope::{ExprInfo, LocalDefId, ScopeId},
-    types::{DefId, TupleCountMode}, MemberAccess, pat
+    types::{DefId, TupleCountMode, Type}, MemberAccess, pat
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -573,6 +573,9 @@ fn call_func(
     }
 
     let ret = sig.return_type.as_info(ctx.types, on_generic);
+    if sig.return_type == Type::Prim(Primitive::Never) {
+        info.mark_noreturn();
+    }
     
     let call_span = ctx.span(call_expr);
     ctx.types.specify_or_merge(info.expected, ret, ctx.errors, call_span, &ctx.symbols);
