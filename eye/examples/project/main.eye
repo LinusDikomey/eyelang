@@ -9,8 +9,8 @@ use folder.file # modules can be used of course
 
 main :: fn {
     p := Point(4, 2)
-    printf("Hello World: %d\n", other.add(p.x, 2))
-    printf("Square Magnitude of Point: %d\n", other.squareMag(p))
+    printf("Hello World: %d\n".ptr, other.add(p.x, 2))
+    printf("Square Magnitude of Point: %d\n".ptr, other.squareMag(p))
     file.function()
 
     # works because function is reexported from mod.eye in folder

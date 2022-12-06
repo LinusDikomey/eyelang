@@ -1,4 +1,6 @@
 use std.c.printf
+use std.string.str
+use std.println
 
 main :: fn {
     arr: [u8; _] = [65, 66, 67, 68, 0]
@@ -12,5 +14,5 @@ main :: fn {
 increment :: fn(x *u8): x^ += 1
 
 print_as_string :: fn(arr [u8; 5]) {
-    printf("%s\n", &arr)
+    println(str.from_cstr(&arr as *i8))
 }

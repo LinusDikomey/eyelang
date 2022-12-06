@@ -1,13 +1,19 @@
+use std.string.str
+use std.print
+use std.println
+
 main :: fn {
-    std.c.printf("%d, %d, %d, %d\n", half(-3), half(0), half(1), half(7))
-    std.c.printf("%s, %s\n", test(7), test(11))
-    std.c.printf("%d\n", while_loop())
+    std.c.printf("%d, %d, %d, %d\n".ptr, half(-3), half(0), half(1), half(7))
+    print(test(7))
+    print(", ")
+    println(test(11))
+    println(std.int_to_str(while_loop()))
     do_nothing()
 }
 
 do_nothing :: fn {
     ret
-    std.c.printf("This should never be printed!\n")
+    std.c.printf("This should never be printed!\n".ptr)
 }
 
 half :: fn(x i32) -> i32 {
@@ -15,7 +21,7 @@ half :: fn(x i32) -> i32 {
     ret x / 2
 }
 
-test :: fn(num i32) -> *i8 {
+test :: fn(num i32) -> str {
     ret if num < 10 {
         ret "Your number is small"
     } else "Your number is at least 10"

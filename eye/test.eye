@@ -1,6 +1,6 @@
 # print and parse are no longer intrinsics so these are added to make the program work
-print :: fn(s *i8, ...) {}
-parse :: fn(s *i8) -> i32: 0
+print :: fn(s std.string.str, ...) {}
+parse :: fn(s std.string.str) -> i32: 0
 
 sayHello :: fn(newline bool): print("Hello", if newline: "\n" else "")
 bye :: fn { print("Bye") }
@@ -47,13 +47,13 @@ main :: fn {
     i := 5
     while i < 10: i = incAndPrint(i)
     incAndPrint :: fn(i i32) -> i32 {
-        std.c.printf("I is %d\n", i)
+        std.c.printf("I is %d\n".ptr, i)
         ret i + 1
     }
 
     {
         obj := PhysicsObject(Vec3(1, 2, 3), Vec3(4, 5, 6))
-        std.c.printf("Physics Object: %d\n", obj.pos.y + obj.rot.z)
+        std.c.printf("Physics Object: %d\n".ptr, obj.pos.y + obj.rot.z)
         PhysicsObject :: struct {
             pos Vec3,
             rot Vec3
@@ -74,7 +74,7 @@ Vec3 :: struct {
 
 addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 printVec3 :: fn(v Vec3) {
-    std.c.printf("Vec3[%d, %d, %d]\n", i32 v.x, i32 v.y, i32 v.z)
+    std.c.printf("Vec3[%d, %d, %d]\n".ptr, i32 v.x, i32 v.y, i32 v.z)
 }
 
 Transform :: struct {

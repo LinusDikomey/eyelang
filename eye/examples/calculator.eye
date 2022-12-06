@@ -1,19 +1,21 @@
+use std.string.str
+
 main :: fn {
     mode := std.input("Enter operation: ")
-    a := std.parse_int(std.input("First number: "))
-    b := std.parse_int(std.input("Second number: "))
-    std.c.printf("Result: %d\n", calc(mode, a, b))
+    a := std.input("First number: ").parse()
+    b := std.input("Second number: ").parse()
+    std.c.printf("Result: %d\n".ptr, calc(mode, a, b))
 }
 
-calc :: fn(mode *i8, a i32, b i32) -> i32 {
-    ret if std.streq(mode, "+"): a + b
-    else if std.streq(mode, "-"): a - b
-    else if std.streq(mode, "*"): a * b
-    else if std.streq(mode, "/"): a / b
-    else if std.streq(mode, "<<"): shl(a, b)
-    else if std.streq(mode, ">>"): shr(a, b)
-    else -1
+calc :: fn(mode str, a i64, b i64) -> i64: match mode {
+    "+": a + b,
+    "-": a - b,
+    "*": a * b,
+    "/": a / b,
+    "<<": shl(a, b),
+    ">>": shr(a, b),
+    _: -1
 }
 
-shl :: fn(x i32, amount i32) -> i32: if amount <= 0: x else shl(x, amount - 1) * 2
-shr :: fn(x i32, amount i32) -> i32: if amount <= 0: x else shr(x, amount - 1) / 2
+shl :: fn(x i64, amount i64) -> i64: if amount <= 0: x else shl(x, amount - 1) * 2
+shr :: fn(x i64, amount i64) -> i64: if amount <= 0: x else shr(x, amount - 1) / 2

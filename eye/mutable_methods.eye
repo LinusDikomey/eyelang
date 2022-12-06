@@ -8,7 +8,7 @@ Vec2 :: struct {
         this^.y += 1
     }
     print :: fn(this Vec2) {
-        std.c.printf("[%d, %d]\n", this.x, this.y)
+        std.c.printf("[%d, %d]\n".ptr, this.x, this.y)
     }
     doubled :: fn(this Vec2) -> Vec2: Vec2(2 * this.x, 2 * this.y)
     doubled_ptr :: fn(this *Vec2) -> Vec2: Vec2(2 * this^.x, 2 * this^.y)

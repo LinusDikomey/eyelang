@@ -30,7 +30,7 @@ main :: fn {
         } # no comma needed after block
         2 {
             x := 1 + 1
-            printf("result of calculation: %d\n")
+            printf("result of calculation: %d\n".ptr)
         }, # comma can still be used
         3 {
             println("bye")

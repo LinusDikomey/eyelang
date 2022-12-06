@@ -261,11 +261,11 @@ impl<'a> Lexer<'a> {
         let mut newlines = 0;
         loop {
             match self.step() {
-                Some('-') if matches!(self.peek(), Some('#')) => {
+                Some('-') if self.peek() == Some('#') => {
                     self.step();
                     break;
                 }
-                Some('#') if matches!(self.peek(), Some('-')) => {
+                Some('#') if self.peek() == Some('-') => {
                     self.step();
                     newlines += self.parse_multiline_comment(errors);
                 }

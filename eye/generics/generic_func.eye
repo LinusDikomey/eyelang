@@ -5,6 +5,6 @@ main :: fn {
     y := id("test")
     z := &x
     w: i64 = z^
-    std.c.printf("%d, %s\n", x, y)
+    std.c.printf("%d, %s\n".ptr, x, y)
 }
 

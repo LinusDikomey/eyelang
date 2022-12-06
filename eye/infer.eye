@@ -1,7 +1,8 @@
+use std.string.str
 # print and parse are no longer intrinsics so these are added to make the program work
-print :: fn(s *i8, ...) {}
-parse :: fn(s *i8) -> i32: 0
-read :: fn(msg *i8) -> *i8: ""
+print :: fn(s str, ...) {}
+parse :: fn(s str) -> i32: 0
+read :: fn(msg str) -> str: ""
 
 main :: fn -> i8 {
     s := "Hello World"
@@ -32,7 +33,7 @@ main :: fn -> i8 {
     {
         s := "Hello"
         x: i32 = 12
-        s = &x as _
+        s.ptr = &x as _
 
         x: _ = 3
         y: _ = 4

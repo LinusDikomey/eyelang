@@ -25,11 +25,11 @@ input :: fn(msg str) -> str {
     ret line
 }
 
-int_to_string :: fn(i i32) -> *i8 {
+int_to_str :: fn(i i32) -> str {
     max_len := 10
     buffer := c.malloc(max_len)
     c.snprintf(buffer, max_len, "%d".ptr, i)
-    ret buffer
+    ret str.from_cstr(buffer)
 }
 
 parse_int :: fn(s *i8) -> i32 {

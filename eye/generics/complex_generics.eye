@@ -15,7 +15,7 @@ main :: fn {
     p1 := Pair(1, "Hello")
     p2 := Pair(1.5, "Bye")
 
-    std.c.printf("%s, %s\n", p1.b, p2.b)
+    std.c.printf("%s, %s\n".ptr, p1.b.ptr, p2.b.ptr)
     swap_second(&p1, &p2)
-    std.c.printf("%s, %s\n", p1.b, p2.b)
+    std.c.printf("%s, %s\n".ptr, p1.b.ptr, p2.b.ptr)
 }

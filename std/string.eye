@@ -49,6 +49,7 @@ str :: struct {
 
     parse :: fn(this str) -> i64 {
         ASCII_ZERO :: 48
+        ASCII_NINE :: ASCII_ZERO + 9
         ASCII_MINUS :: 45
 
         negate := false
@@ -57,7 +58,7 @@ str :: struct {
         while i < this.len {
             b := this.byte(i)
             if b == ASCII_MINUS and x == 0: negate = !negate
-            else if b >= ASCII_ZERO and b <= ASCII_ZERO + 9 {
+            else if b >= ASCII_ZERO and b <= ASCII_NINE {
                 x *= 10
                 x += (b - ASCII_ZERO) as _
             }

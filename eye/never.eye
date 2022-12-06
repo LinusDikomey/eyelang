@@ -1,13 +1,15 @@
 use std.c.printf
 use std.c.exit
 use std.print
+use std.println
+use std.string.str
 
 main :: fn {
     # exit() can coerce into any type because it never returns
     x: i32 = if 1 > 2: exit(5) else 3
     # x := exit(5)
 
-    printf("%d\n", x)
+    println(std.int_to_str(x))
     match_never(3)
 }
 
@@ -25,7 +27,7 @@ if_never :: fn -> f32 {
     ret 3.5
 }
 
-while_never :: fn -> *i8 {
+while_never :: fn -> str {
 
     while false {
         exit(7)
@@ -45,12 +47,12 @@ block_never :: fn -> i16 {
     x = "Also not in the IR"
 }
 
-match_never :: fn(x i64) -> *i8: match i8 x {
+match_never :: fn(x i64) -> str: match i8 x {
     -128..20: "A",
     21: {
         x := 3
         exit(x)
-        printf("not in the IR")
+        print("not in the IR")
     },
     22: "B",
     23..127: "C",
