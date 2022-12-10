@@ -47,6 +47,32 @@ str :: struct {
         ret Split(this, pat)
     }
 
+    lines :: fn(this str) -> List[str] {
+        list := List.new()
+
+        start := 0
+        cur := 0
+
+        while (true) {
+            if cur == this.len {
+                list.push(this.slice(start, cur))
+                ret list
+            }
+            match this.byte(cur) {
+                10 {
+                    list.push(this.slice(start, cur))
+                    cur += 1
+                    if cur < this.len: if this.byte(cur) == 13: cur += 1
+                    start = cur
+                }
+                _ {
+                    cur += 1
+                }
+            }
+        }
+        ret list
+    }
+
     parse :: fn(this str) -> i64 {
         ASCII_ZERO :: 48
         ASCII_NINE :: ASCII_ZERO + 9
@@ -66,6 +92,25 @@ str :: struct {
         }
         ret if negate: -x else x
     }
+
+    trim :: fn(this str) -> str {
+        start := 0
+        b := true
+        while start < this.len and b {
+            if is_whitespace(this.byte(start)):
+                start += 1
+            else b = false
+        }
+
+        end := this.len
+        b = true
+        while end > 0 and b {
+            if is_whitespace(this.byte(end - 1)):
+                end -= 1
+            else b = false
+        }
+        ret this.slice(start, end)
+    }
 }
 
 NEWLINE: i8 : 10
@@ -74,42 +119,6 @@ CARRIAGE_RETURN: i8 : 13
 len :: fn(s *i8) -> u64: root.c.strlen(s) as _
 
 use root.parse_int
-
-lines :: fn(s *i8) -> List[*i8] {
-    substring :: fn(s *i8, start u64, end u64) -> *i8 {
-        substr := malloc(end - start + 1)
-        ptr_add(substr, end - start)^ = 0
-        memcpy(substr, ptr_add(s, start), end - start)
-
-        ret substr
-    }
-
-    list := List.new()
-
-    start := 0
-    cur := 0
-
-    while (true) {
-        match ptr_add(s, cur)^ {
-            0 {
-                list.push(substring(s, start, cur))
-                ret list
-            }
-            10 {
-                list.push(substring(s, start, cur))
-                cur += 1
-                if ptr_add(s, cur)^ == 13: cur += 1
-                start = cur
-            }
-            _ {
-                cur += 1
-            }
-        }
-    }
-
-
-    ret list
-}
 
 Split :: struct {
     string str
@@ -137,4 +146,11 @@ Split :: struct {
         this.string = this.string.slice(this.string.len, this.string.len)
         ret (true, s)
     }
+}
+
+# TODO: unicode whitespace definition (when chars are handled properly)
+is_whitespace :: fn(c u8) -> bool: match c {
+    9..13: true, # \t, \n, \v, \f, \r
+    32: true, # whitespace
+    _: false,
 }
