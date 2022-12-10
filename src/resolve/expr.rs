@@ -494,12 +494,12 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
                                 found: call.args.count,
                             },
                             ctx.span(call_expr)
-                        )
+                        );
                     }
                     let generics = ctx.types.add_multiple_unknown(def.generic_count() as _);
                     
                     
-                    let arg_types = ctx.types.add_multiple_unknown(call.args.count);
+                    let arg_types = ctx.types.add_multiple_unknown(def.members.len() as _);
                     for (i, (_, ty)) in def.members.iter().enumerate() {
                         let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
                         ctx.types.replace_idx(arg_types.nth(i), param_ty);
