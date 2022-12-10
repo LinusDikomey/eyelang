@@ -139,14 +139,8 @@ impl IrType {
                 let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
                 get_type(id).layout(get_type, &generics)
             }
-            IrType::Ptr(_) => Layout { size: 8, alignment: 8 },
-            IrType::Array(elem_ty, size) => {
-                let elem_layout = types[elem_ty].layout(types, get_type);
-                Layout {
-                    size: elem_layout.size * size as u64,
-                    alignment: elem_layout.alignment,
-                }
-            }
+            IrType::Ptr(_) => Layout::PTR,
+            IrType::Array(elem_ty, count) => Layout::array(types[elem_ty].layout(types, get_type), count),
             IrType::Tuple(elems) => {
                 let mut layout = Layout { size: 0, alignment: 1 };
                 for ty in elems.iter() {
@@ -197,7 +191,7 @@ impl TypeRefs {
     pub fn len(self) -> usize {
         self.count as usize
     }
-    pub fn _nth(self, idx: u32) -> TypeRef {
+    pub fn nth(self, idx: u32) -> TypeRef {
         debug_assert!(idx < self.count);
         TypeRef(self.idx + idx)
     }

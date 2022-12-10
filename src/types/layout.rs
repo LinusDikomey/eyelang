@@ -8,6 +8,13 @@ impl Layout {
     pub const EMPTY: Self = Self { size: 0, alignment: 1 };
     pub const PTR: Self = Self { size: 8, alignment: 8 };
 
+    pub fn array(elem: Layout, count: u32) -> Layout {
+        Layout {
+            size: elem.stride() * count as u64,
+            alignment: elem.alignment
+        }
+    }
+
     pub fn align(offset: u64, alignment: u64) -> u64 {
         let misalignment = offset % alignment;
         if misalignment > 0 {
@@ -15,6 +22,9 @@ impl Layout {
         } else {
             offset
         }
+    }
+    pub fn stride(&self) -> u64 {
+        Self::align(self.size, self.alignment)
     }
     pub fn accumulate(&mut self, other: Self) {
         *self = Self {
@@ -37,12 +47,31 @@ mod tests {
 
     use super::*;
 
+    fn layout(items: impl IntoIterator<Item = IntType>) -> Layout {
+        let mut l = Layout::EMPTY;
+        for item in items {
+            l.accumulate(Primitive::from(item).layout());
+        }
+        l
+    }
+
     #[test]
     fn basic() {
-        let mut l = Layout::EMPTY;
-        l.accumulate(Primitive::from(IntType::I16).layout());
-        l.accumulate(Primitive::from(IntType::I32).layout());
+        use IntType as I;
 
-        assert_eq!(l, Layout { size: 8, alignment: 4 });
+        assert_eq!(layout([I::I16, I::I32]), Layout { size: 8, alignment: 4 });
+        assert_eq!(layout([I::I32, I::I16]), Layout { size: 6, alignment: 4 });
+        assert_eq!(layout([I::I32, I::I16, I::I32]), Layout { size: 12, alignment: 4 });
+    }
+
+    #[test]
+    fn nested() {
+        use IntType as I;
+
+        let a = layout([I::I32, I::I16]); // 6, 4
+        let mut b = Layout::EMPTY;
+        b.accumulate(a);
+        b.accumulate(Primitive::I32.layout());
+        assert_eq!(b, Layout { size: 12, alignment: 4 });
     }
 }

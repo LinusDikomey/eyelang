@@ -36,7 +36,7 @@ impl Type {
             Type::Pointer(_) => Layout::PTR,
             Type::Array(b) => {
                 let (ty, size) = &**b;
-                ty.layout(ctx, generics).mul_size(*size as u64)
+                Layout::array(ty.layout(ctx, generics), *size)
             }
             Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
@@ -287,16 +287,11 @@ impl ResolvedTypeDef {
     pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
         match self {
             Self::Struct(struct_) => {
-                let mut alignment = 1;
-                let size = struct_.members.iter()
-                    .map(|(_, ty)| {
-                        let layout = ty.layout(ctx, generics);
-                        alignment = alignment.max(layout.alignment);
-                        layout.size
-                    })
-                    .sum();
-
-                Layout { size, alignment }
+                let mut layout = Layout::EMPTY;
+                for (_, ty) in struct_.members.iter() {
+                    layout.accumulate(ty.layout(ctx, generics));
+                }
+                layout
             }
             Self::Enum(enum_) => {
                 enum_._layout()
