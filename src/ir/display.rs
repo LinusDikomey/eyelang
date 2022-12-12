@@ -211,7 +211,7 @@ impl fmt::Display for TypeDefDisplay<'_> {
 }
 
 impl Instruction {
-    fn display<'a>(&'a self, extra: &'a [u8], types: &'a IrTypes, info: Info<'a>)
+    pub fn display<'a>(&'a self, extra: &'a [u8], types: &'a IrTypes, info: Info<'a>)
     -> InstructionDisplay<'a> {
         InstructionDisplay { inst: self, extra, types, info }
     }

@@ -37,10 +37,10 @@ pub(super) unsafe fn llvm_global_ty(
     module: &ir::Module,
     type_instances: &mut [TypeInstance]
 ) -> LLVMTypeRef {
-    llvm_global_ty_generic(ctx, ty, module, type_instances, &[])
+    llvm_global_ty_instanced(ctx, ty, module, type_instances, &[])
 }
 
-pub(super) unsafe fn llvm_global_ty_generic(
+pub(super) unsafe fn llvm_global_ty_instanced(
     ctx: LLVMContextRef,
     ty: &Type,
     module: &ir::Module,
@@ -63,7 +63,7 @@ pub(super) unsafe fn llvm_global_ty_generic(
             }
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
         }
-        resolve::types::Type::Generic(i) => llvm_global_ty_generic(ctx, &generics[*i as usize], module, instances, generics),
+        resolve::types::Type::Generic(i) => llvm_global_ty_instanced(ctx, &generics[*i as usize], module, instances, generics),
         resolve::types::Type::Invalid => unreachable!(),
     }
 }
@@ -180,9 +180,7 @@ unsafe fn llvm_ty_recursive(
             let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
             get_id_ty(id, &generics, ctx, module, type_instances).0
         }
-        IrType::Ptr(inner) => {
-            LLVMPointerType(llvm_ty_recursive(ctx, module, types, type_instances, types[inner], true, generics), 0)
-        }
+        IrType::Ptr(_) => LLVMPointerTypeInContext(ctx, 0),
         IrType::Array(inner, count) => {
             let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false, generics);
             LLVMArrayType(elem_ty, count)

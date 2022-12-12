@@ -4,6 +4,7 @@ import subprocess
 import time
 from sys import stdout
 
+cargo_test = ['cargo', 'test']
 build = ['cargo', 'build']
 eye_path = './target/debug/eyelang'
 run_cmd = [eye_path, 'run']
@@ -15,8 +16,12 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
-    start_time = time.time()
+    if subprocess.run(cargo_test).returncode != 0:
+        print(f'{RED}Test(s) failed{R}')
+        exit(1)
     
+    start_time = time.time()
+
     total, errors = test_files()
     total2, errors2 = test_readme()
     total += total2
