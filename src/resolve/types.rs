@@ -3,10 +3,18 @@ use color_format::{cwriteln, cwrite};
 
 use crate::{
     types::{Primitive, Layout, IntType},
-    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}
+    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}, ir::types::TypeRef
 };
 
-use super::{const_val::{ConstVal, ConstSymbol}, type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, TypeTableIndex}, Ident, Var, ResolvedCall, MemberAccess, std_builtins::Builtins};
+use super::{
+    const_val::{ConstVal, ConstSymbol},
+    type_info::{TypeInfo, TypeTable, TypeInfoOrIndex},
+    Ident,
+    Var,
+    ResolvedCall,
+    MemberAccess,
+    std_builtins::Builtins
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
@@ -89,7 +97,7 @@ impl Type {
                     let arg_types = types.add_multiple_unknown(variant_types.len() as u32);
                     for (i, ty) in variant_types.iter().enumerate() {
                         let info = ty.as_info(types, on_generic);
-                        types.replace_idx(TypeTableIndex(i as u32), info);
+                        types.replace_idx(TypeRef::new(i as u32), info);
                     }
                     types.replace_enum_variant(i, name.clone(), arg_types);
                 }
@@ -147,7 +155,7 @@ pub struct SymbolTable {
     pub traits: Vec<Option<TraitDef>>,
     pub consts: Vec<ConstVal>,
     pub globals: Vec<Option<(String, Type, Option<ConstVal>)>>,
-    pub expr_types: Vec<TypeTableIndex>,
+    pub expr_types: Vec<TypeRef>,
     pub calls: Vec<Option<ResolvedCall>>,
     pub member_accesses: Vec<MemberAccess>,
 }
@@ -172,7 +180,7 @@ impl SymbolTable {
             traits: (0..trait_count).map(|_| None).collect(),
             consts: Vec::new(),
             globals: vec![None; global_count],
-            expr_types: vec![TypeTableIndex::NONE; expr_count],
+            expr_types: vec![TypeRef::NONE; expr_count],
             calls: vec![None; call_count],
             member_accesses: vec![MemberAccess::Invalid; member_access_count],
         }

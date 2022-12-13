@@ -5,11 +5,11 @@ use crate::{
     ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self, eval::ConstIrTypes}, dmap,
+    irgen, ir::{builder::IrBuilder, Ref, self, eval::{ConstIrTypes, ConstIrType}, types::{TypeRef, IrType, TypeRefs}}, dmap,
 };
 
 use super::{
-    type_info::{TypeTable, TypeInfo, TypeTableIndex, TypeTableIndices},
+    type_info::{TypeTable, TypeInfo},
     types::{Type, DefId, SymbolTable},
     scope::{ExprInfo, ScopeId, Scopes},
     Ctx,
@@ -22,7 +22,7 @@ pub enum ConstItem {
     Symbol(ConstSymbol),
 }
 impl ConstItem {
-    pub fn equal_to(&self, other: &Self, types: &TypeTable) -> bool {
+    pub fn equal_to(&self, other: &Self, types: &ConstIrTypes) -> bool {
         match (self, other) {
             (ConstItem::Val(a), ConstItem::Val(b)) => a.equal_to(b),
             (ConstItem::Symbol(a), ConstItem::Symbol(b)) => a.equal_to(b, types),
@@ -51,7 +51,7 @@ impl ConstVal {
             ConstVal::Float(ty, _) => ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
             ConstVal::String(_) => TypeInfo::Pointer(types.add(TypeInfo::Primitive(Primitive::I8))),
             ConstVal::EnumVariant(name) => TypeInfo::Enum(
-                types.add_enum_variants(std::iter::once((name.clone(), TypeTableIndices::EMPTY)))
+                types.add_enum_variants(std::iter::once((name.clone(), TypeRefs::EMPTY)))
             ),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
         }
@@ -91,19 +91,19 @@ pub enum ConstSymbol {
     TypeValue(Type),
     Trait(TraitId),
     TraitFunc(TraitId, u32),
-    LocalType(TypeTableIndex),
+    LocalType(TypeRef),
     Module(ModuleId),
 }
 impl ConstSymbol {
-    pub fn equal_to(&self, other: &ConstSymbol, types: &TypeTable) -> bool {
+    pub fn equal_to(&self, other: &ConstSymbol, types: &ConstIrTypes) -> bool {
         match (self, other) {
             (Self::Func(l), Self::Func(r)) => l == r,
             (Self::Type(l), Self::Type(r)) => l == r,
             (Self::Trait(l), Self::Trait(r)) => l == r,
             (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
             (Self::LocalType(l), Self::LocalType(r)) => {
-                let TypeInfo::Resolved(_l_id, _l_generics) = types[*l] else { unreachable!() };
-                let TypeInfo::Resolved(_r_id, _r_generics) = types[*r] else { unreachable!() };
+                let ConstIrType::Ty(IrType::Id(_l_id, _l_generics)) = types[*l] else { unreachable!() };
+                let ConstIrType::Ty(IrType::Id(_r_id, _r_generics)) = types[*r] else { unreachable!() };
                 todo!()
             }
             (Self::Module(l), Self::Module(r)) => l == r,
@@ -170,7 +170,8 @@ pub fn eval(
 
     let mut var_refs = vec![Ref::UNDEF; vars.len()];
 
-    let mut builder = IrBuilder::new(types, ConstIrTypes::new());
+    let ir_types = types.finalize_const();
+    let mut builder = IrBuilder::new(ir_types, &types);
     let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
         ast,
         symbols: &symbols,

@@ -3,10 +3,10 @@ use std::ops::Index;
 use crate::{
     ast::{GlobalId, TypeId},
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
-    types::{Primitive, Layout}, resolve::{type_info::{TypeTable, TypeTableIndex, TypeInfo}, types::ResolvedTypeDef}, irgen::CreateReason,
+    types::{Primitive, Layout}, resolve::{type_info::{TypeInfo, TypeTable}, types::{ResolvedTypeDef, Type}}, irgen::CreateReason,
 };
 
-use super::{RefVal, FunctionId, types::TypeRef};
+use super::{RefVal, FunctionId, types::{TypeRef, IrType, TypeRefs}};
 
 pub enum BinOp {
     Add,
@@ -30,25 +30,29 @@ pub enum BinOp {
 pub trait IrTypeTable : Index<TypeRef, Output = Self::Type> {
     const CREATE_REASON: CreateReason;
     type Type;
-    fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type;
-    fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;
+    //fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type;
+    //fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;
+    fn add(&mut self, p: IrType) -> TypeRef;
     fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef;
+    fn from_resolved(&mut self, ty: &Type, generics: TypeRefs) -> IrType;
     fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout;
+    fn get_ir_type(&self, r: TypeRef) -> Option<IrType>;
 }
 
 #[derive(Debug)]
-pub struct IrBuilder<IrTypes: IrTypeTable = super::types::IrTypes> {
+pub struct IrBuilder<'a, IrTypes: IrTypeTable = super::types::IrTypes> {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
     next_block: u32,
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
-    pub types: TypeTable,
-    pub ir_types: IrTypes,
+    //pub types: TypeTable,
+    pub types: IrTypes,
+    pub inferred_types: &'a TypeTable,
 }
-impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
-    pub fn new(types: TypeTable, ir_types: IrTypes) -> Self {
+impl<'a, IrTypes: IrTypeTable> IrBuilder<'a, IrTypes> {
+    pub fn new(ir_types: IrTypes, inferred_types: &'a TypeTable) -> Self {
         Self {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
@@ -61,8 +65,8 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
             next_block: 1,
             blocks: vec![0],
             extra: Vec::new(),
-            types,
-            ir_types,
+            types: ir_types,
+            inferred_types,
         }
     }
 
@@ -85,24 +89,10 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
 
     #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     #[cfg_attr(debug_assertions, track_caller)]
-    fn add(&mut self, data: Data, tag: Tag, ty: TypeTableIndex) -> Ref {
+    fn add(&mut self, data: Data, tag: Tag, ty: impl Into<IdxOrTy>) -> Ref {
         debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
         debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
-        let ty = self.ir_types.add_info(self.types[ty], &self.types);
-        self.add_inst(Instruction {
-            data,
-            tag,
-            ty,
-            used: true
-        })
-    }
-
-    #[must_use = "Use add_unused if the result of this instruction isn't needed."]
-    #[cfg_attr(debug_assertions, track_caller)]
-    fn add_ir_typed(&mut self, data: Data, tag: Tag, ty: TypeRef) -> Ref {
-        debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
-        debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
-
+        let ty = self.ty(ty);
         self.add_inst(Instruction {
             data,
             tag,
@@ -203,7 +193,7 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
             inst: self.inst,
             extra: self.extra,
             blocks: self.blocks,
-            types: self.ir_types,
+            types: self.types,
         }
     }
 
@@ -227,25 +217,25 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add_unused_untyped(Tag::RetUndef, Data { none: () });
     }
 
-    pub fn build_param(&mut self, param_idx: u32, param_ptr_ty: TypeTableIndex) -> Ref {
+    pub fn build_param(&mut self, param_idx: u32, param_ptr_ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { int32: param_idx }, Tag::Param, param_ptr_ty)
     }
 
-    pub fn build_uninit(&mut self, ty: TypeTableIndex) -> Ref {
+    pub fn _build_uninit(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { none: () }, Tag::Uninit, ty)
     }
 
-    pub fn build_int(&mut self, int: u64, int_ty: TypeTableIndex) -> Ref {
-        self.add(Data { int }, Tag::Int, int_ty)
+    pub fn build_int(&mut self, int: u64, ty: impl Into<IdxOrTy>) -> Ref {
+        self.add(Data { int }, Tag::Int, ty)
     }
 
-    pub fn build_large_int(&mut self, int: u128, int_ty: TypeTableIndex) -> Ref {
+    pub fn build_large_int(&mut self, int: u128, int_ty: impl Into<IdxOrTy>) -> Ref {
         debug_assert!(int > u64::MAX as u128, "use build_int if the int is smaller than u64::MAX");
         let extra = self.extra_data(&int.to_le_bytes());
         self.add(Data { extra }, Tag::LargeInt, int_ty)
     }
 
-    pub fn build_float(&mut self, float: f64, float_ty: TypeTableIndex) -> Ref {
+    pub fn build_float(&mut self, float: f64, float_ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { float }, Tag::Float, float_ty)
     }
 
@@ -280,17 +270,20 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add(Data { int32: module.inner() }, Tag::Module, ty)
     }*/
 
-    pub fn build_decl(&mut self, ty: impl Into<TypeTableIdxOrInfo>) -> Ref {
-        let ty_info = match ty.into() {
-            TypeTableIdxOrInfo::Idx(idx) => self.types.get(idx),
-            TypeTableIdxOrInfo::Info(info) => info,
-        };
-        let ty = self.ir_types.add_info(ty_info, &self.types);
-        let ptr_ty = self.ir_types.add_ptr_ty(ty);
-        self.add_ir_typed(Data { ty }, Tag::Decl, ptr_ty)
+    fn ty(&mut self, ty: impl Into<IdxOrTy>) -> TypeRef {
+        match ty.into() {
+            IdxOrTy::Idx(idx) => idx,
+            IdxOrTy::Ty(ty) => self.types.add(ty)
+        }
     }
 
-    pub fn build_load(&mut self, var: Ref, ty: TypeTableIndex) -> Ref {
+    pub fn build_decl(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
+        let ty = self.ty(ty);
+        let ptr_ty = self.types.add_ptr_ty(ty);
+        self.add(Data { ty }, Tag::Decl, ptr_ty)
+    }
+
+    pub fn build_load(&mut self, var: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { un_op: var }, Tag::Load, ty)
     }
 
@@ -298,16 +291,8 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
     }
 
-    pub fn build_string(&mut self, string: &[u8], null_terminate: bool, ty: TypeTableIndex) -> Ref {
-        #[cfg(debug_assertions)]
-        {
-            let TypeInfo::Pointer(pointee_ty) = self.types[ty] else {
-                panic!("'*i8' type expected but found {:?}", self.types[ty])
-            };
-            if !matches!(self.types[pointee_ty], TypeInfo::Primitive(Primitive::I8)) {
-                panic!("'*i8' type expected");
-            }
-        }
+    pub fn build_string(&mut self, string: &[u8], null_terminate: bool, ty: impl Into<IdxOrTy>) -> Ref {
+        let ty = self.ty(ty);
         debug_assert!(string.len() <= u32::MAX as usize, "String is too long");
         let extra = self.extra_data(string);
         if null_terminate {
@@ -316,7 +301,7 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add(Data { extra_len: (extra, string.len() as u32) }, Tag::String, ty)
     }
 
-    pub fn build_call(&mut self, func: FunctionId, params: impl IntoIterator<Item = Ref>, return_ty: TypeTableIndex)
+    pub fn build_call(&mut self, func: FunctionId, params: impl IntoIterator<Item = Ref>, return_ty: impl Into<IdxOrTy>)
     -> Ref {
         let extra = self.extra_data(&func.to_bytes());
         let mut param_count = 0;
@@ -327,20 +312,20 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add(Data { extra_len: (extra, param_count) }, Tag::Call, return_ty)
     }
 
-    pub fn build_neg(&mut self, val: Ref, ty: TypeTableIndex) -> Ref {
+    pub fn build_neg(&mut self, val: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { un_op: val }, Tag::Neg, ty)
     }
 
-    pub fn build_not(&mut self, val: Ref, ty: TypeTableIndex) -> Ref {
+    pub fn build_not(&mut self, val: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { un_op: val }, Tag::Not, ty)
     }
 
-    pub fn build_global(&mut self, global: GlobalId, ptr_ty: TypeTableIndex) -> Ref {
+    pub fn build_global(&mut self, global: GlobalId, ptr_ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { global_symbol: global }, Tag::Global, ptr_ty)
     }
 
     
-    pub fn build_bin_op(&mut self, bin_op: BinOp, l: Ref, r: Ref, ty: TypeTableIndex) -> Ref {
+    pub fn build_bin_op(&mut self, bin_op: BinOp, l: Ref, r: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         let tag = match bin_op {
             BinOp::Add => Tag::Add,
             BinOp::Sub => Tag::Sub,
@@ -377,20 +362,20 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add(Data { bin_op: (l, r) }, tag, ty)
     }
 
-    pub fn build_member(&mut self, var: Ref, member_idx: Ref, ty: TypeTableIndex) -> Ref {
+    pub fn build_member(&mut self, var: Ref, member_idx: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { bin_op: (var, member_idx) }, Tag::Member, ty)
     }
-    pub fn build_member_int(&mut self, var: Ref, idx: u32, ty: TypeTableIndex) -> Ref {
-        let u32_ty = self.types.add(TypeInfo::Primitive(Primitive::U32));
+    pub fn build_member_int(&mut self, var: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
+        let u32_ty = self.types.add(IrType::Primitive(Primitive::U32));
         let idx = self.build_int(idx as u64, u32_ty);
         self.build_member(var, idx, ty)
     }
 
-    pub fn build_value(&mut self, val: Ref, idx: u32, ty: TypeTableIndex) -> Ref {
+    pub fn build_value(&mut self, val: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { ref_int: (val, idx) }, Tag::Value, ty)
     }
 
-    pub fn build_cast(&mut self, val: Ref, target_ty: TypeTableIndex) -> Ref {
+    pub fn build_cast(&mut self, val: Ref, target_ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { un_op: val }, Tag::Cast, target_ty)
     }
 
@@ -404,7 +389,7 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add_unused_untyped(Tag::Branch, Data { ref_int: (cond, branch_extra) });
     }
 
-    pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: TypeTableIndex)
+    pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: impl Into<IdxOrTy>)
     -> Ref {
         let extra = self.extra.len() as u32;
         let mut branch_count = 0;
@@ -416,7 +401,8 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
         self.add(Data { extra_len: (extra, branch_count) }, Tag::Phi, expected)
     }
 
-    pub fn build_asm(&mut self, asm_str: &str, values: impl IntoIterator<Item = Ref>) {
+    /// TODO: proper semantics for asm expressions
+    pub fn _build_asm(&mut self, asm_str: &str, values: impl IntoIterator<Item = Ref>) {
         assert!(asm_str.len() <= u16::MAX as usize, "inline assembly string is too long");
         let extra = self.extra_data(asm_str.as_bytes());
         let mut count = 0;
@@ -429,12 +415,27 @@ impl<IrTypes: IrTypeTable> IrBuilder<IrTypes> {
     }
 }
 
+pub enum IdxOrTy {
+    Idx(TypeRef),
+    Ty(IrType),
+}
+impl From<TypeRef> for IdxOrTy {
+    fn from(value: TypeRef) -> Self {
+        Self::Idx(value)
+    }
+}
+impl From<IrType> for IdxOrTy {
+    fn from(value: IrType) -> Self {
+        Self::Ty(value)
+    }
+}
+
 pub enum TypeTableIdxOrInfo {
-    Idx(TypeTableIndex),
+    Idx(TypeRef),
     Info(TypeInfo),
 }
-impl From<TypeTableIndex> for TypeTableIdxOrInfo {
-    fn from(idx: TypeTableIndex) -> Self { Self::Idx(idx) }
+impl From<TypeRef> for TypeTableIdxOrInfo {
+    fn from(idx: TypeRef) -> Self { Self::Idx(idx) }
 }
 impl From<TypeInfo> for TypeTableIdxOrInfo {
     fn from(info: TypeInfo) -> Self { Self::Info(info) }

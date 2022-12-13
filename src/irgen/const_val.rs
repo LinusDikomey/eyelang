@@ -1,10 +1,10 @@
-use crate::{ir::{builder::{IrBuilder, IrTypeTable}, Ref, RefVal}, resolve::{const_val::ConstVal, type_info::TypeTableIndex}};
+use crate::{ir::{builder::{IrBuilder, IrTypeTable}, Ref, RefVal, types::TypeRef}, resolve::const_val::ConstVal};
 
 use super::Res;
 
 
 
-pub fn build<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, val: &ConstVal, ty: TypeTableIndex) -> Res {
+pub fn build<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, val: &ConstVal, ty: TypeRef)  -> Res {
     match val {
         ConstVal::Invalid => Res::Val(Ref::UNDEF),
         ConstVal::Unit => Res::Val(Ref::UNIT),

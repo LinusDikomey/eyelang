@@ -1,8 +1,8 @@
-use crate::{ast::{ExprRef, Expr, UnOp}, token::{IntLiteral, Operator}, span::TSpan, error::Error, types::Primitive};
+use crate::{ast::{ExprRef, Expr, UnOp, ExprExtra}, token::{IntLiteral, Operator}, span::{TSpan, Span}, error::Error, types::Primitive, dmap, ir::types::TypeRef};
 
-use super::{Ctx, type_info::{TypeInfo, TypeTableIndex}, exhaust::{Exhaustion, self}, Ident, types::TupleCountMode};
+use super::{Ctx, type_info::TypeInfo, exhaust::{Exhaustion, self}, Ident, types::TupleCountMode};
 
-pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exhaustion: &mut Exhaustion) {
+pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion: &mut Exhaustion) {
     ctx.symbols.expr_types[pat_expr.idx()] = expected;
 
     let expr = &ctx.ast[pat_expr];  
@@ -36,20 +36,21 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
         }
         Expr::BoolLiteral { start: _, val } => {
             exhaustion.exhaust_bool(*val);
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), expr.span_in(ctx.ast, ctx.scopes[ctx.scope].module.id));
+            ctx.specify(
+                expected,
+                TypeInfo::Primitive(Primitive::Bool),
+                expr.span_in(ctx.ast, ctx.scopes[ctx.scope].module.id)
+            );
         }
         Expr::EnumLiteral { ident, args, .. } => {
-            let name = &ctx.ast.src(ctx.scopes[ctx.scope].module.id).0[ident.range()];
-
-            let arg_types = ctx.types.add_multiple_unknown(args.count);
-
-            for (arg, ty) in ctx.ast[*args].iter().zip(arg_types.iter()) {
-                let mut variant_exhaustion = Exhaustion::None; // TODO: enum variant data exhaustion
-                pat(*arg, ty, ctx.reborrow(), &mut variant_exhaustion);
-            }
-
-            ctx.specify_enum_variant(expected, name, ident.in_mod(ctx.scopes[ctx.scope].module.id), arg_types);
-            exhaustion.exhaust_enum_variant(name.to_owned());
+            enum_variant_pat(
+                exhaustion,
+                expected,
+                &ctx.ast.src(ctx.scopes[ctx.scope].module.id).0[ident.range()],
+                expr.span_in(ctx.ast, ctx.scope().module.id),
+                ctx.reborrow(),
+                *args
+            );
         }
         Expr::StringLiteral(_) => {
             ctx.specify(expected, ctx.symbols.builtins.str_info(), ctx.span(pat_expr));
@@ -167,4 +168,39 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeTableIndex, mut ctx: Ctx, exh
         }
         
     }
+}
+
+fn enum_variant_pat(exhaustion: &mut Exhaustion, expected: TypeRef, variant: &str, span: Span, mut ctx: Ctx, args: ExprExtra) {
+    let arg_types = ctx.types.add_multiple_unknown(args.count);
+    match exhaustion {
+        Exhaustion::None => {
+            let mut variants = dmap::with_capacity(1);
+            let args = ctx.ast[args].into_iter().zip(arg_types.iter()).map(|(arg, arg_ty)| {
+                let mut variant_exhaustion = Exhaustion::None;
+                pat(*arg, arg_ty, ctx.reborrow(), &mut variant_exhaustion);
+                variant_exhaustion
+            }).collect();
+            variants.insert(variant.to_owned(), args);
+            *exhaustion = Exhaustion::Enum(variants);
+        }
+        Exhaustion::Enum(variants) => if let Some(arg_exhaustions) = variants.get_mut(variant) {
+            for ((&arg, arg_ty), arg_exhaustion) in ctx.ast[args].iter().zip(arg_types.iter()).zip(arg_exhaustions) {
+                pat(arg, arg_ty, ctx.reborrow(), arg_exhaustion)
+            }
+        } else {
+            let args = ctx.ast[args].iter().zip(arg_types.iter()).map(|(&arg, arg_ty)| {
+                let mut variant_exhaustion = Exhaustion::None;
+                pat(arg, arg_ty, ctx.reborrow(), &mut variant_exhaustion);
+                variant_exhaustion
+            }).collect();
+            variants.insert(variant.to_owned(), args);
+        }
+        Exhaustion::Full => {
+            for (&arg, arg_ty) in ctx.ast[args].iter().zip(arg_types.iter()) {
+                pat(arg, arg_ty, ctx.reborrow(), &mut Exhaustion::Full);
+            }
+        }
+        _ => *exhaustion = Exhaustion::Invalid
+    }
+    ctx.specify_enum_variant(expected, variant, span, arg_types);
 }

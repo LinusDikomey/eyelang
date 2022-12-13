@@ -463,7 +463,7 @@ unsafe fn build_func(
                             let member = inst.data.int;
 
                             let generics: Vec<_> = generics.iter()
-                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
+                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
                                 .collect();
                             let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
                             

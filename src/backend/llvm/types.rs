@@ -181,7 +181,7 @@ unsafe fn llvm_ty_recursive(
         IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
         IrType::Id(id, generics) => {
             // PERF: alllocating a Vec here each time
-            let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
+            let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types).unwrap()).collect();
             get_id_ty(id, &generics, ctx, module, type_instances).0
         }
         IrType::Ptr(_) => LLVMPointerTypeInContext(ctx, 0),

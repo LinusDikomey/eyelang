@@ -5,8 +5,8 @@ use crate::{
     resolve::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
         self,
-        type_info::{TypeTableIndex, TypeInfo, TypeTableIndices}, VarId, MemberAccess},
-    ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable}, Ref, RefVal, types::IrTypes},
+        type_info::TypeInfo, VarId, MemberAccess},
+    ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable, IdxOrTy}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
@@ -50,7 +50,7 @@ impl<'a> Ctx<'a> {
     }
 }
 impl<'a> Index<ExprRef> for Ctx<'a> {
-    type Output = TypeTableIndex;
+    type Output = TypeRef;
 
     fn index(&self, index: ExprRef) -> &Self::Output {
         &self.symbols.expr_types[index.idx()]
@@ -259,29 +259,22 @@ fn gen_func(
         }
     };
 
-    // PERF: cloning type table here might be a problem
-    let types = body.types.clone();
-    
-    let mut builder = IrBuilder::new(types, IrTypes::new(Vec::with_capacity(body.types.generics().len())));
-    
     debug_assert_eq!(body.types.generics().len(), generics.len());
-    for ty in generics.iter() {
-        let info = ty.as_info(&mut builder.types, |_| unreachable!()); // TODO: is this really unreachable?
-        let info = match info {
-            resolve::type_info::TypeInfoOrIndex::Type(ty) => ty,
-            resolve::type_info::TypeInfoOrIndex::Idx(idx) => builder.types.get(idx),
-        };
-        let ir_type = builder.ir_types.info_to_ty(info, &builder.types);
-        builder.ir_types.add_generic_instance_ty(ir_type);
+    let mut ir_types = body.types.finalize();
+    
+    for (i, ty) in generics.iter().enumerate() {
+        let ir_ty = ir_types.from_resolved(ty, TypeRefs::EMPTY);
+        ir_types.instantiate_generic(i as u8, ir_ty);
     }
+    let mut builder = IrBuilder::new(ir_types, &body.types);
 
     let mut var_refs = vec![Ref::UNDEF; body.vars.len()];
 
     for (i, (_, param_ty)) in params.iter().enumerate() {
-        let ty = param_ty.as_info(&mut builder.types, |i| body.types.generics().nth(i as usize).into());
-        let ty = builder.types.add_info_or_idx(ty);
-        let ptr_ty = builder.types.add(TypeInfo::Pointer(ty));
-        var_refs[i] = builder.build_param(i as u32, ptr_ty);
+        let types_generics = builder.types.generics();
+        let ty = builder.types.from_resolved(&param_ty.instantiate_generics(generics), types_generics);
+        let ty = builder.types.add(ty);
+        var_refs[i] = builder.build_param(i as u32, IrType::Ptr(ty));
     }
 
     let mut noreturn = false;
@@ -322,7 +315,7 @@ pub enum Res {
     Hole,
 }
 impl Res {
-    pub fn val<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeTableIndex) -> Ref {
+    pub fn val<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeRef) -> Ref {
         match self {
             Res::Val(r) => r,
             Res::Var(r) => ir.build_load(r, ty),
@@ -330,7 +323,7 @@ impl Res {
         }
     }
 
-    pub fn var<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeTableIndex) -> Ref {
+    pub fn var<IrTypes: IrTypeTable>(self, ir: &mut IrBuilder<IrTypes>, ty: TypeRef) -> Ref {
         match self {
             Res::Val(r) => {
                 let var = ir.build_decl(ty);
@@ -368,13 +361,13 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         }
         Expr::Declare { pat, .. } => {
             let ty = ctx[*pat];
-            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
             gen_pat(ir, *pat, Ref::UNDEF, ty, bool_ty, ctx);
             Ref::UNIT
         }
         Expr::DeclareWithVal { pat, val, .. } => {
             let ty = ctx[*pat];
-            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
             let val = val_expr(ir, *val, ctx, noreturn);
             if ! *noreturn {
                 gen_pat(ir, *pat, val, ty, bool_ty, ctx);
@@ -382,8 +375,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             Ref::UNIT
         }
         Expr::Return { val, .. } => {
-            let ir_type = ir.ir_types.add_info(ir.types.get(ctx[*val]), &ir.types);
-            let zero_sized = ir.ir_types.layout(&ir.ir_types[ir_type], |id| ctx.symbols.get_type(id)).size == 0;
+            let zero_sized = ir.types.layout(&ir.types[ctx[*val]], |id| ctx.symbols.get_type(id)).size == 0;
 
             if zero_sized {
                 ir.build_ret_undef();
@@ -418,13 +410,13 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         &Expr::EnumLiteral { ident, .. } => {
             let name = ctx.src_at(ident);
             // TODO: enums with args
-            let (variant, int_ty) = match ir.types.get(ctx[expr]) {
+            let (variant, int_ty) = match ir.inferred_types[ctx[expr]] {
                 TypeInfo::Resolved(id, _generics) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
                     (def.variants[name].0, def.int_ty())
                 }
                 TypeInfo::Enum(variants) => {
-                    let variants = ir.types.get_enum_variants(variants);
+                    let variants = ir.inferred_types.get_enum_variants(variants);
                     let variant = variants
                         .iter()
                         .enumerate()
@@ -438,7 +430,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 _ => int!()
             };
             if let Some(int_ty) = int_ty {
-                let ty = ir.types.add(TypeInfo::Primitive(int_ty.into()));
+                let ty = ir.types.add(IrType::Primitive(int_ty.into()));
                 ir.build_int(variant as u64, ty)
             } else {
                 // type only has one variant and is reduced to unit
@@ -454,9 +446,9 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),
                 resolve::Ident::Global(global_id) => {
                     let ty = &ctx.symbols.get_global(global_id).1;
-                    let ty = ty.as_info(&mut ir.types, |_| int!());
-                    let ty = ir.types.add_info_or_idx(ty);
-                    let ptr_ty = ir.types.add(TypeInfo::Pointer(ty));
+                    let ty = ir.types.from_resolved(ty, TypeRefs::EMPTY);
+                    let ty = ir.types.add(ty);
+                    let ptr_ty = ir.types.add(IrType::Ptr(ty));
                     return Res::Var(ir.build_global(global_id, ptr_ty))
                 }
                 resolve::Ident::Const(const_id) => {
@@ -469,8 +461,8 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         Expr::Hole(_) => return Res::Hole,
         &Expr::Array(_, values) => {
             let array_var = ir.build_decl(ctx[expr]);
-            let TypeInfo::Array(_, member_ty) = ir.types.get(ctx[expr]) else { int!() };
-            let member_ptr_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+            let Some(IrType::Array(member_ty, _)) = ir.types.get_ir_type(ctx[expr]) else { int!() };
+            let member_ptr_ty = ir.types.add(IrType::Ptr(member_ty));
 
             for (i, value) in ctx.ast[values].iter().enumerate() {
                 let val = val_expr(ir, *value, ctx, noreturn);
@@ -486,7 +478,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             for (i, value) in ctx.ast[values].iter().enumerate() {
                 let val = val_expr(ir, *value, ctx, noreturn);
                 if *noreturn { return Res::Val(Ref::UNDEF) }
-                let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[*value]));
+                let member_ptr_ty = ir.types.add(IrType::Ptr(ctx[*value]));
                 let ptr = ir.build_member_int(tuple_var, i as u32, member_ptr_ty);
                 ir.build_store(ptr, val);
             }
@@ -557,7 +549,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
 
             let extra = &ctx.ast[ExprExtra { idx: extra_branches, count: branch_count * 2 }];
             let mut all_noreturn = true;
-            let bool_ty = ir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
 
             let after_block = ir.create_block();
 
@@ -641,11 +633,11 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 resolve::ResolvedCall::Function { func_id, generics } => {
                     let func = ctx.symbols.get_func(*func_id);
 
-                    let this_arg = if let TypeInfo::MethodItem { this_ty, .. } = ir.types.get(ctx[call.called_expr]) {
+                    let this_arg = if let TypeInfo::MethodItem { this_ty, .. } = ir.inferred_types.get(ctx[call.called_expr]) {
                         let mut ptr_count = 0u32;
                         let mut current_ty = this_ty;
                         
-                        while let TypeInfo::Pointer(pointee) = ir.types[current_ty] {
+                        while let Some(IrType::Ptr(pointee)) = ir.types.get_ir_type(current_ty) {
                             current_ty = pointee;
                             ptr_count += 1;
                         }
@@ -673,19 +665,19 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                             }
                             let mut loaded_ty = this_ty;
                             while req_ptr_count < ptr_count {
-                                let TypeInfo::Pointer(pointee) = ir.types[loaded_ty] else { int!() };
+                                let Some(IrType::Ptr(pointee)) = ir.types.get_ir_type(loaded_ty) else { int!() };
                                 loaded_ty = pointee;
                                 val = ir.build_load(val, loaded_ty);
                                 ptr_count -= 1;
                             }
                         } else if req_ptr_count > ptr_count { 
                             let mut current_ref_ty = if val_is_var {
-                                ir.types.add(TypeInfo::Pointer(this_ty))
+                                ir.types.add(IrType::Ptr(this_ty))
                             } else {
                                 this_ty
                             };
                             while req_ptr_count > ptr_count {
-                                current_ref_ty = ir.types.add(TypeInfo::Pointer(current_ref_ty));
+                                current_ref_ty = ir.types.add(IrType::Ptr(current_ref_ty));
                                 let var = ir.build_decl(current_ref_ty);
                                 ir.build_store(var, val);
                                 val = var;
@@ -714,7 +706,15 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     let func_noreturn = func.return_type == Type::Prim(Primitive::Never);
                     let ty = ctx[expr];
                     
-                    let generics = generics.iter().map(|idx| ir.types.get(idx).finalize(&ir.types).instantiate_generics(ctx.function_generics)).collect();
+                    let generics = generics.iter()
+                        .map(|idx| ir.types
+                            .get_ir_type(idx)
+                            .unwrap()
+                            .as_resolved_type(&ir.types)
+                            .unwrap()
+                            .instantiate_generics(ctx.function_generics)
+                        )
+                        .collect();
                     // TODO: proper create reason? Can be a problem if function is first created for comptime but used at runtime
                     let ir_func_id = ctx.functions.get(*func_id, ctx.symbols, generics, CreateReason::Runtime);
                     let call_val = ir.build_call(ir_func_id, args, ty);
@@ -738,7 +738,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                             return Res::Val(Ref::UNDEF)
                         }
                         let arg_ty = ctx[*arg];
-                        let arg_ptr_ty = ir.types.add(TypeInfo::Pointer(arg_ty));
+                        let arg_ptr_ty = ir.types.add(IrType::Ptr(arg_ty));
 
                         let member_ptr = ir.build_member_int(var, i as u32, arg_ptr_ty);
                         ir.build_store(member_ptr, member_val);
@@ -764,7 +764,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     ir.build_not(val, ty)
                 }
                 UnOp::Ref => {
-                    let TypeInfo::Pointer(ty) = ir.types.get(ctx[expr]) else { int!() };
+                    let Some(IrType::Ptr(ty)) = ir.types.get_ir_type(ctx[expr]) else { int!() };
                     let val = gen_expr(ir, val, ctx, noreturn);
                     if *noreturn { return Res::Val(Ref::UNDEF) }
                     match val {
@@ -848,7 +848,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         }
         &Expr::MemberAccess { left, name: _, id } => {
             fn layout_val<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, val: u64) -> Ref {
-                let ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
+                let ty = ir.types.add(IrType::Primitive(Primitive::U64));
                 ir.build_int(val, ty)
             }
             match ctx[id] {
@@ -867,25 +867,23 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     layout_val(ir, layout.alignment)
                 }
                 MemberAccess::LocalSize(idx) => {
-                    let ir_ty = ir.ir_types.info_to_ty(ir.types[idx], &ir.types);
-                    let layout = ir.ir_types.layout(&ir_ty, |id| ctx.symbols.get_type(id));
+                    let layout = ir.types.layout(&ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.size)
                 }
                 MemberAccess::LocalAlign(idx) => {
-                    let ir_ty = ir.ir_types.info_to_ty(ir.types[idx], &ir.types);
-                    let layout = ir.ir_types.layout(&ir_ty, |id| ctx.symbols.get_type(id));
+                    let layout = ir.types.layout(&ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.alignment)
                 }
                 MemberAccess::StructMember(member_idx) => {
-                    let mut member_ty = ir.types.get(ctx[left]);
+                    let mut member_ty = ir.types.get_ir_type(ctx[left]);
                     let mut l_ptr_count = 0u32;
                     let (id, generics) = loop {
                         match member_ty {
-                            TypeInfo::Pointer(pointee) => {
+                            Some(IrType::Ptr(pointee)) => {
                                 l_ptr_count += 1;
-                                member_ty = ir.types.get(pointee);
+                                member_ty = ir.types.get_ir_type(pointee);
                             }
-                            TypeInfo::Resolved(id, generics) => break (id, generics),
+                            Some(IrType::Id(id, generics)) => break (id, generics),
                             _ => int!()
                         }
                     };
@@ -903,24 +901,24 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     if l_ptr_count == 0 {
                         return Res::Val(ir.build_value(left, member_idx, ctx[expr]))
                     }
-                    let mut ptr_ty = ir.types.add(TypeInfo::Resolved(id, generics));
+                    let mut ptr_ty = ir.types.add(IrType::Id(id, generics));
                     for _ in 0..l_ptr_count {
-                        ptr_ty = ir.types.add(TypeInfo::Pointer(ptr_ty));
+                        ptr_ty = ir.types.add(IrType::Ptr(ptr_ty));
                     }
                     while l_ptr_count > 1 {
-                        let TypeInfo::Pointer(loaded_ty) = ir.types.get(ptr_ty) else { unreachable!() };
+                        let Some(IrType::Ptr(loaded_ty)) = ir.types.get_ir_type(ptr_ty) else { unreachable!() };
                         left = ir.build_load(left, loaded_ty);
                         ptr_ty = loaded_ty;
                         l_ptr_count -= 1;
                     }
 
-                    let member_ptr_ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+                    let member_ptr_ty = ir.types.add(IrType::Ptr(ctx[expr]));
                     return Res::Var(ir.build_member_int(left, member_idx, member_ptr_ty));
                 }
                 MemberAccess::Symbol(_) | MemberAccess::Method(_) => Ref::UNDEF,
                 MemberAccess::EnumItem(id, variant) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    let int_ty = ir.types.add(TypeInfo::Primitive(def.int_ty().map_or(Primitive::Unit, Into::into)));
+                    let int_ty = ir.types.add(IrType::Primitive(def.int_ty().map_or(Primitive::Unit, Into::into)));
                     ir.build_int(variant as u64, int_ty)
                 }
                 MemberAccess::Invalid => todo!(),
@@ -934,7 +932,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             let member = val_expr(ir, idx, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
 
-            let ty = ir.types.add(TypeInfo::Pointer(ctx[expr]));
+            let ty = ir.types.add(IrType::Ptr(ctx[expr]));
             return Res::Var(ir.build_member(var, member, ty));
         }
         &Expr::TupleIdx { expr: val, idx, .. } => {
@@ -946,7 +944,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             match res {
                 Res::Val(r) => ir.build_value(r, idx, member_ty),
                 Res::Var(r) => {
-                    let pointer_ty = ir.types.add(TypeInfo::Pointer(member_ty));
+                    let pointer_ty = ir.types.add(IrType::Ptr(member_ty));
                     return Res::Var(ir.build_member_int(r, idx, pointer_ty))
                 }
                 Res::Hole => int!(),
@@ -979,17 +977,17 @@ fn string_literal<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, span: TSpan
         .replace("\\0", "\0")
         .replace("\\\"", "\"");
 
-    let i8_ty = ir.types.add(TypeInfo::Primitive(Primitive::I8));
-    let i8_ptr_ty = ir.types.add(TypeInfo::Pointer(i8_ty));
-    let i8_ptr_ptr_ty = ir.types.add(TypeInfo::Pointer(i8_ptr_ty));
+    let i8_ty = ir.types.add(IrType::Primitive(Primitive::I8));
+    let i8_ptr_ty = ir.types.add(IrType::Ptr(i8_ty));
+    let i8_ptr_ptr_ty = ir.types.add(IrType::Ptr(i8_ptr_ty));
 
-    let u64_ty = ir.types.add(TypeInfo::Primitive(Primitive::U64));
-    let u64_ptr_ty = ir.types.add(TypeInfo::Pointer(u64_ty));
+    let u64_ty = ir.types.add(IrType::Primitive(Primitive::U64));
+    let u64_ptr_ty = ir.types.add(IrType::Ptr(u64_ty));
 
     let ptr = ir.build_string(lit.as_bytes(), true, i8_ptr_ty);
     let len = ir.build_int(lit.len() as u64, u64_ty);
     
-    let str_struct = ir.build_decl(ctx.symbols.builtins.str_info());
+    let str_struct = ir.build_decl(ctx.symbols.builtins.str_ty());
     
     let ptr_ref = ir.build_member_int(str_struct, 0, i8_ptr_ptr_ty);
     ir.build_store(ptr_ref, ptr);
@@ -1003,8 +1001,8 @@ fn gen_pat<IrTypes: IrTypeTable>(
     ir: &mut IrBuilder<IrTypes>,
     pat: ExprRef,
     pat_val: Ref,
-    ty: TypeTableIndex,
-    bool_ty: TypeTableIndex,
+    ty: TypeRef,
+    bool_ty: TypeRef,
     ctx: &mut Ctx
 ) -> Ref {
     match &ctx.ast[pat] {
@@ -1035,10 +1033,10 @@ fn gen_pat<IrTypes: IrTypeTable>(
             };
             ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty)
         }
-        Expr::EnumLiteral { ident, .. } => {
+        Expr::EnumLiteral { ident, args, .. } => {
             let name = ctx.src_at(*ident);
-            let ordinal = match ir.types.get(ty) {
-                TypeInfo::Enum(variants) => (variants.count() > 1).then(|| ir.types.get_enum_variants(variants)
+            let ordinal = match ir.inferred_types[ty] {
+                TypeInfo::Enum(variants) => (variants.count() > 1).then(|| ir.inferred_types.get_enum_variants(variants)
                     .iter()
                     .enumerate()
                     .find(|(_, (other_name, _))| other_name.as_str() == name)
@@ -1061,7 +1059,7 @@ fn gen_pat<IrTypes: IrTypeTable>(
         }
         Expr::StringLiteral(span) => {
             let lit = string_literal(ir, *span, ctx);
-            let str_ty = ir.types.add(TypeInfo::Resolved(ctx.symbols.builtins.str_type, TypeTableIndices::EMPTY));
+            let str_ty = ir.types.add(IrType::Id(ctx.symbols.builtins.str_type, TypeRefs::EMPTY));
             let lit_val = ir.build_load(lit,  str_ty);
             let str_eq = ctx.functions.get(ctx.symbols.builtins.str_eq, ctx.symbols, vec![], IrTypes::CREATE_REASON);
             ir.build_call(str_eq, [pat_val, lit_val], bool_ty)
@@ -1113,7 +1111,7 @@ fn gen_pat<IrTypes: IrTypeTable>(
             ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty)
         }
         Expr::Tuple(_, items) => {
-            let TypeInfo::Tuple(types, _) = ir.types.get(ty) else { int!() };
+            let Some(IrType::Tuple(types)) = ir.types.get_ir_type(ty) else { int!() };
             let mut matches_bool = Ref::val(RefVal::True);
             for (i, (item, item_ty)) in ctx.ast[*items].iter().zip(types.iter()).enumerate() {
                 let item_val = ir.build_value(pat_val, i as u32, item_ty);
@@ -1147,7 +1145,7 @@ fn gen_pat<IrTypes: IrTypeTable>(
     }
 }
 
-fn int_literal<IrTypes: IrTypeTable>(lit: IntLiteral, ty: TypeTableIndex, ir: &mut IrBuilder<IrTypes>) -> Ref {
+fn int_literal<IrTypes: IrTypeTable>(lit: IntLiteral, ty: impl Into<IdxOrTy>, ir: &mut IrBuilder<IrTypes>) -> Ref {
     // TODO: check int type for overflow
     if lit.val <= std::u64::MAX as u128 {
         ir.build_int(lit.val as u64, ty)

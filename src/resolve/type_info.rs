@@ -1,20 +1,28 @@
 use std::{ops::Index, borrow::Cow};
 
-use crate::{resolve::types::{TupleCountMode, ResolvedTypeDef}, error::{Errors, Error}, span::Span, types::Primitive, ast::{TypeId, FunctionId}};
+use crate::{
+    resolve::types::{TupleCountMode, ResolvedTypeDef},
+    error::{Errors, Error},
+    span::Span,
+    types::Primitive,
+    ast::{TypeId, FunctionId},
+    ir::{types::{IrTypes, IrType, TypeRefs, TypeRef},
+    eval::{ConstIrType, ConstIrTypes}
+}};
 
 use super::types::{Type, SymbolTable, DefId, Enum};
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIndex>,
-    enum_variants: Vec<(String, TypeTableIndices)>,
-    generics: TypeTableIndices,
+    enum_variants: Vec<(String, TypeRefs)>,
+    generics: TypeRefs,
 }
 impl TypeTable {
     pub fn new(generic_count: u8) -> Self {
 
         let types = (0..generic_count).map(|i| TypeInfo::Generic(i).into()).collect();
-        let generics = TypeTableIndices { idx: 0, count: generic_count as _ };
+        let generics = TypeRefs { idx: 0, count: generic_count as _ };
         let s = Self {
             types,
             enum_variants: Vec::new(),
@@ -24,13 +32,9 @@ impl TypeTable {
         s
     }
 
-    pub fn generics(&self) -> TypeTableIndices { self.generics }
+    pub fn generics(&self) -> TypeRefs { self.generics }
 
-    pub fn get_generic(&self, i: u8) -> TypeInfo {
-        self.get(self.generics.nth(i as usize))
-    }
-
-    pub fn find(&self, mut idx: TypeTableIndex) -> (TypeTableIndex, TypeInfo) {
+    pub fn find(&self, mut idx: TypeRef) -> (TypeRef, TypeInfo) {
         loop {
             match self.types[idx.idx()] {
                 TypeInfoOrIndex::Type(ty) => return (idx, ty),
@@ -39,7 +43,7 @@ impl TypeTable {
         }
     }
 
-    pub fn find_optimizing(&mut self, mut idx: TypeTableIndex) -> (TypeTableIndex, TypeInfo) {
+    pub fn find_optimizing(&mut self, mut idx: TypeRef) -> (TypeRef, TypeInfo) {
         let initial = idx;
         let mut updated = false;
         let found = loop {
@@ -58,23 +62,23 @@ impl TypeTable {
 
     }
 
-    pub fn get(&self, idx: TypeTableIndex) -> TypeInfo {
+    pub fn get(&self, idx: TypeRef) -> TypeInfo {
         self.find(idx).1
     }
 
-    pub fn update_type(&mut self, idx: TypeTableIndex, ty: TypeInfo) {
+    pub fn update_type(&mut self, idx: TypeRef, ty: TypeInfo) {
         let idx = self.find(idx).0;
         self.types[idx.idx()] = TypeInfoOrIndex::Type(ty);
     }
 
     /// sets the type `ty` points to to `Invalid` and returns `true` if the type wasn't invalid before.
-    pub fn invalidate(&mut self, ty: TypeTableIndex) -> bool {
+    pub fn invalidate(&mut self, ty: TypeRef) -> bool {
         let (idx, prev) = self.find(ty);
         self.types[idx.idx()] = TypeInfo::Invalid.into();
         !matches!(prev, TypeInfo::Invalid)
     }
 
-    fn update_type_and_point(&mut self, idx: TypeTableIndex, info: TypeInfo, b: TypeTableIndex) {
+    fn update_type_and_point(&mut self, idx: TypeRef, info: TypeInfo, b: TypeRef) {
         let idx = self.find(idx).0;
 
         self.types[idx.idx()] = TypeInfoOrIndex::Type(info);
@@ -84,51 +88,51 @@ impl TypeTable {
         }
     }
 
-    pub fn add(&mut self, info: TypeInfo) -> TypeTableIndex {
-        let type_idx = TypeTableIndex(self.types.len() as u32);
+    pub fn add(&mut self, info: TypeInfo) -> TypeRef {
+        let type_idx = TypeRef::new(self.types.len() as u32);
         self.types.push(TypeInfoOrIndex::Type(info));
         self.ty_dbg("Adding", &(info, type_idx));
         type_idx
     }
 
-    pub fn add_info_or_idx(&mut self, ty: TypeInfoOrIndex) -> TypeTableIndex {
+    pub fn add_info_or_idx(&mut self, ty: TypeInfoOrIndex) -> TypeRef {
         match ty {
             TypeInfoOrIndex::Type(info) => self.add(info),
             TypeInfoOrIndex::Idx(idx) => idx,
         }
     }
 
-    pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> TypeTableIndices {
+    pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> TypeRefs {
         let infos = infos.into_iter();
         let idx = self.types.len() as u32;
         self.types.extend(infos.map(TypeInfoOrIndex::Type));
         let count = (self.types.len() - idx as usize) as u32;
-        self.ty_dbg("Adding multiple", TypeTableIndices { idx, count })
+        self.ty_dbg("Adding multiple", TypeRefs { idx, count })
     }
     pub fn add_multiple_info_or_index(
         &mut self,
         types: impl IntoIterator<Item = TypeInfoOrIndex>,
-    ) -> TypeTableIndices {
+    ) -> TypeRefs {
         let idx = self.types.len() as u32;
         self.types.extend(types);
         let count = (self.types.len() - idx as usize) as u32;
         self.ty_dbg(
             "adding multiple (info_or_idx)",
-            TypeTableIndices { idx, count },
+            TypeRefs { idx, count },
         )
     }
 
-    pub fn add_unknown(&mut self) -> TypeTableIndex {
+    pub fn add_unknown(&mut self) -> TypeRef {
         self.add(TypeInfo::Unknown)
     }
 
-    pub fn add_multiple_unknown(&mut self, n: u32) -> TypeTableIndices {
+    pub fn add_multiple_unknown(&mut self, n: u32) -> TypeRefs {
         self.add_multiple((0..n).map(|_| TypeInfo::Unknown))
     }
 
     pub fn specify(
         &mut self,
-        idx: TypeTableIndex,
+        idx: TypeRef,
         other: TypeInfo,
         errors: &mut Errors,
         span: Span,
@@ -152,7 +156,7 @@ impl TypeTable {
     }
     pub fn specify_resolved_type(
         &mut self,
-        idx: TypeTableIndex,
+        idx: TypeRef,
         other: &Type,
         errors: &mut Errors,
         span: Span,
@@ -170,7 +174,7 @@ impl TypeTable {
 
     pub fn specify_or_merge(
         &mut self,
-        idx: TypeTableIndex,
+        idx: TypeRef,
         other: TypeInfoOrIndex,
         errors: &mut Errors,
         span: Span,
@@ -184,8 +188,8 @@ impl TypeTable {
 
     pub fn merge(
         &mut self,
-        a: TypeTableIndex,
-        b: TypeTableIndex,
+        a: TypeRef,
+        b: TypeRef,
         errors: &mut Errors,
         span: Span,
         ctx: &SymbolTable,
@@ -199,7 +203,7 @@ impl TypeTable {
         }
     }
 
-    fn try_merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, ctx: &SymbolTable) -> Result<(), Error> {
+    fn try_merge(&mut self, a: TypeRef, b: TypeRef, ctx: &SymbolTable) -> Result<(), Error> {
         if a.idx() == b.idx() {
             return Ok(());
         }
@@ -238,7 +242,7 @@ impl TypeTable {
         res
     }
 
-    pub fn deref(&self, mut ty: TypeTableIndex) -> TypeTableIndex {
+    pub fn deref(&self, mut ty: TypeRef) -> TypeRef {
         loop {
             ty = match self.get(ty) {
                 TypeInfo::Pointer(pointee) => pointee,
@@ -250,34 +254,34 @@ impl TypeTable {
     /// merges two type table indices while dereferencing pointers automatically to type check auto ref/deref.
     pub fn merge_dereffed(
         &mut self,
-        a: TypeTableIndex, b: TypeTableIndex,
+        a: TypeRef, b: TypeRef,
         errors: &mut Errors, span: Span, ctx: &SymbolTable
     ) {
         self.merge(self.deref(a), self.deref(b), errors, span, ctx)
     }
 
     // not for normal use, just to replace temporaries etc.
-    pub fn replace_idx(&mut self, idx: TypeTableIndex, entry: TypeInfoOrIndex) {
+    pub fn replace_idx(&mut self, idx: TypeRef, entry: TypeInfoOrIndex) {
         self.types[idx.idx()] = entry;
     }
 
     pub fn reserve_enum_variants(&mut self, count: usize) -> EnumVariants {
         let idx = self.enum_variants.len() as u32;
-        self.enum_variants.extend(std::iter::repeat((String::new(), TypeTableIndices::EMPTY)).take(count));
+        self.enum_variants.extend(std::iter::repeat((String::new(), TypeRefs::EMPTY)).take(count));
         EnumVariants { idx, count: count as _ }
     }
-    pub fn replace_enum_variant(&mut self, idx: usize, name: String, args: TypeTableIndices) {
+    pub fn replace_enum_variant(&mut self, idx: usize, name: String, args: TypeRefs) {
         self.enum_variants[idx] = (name, args);
     }
 
-    pub fn add_enum_variants(&mut self, names: impl IntoIterator<Item = (String, TypeTableIndices)>) -> EnumVariants {
+    pub fn add_enum_variants(&mut self, names: impl IntoIterator<Item = (String, TypeRefs)>) -> EnumVariants {
         let idx = self.enum_variants.len() as u32;
         self.enum_variants.extend(names);
         let count = self.enum_variants.len() as u32 - idx;
         EnumVariants { idx, count }
     }
 
-    pub fn get_enum_variants(&self, variants: EnumVariants) -> &[(String, TypeTableIndices)] {
+    pub fn get_enum_variants(&self, variants: EnumVariants) -> &[(String, TypeRefs)] {
         &self.enum_variants[variants.idx as usize .. variants.idx as usize + variants.count as usize]
     }
 
@@ -285,7 +289,7 @@ impl TypeTable {
     pub fn extend_enum_variants(
         &mut self,
         variants: EnumVariants,
-        new_variants: impl IntoIterator<Item = (String, TypeTableIndices)>,
+        new_variants: impl IntoIterator<Item = (String, TypeRefs)>,
     ) -> EnumVariants {
         let prev_len = self.enum_variants.len();
         let insert_at = variants.idx as usize + variants.count as usize;
@@ -294,6 +298,75 @@ impl TypeTable {
             idx: variants.idx,
             count: variants.count + (self.enum_variants.len() - prev_len) as u32,
         }
+    }
+
+    pub fn finalize(&self) -> IrTypes {
+        let mut ir_types = vec![IrType::Primitive(Primitive::Never); self.types.len()];
+        for (i, ty) in self.types.iter().copied().enumerate() {
+            let type_info = match ty {
+                TypeInfoOrIndex::Type(ty) => ty,
+                TypeInfoOrIndex::Idx(idx) => self.get(idx),
+            };
+            ir_types[i] = match type_info {
+                TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
+                TypeInfo::Int => IrType::Primitive(Primitive::I32),
+                TypeInfo::Float => IrType::Primitive(Primitive::F32),
+                TypeInfo::Primitive(p) => IrType::Primitive(p),
+                TypeInfo::Resolved(id, generics) => IrType::Id(id, TypeRefs { idx: generics.idx, count: generics.count }),
+                TypeInfo::Pointer(pointee) => IrType::Ptr(pointee),
+                TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
+                TypeInfo::Enum(variants) => Enum::int_ty_from_variant_count(variants.count).map_or(
+                    IrType::Primitive(Primitive::Unit),
+                    |ty| IrType::Primitive(ty.into())
+                ),
+                TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
+
+                // these types should never be encountered by runtime code (this probably isn't enforced properly)
+                TypeInfo::SymbolItem(_)
+                | TypeInfo::MethodItem { .. }
+                | TypeInfo::LocalTypeItem(_) => IrType::Primitive(Primitive::Never),
+                TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as _)), // this gets replaced with the proper generic types
+                TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
+            };
+        }
+
+        IrTypes::new_with(ir_types, self.generics)
+    }
+    pub fn finalize_const(&self) -> ConstIrTypes {
+        let mut ir_types = vec![ConstIrType::Ty(IrType::Primitive(Primitive::Never)); self.types.len()];
+        for (i, ty) in self.types.iter().copied().enumerate() {
+            let type_info = match ty {
+                TypeInfoOrIndex::Type(ty) => ty,
+                TypeInfoOrIndex::Idx(idx) => self.get(idx),
+            };
+            ir_types[i] = ConstIrType::Ty(match type_info {
+                TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
+                TypeInfo::Int => {
+                    ir_types[i] = ConstIrType::Int;
+                    continue;
+                }
+                TypeInfo::Float => {
+                    ir_types[i] = ConstIrType::Float;
+                    continue;
+                }
+                TypeInfo::Primitive(p) => IrType::Primitive(p),
+                TypeInfo::Resolved(id, generics) => IrType::Id(id, TypeRefs { idx: generics.idx, count: generics.count }),
+                TypeInfo::Pointer(pointee) => IrType::Ptr(pointee),
+                TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
+                TypeInfo::Enum(_) => {
+                    ir_types[i] = ConstIrType::EnumVariant;
+                    continue;
+                }
+                TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
+                TypeInfo::SymbolItem(_)
+                | TypeInfo::MethodItem { .. } => todo!(),
+                | TypeInfo::LocalTypeItem(_) => panic!("comptime type supplied when building ir"),
+                TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as u32)),
+                TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
+            });
+        }
+
+        ConstIrTypes::new(ir_types)
     }
 
     /// Type inference debugging
@@ -334,7 +407,7 @@ impl TypeTable {
                         let elems = match *ty {
                             TypeInfo::Tuple(elems, _) => Some(elems),
                             TypeInfo::Pointer(elem) | TypeInfo::Array(_, elem) => {
-                                Some(TypeTableIndices {
+                                Some(TypeRefs {
                                     idx: elem.0,
                                     count: 1,
                                 })
@@ -366,10 +439,10 @@ impl TypeTable {
         d
     }
 }
-impl Index<TypeTableIndex> for TypeTable {
+impl Index<TypeRef> for TypeTable {
     type Output = TypeInfo;
 
-    fn index(&self, mut index: TypeTableIndex) -> &Self::Output {
+    fn index(&self, mut index: TypeRef) -> &Self::Output {
         loop {
             match &self.types[index.idx()] {
                 TypeInfoOrIndex::Type(ty) => return ty,
@@ -388,45 +461,6 @@ impl Drop for TypeTable {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TypeTableIndex(pub u32);
-impl TypeTableIndex {
-    pub const NONE: Self = Self(u32::MAX);
-    pub fn idx(self) -> usize {
-        self.0 as usize
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TypeTableIndices {
-    idx: u32,
-    count: u32,
-}
-impl TypeTableIndices {
-    pub const EMPTY: Self = Self { idx: 0, count: 0 };
-
-    pub fn iter(self) -> impl Iterator<Item = TypeTableIndex> {
-        (self.idx..self.idx + self.count).map(TypeTableIndex)
-    }
-    pub fn nth(self, index: usize) -> TypeTableIndex {
-        assert!(index < self.count as usize);
-        TypeTableIndex(self.idx + index as u32)
-    }
-    pub fn len(self) -> usize {
-        self.count as usize
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct TypeTableNames {
-    idx: u32,
-    count: u32,
-}
-impl TypeTableNames {
-    pub fn count(self) -> u32 {
-        self.count
-    }
-}
-#[derive(Clone, Copy, Debug)]
 pub struct EnumVariants {
     idx: u32,
     count: u32,
@@ -444,17 +478,17 @@ pub enum TypeInfo {
     Int,
     Float,
     Primitive(Primitive),
-    Resolved(TypeId, TypeTableIndices),
-    Pointer(TypeTableIndex),
-    Array(Option<u32>, TypeTableIndex),
+    Resolved(TypeId, TypeRefs),
+    Pointer(TypeRef),
+    Array(Option<u32>, TypeRef),
     Enum(EnumVariants),
-    Tuple(TypeTableIndices, TupleCountMode),
+    Tuple(TypeRefs, TupleCountMode),
     SymbolItem(DefId),
     MethodItem {
         function: FunctionId,
-        this_ty: TypeTableIndex,
+        this_ty: TypeRef,
     },
-    LocalTypeItem(TypeTableIndex),
+    LocalTypeItem(TypeRef),
     Generic(u8),
     Invalid,
 }
@@ -545,53 +579,6 @@ impl TypeInfo {
             TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
             TypeInfo::LocalTypeItem(idx) => format!("<type {}>", types.get(idx).as_string(types, symbols)).into(),
             TypeInfo::Invalid => "<invalid>".into(),
-        }
-    }
-    
-    pub fn finalize(self, types: &TypeTable) -> Type {
-        match self {
-            Self::Unknown | Self::Invalid => Type::Prim(Primitive::Unit),
-            Self::Int => Type::Prim(Primitive::I32),
-            Self::Float => Type::Prim(Primitive::F32),
-            Self::Primitive(p) => Type::Prim(p),
-            Self::Resolved(id, generics) => {
-                let generic_types = generics
-                    .iter()
-                    .map(|ty| types.get(ty).finalize(types))
-                    .collect();
-                Type::Id(id, generic_types)
-            }
-            Self::Pointer(inner) => Type::Pointer(Box::new(types.get(inner).finalize(types))),
-            Self::Array(size, inner) => {
-                let inner = types.get(inner).finalize(types);
-                size.map_or(Type::Prim(Primitive::Unit), |size| {
-                    Type::Array(Box::new((inner, size)))
-                })
-            }
-            Self::Enum(variants) => Type::Enum(
-                types.get_enum_variants(variants)
-                    .iter()
-                    .map(|(name, variant_types)| (
-                        name.clone(),
-                        variant_types
-                            .iter()
-                            .map(|ty_idx| types[ty_idx].finalize(types))
-                            .collect()
-                    ))
-                    .collect()
-            ),
-            Self::Tuple(inners, _) => Type::Tuple(
-                inners
-                    .iter()
-                    .map(|ty| types.get(ty).finalize(types))
-                    .collect(),
-            ),
-            Self::Generic(i) => match types.get_generic(i) {
-                Self::Generic(_) => Type::Generic(i),
-                other => other.finalize(types),
-            }
-            Self::SymbolItem(_) | Self::MethodItem { .. }
-            | TypeInfo::LocalTypeItem(_) => Type::Invalid,
         }
     }
 }
@@ -828,15 +815,15 @@ fn merge_implicit_enums(a: EnumVariants, b: EnumVariants, types: &mut TypeTable,
 #[derive(Clone, Copy, Debug)]
 pub enum TypeInfoOrIndex {
     Type(TypeInfo),
-    Idx(TypeTableIndex),
+    Idx(TypeRef),
 }
 impl From<TypeInfo> for TypeInfoOrIndex {
     fn from(info: TypeInfo) -> Self {
         Self::Type(info)
     }
 }
-impl From<TypeTableIndex> for TypeInfoOrIndex {
-    fn from(value: TypeTableIndex) -> Self {
+impl From<TypeRef> for TypeInfoOrIndex {
+    fn from(value: TypeRef) -> Self {
         Self::Idx(value)
     }
 }

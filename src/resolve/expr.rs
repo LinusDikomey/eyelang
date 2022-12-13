@@ -4,12 +4,12 @@ use crate::{
     token::{FloatLiteral, IntLiteral, Operator},
     types::Primitive,
     resolve::{exhaust::Exhaustion, types::ResolvedTypeDef},
-    dmap, span::TSpan,
+    dmap, span::TSpan, ir::types::{TypeRefs, TypeRef},
 };
 
 use super::{
     Ctx,
-    type_info::{TypeInfo, TypeInfoOrIndex, TypeTableIndex, TypeTableIndices},
+    type_info::{TypeInfo, TypeInfoOrIndex},
     Ident,
     ResolvedCall,
     scope::{ExprInfo, LocalDefId, ScopeId},
@@ -126,7 +126,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             let name = &ctx.scope().module.src()[ident.range()];
             let arg_types = ctx.types.add_multiple_unknown(args.count);
             for (i, arg) in ctx.ast[*args].iter().enumerate() {
-                val_expr(*arg, info.with_expected(arg_types.nth(i)), ctx.reborrow(), false);
+                val_expr(*arg, info.with_expected(arg_types.nth(i as u32)), ctx.reborrow(), false);
             }
             ctx.specify_enum_variant(info.expected, name, ident.in_mod(ctx.scope().module.id), arg_types)
         }
@@ -334,7 +334,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                                 .enumerate()
                                 .find(|(_, (member_name, _))| member_name == name);
                             if let Some((i, (_, ty))) = member {
-                                let ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
+                                let ty = ty.as_info(ctx.types, |i| generics.nth(i as u32).into());
                                 break (MemberAccess::StructMember(i as _), ty);
                             } else if let Some(id) = s.methods.get(name) {
                                 let ty = TypeInfo::MethodItem { function: *id, this_ty: left_ty };
@@ -385,7 +385,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                                     Some(variant) => break (
                                         MemberAccess::EnumItem(id, variant.0),
                                             // TODO: generic enums
-                                        TypeInfo::Resolved(id, TypeTableIndices::EMPTY).into(),
+                                        TypeInfo::Resolved(id, TypeRefs::EMPTY).into(),
                                     ),
                                     None => {
                                         ctx.errors.emit_span(Error::NonexistantMember, name_span.in_mod(ctx.scope().module.id));
@@ -501,8 +501,8 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
                     
                     let arg_types = ctx.types.add_multiple_unknown(def.members.len() as _);
                     for (i, (_, ty)) in def.members.iter().enumerate() {
-                        let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as usize).into());
-                        ctx.types.replace_idx(arg_types.nth(i), param_ty);
+                        let param_ty = ty.as_info(ctx.types, |i| generics.nth(i as u32).into());
+                        ctx.types.replace_idx(arg_types.nth(i as u32), param_ty);
                         
                     }
                     for (arg, ty) in ctx.ast[call.args].iter().zip(arg_types.iter()) {
@@ -547,7 +547,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
 fn call_func(
     func_id: ast::FunctionId,
     mut ctx: Ctx,
-    this: Option<(TypeTableIndex, TSpan)>,
+    this: Option<(TypeRef, TSpan)>,
     call: &ast::Call,
     call_expr: ExprRef,
     mut info: ExprInfo
@@ -556,7 +556,7 @@ fn call_func(
     let sig = ctx.symbols.get_func(func_id);
 
     let generics = ctx.types.add_multiple_unknown(sig.generic_count() as _);
-    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as usize));
+    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as u32));
 
     let arg_count = call.args.count + this.is_some() as u32;
 

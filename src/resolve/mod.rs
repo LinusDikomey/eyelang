@@ -6,12 +6,12 @@ use crate::{
     parser::IdentId,
     resolve::types::ResolvedFunc,
     types::Primitive,
-    irgen,
+    irgen, ir::types::{TypeRef, TypeRefs},
 };
 
 use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
-    type_info::{TypeTableIndex, TypeTable, TypeInfo, TypeTableIndices, TypeInfoOrIndex},
+    type_info::{TypeTable, TypeInfo, TypeInfoOrIndex},
     scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
     const_val::ConstVal, expr::val_expr, std_builtins::Builtins
 };
@@ -357,7 +357,7 @@ impl VarId {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Var {
-    ty: TypeTableIndex,
+    ty: TypeRef,
 }
 
 struct Ctx<'a> {
@@ -408,13 +408,10 @@ impl<'a> Ctx<'a> {
     fn set_ident(&mut self, id: IdentId, ident: Ident) {
         self.idents[id.idx()] = ident;
     }
-    fn ident(&self, id: IdentId) -> Ident {
-        self.idents[id.idx()]
-    }
-    fn merge(&mut self, a: TypeTableIndex, b: TypeTableIndex, span: Span) {
+    fn merge(&mut self, a: TypeRef, b: TypeRef, span: Span) {
         self.types.merge(a, b, self.errors, span, self.symbols);
     } 
-    fn specify(&mut self, idx: TypeTableIndex, info: TypeInfo, span: Span) {
+    fn specify(&mut self, idx: TypeRef, info: TypeInfo, span: Span) {
         self.types.specify(idx, info, self.errors, span, self.symbols)
     }
     fn span(&self, expr: ExprRef) -> Span {
@@ -428,7 +425,7 @@ impl<'a> Ctx<'a> {
         &self.ast.src(self.scopes[self.scope].module.id).0[span.range()]
     }
 
-    pub fn specify_enum_variant(&mut self, idx: TypeTableIndex, name: &str, span: Span, args: TypeTableIndices) {
+    pub fn specify_enum_variant(&mut self, idx: TypeRef, name: &str, span: Span, args: TypeRefs) {
         // avoid creating enum TypeInfo unnecessarily to avoid allocations and complex comparisons
         let (idx, ty) = self.types.find_optimizing(idx);
         match ty {
@@ -494,8 +491,8 @@ impl<'a> Ctx<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ResolvedCall {
-    Function { func_id: FunctionId, generics: TypeTableIndices },
-    Struct { type_id: TypeId, generics: TypeTableIndices },
+    Function { func_id: FunctionId, generics: TypeRefs },
+    Struct { type_id: TypeId, generics: TypeRefs },
     Invalid,
 }
 
@@ -503,8 +500,8 @@ pub enum ResolvedCall {
 pub enum MemberAccess {
     Size(TypeId),
     Align(TypeId),
-    LocalSize(TypeTableIndex),
-    LocalAlign(TypeTableIndex),
+    LocalSize(TypeRef),
+    LocalAlign(TypeRef),
     StructMember(u32),
     Symbol(DefId),
     Method(FunctionId),
@@ -529,7 +526,7 @@ fn func_body<'a>(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mu
         ctx.scopes[scope].add_generic(name.clone(), ty);
     }
 
-    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as usize));
+    let on_generic = |i| TypeInfoOrIndex::Idx(generics.nth(i as u32));
 
     for (i, (name, ty)) in signature.params.iter().enumerate() {
         let ty = ty.as_info(ctx.types, on_generic);

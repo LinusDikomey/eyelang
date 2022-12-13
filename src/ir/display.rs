@@ -114,7 +114,7 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
             }
             Type::Enum(variants) => {
                 write_delimited_with(f, variants, |f, (name, arg_types)| {
-                    write!(f, "name")?;
+                    write!(f, "{name}")?;
                     if arg_types.len() > 0 {
                         write!(f, "(")?;
                         write_delimited_with(f, arg_types,

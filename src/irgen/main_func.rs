@@ -1,11 +1,19 @@
-use crate::{resolve::{types::Type, type_info::{TypeInfo, TypeTable}}, ir::{Function, builder::IrBuilder, FunctionId, types::IrTypes}, types::{Primitive, IntType}, ast::ModuleId};
+use crate::{
+    resolve::{types::Type, type_info::TypeTable},
+    ir::{Function, builder::{IrBuilder, IrTypeTable},
+    FunctionId,
+    types::{IrTypes, IrType}},
+    types::{Primitive, IntType},
+    ast::ModuleId
+};
 
 
 /// Add hidden function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
 pub fn main_wrapper(eye_main: FunctionId, _module: ModuleId, main_return_ty: Type) -> Function {
-    let mut builder = IrBuilder::new(TypeTable::new(0), IrTypes::new(vec![]));
+    let inferred_types = TypeTable::new(0);
+    let mut builder = IrBuilder::new(IrTypes::new(), &inferred_types);
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {
@@ -15,9 +23,9 @@ pub fn main_wrapper(eye_main: FunctionId, _module: ModuleId, main_return_ty: Typ
     };
 
     let main_ret_ty = builder.types.add(
-        main_return.map_or(TypeInfo::UNIT, |int_ty| TypeInfo::Primitive(int_ty.into()))
+        main_return.map_or(IrType::Primitive(Primitive::Unit), |int_ty| IrType::Primitive(int_ty.into()))
     );
-    let i32_ty = builder.types.add(TypeInfo::Primitive(Primitive::I32));
+    let i32_ty = builder.types.add(IrType::Primitive(Primitive::I32));
 
     let main_val = builder.build_call(eye_main, [], main_ret_ty);
     let exit_code = match main_return {

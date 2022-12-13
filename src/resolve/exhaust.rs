@@ -1,13 +1,11 @@
-use std::collections::HashSet;
-
-use crate::dmap;
+use crate::dmap::DHashMap;
 
 use super::types::{SymbolTable, Type, ResolvedTypeDef};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
 #[derive(Clone, Debug, PartialEq, Eq)]
-// FIXME: exhaustion of tuples is wrong
+// FIXME: exhaustion of tuples/enum arguments is wrong
 pub enum Exhaustion {
     None, // no values exhausted
     Full, // all values exhausted
@@ -20,8 +18,7 @@ pub enum Exhaustion {
         true_: bool,
         false_: bool,
     },
-    // TODO: check argument exhaustion
-    Enum(HashSet<String, dmap::DeterministicState>),
+    Enum(DHashMap<String, Vec<Exhaustion>>),
     Tuple(Vec<Exhaustion>),
     Invalid,
 }
@@ -29,6 +26,10 @@ impl Default for Exhaustion {
     fn default() -> Self { Self::None }
 }
 impl Exhaustion {
+    /// Return value:
+    /// Some(true) means it's exhausted.
+    /// Some(false) means it's not exhausted.
+    /// None means a type is mismatched
     pub fn is_exhausted(&self, ty: Option<&Type>, symbols: &SymbolTable) -> Option<bool> {
         Some(match self {
             Exhaustion::None => false,
@@ -56,15 +57,36 @@ impl Exhaustion {
                 }
             }
             Exhaustion::Enum(exhausted_variants) => {
-                match ty {
-                    Some(Type::Enum(variants)) => variants
-                        .iter()
-                        .all(|(name, _args)| exhausted_variants.contains(name)),
-                    Some(Type::Id(symbol, _generics)) => {
-                        match &symbols.get_type(*symbol) {
-                            ResolvedTypeDef::Enum(enum_def) => {
-                                enum_def.variants.iter().all(|(v, _)| exhausted_variants.contains(v))
+                fn is_enum_exhausted<'a>(
+                    ty: impl Iterator<Item = (&'a str, &'a [Type])>,
+                    generics: &[Type],
+                    exhaust: &DHashMap<String, Vec<Exhaustion>>,
+                    symbols: &SymbolTable
+                ) -> Option<bool> {
+                    for (name, arg_types) in ty {
+                        let Some(args) = exhaust.get(name) else { return Some(false); };
+                        if args.len() != arg_types.len() { return None; }
+                        debug_assert_eq!(args.len(), arg_types.len());
+                        for (arg, arg_ty) in args.iter().zip(arg_types) {
+                            if !arg.is_exhausted(Some(&arg_ty.instantiate_generics(generics)), symbols)? {
+                                return Some(false);
                             }
+
+                        }
+                    }
+                    Some(true)
+                }
+                match ty {
+                    Some(Type::Id(symbol, generics)) => {
+                        match &symbols.get_type(*symbol) {
+                            ResolvedTypeDef::Enum(enum_def) => return is_enum_exhausted(
+                                enum_def.variants
+                                    .iter()
+                                    .map(|(name, (_, arg_types))| (name.as_str(), arg_types.as_slice())),
+                                &generics,
+                                exhausted_variants,
+                                symbols,
+                            ),
                             _ => return None
                         }
                     }
@@ -220,23 +242,6 @@ impl Exhaustion {
                     prev
                 }
             }
-            Self::Full => false,
-            _ => {
-                *self = Self::Invalid;
-                false
-            }
-        }
-    }
-
-    pub fn exhaust_enum_variant(&mut self, variant: String) -> bool {
-        match self {
-            Self::None => {
-                let mut set = HashSet::with_capacity_and_hasher(1, dmap::DeterministicState);
-                set.insert(variant);
-                *self = Self::Enum(set);
-                true
-            }
-            Self::Enum(variants) => variants.insert(variant),
             Self::Full => false,
             _ => {
                 *self = Self::Invalid;

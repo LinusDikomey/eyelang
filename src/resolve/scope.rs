@@ -1,8 +1,8 @@
 use std::ops::{Index, IndexMut};
 
-use crate::{ast::{ModuleId, self, TypeId, ExprRef, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}, parser::Counts, irgen, help::id};
+use crate::{ast::{ModuleId, self, TypeId, ExprRef, Ast}, dmap::{DHashMap, self}, span::{TSpan, Span}, error::{Errors, Error}, parser::Counts, irgen, help::id, ir::types::TypeRef};
 
-use super::{types::{DefId, SymbolTable, Type, TupleCountMode}, type_info::{TypeTableIndex, TypeTable, TypeInfoOrIndex, TypeInfo}, VarId, const_val};
+use super::{types::{DefId, SymbolTable, Type, TupleCountMode}, type_info::{TypeTable, TypeInfoOrIndex, TypeInfo}, VarId, const_val};
 
 #[derive(Clone, Copy)]
 pub struct ModuleCtx {
@@ -64,7 +64,7 @@ impl Scope {
         self.locals.insert(name, LocalDefId::Var(id));
     }
     
-    pub fn add_generic(&mut self, name: String, ty: TypeTableIndex) {
+    pub fn add_generic(&mut self, name: String, ty: TypeRef) {
         self.locals.insert(name, LocalDefId::Type(ty));
     }
 
@@ -445,15 +445,15 @@ impl Scopes {
 }
 
 pub struct ExprInfo<'a> {
-    pub expected: TypeTableIndex,
-    pub ret: TypeTableIndex,
+    pub expected: TypeRef,
+    pub ret: TypeRef,
     pub noreturn: &'a mut bool,
 }
 impl<'a> ExprInfo<'a> {
     pub fn mark_noreturn(&mut self) {
         *self.noreturn = true;
     }
-    pub fn with_expected(&mut self, expected: TypeTableIndex) -> ExprInfo<'_> {
+    pub fn with_expected(&mut self, expected: TypeRef) -> ExprInfo<'_> {
         ExprInfo { expected, ret: self.ret, noreturn: self.noreturn }
     }
     pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
@@ -470,7 +470,7 @@ impl<'a> ExprInfo<'a> {
 pub enum LocalDefId {
     Def(DefId),
     Var(VarId),
-    Type(TypeTableIndex),
+    Type(TypeRef),
 }
 
 /*

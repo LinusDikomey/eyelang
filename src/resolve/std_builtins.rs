@@ -1,6 +1,6 @@
-use crate::ast::{TypeId, ModuleId, FunctionId, Ast, TypeDef};
+use crate::{ast::{TypeId, ModuleId, FunctionId, Ast, TypeDef}, ir::types::{TypeRefs, IrType}};
 
-use super::{scope::{Scopes, ScopeId, UnresolvedDefId}, types::DefId, type_info::{TypeInfo, TypeTableIndices}};
+use super::{scope::{Scopes, ScopeId, UnresolvedDefId}, types::DefId, type_info::TypeInfo};
 
 /// Builtin items that are defined in the std library and are required by many parts of the compiler,
 /// for example because they can be constructed with special syntax (strings).
@@ -35,6 +35,9 @@ impl Builtins {
     }
 
     pub fn str_info(&self) -> TypeInfo {
-        TypeInfo::Resolved(self.str_type, TypeTableIndices::EMPTY)
+        TypeInfo::Resolved(self.str_type, TypeRefs::EMPTY)
+    }
+    pub fn str_ty(&self) -> IrType {
+        IrType::Id(self.str_type, TypeRefs::EMPTY)
     }
 }
