@@ -65,13 +65,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             match ty {
                 ResolvedTypeDef::Struct(def) => {
                     if def.generic_count() != 0 { return TypeInstance::Generic(dmap::new()); }
-                    let mut layout = Layout::EMPTY;
-                    let member_offsets = def.members.iter().map(|(_, member)| {
-                        let offset = layout.size;
-                        layout.accumulate(member.layout(|id| &module.types[id.idx()].1, &[]));
-                        offset as _
-                    }).collect();
-                    TypeInstance::Simple(LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _), member_offsets)
+                    let (ty, offsets) = struct_ty(ctx, def, module, &[]);
+                    TypeInstance::Simple(ty, offsets)
                 }
                 ResolvedTypeDef::Enum(def) => {
                     // TODO: enums with data

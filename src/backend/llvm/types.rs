@@ -5,7 +5,7 @@ use llvm_sys::{
 
 use crate::{
     types::{Primitive, Layout},
-    resolve::{types::{Type, Enum, ResolvedTypeDef}, self},
+    resolve::{types::{Type, Enum, ResolvedTypeDef, Struct}, self},
     ir::{self, types::{IrTypes, TypeRefs, IrType}},
     ast::TypeId
 };
@@ -140,15 +140,7 @@ pub(super) unsafe fn get_id_ty<'a>(
 
                 let (ty, offsets) = match &module.types[id.idx()].1 {
                     ResolvedTypeDef::Struct(def) => {
-                        let mut layout = Layout::EMPTY;
-                        let member_offsets = def.members.iter()
-                            .map(|(_, ty)| {
-                                let offset = layout.size;
-                                layout.accumulate(ty.layout(|id| &module.types[id.idx()].1, generics));
-
-                                offset as _
-                            }).collect::<Vec<_>>();
-                        (LLVMArrayType(LLVMInt8Type(), layout.size as _), member_offsets)
+                        struct_ty(ctx, def, module, generics)
                     }
                     ResolvedTypeDef::Enum(def) => {
                         (int_from_variant_count(ctx, def.variants.len()), vec![])
@@ -161,6 +153,18 @@ pub(super) unsafe fn get_id_ty<'a>(
             }
         }
     }
+}
+
+pub fn struct_ty(ctx: LLVMContextRef, def: &Struct, module: &ir::Module, generics: &[Type]) -> (LLVMTypeRef, Vec<u32>) {
+    let mut layout = Layout::EMPTY;
+    let member_offsets = def.members.iter()
+        .map(|(_, ty)| {
+            let offset = layout.size;
+            layout.accumulate(ty.layout(|id| &module.types[id.idx()].1, generics));
+
+            offset as _
+        }).collect::<Vec<_>>();
+    (unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }, member_offsets)
 }
 
 unsafe fn llvm_ty_recursive(
