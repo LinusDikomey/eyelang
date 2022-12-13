@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{types::{Enum, Type, ResolvedTypeDef}}, irgen::CreateReason};
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{types::{Type, ResolvedTypeDef}}, irgen::CreateReason};
 
 use super::builder::IrTypeTable;
 
@@ -108,9 +108,6 @@ impl IrTypeTable for IrTypes {
                 let elem_ty = self.from_resolved(&b.0, on_generic);
                 IrType::Array(self.add(elem_ty), b.1)
             }
-            Type::Enum(variants) => IrType::Primitive(
-                Enum::int_ty_from_variant_count(variants.len() as _).map_or(Primitive::Unit, Into::into)
-            ),
             Type::Tuple(elems) => {
                 let idx = self.types.len() as u32;
                 self.types.extend((0..elems.len()).map(|_| IrType::Primitive(Primitive::Unit)));

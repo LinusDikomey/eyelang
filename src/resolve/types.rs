@@ -22,8 +22,6 @@ pub enum Type {
     Id(TypeId, Vec<Type>),
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
-    //TODO: takes up 24 bytes and heap allocates, maybe find a more generic solution to store all types.
-    Enum(Vec<(String, Vec<Type>)>),
     Tuple(Vec<Type>),
     /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
@@ -46,7 +44,6 @@ impl Type {
                 let (ty, size) = &**b;
                 Layout::array(ty.layout(ctx, generics), *size)
             }
-            Type::Enum(variants) => Enum::_layout_from_variant_count(variants.len()),
             Type::Tuple(tuple) => {
                 let mut l = Layout::EMPTY;
                 for ty in tuple {
@@ -91,18 +88,6 @@ impl Type {
                 let inner = ty.as_info(types, on_generic);
                 TypeInfo::Array(Some(*count), types.add_info_or_idx(inner))
             }
-            Self::Enum(variants) => {
-                let enum_variants = types.reserve_enum_variants(variants.len());
-                for (i, (name, variant_types)) in variants.iter().enumerate() {
-                    let arg_types = types.add_multiple_unknown(variant_types.len() as u32);
-                    for (i, ty) in variant_types.iter().enumerate() {
-                        let info = ty.as_info(types, on_generic);
-                        types.replace_idx(TypeRef::new(i as u32), info);
-                    }
-                    types.replace_enum_variant(i, name.clone(), arg_types);
-                }
-                TypeInfo::Enum(enum_variants)
-            }
             Self::Tuple(elems) => {
                 let infos = elems.iter().map(|ty| ty.as_info(types, on_generic)).collect::<Vec<_>>();
                 TypeInfo::Tuple(types.add_multiple_info_or_index(infos), TupleCountMode::Exact)
@@ -126,7 +111,6 @@ impl Type {
                 let (inner, count) = &**b;
                 Type::Array(Box::new((inner.instantiate_generics(generics), *count)))
             }
-            Type::Enum(variants) => Type::Enum(variants.clone()),
             Type::Tuple(types) => Type::Tuple(
                 types
                     .iter()

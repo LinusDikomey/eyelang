@@ -112,21 +112,6 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
                 let (ty, count) = &**array;
                 write!(f, "[{}; {}]", ty.display_fn(*type_name), count)
             }
-            Type::Enum(variants) => {
-                write_delimited_with(f, variants, |f, (name, arg_types)| {
-                    write!(f, "{name}")?;
-                    if arg_types.len() > 0 {
-                        write!(f, "(")?;
-                        write_delimited_with(f, arg_types,
-                            |f, ty| write!(f, "{}", ty.display_fn(self.type_name)),
-                            ", "
-                        )?;
-                        write!(f, ")")?;
-                    }
-                    Ok(())
-                }, " | ")?;
-                Ok(())
-            }
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 write_delimited(f, elems.iter().map(|ty| ty.display_fn(*type_name)), ", ")?;

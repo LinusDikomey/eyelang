@@ -55,7 +55,6 @@ pub(super) unsafe fn llvm_global_ty_instanced(
             let (inner, size) = &**inner;
             LLVMArrayType(llvm_global_ty(ctx, inner, module, instances), *size)
         }
-        resolve::types::Type::Enum(variants) => int_from_variant_count(ctx, variants.len()),
         resolve::types::Type::Tuple(elems) => {
             let mut layout = Layout::EMPTY;
             for elem in elems {
