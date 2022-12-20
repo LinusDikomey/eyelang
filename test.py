@@ -54,7 +54,7 @@ def test_files():
 
 def test_readme():
     print(f'{CYAN}Running README tests ...{R}')
-    file = open('README.md')
+    file = open('README.md', encoding="utf8")
     # contents = file.read()
     current_source = ''
     in_code_block = False
@@ -63,7 +63,7 @@ def test_readme():
     for line in file:
         if line.find('```') != -1:
             if in_code_block:
-                temp_code_file = open(tmp_file, 'w')
+                temp_code_file = open(tmp_file, 'w', encoding="utf8")
                 temp_code_file.write(current_source)
                 temp_code_file.close()
                 
@@ -136,18 +136,21 @@ def test(eye_file) -> str:
         print(f'{t}{padding}{CYAN}[SKIP]{R}')
         return SKIP
 
-    with open(expected) as file:
+    with open(expected, encoding="utf8") as file:
         expected_output = file.read()
 
     input = None
     if os.path.exists(no_ext + '.in'):
-        with open(no_ext + '.in') as file:
+        with open(no_ext + '.in', encoding="utf8") as file:
             input = memoryview(bytes(file.read(), 'utf-8'))
 
     out, stderr, exit_code = run(eye_file, input)
     
     padding = ' ' * max(0, 50 - len(eye_file))
     
+    out = out.replace('\r\n', '\n')
+    expected_output = expected_output.replace('\r\n', '\n')
+
     if expected_output == out:
         print(f'{padding}{GREEN}[OK]{R}')
         return OK
