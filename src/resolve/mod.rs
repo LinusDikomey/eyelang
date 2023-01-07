@@ -462,18 +462,18 @@ impl<'a> Ctx<'a> {
                 }
             }
             TypeInfo::Resolved(id, generics) => {
-                // TODO: enum generics
                 if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
                     match def.variants.get(name) {
-                        Some((_id, _, other_args)) => {
-                            if args.len() != other_args.len() {
-                                self.errors.emit_span(Error::MismatchedType {
-                                    expected: format!("enum variant with {} args", other_args.len()),
-                                    found: format!("enum variang with {} args", args.len())
+                        Some((_id, _, arg_types)) => {
+                            if args.len() != arg_types.len() {
+                                self.errors.emit_span(Error::InvalidArgCount {
+                                    expected: arg_types.len() as u32,
+                                    found: args.len() as u32,
+                                    varargs: false,
                                 }, span);
                                 return;
                             }
-                            for (arg_idx, ty) in args.iter().zip(other_args) {
+                            for (arg_idx, ty) in args.iter().zip(arg_types) {
                                 self.types.specify_resolved_type(arg_idx, ty, generics,
                                     self.errors, span, &self.symbols);
                             }

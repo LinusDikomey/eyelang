@@ -77,17 +77,6 @@ pub(super) unsafe fn llvm_ty(
     llvm_ty_recursive(ctx, module, types, type_instances, ty, false, TypeRefs::EMPTY)
 }
 
-pub(super) unsafe fn int_from_variant_count(ctx: LLVMContextRef, count: usize) -> LLVMTypeRef {
-    if count < 2 {
-        LLVMVoidTypeInContext(ctx)
-    } else {
-        llvm_primitive_ty(
-            ctx,
-            Enum::int_ty_from_variant_count(count as _).map_or(Primitive::Unit, |ty| ty.into())
-        )
-    }
-}
-
 pub unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
     use crate::types::Primitive::*;
     match p {

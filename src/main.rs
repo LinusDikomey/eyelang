@@ -176,7 +176,7 @@ pub struct Args {
     )]
     #[cfg_attr(
         not(feature = "llvm-backend"),
-        clap(short, long, arg_enum, default_value_t = Backend::X86)
+        clap(short, long, value_enum, default_value_t = Backend::X86)
     )]
     backend: Backend,
 }

@@ -710,9 +710,10 @@ impl<'a> Parser<'a> {
                 let tok = self.toks.step()?;
                 match_or_unexpected! {tok, self.toks.module,
                     TokenType::Ident = TokenType::Ident => {
-                        let args = self.parse_enum_args(counts)?;
+                        let (args, end) = self.parse_enum_args(counts)?;
                         let args = self.ast.add_extra(&args);
-                        Expr::EnumLiteral { dot: start, ident: tok.span(), args }
+                        let span = TSpan::new(start, end.unwrap_or(tok.end));
+                        Expr::EnumLiteral { span, ident: tok.span(), args }
                     },
                     TokenType::LBrace = TokenType::LBrace => {
                         self.parse_record(tok, counts)?
@@ -998,16 +999,18 @@ impl<'a> Parser<'a> {
             .transpose()
     }
 
-    fn parse_enum_args(&mut self, counts: &mut Counts) -> EyeResult<Vec<ExprRef>> {
+    /// parses optional arguments of an enum and returns them and the end position if arguments are
+    /// present.
+    fn parse_enum_args(&mut self, counts: &mut Counts) -> EyeResult<(Vec<ExprRef>, Option<u32>)> {
         let mut args = vec![];
-        if self.toks.peek().is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line) {
+        let end = self.toks.peek().is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line).then(|| {
             self.toks.step_assert(TokenType::LParen);
             self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
                 args.push(p.parse_expr(counts)?);
                 Ok(Delimit::OptionalIfNewLine)
-            })?;
-        }
+            }).map(|end_tok| end_tok.end)
+        }).transpose()?;
 
-        Ok(args)
+        Ok((args, end))
     }
 }

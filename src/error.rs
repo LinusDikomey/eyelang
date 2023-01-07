@@ -304,9 +304,10 @@ impl Error {
                 cformat!("expected value of type #m<{}> but found #m<{}>", expected, found)
             }
             &Error::InvalidArgCount { expected, varargs, found } => {
-                cformat!("expected #g<{}{}> arguments but #r<{}> were found",
+                cformat!("expected #g<{}{}> argument{} but #r<{}> were found",
                     if varargs { "at least" } else { "" },
                     expected,
+                    if expected == 1 { "" } else { "" },
                     found
                 )
             }

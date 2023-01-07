@@ -286,7 +286,7 @@ impl ResolvedTypeDef {
                 layout
             }
             Self::Enum(enum_) => {
-                enum_._layout()
+                enum_.layout(ctx, generics)
             }
         }
     }
@@ -342,11 +342,6 @@ impl Struct {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum StructMemberSymbol {
-    Func(FunctionId),
-}
-
 #[derive(Debug, Clone)]
 pub struct TraitDef {
     pub functions: DHashMap<String, (u32, FunctionHeader)>
@@ -359,18 +354,17 @@ pub struct Enum {
     pub generic_count: u8,
 }
 impl Enum {
-    pub fn _layout_from_variant_count(count: usize) -> Layout {
-        let size = ((count as u64 - 1).ilog2() as u64 + 1).div_ceil(8);
-        let alignment = match size {
-            0 | 1 => 1,
-            2 => 2,
-            3..=4 => 4,
-            5.. => 8,
-        };
-        Layout { size, alignment }
-    }
-    pub fn _layout(&self) -> Layout {
-        Self::_layout_from_variant_count(self.variants.len())
+    pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
+        let mut layout = Self::int_ty_from_variant_count(self.variants.len() as u32)
+            .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+        for (_, _, args) in self.variants.values() {
+            let mut variant_layout = layout;
+            for arg in args {
+                variant_layout.accumulate(arg.layout(ctx, generics));
+            }
+            layout.add_variant(variant_layout);
+        }
+        layout
     }
     pub fn int_ty(&self) -> Option<IntType> {
         Self::int_ty_from_variant_count(self.variants.len() as u32)

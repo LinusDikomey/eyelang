@@ -779,14 +779,19 @@ fn merge_implicit_and_explicit_enum(def: &Enum, generics: TypeRefs, variants: En
 
         for (a, b) in arg_types.iter().zip(def_arg_types) {
             let (a_idx, a_ty) = types.find(a);
-            let b_ty = match b.as_info(types, |i| generics.nth(i as u32).into()) {
-                TypeInfoOrIndex::Type(ty) => ty,
-                TypeInfoOrIndex::Idx(idx) => types.find(idx).1,
-            };
+            let (b_ty, b_idx) = dbg!(match b.as_info(types, |i| generics.nth(i as u32).into()) {
+                TypeInfoOrIndex::Type(ty) => (ty, None),
+                TypeInfoOrIndex::Idx(idx) => (types.find(idx).1, Some(idx)),
+            });
 
             match merge_infos(a_ty, b_ty, types, symbols) {
                 Some(new_ty) => {
                     types.replace_idx(a_idx, new_ty.into());
+                    if let Some(b_idx) = b_idx {
+                        if b_idx.idx() != a_idx.idx() {
+                            types.replace_idx(b_idx, a_idx.into());
+                        }
+                    }
                 }
                 None => return false
             }

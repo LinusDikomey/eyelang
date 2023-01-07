@@ -165,6 +165,7 @@ impl IrType {
         match self {
             IrType::Primitive(p) => p.layout(),
             IrType::Id(id, generics) => {
+                // PERF: heap allocation + recalculation of enum layout
                 let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types).unwrap()).collect();
                 get_type(id).layout(get_type, &generics)
             }

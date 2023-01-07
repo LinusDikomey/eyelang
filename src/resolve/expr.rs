@@ -120,7 +120,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             
             ctx.specify(info.expected, TypeInfo::Primitive(Primitive::Bool), ctx.span(expr));
         }
-        ast::Expr::EnumLiteral { ident, args, dot: _ } => {
+        ast::Expr::EnumLiteral { ident, args, span: _ } => {
             use_hint = UseHint::Should;
 
             let name = &ctx.scope().module.src()[ident.range()];
@@ -128,7 +128,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             for (i, arg) in ctx.ast[*args].iter().enumerate() {
                 val_expr(*arg, info.with_expected(arg_types.nth(i as u32)), ctx.reborrow(), false);
             }
-            ctx.specify_enum_variant(info.expected, name, ident.in_mod(ctx.scope().module.id), arg_types)
+            ctx.specify_enum_variant(info.expected, name, ctx.span(expr), arg_types)
         }
         ast::Expr::Record { .. } => todo!("record literals"),
         ast::Expr::Nested(_, inner) => return check_expr(*inner, info, ctx, hole_allowed),
