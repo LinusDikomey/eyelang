@@ -277,12 +277,7 @@ fn struct_def(
     errors: &mut Errors,
     ir: &mut irgen::Functions
 ) -> Struct {    
-    let names = def.generics.iter().enumerate().map(|(i, name_span)| {
-        let name = &ast.src(scopes[scope].module.id).0[name_span.range()];
-        (name.to_owned(), UnresolvedDefId::Resolved(DefId::Generic(i as u8)))
-    }).collect();
-
-    let scope = scopes.child(scope, names, dmap::new(), false);
+    let scope = generic_scope(&def.generics, scopes, scope, ast);
     
     let members = def.members.iter().map(|(name, ty, _, _)| {
         (name.clone(), scopes.resolve_ty(scope, ty, errors, symbols, ast, ir))
@@ -307,6 +302,15 @@ fn struct_def(
     }
 }
 
+fn generic_scope(generics: &[TSpan], scopes: &mut Scopes, scope: ScopeId, ast: &Ast) -> ScopeId {
+    let names = generics.iter().enumerate().map(|(i, name_span)| {
+        let name = &ast.src(scopes[scope].module.id).0[name_span.range()];
+        (name.to_owned(), UnresolvedDefId::Resolved(DefId::Generic(i as u8)))
+    }).collect();
+
+    scopes.child(scope, names, dmap::new(), false)
+}
+
 fn enum_def(
     name: String,
     def: &ast::EnumDefinition,
@@ -317,6 +321,7 @@ fn enum_def(
     errors: &mut Errors,
     ir: &mut irgen::Functions,
 ) -> Enum {
+    let scope = generic_scope(&def.generics, scopes, scope, ast);
     let variants = def.variants
         .iter()
         .enumerate()
@@ -456,7 +461,7 @@ impl<'a> Ctx<'a> {
                     }
                 }
             }
-            TypeInfo::Resolved(id, _generics) => {
+            TypeInfo::Resolved(id, generics) => {
                 // TODO: enum generics
                 if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
                     match def.variants.get(name) {
@@ -469,7 +474,8 @@ impl<'a> Ctx<'a> {
                                 return;
                             }
                             for (arg_idx, ty) in args.iter().zip(other_args) {
-                                self.types.specify_resolved_type(arg_idx, ty, self.errors, span, &self.symbols);
+                                self.types.specify_resolved_type(arg_idx, ty, generics,
+                                    self.errors, span, &self.symbols);
                             }
                         }
                         None => self.errors.emit_span(Error::NonexistantEnumVariant, span),

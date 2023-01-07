@@ -71,7 +71,8 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                 ResolvedTypeDef::Enum(def) => {
                     // TODO: enums with data
                     if def.generic_count == 0 {
-                        TypeInstance::SimpleEnum(int_from_variant_count(ctx, def.variants.len()), vec![])
+                        let (ty, offsets) = enum_ty(ctx, def, module, &[]);
+                        TypeInstance::SimpleEnum(ty, offsets)
                     } else {
                         TypeInstance::GenericEnum(dmap::new())
                     }

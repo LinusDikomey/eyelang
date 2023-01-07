@@ -158,13 +158,14 @@ impl TypeTable {
         &mut self,
         idx: TypeRef,
         other: &Type,
+        type_generics: TypeRefs,
         errors: &mut Errors,
         span: Span,
         symbols: &SymbolTable,
     ) {
         // PERF: this function converts Type to TypeInfo for now but making an explicit implementation for type
         // will save performance and won't add unnecessary entries to the type table.
-        let other_info = match other.as_info(self, |_| unreachable!()) {
+        let other_info = match other.as_info(self, |i| type_generics.nth(i as u32).into()) {
             TypeInfoOrIndex::Type(ty) => ty,
             TypeInfoOrIndex::Idx(idx) => self.find(idx).1,
         };
@@ -643,7 +644,7 @@ fn merge_infos(
             }
         } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
             if let Enum(variants) = other {
-                merge_implicit_and_explicit_enum(def, variants, types, symbols)
+                merge_implicit_and_explicit_enum(def, generics, variants, types, symbols)
             } else {
                 false
             }
@@ -686,9 +687,9 @@ fn merge_infos(
                 Enum(other_variants) => {
                     merge_implicit_enums(variants, other_variants, types, symbols)
                 }
-                Resolved(id, _generics) => {
+                Resolved(id, generics) => {
                     let ResolvedTypeDef::Enum(def) = symbols.get_type(id) else { return None };
-                    merge_implicit_and_explicit_enum(def, variants, types, symbols).then_some(other)
+                    merge_implicit_and_explicit_enum(def, generics, variants, types, symbols).then_some(other)
                 }
                 _ => None
             }
@@ -767,7 +768,8 @@ fn merge_infos(
     }
 }
 
-fn merge_implicit_and_explicit_enum(def: &Enum, variants: EnumVariants, types: &mut TypeTable, symbols: &SymbolTable)
+fn merge_implicit_and_explicit_enum(def: &Enum, generics: TypeRefs, variants: EnumVariants,
+    types: &mut TypeTable, symbols: &SymbolTable)
 -> bool {
     for i in variants.idx .. variants.idx + variants.count {
         let (name, arg_types) = &types.enum_variants[i as usize];
@@ -777,7 +779,7 @@ fn merge_implicit_and_explicit_enum(def: &Enum, variants: EnumVariants, types: &
 
         for (a, b) in arg_types.iter().zip(def_arg_types) {
             let (a_idx, a_ty) = types.find(a);
-            let b_ty = match b.as_info(types, |_| unreachable!()) {
+            let b_ty = match b.as_info(types, |i| generics.nth(i as u32).into()) {
                 TypeInfoOrIndex::Type(ty) => ty,
                 TypeInfoOrIndex::Idx(idx) => types.find(idx).1,
             };
