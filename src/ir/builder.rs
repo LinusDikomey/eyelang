@@ -1,7 +1,7 @@
 use std::ops::Index;
 
 use crate::{
-    ast::{GlobalId, TypeId},
+    ast::{GlobalId, TypeId, VariantId},
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
     types::{Primitive, Layout}, resolve::{type_info::{TypeInfo, TypeTable}, types::{ResolvedTypeDef, Type}}, irgen::CreateReason,
 };
@@ -34,6 +34,8 @@ pub trait IrTypeTable : Index<TypeRef, Output = Self::Type> {
     //fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;
     fn add(&mut self, p: IrType) -> TypeRef;
     fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef;
+    fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs;
+    fn replace(&mut self, idx: TypeRef, ty: IrType);
     fn from_resolved(&mut self, ty: &Type, generics: TypeRefs) -> IrType;
     fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout;
     fn get_ir_type(&self, r: TypeRef) -> Option<IrType>;
@@ -195,12 +197,6 @@ impl<'a, IrTypes: IrTypeTable> IrBuilder<'a, IrTypes> {
             blocks: self.blocks,
             types: self.types,
         }
-    }
-
-    pub fn _create_and_begin_block(&mut self) -> BlockIndex {
-        let block = self.create_block();
-        self.begin_block(block);
-        block
     }
 
     /// --------------------------------------------------------------
@@ -369,6 +365,23 @@ impl<'a, IrTypes: IrTypeTable> IrBuilder<'a, IrTypes> {
         let u32_ty = self.types.add(IrType::Primitive(Primitive::U32));
         let idx = self.build_int(idx as u64, u32_ty);
         self.build_member(var, idx, ty)
+    }
+
+    pub fn build_enum_tag(&mut self, enum_ptr: Ref, tag_ptr_ty: impl Into<IdxOrTy>) -> Ref {
+        self.add(Data { un_op: enum_ptr }, Tag::EnumTag, tag_ptr_ty)
+    }
+    pub fn build_enum_value_tag(&mut self, enum_val: Ref, tag_ty: impl Into<IdxOrTy>) -> Ref {
+        self.add(Data { un_op: enum_val }, Tag::EnumValueTag, tag_ty)
+    }
+
+    pub fn build_enum_variant_member(&mut self, var: Ref, variant: VariantId, arg: u16, ty: impl Into<IdxOrTy>)
+    -> Ref {
+        self.add(Data { variant_member: (var, variant, arg) }, Tag::EnumVariantMember, ty)
+    }
+
+    pub fn build_enum_value_variant_member(&mut self, var: Ref, variant: VariantId, arg: u16, ty: impl Into<IdxOrTy>)
+    -> Ref {
+        self.add(Data { variant_member: (var, variant, arg) }, Tag::EnumValueVariantMember, ty)
     }
 
     pub fn build_value(&mut self, val: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {

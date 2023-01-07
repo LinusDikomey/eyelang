@@ -32,6 +32,11 @@ impl Layout {
             alignment: self.alignment.max(other.alignment),
         };
     }
+    pub fn add_variant(&mut self, variant: Self) {
+        self.size = self.size.max(variant.size);
+        self.alignment = self.alignment.max(variant.alignment);
+    }
+
     #[must_use]
     pub fn mul_size(self, factor: u64) -> Self {
         Self {

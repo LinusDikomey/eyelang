@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId},
+    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId, VariantId},
     error::{Errors, Error},
     dmap::{DHashMap, self},
     span::{Span, TSpan},
@@ -322,7 +322,11 @@ fn enum_def(
         .enumerate()
         .map(|(i, (_, name, args))| (
             name.clone(),
-            (i as _, args.iter().map(|ty| scopes.resolve_ty(scope, ty, errors, symbols, ast, ir)).collect())
+            (
+                VariantId::new(i as u16),
+                i as _,
+                args.iter().map(|ty| scopes.resolve_ty(scope, ty, errors, symbols, ast, ir)).collect(),
+            )
         ))
         .collect();
     Enum { name, variants, generic_count: def.generic_count() }
@@ -456,7 +460,7 @@ impl<'a> Ctx<'a> {
                 // TODO: enum generics
                 if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
                     match def.variants.get(name) {
-                        Some((_, other_args)) => {
+                        Some((_id, _, other_args)) => {
                             if args.len() != other_args.len() {
                                 self.errors.emit_span(Error::MismatchedType {
                                     expected: format!("enum variant with {} args", other_args.len()),

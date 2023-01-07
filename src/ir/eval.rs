@@ -49,6 +49,14 @@ impl IrTypeTable for ConstIrTypes {
     fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
         self.add(ConstIrType::Ty(IrType::Ptr(pointee)))
     }
+    fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs {
+        let start = self.types.len();
+        self.types.extend(types.into_iter().map(ConstIrType::Ty));
+        TypeRefs { idx: start as _, count: (self.types.len() - start) as _ }
+    }
+    fn replace(&mut self, idx: TypeRef, ty: IrType) {
+        self.types[idx.idx()] = ConstIrType::Ty(ty);
+    }
     fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
         match ty {
             Type::Prim(p) => IrType::Primitive(*p),
@@ -512,6 +520,9 @@ unsafe fn eval_internal(ir: &IrBuilder<ConstIrTypes>, _params: &[ConstVal], _fra
                 val.expect("Invalid phi node: didn't go through any of the blocks")
             }
             super::Tag::Asm => todo!(),
+            super::Tag::EnumTag | super::Tag::EnumValueTag
+            | super::Tag::EnumVariantMember | super::Tag::EnumValueVariantMember 
+            => todo!("eval enums"),
         });
         pos += 1;
     };

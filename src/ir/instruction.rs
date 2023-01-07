@@ -1,7 +1,7 @@
 use std::fmt;
 
 use color_format::cwrite;
-use crate::ast::{TypeId, FunctionId, TraitId, GlobalId};
+use crate::ast::{TypeId, FunctionId, TraitId, GlobalId, VariantId};
 
 use super::{Ref, BlockIndex, types::TypeRef};
 
@@ -63,6 +63,12 @@ pub enum Tag {
 
     Member,
     Value,
+
+    EnumTag,
+    EnumValueTag,
+    EnumVariantMember,
+    EnumValueVariantMember,
+
     Cast,
 
     Goto,
@@ -101,6 +107,9 @@ impl Tag {
             Tag::Branch => Branch,
             Tag::Phi => ExtraBranchRefs,
             Tag::Asm => Asm,
+
+            Tag::EnumTag | Tag::EnumValueTag => UnOp,
+            Tag::EnumVariantMember | Tag::EnumValueVariantMember => VariantMember,
         }
     }
 
@@ -146,6 +155,7 @@ pub union Data {
     pub trait_symbol: TraitId,
     pub global_symbol: GlobalId,
     pub trait_func: (u32, u32), // extra_index for SymbolKey, func index in trait
+    pub variant_member: (Ref, VariantId, u16),
     pub none: (),
     pub block: BlockIndex
 }
@@ -176,5 +186,6 @@ pub enum DataVariant {
     Type,
     Trait,
     Global,
+    VariantMember,
     None,
 }

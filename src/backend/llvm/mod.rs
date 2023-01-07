@@ -4,9 +4,9 @@ use crate::{
     types::{Primitive, Layout},
     BackendStats,
     ir::{self, types::{IrType, TypeRef}, Tag}, 
-    resolve::{types::{ResolvedTypeDef, Type},
+    resolve::{types::{ResolvedTypeDef, Type, Enum},
     const_val::ConstVal, self},
-    backend::llvm::types::Numeric
+    backend::llvm::types::Numeric, ast::VariantId
 };
 use std::{ffi, ptr, ops::{Deref, DerefMut}, sync::atomic::Ordering, io::Write, time::Instant};
 
@@ -71,9 +71,9 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                 ResolvedTypeDef::Enum(def) => {
                     // TODO: enums with data
                     if def.generic_count == 0 {
-                        TypeInstance::Simple(int_from_variant_count(ctx, def.variants.len()), vec![])
+                        TypeInstance::SimpleEnum(int_from_variant_count(ctx, def.variants.len()), vec![])
                     } else {
-                        TypeInstance::Generic(dmap::new())
+                        TypeInstance::GenericEnum(dmap::new())
                     }
                 }
             }
@@ -465,7 +465,8 @@ unsafe fn build_func(
                             let generics: Vec<_> = generics.iter()
                                 .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
                                 .collect();
-                            let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
+                            let (_, OffsetsRef::Struct(offsets)) = get_id_ty(id, &generics, ctx, module, types)
+                                else { panic!("Tried to get member of non-struct") };
                             
                             let ty = LLVMInt32TypeInContext(ctx);
                             (LLVMConstInt(ty, offsets[member as usize] as u64, FALSE), ty)
@@ -473,7 +474,7 @@ unsafe fn build_func(
                         IrType::Tuple(members) => {
                             let inst = ir.inst[data.bin_op.1.into_ref().unwrap() as usize];
                             assert_eq!(inst.tag, Tag::Int);
-                            let member = inst.data.int;
+                            let member = inst.data.int as u32;
 
                             // calculate layout of all members before the one is accessed
                             // to find out the offset of the indexed element
@@ -485,7 +486,9 @@ unsafe fn build_func(
                                 );
                             }
                             let ty = LLVMInt32TypeInContext(ctx);
-                            (LLVMConstInt(ty, layout.size, FALSE), ty)
+                            let offset = Layout::align(layout.size, ir.types[members.nth(member)]
+                                .layout(&ir.types, |id| &module.types[id.idx()].1).alignment);
+                            (LLVMConstInt(ty, offset, FALSE), ty)
                         }
                         _ => {
                             let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
@@ -497,12 +500,153 @@ unsafe fn build_func(
                     let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[pointee]);
                     LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
                 } else {
-                    std::ptr::null_mut()
+                    ptr::null_mut()
                 }
             }
             ir::Tag::Value => {
-                if let Some(r) = get_ref(&instructions,  data.ref_int.0) {
-                    LLVMBuildExtractValue(builder, r, data.ref_int.1, NONE)
+                if let (Some(r), r_ty) = get_ref_and_type(&instructions,  data.ref_int.0) {
+                    match r_ty {
+                        IrType::Id(id, generics) => {
+                            let generics: Vec<_> = generics.iter()
+                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                                .collect();
+                            let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
+                            let OffsetsRef::Struct(offsets) = offsets else { panic!("invalid argument for Value") };
+                            let offset = offsets[data.ref_int.1 as usize];
+                            let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
+                            let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
+                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty)
+                        }
+                        IrType::Tuple(elems) => {
+                            // TODO: cache offsets
+                            let mut layout = Layout::EMPTY;
+                            for elem in elems.iter().take(data.ref_int.1 as usize) {
+                                layout.accumulate(ir.types[elem].layout(&ir.types, |id| &module.types[id.idx()].1));
+                                println!("{layout:?}");
+                            }
+                            let elem_align = ir.types[elems.nth(data.ref_int.1)]
+                                .layout(&ir.types, |id| &module.types[id.idx()].1)
+                                .alignment;
+                            let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
+                            let offset = Layout::align(layout.size, elem_align) as u32;
+                            let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
+                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty)
+                            
+                        }
+                        IrType::Primitive(_) | IrType::Ptr(_) | IrType::Enum(_)
+                        => panic!("invalid argument for Value"),
+                        IrType::Array(_, _) => {
+                            LLVMBuildExtractValue(builder, r, data.ref_int.1, NONE)
+                        }
+                        IrType::Ref(_) => unreachable!(),
+                    }
+                } else {
+                    ptr::null_mut()
+                }
+            }
+            ir::Tag::EnumTag => {
+                if let (Some(r), ty) = get_ref_and_type(&&instructions, data.un_op) {
+                    let IrType::Ptr(pointee) = ty else { panic!("invalid ir") };
+                    /*
+                    match ir.types[pointee] {
+                        IrType::Id(id, generics) => {
+                            // FIXME: better generics handling without as_resolved_type
+                            let generics: Vec<_> = generics
+                                .iter()
+                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                                .collect();
+                            let (ty, OffsetsRef::Enum(offsets) = get_id_ty(id, &generics, ctx, module, types);
+
+                            todo!("explicit enum types in llvm backend")
+                        }
+                        IrType::Enum(_variants) => {
+                            let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[pointee]);
+                            let i32_ty = LLVMInt32TypeInContext(ctx);
+                            let zero = LLVMConstInt(i32_ty, 0, FALSE);
+                            let mut elems = [zero; 2];
+                            LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
+                        }
+                        _ => panic!("invalid type for enum tag"),
+                        
+                    }
+                    */
+                    // FIXME: right now, the tag is always stored at offset zero, but it
+                    // might be stored arbitrarily so check the (cached) layout in the
+                    // future
+                    let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[pointee]);
+                    let i32_ty = LLVMInt32TypeInContext(ctx);
+                    let zero = LLVMConstInt(i32_ty, 0, FALSE);
+                    let mut elems = [zero; 2];
+                    LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
+                } else {
+                    ptr::null_mut()
+                }
+            }
+            ir::Tag::EnumValueTag => {
+                // FIXME: like with EnumTag above, tag may not be at offset zero in the future. 
+                if let Some(r) = get_ref(&instructions, data.un_op) {
+                    LLVMBuildExtractValue(builder, r, 0, NONE)
+                } else {
+                    ptr::null_mut()
+                }
+            }
+            Tag::EnumVariantMember => {
+                if let (Some(r), ty) = get_ref_and_type(&instructions, data.variant_member.0) {
+                    let IrType::Ptr(pointee) = ty else { panic!("non-pointer found for EnumVariantMember") };
+                    let pointee = ir.types[pointee];
+                    let offset = variant_offset(pointee, ir,
+                        data.variant_member.1, data.variant_member.2, ctx, module, types);
+                    let pointee_ty = llvm_ty(ctx, module, &ir.types, types, pointee);
+                    let i32_ty = LLVMInt32TypeInContext(ctx);
+                    let mut elems = [LLVMConstInt(i32_ty, 0, FALSE), LLVMConstInt(i32_ty, offset as _, FALSE)];
+                    LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
+                } else {
+                    ptr::null_mut()
+                }
+            }
+            Tag::EnumValueVariantMember => {
+                if let (Some(r), enum_ty) = get_ref_and_type(&instructions, data.variant_member.0) {
+                    // NOCHECKIN CLEANUP
+                    // This is a bit of a hack but to extract a member we cast the byte array into
+                    // a struct of 3 byte arrays. For example, if we want to get 3 bytes from
+                    // position 1 out of an enum with llvm type [8 x i8], we bitcast it to:
+                    // { [1 x i8], [3 x i8], [4 x i8] }
+                    // and retrieve the second element using extractvalue.
+                    // The type in the middle will directly be set to the expected type.
+                    /*
+                    let offset = variant_offset(enum_ty, ir,
+                        data.variant_member.1, data.variant_member.2, ctx, module, types);
+                    let arg_llvm_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
+                    let enum_size = enum_ty.layout(&ir.types, |ty| &module.types[ty.idx()].1).size as u32;
+                    let arg_size = ir.types[ty].layout(&ir.types, |ty| &module.types[ty.idx()].1).size as u32;
+                    let i8 = LLVMInt8TypeInContext(ctx);
+                    dbg!(enum_size, arg_size, offset);
+                    let mut cast_elements = [
+                        LLVMArrayType(i8, offset),
+                        LLVMArrayType(i8, arg_size),
+                        LLVMArrayType(i8, enum_size - offset - arg_size),
+                    ];
+                    let cast_ty = LLVMStructTypeInContext(ctx,
+                        cast_elements.as_mut_ptr(), cast_elements.len() as _, TRUE);
+                    let from = LLVMTypeOf(r);
+                    let from = LLVMPrintTypeToString(from);
+                    let to = LLVMPrintTypeToString(cast_ty);
+                    println!("Casting {:?} to {:?}", std::ffi::CStr::from_ptr(from), std::ffi::CStr::from_ptr(to));
+                    let cast = LLVMBuildBitCast(builder, r, cast_ty, NONE);
+                    let raw_value = LLVMBuildExtractValue(builder, cast, 1, NONE);
+                    // value is now just a byte array, cast to target type to make sure the type
+                    // matches.
+                    LLVMBuildBitCast(builder, raw_value, arg_llvm_ty, NONE)
+                    */
+                    // the above solution doesn't work because llvm doesn't allow bitcast between
+                    // aggregate types for some reason.
+                    // Instead we store the enum value in an allocated slot and load an offset
+                    // pointer. Let's hope llvm can optimize this shit.
+                    let offset = variant_offset(enum_ty, ir,
+                        data.variant_member.1, data.variant_member.2, ctx, module, types);
+                    let arg_llvm_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
+                    let enum_llvm_ty = llvm_ty(ctx, module, &ir.types, types, enum_ty);
+                    extract_value_from_byte_array(ctx, builder, r, enum_llvm_ty, offset, arg_llvm_ty)
                 } else {
                     ptr::null_mut()
                 }
@@ -586,6 +730,54 @@ unsafe fn build_func(
     }
 }
 
+unsafe fn variant_offset(ty: IrType, ir: &ir::FunctionIr, variant: VariantId, arg: u16,
+    ctx: LLVMContextRef, module: &ir::Module, types: &mut [TypeInstance]
+) -> u32 {
+    match ty {
+        IrType::Id(id, generics) => {
+            let generics: Vec<_> = generics
+                .iter()
+                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                .collect();
+            let (_, OffsetsRef::Enum(offsets)) = get_id_ty(id, &generics, ctx, module, types) else {
+                panic!("non-enum type found for EnumVariantMember");
+            };
+            offsets[variant.idx()][arg as usize]
+        }
+        // TODO: cache local layouts so offset doesn't have to be recomputed
+        IrType::Enum(variants) => {
+            let mut layout = Enum::int_ty_from_variant_count(variants.len() as _)
+                .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+            let variant = variants.iter().nth(variant.idx()).unwrap();
+            let IrType::Tuple(variant_args) = ir.types[variant] else { panic!("invalid enum IrType") };
+            let args_before = variant_args.iter()
+                .take(if arg == 0 { 0 } else {
+                    (arg - 1) as usize
+                });
+            for arg in args_before {
+                layout.accumulate(ir.types[arg].layout(&ir.types, |id| &module.types[id.idx()].1));
+            }
+            let arg = ir.types[variant_args.nth(arg as u32)].layout(&ir.types, |id| &module.types[id.idx()].1);
+            Layout::align(layout.size, arg.alignment) as u32
+        }
+        _ => panic!("invalid type for EnumVariantMember: {ty:?}"),
+    }
+}
+
+unsafe fn extract_value_from_byte_array(
+    ctx: LLVMContextRef, builder: LLVMBuilderRef,
+    r: LLVMValueRef, r_ty: LLVMTypeRef, offset: u32, value_ty: LLVMTypeRef,
+) -> LLVMValueRef {
+    println!("extracting with offset {offset}");
+    let alloced = LLVMBuildAlloca(builder, r_ty, NONE);
+    LLVMBuildStore(builder, r, alloced);
+    let i32 = LLVMInt32TypeInContext(ctx);
+    let mut indices = [LLVMConstInt(i32, 0, FALSE), LLVMConstInt(i32, offset as _, FALSE)];
+    let elem_ptr = LLVMBuildInBoundsGEP2(builder, r_ty, alloced,
+        indices.as_mut_ptr(), indices.len() as _, NONE);
+    LLVMBuildLoad2(builder, value_ty, elem_ptr, NONE)
+}
+
 unsafe fn inline_asm(
     asm: &str, ctx: LLVMContextRef, builder: LLVMBuilderRef,
     values: &[LLVMValueRef], types: &mut [LLVMTypeRef]
@@ -663,7 +855,7 @@ unsafe fn cast(val: LLVMValueRef, origin: IrType, target: IrType, builder: LLVMB
                 _ => panic!("Invalid cast to primitive")
             }
         }
-        IrType::Id(_, _) | IrType::Array(_, _) | IrType::Tuple(_) => panic!("Invalid cast"),
+        IrType::Id(_, _) | IrType::Array(_, _) | IrType::Tuple(_) | IrType::Enum { .. } => panic!("Invalid cast"),
         IrType::Ptr(_) => {
             let llvm_target = llvm_ty(ctx, module, &ir.types, types, target);
             match origin {
@@ -681,9 +873,11 @@ fn is_resolved_void_type(ty: &Type) -> bool {
     matches!(ty, resolve::types::Type::Prim(Primitive::Unit | Primitive::Never))
 }
 
-enum TypeInstance {
+enum TypeInstance { // TODO: add offsets arena
     Simple(LLVMTypeRef, Vec<u32>),
+    SimpleEnum(LLVMTypeRef, Vec<Vec<u32>>),
     Generic(DHashMap<Vec<Type>, (LLVMTypeRef, Vec<u32>)>),
+    GenericEnum(DHashMap<Vec<Type>, (LLVMTypeRef, Vec<Vec<u32>>)>),
 }
 
 // returns the constant or None in case of a zero sized type

@@ -383,7 +383,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                             ResolvedTypeDef::Enum(def) => {
                                 match def.variants.get(name) {
                                     Some(variant) => break (
-                                        MemberAccess::EnumItem(id, variant.0),
+                                        MemberAccess::EnumItem(id, variant.1),
                                             // TODO: generic enums
                                         TypeInfo::Resolved(id, TypeRefs::EMPTY).into(),
                                     ),

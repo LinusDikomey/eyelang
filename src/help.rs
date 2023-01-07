@@ -47,7 +47,7 @@ where
     F: Fn(&mut fmt::Formatter, T) -> fmt::Result,
     D: fmt::Display
 {
-    let mut i =i.into_iter();
+    let mut i = i.into_iter();
     i.next().map(|t| write_func(f, t)).transpose()?;
     for elem in i {
         write!(f, "{delim}")?;

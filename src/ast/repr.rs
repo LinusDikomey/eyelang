@@ -199,6 +199,12 @@ impl EnumDefinition {
                 }
                 child.write_add(")");
             }
+            /*
+            if let Some(value) = value {
+                child.write_add(" = ");
+                child.write_add(value.to_string());
+            }
+            */
         }
         c.write_start("}");
     }

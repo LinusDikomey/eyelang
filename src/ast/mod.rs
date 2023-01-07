@@ -279,6 +279,7 @@ pub enum Definition {
 }
 
 id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId ConstId MemberAccessId);
+id!(u16, 2: VariantId);
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {

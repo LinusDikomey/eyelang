@@ -103,52 +103,55 @@ pub unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRe
     }
 }
 
+pub(super) enum OffsetsRef<'a> {
+    Struct(&'a [u32]),
+    Enum(&'a[Vec<u32>]),
+}
+
 pub(super) unsafe fn get_id_ty<'a>(
     id: TypeId,
     generics: &[Type],
     ctx: LLVMContextRef,
     module: &ir::Module,
     instances: &'a mut [TypeInstance]
-) -> (LLVMTypeRef, &'a [u32]) {
+) -> (LLVMTypeRef, OffsetsRef<'a>) {
     match &instances[id.idx()] {
         TypeInstance::Simple(simple, _) => {
             debug_assert_eq!(generics.len(), 0);
             // getting the value here again to prevent an ownership error
             let TypeInstance::Simple(_, offsets) = &instances[id.idx()] else { unreachable!() };
-            (*simple, offsets)
+            (*simple, OffsetsRef::Struct(offsets))
+        }
+        TypeInstance::SimpleEnum(simple, _) => {
+            debug_assert_eq!(generics.len(), 0);
+            let TypeInstance::SimpleEnum(_, offsets) = &instances[id.idx()] else { unreachable!() };
+            (*simple, OffsetsRef::Enum(offsets))
         }
         TypeInstance::Generic(map) => {
             if let Some((ty, _)) = map.get(generics) {
                 // getting the value here again to prevent an ownership error
                 let TypeInstance::Generic(map) = &instances[id.idx()] else { unreachable!() };
-                (*ty, &map[generics].1)
+                (*ty, OffsetsRef::Struct(&map[generics].1))
             } else {
-                /*
-                let mut name = format!("t{}[", id.idx());
-
-                for (i, ty) in generics.iter().enumerate() {
-                    use std::fmt::Write;
-                    if i != 0 {
-                        name.push_str(",");
-                    }
-                    name.write_fmt(format_args!("{ty:?}")).unwrap();
-                }
-                name.push(']');
-                let name = ffi::CString::new(name).unwrap();
-                */
-
-                let (ty, offsets) = match &module.types[id.idx()].1 {
-                    ResolvedTypeDef::Struct(def) => {
-                        struct_ty(ctx, def, module, generics)
-                    }
-                    ResolvedTypeDef::Enum(def) => {
-                        (int_from_variant_count(ctx, def.variants.len()), vec![])
-                    }
-                };
+                let ResolvedTypeDef::Struct(def) = &module.types[id.idx()].1 else { unreachable!() };
+                let (ty, offsets) = struct_ty(ctx, def, module, generics);
 
                 let TypeInstance::Generic(map) = &mut instances[id.idx()] else { unreachable!() };
                 map.insert(generics.to_vec(), (ty, offsets));
-                (ty, &map[generics].1)
+                (ty, OffsetsRef::Struct(&map[generics].1))
+            }
+        }
+        TypeInstance::GenericEnum(map) => {
+            if let Some((ty, _)) = map.get(generics) {
+                // getting the value here again to prevent an ownership error
+                let TypeInstance::GenericEnum(map) = &instances[id.idx()] else { unreachable!() };
+                (*ty, OffsetsRef::Enum(&map[generics].1))
+            } else {
+                let ResolvedTypeDef::Enum(def) = &module.types[id.idx()].1 else { unreachable!() };
+                let (ty, offsets) = enum_ty(ctx, def, module, generics);
+                let TypeInstance::GenericEnum(map) = &mut instances[id.idx()] else { unreachable!() };
+                map.insert(generics.to_vec(), (ty, offsets));
+                (ty, OffsetsRef::Enum(&map[generics].1))
             }
         }
     }
@@ -164,6 +167,32 @@ pub fn struct_ty(ctx: LLVMContextRef, def: &Struct, module: &ir::Module, generic
             offset as _
         }).collect::<Vec<_>>();
     (unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }, member_offsets)
+}
+
+pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &[Type]) -> (LLVMTypeRef, Vec<Vec<u32>>) {
+    let int_ty = Enum::int_ty_from_variant_count(def.variants.len() as u32);
+    let tag_layout = int_ty.map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+    let mut layout = tag_layout;
+    let mut offsets = vec![Vec::new(); def.variants.len()];
+    for (_name, (variant_id, _ordinal, args)) in &def.variants {
+        let mut variant_layout = layout;
+        let variant_offsets = args.iter().map(|arg| { 
+            let offset = variant_layout.size as u32;
+            variant_layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
+            offset
+        }).collect();
+        offsets[variant_id.idx()] = variant_offsets;
+        layout.add_variant(variant_layout);
+    }
+
+    let ty = if layout == tag_layout {
+        unsafe {
+            int_ty.map_or_else(|| LLVMVoidTypeInContext(ctx), |ty| llvm_primitive_ty(ctx, Primitive::from(ty)))
+        }
+    } else {
+        unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }
+    };
+    (ty, offsets)
 }
 
 unsafe fn llvm_ty_recursive(
@@ -188,11 +217,8 @@ unsafe fn llvm_ty_recursive(
             let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false, generics);
             LLVMArrayType(elem_ty, count)
         }
-        IrType::Tuple(elems) => {
-            let mut layout = Layout::EMPTY;
-            for elem in elems.iter() {
-                layout.accumulate(types[elem].layout(types, |id| &module.types[id.idx()].1));
-            }
+        IrType::Tuple(_) | IrType::Enum(_) => {
+            let layout = ty.layout(types, |id| &module.types[id.idx()].1);
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
         }
         IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee, generics),

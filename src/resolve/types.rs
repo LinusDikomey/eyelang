@@ -3,7 +3,7 @@ use color_format::{cwriteln, cwrite};
 
 use crate::{
     types::{Primitive, Layout, IntType},
-    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId}, ir::types::TypeRef
+    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId, VariantId}, ir::types::TypeRef
 };
 
 use super::{
@@ -355,7 +355,7 @@ pub struct TraitDef {
 #[derive(Debug, Clone)]
 pub struct Enum {
     pub name: String,
-    pub variants: DHashMap<String, (u32, Vec<Type>)>,
+    pub variants: DHashMap<String, (VariantId, u32, Vec<Type>)>,
     pub generic_count: u8,
 }
 impl Enum {
@@ -390,7 +390,7 @@ impl Enum {
 }
 impl fmt::Display for Enum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (variant, (variant_val, variant_types)) in &self.variants {
+        for (variant, (_, variant_val, variant_types)) in &self.variants {
             if variant_types.is_empty() {
                 cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
             } else {

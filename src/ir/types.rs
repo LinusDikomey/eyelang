@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::{types::{Type, ResolvedTypeDef}}, irgen::CreateReason};
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::types::{Type, ResolvedTypeDef, Enum}, irgen::CreateReason};
 
 use super::builder::IrTypeTable;
 
@@ -88,6 +88,14 @@ impl IrTypeTable for IrTypes {
     fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
         self.add(IrType::Ptr(pointee))
     }
+    fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs {
+        let start = self.types.len();
+        self.types.extend(types);
+        TypeRefs { idx: start as _, count: (self.types.len() - start) as _ }
+    }
+    fn replace(&mut self, idx: TypeRef, ty: IrType) {
+        self.types[idx.idx()] = ty;
+    }
     fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
         match ty {
             Type::Prim(p) => IrType::Primitive(*p),
@@ -148,7 +156,8 @@ pub enum IrType {
     Ptr(TypeRef),
     Array(TypeRef, u32),
     Tuple(TypeRefs),
-    
+    Enum(TypeRefs),  /// TypeRefs should point to tuples of arguments
+
     Ref(TypeRef), // just refers to a different index
 }
 impl IrType {
@@ -166,6 +175,20 @@ impl IrType {
                 for ty in elems.iter() {
                     let ty = &types[ty];
                     layout.accumulate(ty.layout(types, get_type));
+                }
+                layout
+            }
+            IrType::Enum(variants) => {
+                let mut layout = Enum::int_ty_from_variant_count(variants.len() as u32)
+                    .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+
+                for variant in variants.iter() {
+                    let IrType::Tuple(args) = types[variant] else { panic!("invalid IrType found") };
+                    let mut variant_layout = layout;
+                    for arg in args.iter() {
+                        variant_layout.accumulate(types[arg].layout(types, get_type));
+                    }
+                    layout.add_variant(variant_layout);
                 }
                 layout
             }
@@ -193,6 +216,10 @@ impl IrType {
                     .map(|ty| types.get_ir_type(ty)?.as_resolved_type(types))
                     .collect::<Option<_>>()?
             ),
+            IrType::Enum(variants) => todo!("enum as Type"), // find an alternative,
+                                                                        // converting to resolved
+                                                                        // type is a bad solution
+                                                                        // anyways
             IrType::Ref(idx) => types.get_ir_type(idx)?.as_resolved_type(types)?,
         })
     }

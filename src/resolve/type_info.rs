@@ -315,10 +315,19 @@ impl TypeTable {
                 TypeInfo::Resolved(id, generics) => IrType::Id(id, TypeRefs { idx: generics.idx, count: generics.count }),
                 TypeInfo::Pointer(pointee) => IrType::Ptr(pointee),
                 TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
-                TypeInfo::Enum(variants) => Enum::int_ty_from_variant_count(variants.count).map_or(
-                    IrType::Primitive(Primitive::Unit),
-                    |ty| IrType::Primitive(ty.into())
-                ),
+                TypeInfo::Enum(variants) => {
+                    let tag_ty = Enum::int_ty_from_variant_count(variants.count).map_or(
+                        IrType::Primitive(Primitive::Unit),
+                        |ty| IrType::Primitive(ty.into())
+                    );
+                    let variants_start = ir_types.len() as u32;
+                    ir_types.extend((0..variants.count()).map(|_| IrType::Primitive(Primitive::Never)));
+
+                    for (i, (_name, args)) in self.get_enum_variants(variants).iter().enumerate() {
+                        ir_types[variants_start as usize + i] = IrType::Tuple(*args);
+                    }
+                    IrType::Enum(TypeRefs { idx: variants_start, count: variants.count() })
+                }
                 TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
 
                 // these types should never be encountered by runtime code (this probably isn't enforced properly)
@@ -762,7 +771,7 @@ fn merge_implicit_and_explicit_enum(def: &Enum, variants: EnumVariants, types: &
 -> bool {
     for i in variants.idx .. variants.idx + variants.count {
         let (name, arg_types) = &types.enum_variants[i as usize];
-        let Some((_, def_arg_types)) = def.variants.get(name) else { return false };
+        let Some((_, _, def_arg_types)) = def.variants.get(name) else { return false };
         
         if def_arg_types.len() != arg_types.len() { return false }
 

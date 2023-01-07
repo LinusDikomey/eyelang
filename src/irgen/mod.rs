@@ -1,12 +1,12 @@
 use std::ops::Index;
 
 use crate::{
-    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId},
+    ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId, VariantId},
     resolve::{
         types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
         self,
         type_info::TypeInfo, VarId, MemberAccess},
-    ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable, IdxOrTy}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}},
+    ir::{self, Function, builder::{IrBuilder, BinOp, IrTypeTable, IdxOrTy}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}, BlockIndex},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
@@ -284,7 +284,7 @@ fn gen_func(
         symbols,
         var_refs: &mut var_refs,
         idents: &body.idents,
-        module: module,
+        module,
         functions,
         function_generics: generics,
         member_accesses: &symbols.member_accesses,
@@ -362,7 +362,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
         Expr::Declare { pat, .. } => {
             let ty = ctx[*pat];
             let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
-            gen_pat(ir, *pat, Ref::UNDEF, ty, bool_ty, ctx);
+            gen_pat(ir, *pat, Ref::UNDEF, ty, &mut |_ir| None, bool_ty, ctx);
             Ref::UNIT
         }
         Expr::DeclareWithVal { pat, val, .. } => {
@@ -370,7 +370,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
             let val = val_expr(ir, *val, ctx, noreturn);
             if ! *noreturn {
-                gen_pat(ir, *pat, val, ty, bool_ty, ctx);
+                gen_pat(ir, *pat, val, ty, &mut |_ir| None, bool_ty, ctx);
             }
             Ref::UNIT
         }
@@ -407,35 +407,42 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             return Res::Var(string_literal(ir, *span, ctx));
         }
         Expr::BoolLiteral { val, .. } => if *val { Ref::val(RefVal::True) } else { Ref::val(RefVal::False) }
-        &Expr::EnumLiteral { ident, .. } => {
+        &Expr::EnumLiteral { ident, args, .. } => {
             let name = ctx.src_at(ident);
             // TODO: enums with args
-            let (variant, int_ty) = match ir.inferred_types[ctx[expr]] {
+            let (variant_id, tag, int_ty) = match ir.inferred_types[ctx[expr]] {
                 TypeInfo::Resolved(id, _generics) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    (def.variants[name].0, def.int_ty())
+                    let (variant_id, tag, _) = def.variants[name];
+                    (variant_id, tag, def.int_ty())
                 }
                 TypeInfo::Enum(variants) => {
                     let variants = ir.inferred_types.get_enum_variants(variants);
                     let variant = variants
                         .iter()
-                        .enumerate()
-                        .find(|(_, (s, _))| s.as_str() == name)
-                        .unwrap()
-                        .0 as u32;
+                        .position(|(s, _)| s.as_str() == name)
+                        .unwrap() as u32;
 
-                    (variant, Enum::int_ty_from_variant_count(variants.len() as u32))
+                    (VariantId::new(variant as u16), variant, Enum::int_ty_from_variant_count(variants.len() as u32))
 
                 }
                 _ => int!()
             };
+            let enum_var = ir.build_decl(ctx[expr]);
             if let Some(int_ty) = int_ty {
                 let ty = ir.types.add(IrType::Primitive(int_ty.into()));
-                ir.build_int(variant as u64, ty)
-            } else {
-                // type only has one variant and is reduced to unit
-                Ref::UNIT
+                let tag_ty = ir.types.add(IrType::Primitive(Primitive::from(int_ty)));
+                let val_tag_ptr = ir.build_enum_tag(enum_var, IrType::Ptr(tag_ty));
+                let tag = ir.build_int(tag as u64, ty);
+                ir.build_store(val_tag_ptr, tag);
             }
+            for (i, arg) in ctx.ast[args].iter().copied().enumerate() {
+                let arg_val = val_expr(ir, arg, ctx, noreturn);
+                if *noreturn { break }
+                let arg_ptr = ir.build_enum_variant_member(enum_var, variant_id, i as u16, IrType::Ptr(ctx[arg]));
+                ir.build_store(arg_ptr, arg_val);
+            }
+            return Res::Var(enum_var)
         }
         Expr::Record { .. } => todo!(),
         Expr::Nested(_, inner) => return gen_expr(ir, *inner, ctx, noreturn),
@@ -556,44 +563,29 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             let mut phi_vals = vec![];
 
             for (i, [pat, branch]) in extra.array_chunks().enumerate() {
-                let matches = gen_pat(ir, *pat, matched, ctx[val], bool_ty, ctx);
-
-                if let Some(RefVal::False) = matches.into_val() {
-                    // branch never matches, do nothing
-                } else if let Some(RefVal::True) = matches.into_val() {
-                    let mut branch_noreturn = false;    
-                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
-                    all_noreturn &= branch_noreturn;
-                    
-                    if !branch_noreturn {
-                        ir.build_goto(after_block);
-                        phi_vals.push((ir.current_block(), branch_val));
-                    }
-                    break; // branches after this won't be reached as this branch always matches
-                } else {
-                    let next_block = if i as u32 == branch_count - 1 {
+                let mut next_block = None;
+                gen_pat(ir, *pat, matched, ctx[val], &mut |ir| {
+                    if let Some(next) = next_block { return Some(next) };
+                    if i as u32 == branch_count - 1 {
                         None
                     } else {
-                        let on_match = ir.create_block();
                         let next = ir.create_block();
-                        ir.build_branch(matches, on_match, next);
-                        ir.begin_block(on_match);
+                        next_block = Some(next);
                         Some(next)
-                    };
-                
-                    let mut branch_noreturn = false;    
-                    let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
-                    all_noreturn &= branch_noreturn;
+                    }
+                }, bool_ty, ctx);
 
-                    if !branch_noreturn {
-                        ir.build_goto(after_block);
-                        phi_vals.push((ir.current_block(), branch_val));
-                    }
-                    if let Some(next) = next_block {
-                        ir.begin_block(next);
-                    }
+                let mut branch_noreturn = false;    
+                let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
+                all_noreturn &= branch_noreturn;
+
+                if !branch_noreturn {
+                    ir.build_goto(after_block);
+                    phi_vals.push((ir.current_block(), branch_val));
                 }
-
+                if let Some(next) = next_block {
+                    ir.begin_block(next);
+                }
             }
             ir.begin_block(after_block);
             *noreturn = all_noreturn;
@@ -1002,14 +994,26 @@ fn gen_pat<IrTypes: IrTypeTable>(
     pat: ExprRef,
     pat_val: Ref,
     ty: TypeRef,
+    on_mismatch: &mut impl FnMut(&mut IrBuilder<IrTypes>) -> Option<BlockIndex>,
     bool_ty: TypeRef,
     ctx: &mut Ctx
-) -> Ref {
+) {
+    let mut cond_match = |ir: &mut IrBuilder<IrTypes>, cond: Ref| {
+        match on_mismatch(ir) {
+            Some(on_mismatch) => {
+                let on_match = ir.create_block();
+                ir.build_branch(cond, on_match, on_mismatch);
+                ir.begin_block(on_match);
+            }
+            None => {}
+        }
+    };
     match &ctx.ast[pat] {
         Expr::IntLiteral(lit) => {
             let lit = IntLiteral::parse(&ctx.src()[lit.range()]);
             let int_val = int_literal(lit, ty, ir);
-            ir.build_bin_op(BinOp::Eq, pat_val, int_val, bool_ty)
+            let eq = ir.build_bin_op(BinOp::Eq, pat_val, int_val, bool_ty);
+            cond_match(ir, eq)
         }
         Expr::UnOp(_, UnOp::Neg, val) => {
             let val = &ctx.ast[*val];
@@ -1018,43 +1022,93 @@ fn gen_pat<IrTypes: IrTypeTable>(
                     let lit = IntLiteral::parse(ctx.src_at(*lit_span));
                     let val = int_literal(lit, ty, ir);
                     let val = ir.build_neg(val, ty);
-                    ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty)
+                    let eq = ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty);
+                    cond_match(ir, eq)
                 }
                 Expr::FloatLiteral(_) => todo!(),
                 _ => int!()
             }
         }
         Expr::FloatLiteral(_) => todo!(),
-        Expr::BoolLiteral { val, .. } => {
-            let val = if *val {
-                Ref::val(RefVal::True)
-            } else {
-                Ref::val(RefVal::False)
-            };
-            ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty)
+        Expr::BoolLiteral { val, .. } => if *val {
+            cond_match(ir, pat_val);
+        } else {
+            let negated_val = ir.build_neg(pat_val, bool_ty);
+            cond_match(ir, negated_val);
         }
         Expr::EnumLiteral { ident, args, .. } => {
             let name = ctx.src_at(*ident);
-            let ordinal = match ir.inferred_types[ty] {
-                TypeInfo::Enum(variants) => (variants.count() > 1).then(|| ir.inferred_types.get_enum_variants(variants)
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (other_name, _))| other_name.as_str() == name)
-                    .unwrap()
-                    .0 as u64
-                ),
-                TypeInfo::Resolved(id, _generics) => {
+            let (variant_id, tag, tag_ty, arg_types) = match ir.inferred_types[ty] {
+                TypeInfo::Enum(variants) => {
+                    let (pos, (_, types)) = ir.inferred_types.get_enum_variants(variants)
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (other_name, _))| other_name.as_str() == name)
+                        .unwrap();
+                    (
+                        VariantId::new(pos as u16),
+                        pos as u64,
+                        Enum::int_ty_from_variant_count(variants.count()),
+                        *types,
+                    )
+                }
+                TypeInfo::Resolved(id, generics) => {
                     let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
-                    // TODO: enums with args
-                    (def.variants.len() > 1).then(|| def.variants.get(name).unwrap().0 as u64)
+                    let variant = def.variants.get(name).unwrap();
+                    let types = ir.types.add_multiple(
+                        (0..variant.2.len()).map(|_| IrType::Primitive(Primitive::Never))
+                    );
+                    for (i, ty) in variant.2.iter().enumerate() {
+                        let ty = ir.types.from_resolved(ty, generics);
+                        ir.types.replace(types.nth(i as u32), ty);
+                    }
+                    (
+                        variant.0,
+                        variant.1 as u64,
+                        Enum::int_ty_from_variant_count(def.variants.len() as _),
+                        types,
+                    )
                 }
                 _ => int!()
             };
-            if let Some(ordinal) = ordinal {
-                let i = ir.build_int(ordinal, ty);
-                ir.build_bin_op(BinOp::Eq, pat_val, i, bool_ty)
+            let tag_matches = if let Some(tag_ty) = tag_ty {
+                let tag_ty = IrType::Primitive(Primitive::from(tag_ty));
+                let i = ir.build_int(tag, tag_ty);
+                let tag_val = ir.build_enum_value_tag(pat_val, tag_ty);
+                ir.build_bin_op(BinOp::Eq, tag_val, i, bool_ty)
             } else {
+                // single-variant enum without arguments always matches
+                if args.count == 0 { return };
                 Ref::val(RefVal::True)
+            };
+            if args.count != 0 {
+                debug_assert_eq!(ctx.ast[*args].len(), arg_types.len());
+                // We duplicate some code here but that is fine since it saves potentially calling on_mismatch
+                // when it isn't needed. That happens when the enum has a single variants and all
+                // args match trivially.
+                if tag_matches == Ref::val(RefVal::True) {
+                    for ((i, arg), arg_ty) in ctx.ast[*args].iter().copied().enumerate().zip(arg_types.iter()) {
+                        let arg_val = ir.build_enum_value_variant_member(pat_val, variant_id, i as u16, arg_ty);
+                        gen_pat(ir, arg, arg_val, arg_ty, on_mismatch, bool_ty, ctx);
+                    }
+                } else {
+                    if let Some(on_mismatch_branch) = on_mismatch(ir) {
+                        let on_tag_match = ir.create_block();
+                        ir.build_branch(tag_matches, on_tag_match, on_mismatch_branch);
+                        ir.begin_block(on_tag_match);
+                    }
+
+                    for ((i, arg), arg_ty) in ctx.ast[*args].iter().copied().enumerate().zip(arg_types.iter()) {
+                        let arg_val = ir.build_enum_value_variant_member(pat_val, variant_id, i as u16, arg_ty);
+                        gen_pat(ir, arg, arg_val, arg_ty, on_mismatch, bool_ty, ctx);
+                    }
+                }
+            } else {
+                if let Some(on_mismatch) = on_mismatch(ir) {
+                    let on_match = ir.create_block();
+                    ir.build_branch(tag_matches, on_match, on_mismatch);
+                    ir.begin_block(on_match);
+                }
             }
         }
         Expr::StringLiteral(span) => {
@@ -1062,10 +1116,11 @@ fn gen_pat<IrTypes: IrTypeTable>(
             let str_ty = ir.types.add(IrType::Id(ctx.symbols.builtins.str_type, TypeRefs::EMPTY));
             let lit_val = ir.build_load(lit,  str_ty);
             let str_eq = ctx.functions.get(ctx.symbols.builtins.str_eq, ctx.symbols, vec![], IrTypes::CREATE_REASON);
-            ir.build_call(str_eq, [pat_val, lit_val], bool_ty)
+            let eq = ir.build_call(str_eq, [pat_val, lit_val], bool_ty);
+            cond_match(ir, eq);
         }
-        Expr::Nested(_, inner) => gen_pat(ir, *inner, pat_val, ty, bool_ty, ctx),
-        Expr::Unit(_) => Ref::val(RefVal::True),
+        Expr::Nested(_, inner) => gen_pat(ir, *inner, pat_val, ty, on_mismatch, bool_ty, ctx),
+        Expr::Unit(_) | Expr::Hole(_) => {}
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
                 resolve::Ident::Invalid => int!(),
@@ -1077,9 +1132,7 @@ fn gen_pat<IrTypes: IrTypeTable>(
                 resolve::Ident::Global(_) => int!("global in pattern"),
                 resolve::Ident::Const(_) => int!("const in pattern"),
             }
-            Ref::val(RefVal::True)
         }
-        Expr::Hole(_) => Ref::val(RefVal::True),
         &Expr::BinOp(op @ (Operator::Range | Operator::RangeExclusive), l, r) => {
             let mut side = |expr| match ctx.ast[expr] {
                 Expr::IntLiteral(span) => {
@@ -1108,17 +1161,16 @@ fn gen_pat<IrTypes: IrTypeTable>(
             let right_op = if op == Operator::RangeExclusive { BinOp::LT } else { BinOp::LE };
             let right_check = ir.build_bin_op(right_op, pat_val, r, bool_ty);
 
-            ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty)
+            // PERF: Is 'And' more efficient than branching twice? Probably doesn't matter much.
+            let eq = ir.build_bin_op(BinOp::And, left_check, right_check, bool_ty);
+            cond_match(ir, eq);
         }
         Expr::Tuple(_, items) => {
             let Some(IrType::Tuple(types)) = ir.types.get_ir_type(ty) else { int!() };
-            let mut matches_bool = Ref::val(RefVal::True);
             for (i, (item, item_ty)) in ctx.ast[*items].iter().zip(types.iter()).enumerate() {
                 let item_val = ir.build_value(pat_val, i as u32, item_ty);
-                let item_matches = gen_pat(ir, *item, item_val, item_ty, bool_ty, ctx);
-                matches_bool = ir.build_bin_op(BinOp::And, matches_bool, item_matches, item_ty);
+                gen_pat(ir, *item, item_val, item_ty, on_mismatch, bool_ty, ctx);
             }
-            matches_bool
         }
 
         Expr::Record { .. } // very useful to match on records
@@ -1153,3 +1205,4 @@ fn int_literal<IrTypes: IrTypeTable>(lit: IntLiteral, ty: impl Into<IdxOrTy>, ir
         ir.build_large_int(lit.val, ty)
     }
 }
+

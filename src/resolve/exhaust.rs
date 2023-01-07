@@ -82,7 +82,7 @@ impl Exhaustion {
                             ResolvedTypeDef::Enum(enum_def) => return is_enum_exhausted(
                                 enum_def.variants
                                     .iter()
-                                    .map(|(name, (_, arg_types))| (name.as_str(), arg_types.as_slice())),
+                                    .map(|(name, (_variant_id, _, arg_types))| (name.as_str(), arg_types.as_slice())),
                                 &generics,
                                 exhausted_variants,
                                 symbols,

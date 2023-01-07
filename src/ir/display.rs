@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::{types::{Struct, ResolvedTypeDef, Type}}};
+use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef, Type}};
 
 use super::{
     Function,
@@ -256,6 +256,20 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &Ir
             write_delimited_with(f, elems.iter(), |f, ty| display_type(f, types[ty], types, info), ", ")?;
             write!(f, ")")
         }
+        IrType::Enum(variants) => {
+            write!(f, "enum {{")?;
+            write_delimited_with(f, variants.iter().enumerate(), |f, (i, variant)| {
+                write!(f, "{i}")?;
+                let IrType::Tuple(args) = types[variant] else { panic!("invalid IrTypes") };
+                if args.len() > 0 {
+                    write!(f, "(")?;
+                    write_delimited_with(f, args.iter(), |f, arg| display_type(f, types[arg], types, info), ", ")?;
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }, ", ")?;
+            write!(f, "}}")
+        }
         IrType::Ref(r) => display_type(f, types[r], types, info)
     }
 }
@@ -370,6 +384,10 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
         DataVariant::Type => cwrite!(f, "type #c<##{}>", inst.data.type_symbol.idx()),
         DataVariant::Trait => cwrite!(f, "trait #c<##{}>", inst.data.trait_symbol.idx()),
         DataVariant::Global => cwrite!(f, "global #c<##{}>", inst.data.global_symbol.idx()),
+        DataVariant::VariantMember => {
+            write_ref(f, inst.data.variant_member.0)?;
+            write!(f, " {:?} arg {}", inst.data.variant_member.1, inst.data.variant_member.2)
+        }
         DataVariant::None => Ok(())
     }}
 }
