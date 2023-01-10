@@ -10,7 +10,7 @@ use crate::{
     ast::TypeId
 };
 
-use super::TypeInstance;
+use super::{TypeInstance, EnumLayout};
 
 
 #[derive(Clone, Copy, Debug)]
@@ -94,7 +94,7 @@ pub unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRe
 
 pub(super) enum OffsetsRef<'a> {
     Struct(&'a [u32]),
-    Enum(&'a[Vec<u32>]),
+    Enum(&'a EnumLayout),
 }
 
 pub(super) unsafe fn get_id_ty<'a>(
@@ -158,7 +158,7 @@ pub fn struct_ty(ctx: LLVMContextRef, def: &Struct, module: &ir::Module, generic
     (unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }, member_offsets)
 }
 
-pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &[Type]) -> (LLVMTypeRef, Vec<Vec<u32>>) {
+pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &[Type]) -> (LLVMTypeRef, EnumLayout) {
     let int_ty = Enum::int_ty_from_variant_count(def.variants.len() as u32);
     let tag_layout = int_ty.map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
     let mut layout = tag_layout;
@@ -174,14 +174,15 @@ pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &
         layout.add_variant(variant_layout);
     }
 
-    let ty = if layout == tag_layout {
-        unsafe {
+    if layout == tag_layout {
+        let ty = unsafe {
             int_ty.map_or_else(|| LLVMVoidTypeInContext(ctx), |ty| llvm_primitive_ty(ctx, Primitive::from(ty)))
-        }
+        };
+        (ty, EnumLayout::TransparentTag)
     } else {
-        unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }
-    };
-    (ty, offsets)
+        let ty = unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) };
+        (ty, EnumLayout::Variants { tag_offset: 0, arg_offsets: offsets })
+    }
 }
 
 unsafe fn llvm_ty_recursive(

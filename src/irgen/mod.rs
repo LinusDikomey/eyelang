@@ -806,10 +806,7 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                 ir.build_store(var, val);
                 Ref::UNIT
             } else {
-                let l = val_expr(ir, l, ctx, noreturn);
-                if *noreturn { return Res::Val(Ref::UNDEF) }
-                let r = val_expr(ir, r, ctx, noreturn);
-                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let ty = ctx[expr];
                 let op = match op {
                     Operator::Add => BinOp::Add,
                     Operator::Sub => BinOp::Sub,
@@ -820,7 +817,68 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     Operator::Or => BinOp::Or,
                     Operator::And => BinOp::And,
                     
-                    Operator::Equals => BinOp::Eq,
+                    Operator::Equals | Operator::NotEquals
+                        if ir.types.get_ir_type(ctx[l]).is_some_and(|ty| ty.is_id(ctx.symbols.builtins.str_type))
+                    => {
+                        let l_val = val_expr(ir, l, ctx, noreturn);
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+                        let r_val = val_expr(ir, r, ctx, noreturn);
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                        let str_eq = ctx.functions.get(
+                            ctx.symbols.builtins.str_eq,
+                            ctx.symbols,
+                            vec![],
+                            IrTypes::CREATE_REASON,
+                        );
+                        let eq = ir.build_call(str_eq, [l_val, r_val], ty);
+                        return Res::Val(match op {
+                            Operator::Equals => eq,
+                            Operator::NotEquals => ir.build_not(eq, ty),
+                            _ => unreachable!(),
+                        });
+                    }
+                    Operator::Equals | Operator::NotEquals
+                        if ir.types.get_ir_type(ctx[l]).is_some_and(|ty| matches!(ty, IrType::Enum(_)))
+                    => {
+                        let l_val = gen_expr(ir, l, ctx, noreturn);
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+                        let r_val = gen_expr(ir, r, ctx, noreturn);
+                        if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                        let Some(IrType::Enum(variants)) = ir.types.get_ir_type(ctx[l]) else { unreachable!() };
+                        for variant in variants.iter() {
+                            let Some(IrType::Tuple(args)) = ir.types.get_ir_type(variant) else { int!() };
+                            if args.len() != 0 {
+                                todo!("comparing implicit enums with variants is unsupported right now, \
+                                    use match instead");
+                            };
+                        }
+                        if let Some(tag_int_ty) = Enum::int_ty_from_variant_count(variants.count) {
+                            let tag_ty = ir.types.add(IrType::Primitive(tag_int_ty.into()));
+                            let mut get_tag = |val| match val {
+                                Res::Val(r) => ir.build_enum_value_tag(r, tag_ty),
+                                Res::Var(r) => {
+                                    let tag_ptr_ty = ir.types.add(IrType::Ptr(tag_ty));
+                                    let tag_ptr = ir.build_enum_tag(r, tag_ptr_ty);
+                                    ir.build_load(tag_ptr, tag_ty)
+                                }
+                                Res::Hole => int!()
+                            };
+                            let l_tag = get_tag(l_val);
+                            let r_tag = get_tag(r_val);
+                            let op = match op {
+                                Operator::Equals => BinOp::Eq,
+                                Operator::NotEquals => BinOp::NE,
+                                _ => unreachable!()
+                            };
+                            return Res::Val(ir.build_bin_op(op, l_tag, r_tag, ty));
+                        }
+                        todo!()
+                    }
+                    Operator::Equals => {
+                        BinOp::Eq
+                    }
                     Operator::NotEquals => BinOp::NE,
                     
                     Operator::LT => BinOp::LT,
@@ -834,8 +892,12 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
                     Operator::Assignment(_) => int!(),
                 };
 
-                let ty = ctx[expr];
-                ir.build_bin_op(op, l, r, ty)
+                let l_val = val_expr(ir, l, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+                let r_val = val_expr(ir, r, ctx, noreturn);
+                if *noreturn { return Res::Val(Ref::UNDEF) }
+
+                ir.build_bin_op(op, l_val, r_val, ty)
             }
         }
         &Expr::MemberAccess { left, name: _, id } => {

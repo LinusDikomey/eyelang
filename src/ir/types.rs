@@ -161,6 +161,14 @@ pub enum IrType {
     Ref(TypeRef), // just refers to a different index
 }
 impl IrType {
+    /// Checks if the type is a type of the provided id and ignores generics.
+    pub fn is_id(&self, id: TypeId) -> bool {
+        match self {
+            Self::Id(my_id, _) => *my_id == id,
+            Self::Ref(_) => panic!("is_id used on a Ref type"),
+            _ => false,
+        }
+    }
     pub fn layout<'a>(self, types: &IrTypes, get_type: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy) -> Layout {
         match self {
             IrType::Primitive(p) => p.layout(),
