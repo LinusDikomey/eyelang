@@ -74,9 +74,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
 
             let mut exhaustion = Exhaustion::None;
             pat::pat(*pat, ty, ctx.reborrow(), &mut exhaustion);
-            if !matches!(exhaustion.is_exhausted(None, &ctx.symbols), Some(true)) {
-                ctx.errors.emit_span(Error::Inexhaustive, ctx.span(*pat));
-            }
+            ctx.add_exhaustion(exhaustion, ty, ctx.ast[*pat].span(ctx.ast));
         }
         ast::Expr::DeclareWithVal { pat, annotated_ty, val } => {
             let ty = ctx.scopes.resolve_type_info(ctx.scope, annotated_ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
@@ -86,9 +84,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             
             let mut exhaustion = Exhaustion::None;
             pat::pat(*pat, ty, ctx.reborrow(), &mut exhaustion);
-            if !matches!(exhaustion.is_exhausted(None, &ctx.symbols), Some(true)) {
-                ctx.errors.emit_span(Error::Inexhaustive, ctx.span(*pat));
-            }
+            ctx.add_exhaustion(exhaustion, ty, ctx.ast[*pat].span(ctx.ast));
         }
         ast::Expr::Return { val, .. } => {
             val_expr(*val, info.with_expected(info.ret), ctx, false);
@@ -241,6 +237,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                 val_expr(*branch, info.with_noreturn(&mut branch_noreturn), ctx, false);
                 all_noreturn &= branch_noreturn;
             }
+            ctx.add_exhaustion(exhaustion, matched_ty, ctx.ast[*val].span(ctx.ast));
             if all_noreturn {
                 info.mark_noreturn();
             }

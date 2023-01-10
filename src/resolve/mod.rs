@@ -13,7 +13,7 @@ use self::{
     types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
     type_info::{TypeTable, TypeInfo, TypeInfoOrIndex},
     scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
-    const_val::ConstVal, expr::val_expr, std_builtins::Builtins
+    const_val::ConstVal, expr::val_expr, std_builtins::Builtins, exhaust::Exhaustion
 };
 
 pub mod const_val;
@@ -143,6 +143,7 @@ fn scope_bodies(
             let mut types = TypeTable::new(generic_count);
             let mut vars = vec![];
             let mut idents = vec![Ident::Invalid; func.counts.idents as usize];
+            let mut exhaustions = Vec::new();
             func_body(body, id, generics_ctx, Ctx {
                 scopes,
                 scope,
@@ -153,7 +154,21 @@ fn scope_bodies(
                 vars: &mut vars,
                 errors,
                 ir: ir_functions,
+                exhaustions: &mut exhaustions,
             });
+
+            for (exhaustion, ty, span) in exhaustions {
+                let Some(exhausted) = exhaustion.is_exhausted(types[ty], &mut types, symbols) else {
+                    errors.emit_span(
+                        Error::Internal(format!("exhaustion type mismatch: {:?}", types[ty])),
+                        span.in_mod(scopes[scope].module.id)
+                    );
+                    continue
+                };
+                if !exhausted {
+                    errors.emit_span(Error::Inexhaustive, span.in_mod(scopes[scope].module.id));
+                }
+            }
 
             symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
                 body,
@@ -379,6 +394,7 @@ struct Ctx<'a> {
     vars: &'a mut Vec<Var>,
     errors: &'a mut Errors,
     ir: &'a mut irgen::Functions,
+    exhaustions: &'a mut Vec<(Exhaustion, TypeRef,TSpan)>,
 }
 impl<'a> Ctx<'a> {
     fn with_scope(&mut self, scope: ScopeId) -> Ctx<'_> {
@@ -392,6 +408,7 @@ impl<'a> Ctx<'a> {
             vars: &mut *self.vars,
             errors: &mut *self.errors,
             ir: &mut *self.ir,
+            exhaustions: &mut *self.exhaustions,
         }
     }
     fn reborrow(&mut self) -> Ctx<'_> {
@@ -405,6 +422,7 @@ impl<'a> Ctx<'a> {
             vars: &mut *self.vars,
             errors: &mut *self.errors,
             ir: &mut *self.ir,
+            exhaustions: &mut *self.exhaustions,
         }
     }
     fn new_var(&mut self, var: Var) -> VarId {
@@ -496,6 +514,11 @@ impl<'a> Ctx<'a> {
                 );
             }
         }
+    }
+
+    pub fn add_exhaustion(&mut self, exhaustion: Exhaustion, ty: TypeRef, span: TSpan) {
+        if exhaustion.is_trivially_exhausted() { return } 
+        self.exhaustions.push((exhaustion, ty, span));
     }
 }
 

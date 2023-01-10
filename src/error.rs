@@ -147,6 +147,7 @@ impl<const N: usize> From<crate::parser::TokenTypes<N>> for ExpectedTokens {
 #[derive(Debug, Clone)]
 #[allow(unused)]
 pub enum Error {
+    Internal(String),
     FileSizeExceeeded,
     UnexpectedEndOfFile,
     UnexpectedCharacters,
@@ -218,6 +219,7 @@ pub enum Error {
 impl Error {
     pub fn conclusion(&self) -> &'static str {
         match self {
+            Error::Internal(_) => "internal compiler error",
             Error::FileSizeExceeeded => "maximum file size exceeded",
             Error::UnexpectedEndOfFile => "unexpected end of file",
             Error::UnexpectedCharacters => "unexpected characters",
@@ -289,6 +291,10 @@ impl Error {
     }
     pub fn details(&self) -> Option<String> {
         Some(match self {
+            Error::Internal(msg) => cformat!(
+                "#r<internal compiler error> #y!<(this is a bug and not your fault)>: {}",
+                msg,
+            ),
             Error::UnexpectedToken { expected, found } => cformat!(
                 "expected {} but found {}",
                 expected, found

@@ -146,6 +146,7 @@ pub fn eval(
 
     let before_error_count = errors.error_count();
 
+    let mut exhaustions = Vec::new();
     let ctx = Ctx {
         scopes,
         scope,
@@ -156,6 +157,7 @@ pub fn eval(
         vars: &mut vars,
         errors,
         ir,
+        exhaustions: &mut exhaustions,
     };
     let mut noreturn = false;
     _ = super::expr::check_expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);

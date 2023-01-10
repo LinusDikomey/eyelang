@@ -1,6 +1,6 @@
-use crate::dmap::DHashMap;
+use crate::{dmap::DHashMap, ir::types::TypeRefs};
 
-use super::types::{SymbolTable, Type, ResolvedTypeDef};
+use super::{types::{SymbolTable, Type, ResolvedTypeDef}, type_info::{TypeInfo, TypeTable}};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
@@ -26,98 +26,96 @@ impl Default for Exhaustion {
     fn default() -> Self { Self::None }
 }
 impl Exhaustion {
+    pub fn is_trivially_exhausted(&self) -> bool {
+        match self {
+            Self::Full | Self::Bool { true_: true, false_: true } => true,
+            Self::Tuple(_) => false, //TODO: with proper tuple exhaustion, check trivial tuples
+            _ => false,
+        }
+    }
+
     /// Return value:
     /// Some(true) means it's exhausted.
     /// Some(false) means it's not exhausted.
     /// None means a type is mismatched
-    pub fn is_exhausted(&self, ty: Option<&Type>, symbols: &SymbolTable) -> Option<bool> {
+    pub fn is_exhausted(&self, ty: TypeInfo, types: &mut TypeTable, symbols: &SymbolTable) -> Option<bool> {
         Some(match self {
             Exhaustion::None => false,
             Exhaustion::Full => true,
             Exhaustion::UnsignedInt(ranges) => {
                 match ty {
-                    Some(Type::Prim(p)) if p.is_int() => {
+                    TypeInfo::Primitive(p) if p.is_int() => {
                         let int = p.as_int().unwrap();
                         if int.is_signed() { return Some(false) }
 
                         ranges.first().map_or(false, |r| r.start == 0 && r.end >= int.max())
                     }
+                    TypeInfo::Int => false, // compile-time integer can't be exhausted with limited ranges
                     _ => return None
                 }
             },
             Exhaustion::SignedInt { neg, pos } => {
                 match ty {
-                    Some(Type::Prim(p)) if p.is_int() => {
+                    TypeInfo::Primitive(p) if p.is_int() => {
                         let int = p.as_int().unwrap();
 
                         pos.first().map_or(false, |r| r.start == 0 && r.end >= int.max()) &&
                         neg.first().map_or(false, |r| r.start == 0 && r.end >= int.min())
                     }
+                    TypeInfo::Int => false, // compile-time integer can't be exhausted with limited ranges
+
                     _ => return None
                 }
             }
             Exhaustion::Enum(exhausted_variants) => {
-                fn is_enum_exhausted<'a>(
-                    ty: impl Iterator<Item = (&'a str, &'a [Type])>,
-                    generics: &[Type],
-                    exhaust: &DHashMap<String, Vec<Exhaustion>>,
-                    symbols: &SymbolTable
-                ) -> Option<bool> {
-                    for (name, arg_types) in ty {
-                        let Some(args) = exhaust.get(name) else { return Some(false); };
-                        if args.len() != arg_types.len() { return None; }
-                        debug_assert_eq!(args.len(), arg_types.len());
-                        for (arg, arg_ty) in args.iter().zip(arg_types) {
-                            if !arg.is_exhausted(Some(&arg_ty.instantiate_generics(generics)), symbols)? {
-                                return Some(false);
+                match ty {
+                    TypeInfo::Resolved(symbol, generics) => {
+                        let ResolvedTypeDef::Enum(enum_def) = &symbols.get_type(symbol) else { return None };
+                        for (name, (_, _, arg_types)) in &enum_def.variants {
+                            let Some(args) = exhausted_variants.get(name) else { return Some(false) };
+                            if args.len() != arg_types.len() { return None };
+                            for (arg, arg_ty) in args.iter().zip(arg_types.iter()) {
+                                let arg_ty = arg_ty.as_info(types, |i| generics.nth(i as u32).into());
+                                let arg_ty = types.get_info_or_idx(arg_ty);
+                                if !arg.is_exhausted(arg_ty, types, symbols)? {
+                                    return Some(false)
+                                }
                             }
-
                         }
                     }
-                    Some(true)
-                }
-                match ty {
-                    Some(Type::Id(symbol, generics)) => {
-                        match &symbols.get_type(*symbol) {
-                            ResolvedTypeDef::Enum(enum_def) => return is_enum_exhausted(
-                                enum_def.variants
-                                    .iter()
-                                    .map(|(name, (_variant_id, _, arg_types))| (name.as_str(), arg_types.as_slice())),
-                                &generics,
-                                exhausted_variants,
-                                symbols,
-                            ),
-                            _ => return None
+                    TypeInfo::Enum(variants) => {
+                        for i in 0..variants.count() as usize {
+                            let (name, arg_types) = &types.get_enum_variants(variants)[i];
+                            let Some(args) = exhausted_variants.get(name) else { return Some(false) };
+                            if args.len() != arg_types.len() { return None };
+                            for (arg, arg_ty) in args.iter().zip(arg_types.iter()) {
+                                if !arg.is_exhausted(types[arg_ty], types, symbols)? {
+                                    return Some(false)
+                                }
+                            }
                         }
                     }
                     _ => return None
                 }
+                true
             }
             &Exhaustion::Bool { true_, false_ } => true_ && false_,
             Exhaustion::Tuple(members) => {
-                let mut member_types = match ty {
-                    Some(Type::Tuple(member_types)) => {
+                let member_types = match ty {
+                    TypeInfo::Tuple(member_types, _) => {
                         if member_types.len() != members.len() { return None };
-                        Some(member_types.iter())
+                        member_types.iter()
                     }
-                    None => None,
                     _ => return None
                 };
                 
-                let mut exhausted = true;
-                for member in members {
-                    let ty = match &mut member_types {
-                        Some(member_types) => Some(member_types.next().unwrap()),
-                        None => None
-                    };
-                    match member.is_exhausted(ty, symbols) {
-                        Some(true) => {}
-                        Some(false) => exhausted = false,
-                        None => return None
+                for (member, ty) in members.iter().zip(member_types) {
+                    if !member.is_exhausted(types[ty], types, symbols)? {
+                        return Some(false)
                     }
                     
                 }
-                exhausted
+                true
             }
             Exhaustion::Invalid => return None,
         })

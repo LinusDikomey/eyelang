@@ -66,6 +66,13 @@ impl TypeTable {
         self.find(idx).1
     }
 
+    pub fn get_info_or_idx(&self, info_or_idx: TypeInfoOrIndex) -> TypeInfo {
+        match info_or_idx {
+            TypeInfoOrIndex::Type(ty) => ty,
+            TypeInfoOrIndex::Idx(idx) => self.get(idx),
+        }
+    }
+
     pub fn update_type(&mut self, idx: TypeRef, ty: TypeInfo) {
         let idx = self.find(idx).0;
         self.types[idx.idx()] = TypeInfoOrIndex::Type(ty);
@@ -779,10 +786,10 @@ fn merge_implicit_and_explicit_enum(def: &Enum, generics: TypeRefs, variants: En
 
         for (a, b) in arg_types.iter().zip(def_arg_types) {
             let (a_idx, a_ty) = types.find(a);
-            let (b_ty, b_idx) = dbg!(match b.as_info(types, |i| generics.nth(i as u32).into()) {
+            let (b_ty, b_idx) = match b.as_info(types, |i| generics.nth(i as u32).into()) {
                 TypeInfoOrIndex::Type(ty) => (ty, None),
                 TypeInfoOrIndex::Idx(idx) => (types.find(idx).1, Some(idx)),
-            });
+            };
 
             match merge_infos(a_ty, b_ty, types, symbols) {
                 Some(new_ty) => {
