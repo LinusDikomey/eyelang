@@ -377,6 +377,19 @@ pub enum Expr {
         then: ExprRef,
         else_: ExprRef
     },
+    IfPat {
+        start: u32,
+        pat: ExprRef,
+        value: ExprRef,
+        then: ExprRef,
+    },
+    IfPatElse {
+        start: u32,
+        pat: ExprRef,
+        value: ExprRef,
+        then: ExprRef,
+        else_: ExprRef,
+    },
     Match {
         span: TSpan,
         val: ExprRef,
@@ -387,6 +400,13 @@ pub enum Expr {
         start: u32,
         cond: ExprRef,
         body: ExprRef
+    },
+    /// while ... := ...
+    WhilePat {
+        start: u32,
+        pat: ExprRef,
+        val: ExprRef,
+        body: ExprRef,
     },
     FunctionCall(CallId),
     UnOp(u32, UnOp, ExprRef),
@@ -430,9 +450,15 @@ impl Expr {
             Expr::ReturnUnit { start } => TSpan::new(*start, start+2),
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
             &Expr::Hole(start) => TSpan::new(start, start),
-            Expr::If { start, cond: _, then } => TSpan::new(*start, e(then) ),
-            Expr::IfElse { start, cond: _, then: _, else_ } => TSpan::new(*start, e(else_) ),
-            Expr::While { start, cond: _, body } => TSpan::new(*start, e(body)),
+            Expr::If { start, then, .. }
+                | Expr::IfPat { start, then, .. }
+                => TSpan::new(*start, e(then) ),
+            Expr::IfElse { start, else_, .. }
+                | Expr::IfPatElse { start, else_, .. }
+                => TSpan::new(*start, e(else_) ),
+            Expr::While { start, body, .. }
+                | Expr::WhilePat { start, body, .. }
+                => TSpan::new(*start, e(body)),
             Expr::FunctionCall(call_id) => {
                 let Call { called_expr, args: _, end } = &ast[*call_id];
                 TSpan::new(s(called_expr), *end)

@@ -767,7 +767,6 @@ unsafe fn extract_value_from_byte_array(
     ctx: LLVMContextRef, builder: LLVMBuilderRef,
     r: LLVMValueRef, r_ty: LLVMTypeRef, offset: u32, value_ty: LLVMTypeRef,
 ) -> LLVMValueRef {
-    println!("extracting with offset {offset}");
     let alloced = LLVMBuildAlloca(builder, r_ty, NONE);
     LLVMBuildStore(builder, r, alloced);
     let i32 = LLVMInt32TypeInContext(ctx);

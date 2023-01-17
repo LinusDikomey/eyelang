@@ -340,9 +340,35 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 then.repr(c);
             }
+            Self::IfPat { start: _, pat, value, then } => {
+                c.write_add("if ");
+                ast[*pat].repr(c);
+                c.write_add(" := ");
+                ast[*value].repr(c);
+                let then = &ast[*then];
+                match then {
+                    Expr::Block { .. } => c.space(),
+                    _ => c.write_add(": ")
+                }
+                then.repr(c);
+            }
             Self::IfElse { start: _, cond, then, else_ } => {
                 c.write_add("if ");
                 ast[*cond].repr(c);
+                let then = &ast[*then];
+                match then {
+                    Expr::Block { .. } => c.space(),
+                    _ => c.write_add(": ")
+                }
+                then.repr(c);
+                c.write_add(" else ");
+                ast[*else_].repr(c);
+            }
+            Self::IfPatElse { start: _, pat, value, then, else_ } => {
+                c.write_add("if ");
+                ast[*pat].repr(c);
+                c.write_add(" := ");
+                ast[*value].repr(c);
                 let then = &ast[*then];
                 match then {
                     Expr::Block { .. } => c.space(),
@@ -373,6 +399,19 @@ impl<C: Representer> Repr<C> for Expr {
             Self::While { start: _, cond, body } => {
                 c.write_add("while ");
                 ast[*cond].repr(c);
+                let body = &ast[*body];
+                if body.is_block() {
+                    c.space();
+                } else {
+                    c.write_add(": ");
+                }
+                body.repr(c);
+            }
+            Self::WhilePat { start: _, pat, val, body } => {
+                c.write_add("while ");
+                ast[*pat].repr(c);
+                c.write_add(" := ");
+                ast[*val].repr(c);
                 let body = &ast[*body];
                 if body.is_block() {
                     c.space();

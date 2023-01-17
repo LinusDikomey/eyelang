@@ -198,15 +198,28 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                 val_expr(*elem, info.with_expected(elem_ty), ctx.reborrow(), false);
             }
         }
-        ast::Expr::If { cond, then, .. } => {
+        &ast::Expr::If { cond, then, .. } => {
             ctx.specify(info.expected, TypeInfo::UNIT, ctx.span(expr));
 
             let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));
-            val_expr(*cond, info.with_expected(bool_ty), ctx.reborrow(), false);
+            val_expr(cond, info.with_expected(bool_ty), ctx.reborrow(), false);
             
             let then_ty = ctx.types.add_unknown();
             let mut then_noreturn = *info.noreturn;
-            val_expr(*then, info.with_expected(then_ty).with_noreturn(&mut then_noreturn), ctx, true);
+            val_expr(then, info.with_expected(then_ty).with_noreturn(&mut then_noreturn), ctx, true);
+        }
+        &ast::Expr::IfPat { pat, value, then, .. } => {
+            ctx.specify(info.expected, TypeInfo::UNIT, ctx.span(expr));
+
+            let value_ty = ctx.types.add(TypeInfo::Unknown);
+            val_expr(value, info.with_expected(value_ty), ctx.reborrow(), false); 
+            let mut exhaustion = Exhaustion::None;
+            pat::pat(pat, value_ty, ctx.reborrow(), &mut exhaustion);
+            // TODO: warn on full/empty exhaustion
+            
+            let then_ty = ctx.types.add_unknown();
+            let mut then_noreturn = *info.noreturn;
+            val_expr(then, info.with_expected(then_ty).with_noreturn(&mut then_noreturn), ctx, true);
         }
         ast::Expr::IfElse { cond, then, else_, .. } => {
             let bool_ty = ctx.types.add(TypeInfo::Primitive(Primitive::Bool));
@@ -217,6 +230,21 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             // TODO: setting unused to false can be incorrect if the if-else is unused
             val_expr(*then, info.with_noreturn(&mut then_noreturn), ctx.reborrow(), false);
             val_expr(*else_, info.with_noreturn(&mut else_noreturn), ctx, false);
+            if then_noreturn && else_noreturn {
+                info.mark_noreturn();
+            }
+        }
+        &ast::Expr::IfPatElse { pat, value, then, else_, .. } => {
+            let value_ty = ctx.types.add(TypeInfo::Unknown);
+            val_expr(value, info.with_expected(value_ty), ctx.reborrow(), false); 
+            let mut exhaustion = Exhaustion::None;
+            pat::pat(pat, value_ty, ctx.reborrow(), &mut exhaustion);
+            // TODO: warn on full/empty exhaustion
+            
+            let mut then_noreturn = false;
+            let mut else_noreturn = false;
+            val_expr(then, info.with_noreturn(&mut then_noreturn), ctx.reborrow(), false);
+            val_expr(else_, info.with_noreturn(&mut else_noreturn), ctx, false);
             if then_noreturn && else_noreturn {
                 info.mark_noreturn();
             }
@@ -251,6 +279,20 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             let body_ty = ctx.types.add_unknown();
             let mut body_noreturn = false;
             val_expr(*body, info.with_expected(body_ty).with_noreturn(&mut body_noreturn), ctx, true);
+        }
+        &ast::Expr::WhilePat { start: _, pat, val, body } => {
+            ctx.specify(info.expected, TypeInfo::UNIT, ctx.span(expr));
+
+            let val_ty = ctx.types.add(TypeInfo::Unknown);
+            val_expr(val, info.with_expected(val_ty), ctx.reborrow(), false);
+            let mut exhaustion = Exhaustion::None;
+            pat::pat(pat, val_ty, ctx.reborrow(), &mut exhaustion);
+
+            // TODO: we probably want to emit a warning if the pattern is fully exhausted.
+            
+            let body_ty = ctx.types.add_unknown();
+            let mut body_noreturn = false;
+            val_expr(body, info.with_expected(body_ty).with_noreturn(&mut body_noreturn), ctx, true);
         }
         ast::Expr::FunctionCall(call_id) => {
             return call(*call_id, expr, info, ctx);

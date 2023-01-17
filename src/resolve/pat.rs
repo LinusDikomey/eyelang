@@ -150,9 +150,12 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
         | Expr::Return { .. }
         | Expr::ReturnUnit { .. }
         | Expr::If { .. }
+        | Expr::IfPat { .. }
         | Expr::IfElse { .. } 
+        | Expr::IfPatElse { .. }
         | Expr::Match { .. } 
         | Expr::While { .. } 
+        | Expr::WhilePat { .. }
         | Expr::UnOp(_, _, _) 
         | Expr::BinOp(_, _, _) 
         | Expr::Index { .. } 

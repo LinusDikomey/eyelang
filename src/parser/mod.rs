@@ -650,6 +650,9 @@ impl<'a> Parser<'a> {
             TokenType::Underscore => Expr::Hole(first.start),
             TokenType::Keyword(Keyword::If) => {
                 let cond = self.parse_expr(counts)?;
+                let pat_value = self.toks.step_if(TokenType::Declare).map(|_| {
+                    self.parse_expr(counts)
+                }).transpose()?;
                 let then = self.parse_block_or_expr(counts)?;
 
                 let else_ = if let Some(tok) = self.toks.peek() {
@@ -663,10 +666,11 @@ impl<'a> Parser<'a> {
                     } else { None }
                 } else { None };
 
-                if let Some(else_) = else_ {
-                    Expr::IfElse { start, cond, then, else_ }
-                } else {
-                    Expr::If { start, cond, then }
+                match (pat_value, else_) {
+                    (None, None) => Expr::If { start, cond, then },
+                    (None, Some(else_)) => Expr::IfElse { start, cond, then, else_ },
+                    (Some(value), None) => Expr::IfPat { start, pat: cond, value, then },
+                    (Some(value), Some(else_)) => Expr::IfPatElse { start, pat: cond, value, then, else_ },
                 }
             },
             TokenType::Keyword(Keyword::Match) => {
@@ -858,12 +862,23 @@ impl<'a> Parser<'a> {
     fn parse_while_from_cond(&mut self, while_tok: Token, ident_count: &mut Counts) -> EyeResult<Expr> {
         debug_assert_eq!(while_tok.ty, TokenType::Keyword(Keyword::While));
         let cond = self.parse_expr(ident_count)?;
-        let body = self.parse_block_or_expr(ident_count)?;
-        Ok(Expr::While {
-            start: while_tok.start,
-            cond,
-            body,
-        })
+        if self.toks.step_if(TokenType::Declare).is_some() {
+            let val = self.parse_expr(ident_count)?;
+            let body = self.parse_block_or_expr(ident_count)?;
+            Ok(Expr::WhilePat {
+                start: while_tok.start,
+                pat: cond,
+                val,
+                body,
+            })
+        } else {
+            let body = self.parse_block_or_expr(ident_count)?;
+            Ok(Expr::While {
+                start: while_tok.start,
+                cond,
+                body,
+            })
+        }
     }
 
     fn parse_path(&mut self) -> EyeResult<IdentPath> {

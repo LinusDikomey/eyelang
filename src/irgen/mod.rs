@@ -508,47 +508,44 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             ir.begin_block(after_block);
             Ref::UNIT
         }
+        &Expr::IfPat { pat, value, then, .. } => {
+            let value = val_expr(ir, value, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let after_block = ir.create_block();
+            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
+            gen_pat(ir, pat, value, ctx[pat], &mut |_| Some(after_block), bool_ty, ctx);
+            
+            let mut then_noreturn = false;
+            gen_expr(ir, then, ctx, &mut then_noreturn);
+            if !then_noreturn {
+                ir.build_goto(after_block);
+            }
+
+            ir.begin_block(after_block);
+            Ref::UNIT
+        }
         &Expr::IfElse { cond, then, else_, .. } => {
             let cond = val_expr(ir, cond, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
             
             let then_block = ir.create_block();
             let else_block = ir.create_block();
-            let after_block = ir.create_block();
 
             ir.build_branch(cond, then_block, else_block);
-            
             ir.begin_block(then_block);
-            let mut then_noreturn = false;
-            let then_val = val_expr(ir, then, ctx, &mut then_noreturn);
-            let then_exit = ir.current_block();
-
-            if !then_noreturn {
-                ir.build_goto(after_block);
-            }
-
-            ir.begin_block(else_block);
-            let mut else_noreturn = false;
-            let else_val = val_expr(ir, else_, ctx, &mut else_noreturn);
-            let else_exit = ir.current_block();
-
-            if !else_noreturn {
-                ir.build_goto(after_block);
-            }
-
-            ir.begin_block(after_block);
             
-            if then_noreturn && else_noreturn {
-                *noreturn = true;
-                Ref::UNDEF
-            } else if then_noreturn {
-                else_val
-            } else if else_noreturn {
-                then_val
-            } else {
-                let ty = ctx[expr];
-                ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
-            }
+            let ty = ctx[expr];
+            build_then_else(ir, ctx, noreturn, ty, then, else_, else_block)
+        }
+        &Expr::IfPatElse { pat, value, then, else_, .. } => {
+            let value = val_expr(ir, value, ctx, noreturn);
+            if *noreturn { return Res::Val(Ref::UNDEF) }
+            let else_block = ir.create_block();
+            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
+            gen_pat(ir, pat, value, ctx[pat], &mut |_| Some(else_block), bool_ty, ctx);
+            
+            let ty = ctx[expr];
+            build_then_else(ir, ctx, noreturn, ty, then, else_, else_block)
         }
         &Expr::Match { span: _, val, extra_branches, branch_count } => {
             let matched = val_expr(ir, val, ctx, noreturn);
@@ -599,25 +596,23 @@ pub fn gen_expr<IrTypes: IrTypeTable>(ir: &mut IrBuilder<IrTypes>, expr: ExprRef
             }
         }
         &Expr::While { cond, body, .. } => {
-            let cond_block = ir.create_block();
-            let body_block = ir.create_block();
-            let after_block = ir.create_block();
-            
-            ir.build_goto(cond_block);
-            
-            ir.begin_block(cond_block);
-            let cond = val_expr(ir, cond, ctx, noreturn);
-            ir.build_branch(cond, body_block, after_block);
-            
-            ir.begin_block(body_block);
-            let mut body_noreturn = false;
-            gen_expr(ir, body, ctx, &mut body_noreturn);
-            if !body_noreturn {
-                ir.build_goto(cond_block);
-            }
-            ir.begin_block(after_block);
-
-            Ref::UNIT
+            build_while_loop(ir, ctx, noreturn, body, |ir, ctx, noreturn, after_block| {
+                let cond = val_expr(ir, cond, ctx, noreturn);
+                if !*noreturn {
+                    let body_block = ir.create_block();
+                    ir.build_branch(cond, body_block, after_block);
+                    ir.begin_block(body_block);
+                }
+            })
+        }
+        &Expr::WhilePat { start: _, pat, val, body } => {
+            build_while_loop(ir, ctx, noreturn, body, |ir, ctx, noreturn, after_block| {
+                let val = val_expr(ir, val, ctx, noreturn);
+                if !*noreturn {
+                    let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
+                    gen_pat(ir, pat, val, ctx[pat], &mut |_| Some(after_block), bool_ty, ctx);
+                }
+            })
         }
         Expr::FunctionCall(call_id) => {
             let call = &ctx.ast.calls[call_id.idx()];
@@ -1243,9 +1238,12 @@ fn gen_pat<IrTypes: IrTypeTable>(
             | Expr::ReturnUnit { .. }
             | Expr::Array(_, _)
             | Expr::If { .. } 
+            | Expr::IfPat { .. }
             | Expr::IfElse { .. } 
+            | Expr::IfPatElse { .. }
             | Expr::Match { .. } 
             | Expr::While { .. } 
+            | Expr::WhilePat { .. }
             | Expr::FunctionCall { .. } 
             | Expr::UnOp(_, _, _) 
             | Expr::BinOp(_, _, _) 
@@ -1257,6 +1255,76 @@ fn gen_pat<IrTypes: IrTypeTable>(
             | Expr::Asm { .. } 
             => int!(),
     }
+}
+
+fn build_then_else<IrTypes: IrTypeTable>(
+    ir: &mut IrBuilder<IrTypes>, ctx: &mut Ctx, noreturn: &mut bool,
+    ty: TypeRef, then: ExprRef, else_: ExprRef, else_block: BlockIndex
+) -> Ref {
+    let mut then_noreturn = false;
+    let then_val = val_expr(ir, then, ctx, &mut then_noreturn);
+    let then_exit = ir.current_block();
+
+    let mut after_block = None;
+    let mut goto_after = |ir: &mut IrBuilder<_>| {
+        let after = if let Some(after_block) = after_block {
+            after_block
+        } else {
+            let after = ir.create_block();
+            after_block = Some(after);
+            after
+        };
+        ir.build_goto(after);
+    };
+
+    if !then_noreturn {
+        goto_after(ir);
+    }
+
+    ir.begin_block(else_block);
+    let mut else_noreturn = false;
+    let else_val = val_expr(ir, else_, ctx, &mut else_noreturn);
+    let else_exit = ir.current_block();
+
+    if !else_noreturn {
+        goto_after(ir);
+    }
+    
+    if then_noreturn && else_noreturn {
+        *noreturn = true;
+        Ref::UNDEF
+    } else if then_noreturn {
+        else_val
+    } else if else_noreturn {
+        then_val
+    } else {
+        ir.begin_block(after_block.unwrap());
+        if matches!(ir.types.get_ir_type(ty), Some(IrType::Primitive(Primitive::Unit))) {
+            Ref::UNIT
+        } else {
+            ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
+        }
+    }
+}
+fn build_while_loop<IrTypes: IrTypeTable>(
+    ir: &mut IrBuilder<IrTypes>, ctx: &mut Ctx, noreturn: &mut bool,
+    body: ExprRef,
+    build_cond: impl Fn(&mut IrBuilder<IrTypes>, &mut Ctx, &mut bool, BlockIndex),
+) -> Ref {
+    let cond_block = ir.create_block();
+    let after_block = ir.create_block();
+    ir.build_goto(cond_block);
+
+    ir.begin_block(cond_block);
+    build_cond(ir, ctx, noreturn, after_block);
+    if *noreturn { return Ref::UNDEF }
+    let mut body_noreturn = false;
+    gen_expr(ir, body, ctx, &mut body_noreturn);
+    if !body_noreturn {
+        ir.build_goto(cond_block);
+    }
+    ir.begin_block(after_block);
+    Ref::UNIT
 }
 
 fn int_literal<IrTypes: IrTypeTable>(lit: IntLiteral, ty: impl Into<IdxOrTy>, ir: &mut IrBuilder<IrTypes>) -> Ref {

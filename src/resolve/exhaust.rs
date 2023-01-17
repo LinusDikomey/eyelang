@@ -1,6 +1,6 @@
-use crate::{dmap::DHashMap, ir::types::TypeRefs};
+use crate::dmap::DHashMap;
 
-use super::{types::{SymbolTable, Type, ResolvedTypeDef}, type_info::{TypeInfo, TypeTable}};
+use super::{types::{SymbolTable, ResolvedTypeDef}, type_info::{TypeInfo, TypeTable}};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
