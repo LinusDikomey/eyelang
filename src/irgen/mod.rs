@@ -1286,10 +1286,14 @@ fn build_then_else<IrTypes: IrTypeTable>(
     let else_val = val_expr(ir, else_, ctx, &mut else_noreturn);
     let else_exit = ir.current_block();
 
-    if !else_noreturn {
+    // if else returns but then doesn't we can just skip the goto to after_block
+    if !else_noreturn  && !then_noreturn {
         goto_after(ir);
     }
     
+    if let Some(after_block) = after_block {
+        ir.begin_block(after_block);
+    }
     if then_noreturn && else_noreturn {
         *noreturn = true;
         Ref::UNDEF
@@ -1298,7 +1302,6 @@ fn build_then_else<IrTypes: IrTypeTable>(
     } else if else_noreturn {
         then_val
     } else {
-        ir.begin_block(after_block.unwrap());
         if matches!(ir.types.get_ir_type(ty), Some(IrType::Primitive(Primitive::Unit))) {
             Ref::UNIT
         } else {
