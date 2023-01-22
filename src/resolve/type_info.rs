@@ -6,9 +6,7 @@ use crate::{
     span::Span,
     types::Primitive,
     ast::{TypeId, FunctionId},
-    ir::{types::{IrTypes, IrType, TypeRefs, TypeRef},
-    eval::{ConstIrType, ConstIrTypes}
-}};
+    ir::types::{IrTypes, IrType, TypeRefs, TypeRef, ConstIrType}};
 
 use super::types::{Type, SymbolTable, DefId, Enum};
 
@@ -282,9 +280,9 @@ impl TypeTable {
         self.enum_variants[idx] = (name, args);
     }
 
-    pub fn add_enum_variants(&mut self, names: impl IntoIterator<Item = (String, TypeRefs)>) -> EnumVariants {
+    pub fn add_enum_variants(&mut self, variants: impl IntoIterator<Item = (String, TypeRefs)>) -> EnumVariants {
         let idx = self.enum_variants.len() as u32;
-        self.enum_variants.extend(names);
+        self.enum_variants.extend(variants);
         let count = self.enum_variants.len() as u32 - idx;
         EnumVariants { idx, count }
     }
@@ -349,41 +347,32 @@ impl TypeTable {
 
         IrTypes::new_with(ir_types, self.generics)
     }
-    pub fn finalize_const(&self) -> ConstIrTypes {
-        let mut ir_types = vec![ConstIrType::Ty(IrType::Primitive(Primitive::Never)); self.types.len()];
+    pub fn finalize_const(&self) -> IrTypes {
+        let mut ir_types = vec![IrType::Primitive(Primitive::Never); self.types.len()];
         for (i, ty) in self.types.iter().copied().enumerate() {
             let type_info = match ty {
                 TypeInfoOrIndex::Type(ty) => ty,
                 TypeInfoOrIndex::Idx(idx) => self.get(idx),
             };
-            ir_types[i] = ConstIrType::Ty(match type_info {
+            ir_types[i] = match type_info {
                 TypeInfo::Unknown => IrType::Primitive(Primitive::Unit),
-                TypeInfo::Int => {
-                    ir_types[i] = ConstIrType::Int;
-                    continue;
-                }
-                TypeInfo::Float => {
-                    ir_types[i] = ConstIrType::Float;
-                    continue;
-                }
+                TypeInfo::Int => IrType::Const(ConstIrType::Int),
+                TypeInfo::Float => IrType::Const(ConstIrType::Float),
                 TypeInfo::Primitive(p) => IrType::Primitive(p),
                 TypeInfo::Resolved(id, generics) => IrType::Id(id, TypeRefs { idx: generics.idx, count: generics.count }),
                 TypeInfo::Pointer(pointee) => IrType::Ptr(pointee),
                 TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
-                TypeInfo::Enum(_) => {
-                    ir_types[i] = ConstIrType::EnumVariant;
-                    continue;
-                }
+                TypeInfo::Enum(_) => IrType::Const(ConstIrType::Enum),
                 TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
                 TypeInfo::SymbolItem(_)
                 | TypeInfo::MethodItem { .. } => todo!(),
                 | TypeInfo::LocalTypeItem(_) => panic!("comptime type supplied when building ir"),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as u32)),
                 TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
-            });
+            };
         }
 
-        ConstIrTypes::new(ir_types)
+        IrTypes::new_with(ir_types, self.generics)
     }
 
     /// Type inference debugging

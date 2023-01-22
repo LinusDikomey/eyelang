@@ -6,7 +6,7 @@ use llvm_sys::{
 use crate::{
     types::{Primitive, Layout},
     resolve::{types::{Type, Enum, ResolvedTypeDef, Struct}, self},
-    ir::{self, types::{IrTypes, TypeRefs, IrType}, builder::IrTypeTable},
+    ir::{self, types::{IrTypes, TypeRefs, IrType}},
     ast::{TypeId, VariantId}
 };
 
@@ -63,6 +63,26 @@ pub(super) unsafe fn llvm_global_ty_instanced(
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
         }
         resolve::types::Type::Generic(i) => llvm_global_ty_instanced(ctx, &generics[*i as usize], module, instances, generics),
+        resolve::types::Type::LocalEnum(variants) => {
+            let int_ty = Enum::int_ty_from_variant_count(variants.len() as _);
+            let tag_layout = int_ty
+                .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+            let mut layout = tag_layout;
+
+            for variant in variants {
+                let mut variant_layout = tag_layout;
+                for arg in variant {
+                    variant_layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
+                }
+                layout.add_variant(variant_layout);
+            }
+
+            if layout == tag_layout {
+                int_ty.map_or_else(|| LLVMVoidTypeInContext(ctx), |ty| llvm_primitive_ty(ctx, Primitive::from(ty)))
+            } else {
+                LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
+            }
+        }
         resolve::types::Type::Invalid => unreachable!(),
     }
 }
@@ -166,7 +186,7 @@ pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &
             .find(|(_, (id, _, _))| *id == variant_idx)
             .unwrap();
         args.iter().map(|arg| {
-            let mut offset = layout.size;
+            let offset = layout.size;
             layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
             offset as _
         }).collect()
@@ -180,7 +200,7 @@ fn enum_ty_with_fn(ctx: LLVMContextRef, variant_count: u16, variant: impl Fn(Var
     let mut layout = tag_layout;
     let mut offsets = vec![Vec::new(); variant_count as usize];
     for i in 0..variant_count {
-        let mut variant_layout = layout;
+        let mut variant_layout = tag_layout;
         let variant_offsets = variant(VariantId::new(i), &mut variant_layout);
         offsets[i as usize] = variant_offsets;
         layout.add_variant(variant_layout);
@@ -211,7 +231,7 @@ unsafe fn llvm_ty_recursive(
         IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
         IrType::Id(id, generics) => {
             // PERF: alllocating a Vec here each time
-            let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types).unwrap()).collect();
+            let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
             get_id_ty(id, &generics, ctx, module, type_instances).0
         }
         IrType::Ptr(_) => LLVMPointerTypeInContext(ctx, 0),
@@ -225,7 +245,7 @@ unsafe fn llvm_ty_recursive(
         }
         IrType::Enum(variants) => {
             enum_ty_with_fn(ctx, variants.count as _, |variant_id, layout| {
-                let Some(IrType::Tuple(args)) = types.get_ir_type(variants.nth(variant_id.idx() as _)) else {
+                let IrType::Tuple(args) = types[variants.nth(variant_id.idx() as _)] else {
                     panic!("invalid type");
                 };
                 args.iter().map(|arg| {
@@ -235,6 +255,7 @@ unsafe fn llvm_ty_recursive(
                 }).collect()
             }).0
         }
+        IrType::Const(_) => panic!("Invalid const type in LLVM backend"),
         IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee, generics),
     }
 }

@@ -1,8 +1,6 @@
 use crate::{
     resolve::{types::Type, type_info::TypeTable},
-    ir::{Function, builder::{IrBuilder, IrTypeTable},
-    FunctionId,
-    types::{IrTypes, IrType}},
+    ir::{Function, builder::IrBuilder, FunctionId, types::{IrTypes, IrType}},
     types::{Primitive, IntType},
     ast::ModuleId
 };
@@ -13,7 +11,7 @@ use crate::{
 /// If the main returns unit, it will always return 0.
 pub fn main_wrapper(eye_main: FunctionId, _module: ModuleId, main_return_ty: Type) -> Function {
     let inferred_types = TypeTable::new(0);
-    let mut builder = IrBuilder::new(IrTypes::new(), &inferred_types);
+    let mut builder = IrBuilder::new(IrTypes::new(), &inferred_types, super::CreateReason::Runtime);
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {

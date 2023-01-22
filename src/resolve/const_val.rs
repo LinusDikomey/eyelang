@@ -5,7 +5,7 @@ use crate::{
     ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self, eval::{ConstIrTypes, ConstIrType}, types::{TypeRef, IrType, TypeRefs}}, dmap,
+    irgen, ir::{builder::IrBuilder, Ref, self, types::{TypeRef, IrType, TypeRefs, IrTypes}}, dmap,
 };
 
 use super::{
@@ -22,7 +22,7 @@ pub enum ConstItem {
     Symbol(ConstSymbol),
 }
 impl ConstItem {
-    pub fn equal_to(&self, other: &Self, types: &ConstIrTypes) -> bool {
+    pub fn equal_to(&self, other: &Self, types: &IrTypes) -> bool {
         match (self, other) {
             (ConstItem::Val(a), ConstItem::Val(b)) => a.equal_to(b),
             (ConstItem::Symbol(a), ConstItem::Symbol(b)) => a.equal_to(b, types),
@@ -95,15 +95,15 @@ pub enum ConstSymbol {
     Module(ModuleId),
 }
 impl ConstSymbol {
-    pub fn equal_to(&self, other: &ConstSymbol, types: &ConstIrTypes) -> bool {
+    pub fn equal_to(&self, other: &ConstSymbol, types: &IrTypes) -> bool {
         match (self, other) {
             (Self::Func(l), Self::Func(r)) => l == r,
             (Self::Type(l), Self::Type(r)) => l == r,
             (Self::Trait(l), Self::Trait(r)) => l == r,
             (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
             (Self::LocalType(l), Self::LocalType(r)) => {
-                let ConstIrType::Ty(IrType::Id(_l_id, _l_generics)) = types[*l] else { unreachable!() };
-                let ConstIrType::Ty(IrType::Id(_r_id, _r_generics)) = types[*r] else { unreachable!() };
+                let IrType::Id(_l_id, _l_generics) = types[*l] else { unreachable!() };
+                let IrType::Id(_r_id, _r_generics) = types[*r] else { unreachable!() };
                 todo!()
             }
             (Self::Module(l), Self::Module(r)) => l == r,
@@ -173,7 +173,7 @@ pub fn eval(
     let mut var_refs = vec![Ref::UNDEF; vars.len()];
 
     let ir_types = types.finalize_const();
-    let mut builder = IrBuilder::new(ir_types, &types);
+    let mut builder = IrBuilder::new(ir_types, &types, irgen::CreateReason::Comptime);
     let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
         ast,
         symbols: &symbols,

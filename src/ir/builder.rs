@@ -1,12 +1,10 @@
-use std::ops::Index;
-
 use crate::{
-    ast::{GlobalId, TypeId, VariantId},
+    ast::{GlobalId, VariantId},
     ir::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex},
-    types::{Primitive, Layout}, resolve::{type_info::{TypeInfo, TypeTable}, types::{ResolvedTypeDef, Type}}, irgen::CreateReason,
+    types::Primitive, resolve::type_info::{TypeInfo, TypeTable}, irgen::CreateReason,
 };
 
-use super::{RefVal, FunctionId, types::{TypeRef, IrType, TypeRefs}};
+use super::{RefVal, FunctionId, types::{TypeRef, IrType, IrTypes}};
 
 pub enum BinOp {
     Add,
@@ -27,34 +25,20 @@ pub enum BinOp {
     GE,
 }
 
-pub trait IrTypeTable : Index<TypeRef, Output = Self::Type> {
-    const CREATE_REASON: CreateReason;
-    type Type;
-    //fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> Self::Type;
-    //fn add_info(&mut self, info: TypeInfo, types: &TypeTable) -> TypeRef;
-    fn add(&mut self, p: IrType) -> TypeRef;
-    fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef;
-    fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs;
-    fn replace(&mut self, idx: TypeRef, ty: IrType);
-    fn from_resolved(&mut self, ty: &Type, generics: TypeRefs) -> IrType;
-    fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout;
-    fn get_ir_type(&self, r: TypeRef) -> Option<IrType>;
-}
-
 #[derive(Debug)]
-pub struct IrBuilder<'a, IrTypes: IrTypeTable = super::types::IrTypes> {
+pub struct IrBuilder<'a> {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
     next_block: u32,
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
-    //pub types: TypeTable,
     pub types: IrTypes,
     pub inferred_types: &'a TypeTable,
+    create_reason: CreateReason,
 }
-impl<'a, IrTypes: IrTypeTable> IrBuilder<'a, IrTypes> {
-    pub fn new(ir_types: IrTypes, inferred_types: &'a TypeTable) -> Self {
+impl<'a> IrBuilder<'a> {
+    pub fn new(ir_types: IrTypes, inferred_types: &'a TypeTable, create_reason: CreateReason) -> Self {
         Self {
             inst: vec![Instruction {
                 data: Data { block: BlockIndex(0) },
@@ -69,8 +53,11 @@ impl<'a, IrTypes: IrTypeTable> IrBuilder<'a, IrTypes> {
             extra: Vec::new(),
             types: ir_types,
             inferred_types,
+            create_reason,
         }
     }
+
+    pub fn create_reason(&self) -> CreateReason { self.create_reason }
 
     /// Internal function to add an instruction. This will not add anything if `emit` is set to false.
     #[cfg_attr(debug_assertions, track_caller)]

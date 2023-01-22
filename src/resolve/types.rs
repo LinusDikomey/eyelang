@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     const_val::{ConstVal, ConstSymbol},
-    type_info::{TypeInfo, TypeTable, TypeInfoOrIndex},
+    type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, EnumVariants},
     Ident,
     Var,
     ResolvedCall,
@@ -25,6 +25,9 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
+
+    // a local enum that will only be created from inference
+    LocalEnum(Vec<Vec<Type>>),
     Invalid
 }
 impl Type {
@@ -52,6 +55,19 @@ impl Type {
                 l
             }
             Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
+            Type::LocalEnum(variants) => {
+                let tag_layout = Enum::int_ty_from_variant_count(variants.len() as _)
+                    .map_or(Layout::EMPTY, |int_ty| Primitive::from(int_ty).layout());
+                let mut layout = tag_layout;
+                for variant in variants {
+                    let mut variant_layout = tag_layout;
+                    for arg in variant {
+                        variant_layout.accumulate(arg.layout(ctx, generics));
+                    }
+                    layout.add_variant(variant_layout);
+                }
+                layout
+            }
             Type::Invalid => Layout::EMPTY,
         }
     }
@@ -95,6 +111,8 @@ impl Type {
             Self::Generic(idx) => {
                 return on_generic(*idx);
             }
+            Self::LocalEnum(variants) => unreachable!(), // this shouldn't happen as LocalEnum
+                                                         // can't be created with a type annotation
             Self::Invalid => TypeInfo::Invalid
         })
     }
@@ -118,6 +136,15 @@ impl Type {
                     .collect()
             ),
             Type::Generic(idx) => generics[*idx as usize].clone(),
+            Type::LocalEnum(variants) => Type::LocalEnum(variants
+                .iter()
+                .map(|variant| variant
+                     .iter()
+                     .map(|ty| ty.instantiate_generics(generics))
+                     .collect()
+                )
+                .collect()
+            ),
             Type::Invalid => Type::Invalid,
         }
     }
@@ -355,10 +382,11 @@ pub struct Enum {
 }
 impl Enum {
     pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
-        let mut layout = Self::int_ty_from_variant_count(self.variants.len() as u32)
+        let tag_layout = Self::int_ty_from_variant_count(self.variants.len() as u32)
             .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+        let mut layout = tag_layout;
         for (_, _, args) in self.variants.values() {
-            let mut variant_layout = layout;
+            let mut variant_layout = tag_layout;
             for arg in args {
                 variant_layout.accumulate(arg.layout(ctx, generics));
             }

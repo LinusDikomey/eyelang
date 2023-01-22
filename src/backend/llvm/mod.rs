@@ -3,7 +3,7 @@ use crate::{
     dmap::{self, DHashMap},
     types::{Primitive, Layout},
     BackendStats,
-    ir::{self, types::{IrType, TypeRef}, Tag, builder::IrTypeTable}, 
+    ir::{self, types::{IrType, TypeRef}, Tag}, 
     resolve::{types::{ResolvedTypeDef, Type, Enum},
     const_val::ConstVal, self},
     backend::llvm::types::Numeric, ast::VariantId
@@ -464,7 +464,7 @@ unsafe fn build_func(
                             let member = inst.data.int;
 
                             let generics: Vec<_> = generics.iter()
-                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
                                 .collect();
                             let (_, OffsetsRef::Struct(offsets)) = get_id_ty(id, &generics, ctx, module, types)
                                 else { panic!("Tried to get member of non-struct") };
@@ -509,7 +509,7 @@ unsafe fn build_func(
                     match r_ty {
                         IrType::Id(id, generics) => {
                             let generics: Vec<_> = generics.iter()
-                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
                                 .collect();
                             let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
                             let OffsetsRef::Struct(offsets) = offsets else { panic!("invalid argument for Value") };
@@ -539,6 +539,7 @@ unsafe fn build_func(
                         IrType::Array(_, _) => {
                             LLVMBuildExtractValue(builder, r, data.ref_int.1, NONE)
                         }
+                        IrType::Const(_) => panic!("invalid const type in LLVM backend"),
                         IrType::Ref(_) => unreachable!(),
                     }
                 } else {
@@ -689,7 +690,7 @@ unsafe fn tag_offset(
             // FIXME: better generics handling without as_resolved_type
             let generics: Vec<_> = generics
                 .iter()
-                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
                 .collect();
             let (_ty, OffsetsRef::Enum(layout)) = get_id_ty(id, &generics, ctx, module, types) else {
                 panic!()
@@ -707,9 +708,9 @@ unsafe fn tag_offset(
             // unnecessary.
             let mut transparent_tag = true;
             'variant_check: for variant in variants.iter() {
-                let Some(IrType::Tuple(args)) = ir.types.get_ir_type(variant) else { panic!() };
+                let IrType::Tuple(args) = ir.types[variant] else { panic!() };
                 for arg in args.iter() {
-                    if ir.types.layout(&ir.types[arg], |id| &module.types[id.idx()].1).size != 0 {
+                    if ir.types.layout(ir.types[arg], |id| &module.types[id.idx()].1).size != 0 {
                         transparent_tag = false;
                         break 'variant_check;
                     }
@@ -732,7 +733,7 @@ unsafe fn variant_offset(ty: IrType, ir: &ir::FunctionIr, variant: VariantId, ar
         IrType::Id(id, generics) => {
             let generics: Vec<_> = generics
                 .iter()
-                .map(|ty| ir.types[ty].as_resolved_type(&ir.types).unwrap())
+                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
                 .collect();
             let (_, OffsetsRef::Enum(enum_layout)) = get_id_ty(id, &generics, ctx, module, types) else {
                 panic!("non-enum type found for EnumVariantMember");
@@ -862,6 +863,7 @@ unsafe fn cast(val: LLVMValueRef, origin: IrType, target: IrType, builder: LLVMB
                 t => panic!("Can't cast from non-pointer type {t:?} to pointer")
             }
         }
+        IrType::Const(_) => panic!("invalid const type in LLVM backend"),
         IrType::Ref(_) => unreachable!()
     }
 }

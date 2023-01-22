@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef, Type}};
+use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef, Type}, ir::types::ConstIrType};
 
 use super::{
     Function,
@@ -118,6 +118,17 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
                 write!(f, ")")
             }
             Type::Generic(idx) => write!(f, "Generic #{idx}"),
+            Type::LocalEnum(variants) => {
+                write!(f, "enum {{")?;
+                write_delimited_with(f, variants, |f, variant| {
+                    write!(f, "(")?;
+                    for arg in variant {
+                        write!(f, "{}", arg.display_fn(self.type_name))?;
+                    }
+                    write!(f, ")")
+                }, ", ")?;
+                write!(f, "}}")
+            }
             Type::Invalid => write!(f, "[invalid]"),
         }
     }
@@ -270,6 +281,10 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &Ir
             }, ", ")?;
             write!(f, "}}")
         }
+        IrType::Const(ConstIrType::Int) => write!(f, "int"),
+        IrType::Const(ConstIrType::Float) => write!(f, "enum"),
+        IrType::Const(ConstIrType::Enum) => write!(f, "float"),
+        IrType::Const(ConstIrType::Type) => write!(f, "type"),
         IrType::Ref(r) => display_type(f, types[r], types, info)
     }
 }

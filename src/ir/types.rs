@@ -1,8 +1,6 @@
 use std::ops::Index;
 
-use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::types::{Type, ResolvedTypeDef, Enum}, irgen::CreateReason};
-
-use super::builder::IrTypeTable;
+use crate::{types::{Primitive, Layout}, ast::TypeId, resolve::types::{Type, ResolvedTypeDef, Enum}};
 
 #[derive(Debug)]
 pub struct IrTypes {
@@ -26,10 +24,7 @@ impl IrTypes {
     pub fn generics(&self) -> TypeRefs {
         self.generics
     }
-}
-impl IrTypeTable for IrTypes {
-    const CREATE_REASON: CreateReason = CreateReason::Runtime;
-    type Type = IrType;
+
     /*
     fn info_to_ty(&mut self, info: TypeInfo, types: &TypeTable) -> IrType {
         match info {
@@ -81,22 +76,31 @@ impl IrTypeTable for IrTypes {
         self.add(ty)
     }
     */
-    fn add(&mut self, ty: IrType) -> TypeRef {
+    pub fn add(&mut self, ty: IrType) -> TypeRef {
         self.types.push(ty);
         TypeRef((self.types.len() - 1) as u32)
     }
-    fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
+    pub fn add_ptr_ty(&mut self, pointee: TypeRef) -> TypeRef {
         self.add(IrType::Ptr(pointee))
     }
-    fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs {
+    pub fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs {
         let start = self.types.len();
         self.types.extend(types);
         TypeRefs { idx: start as _, count: (self.types.len() - start) as _ }
     }
-    fn replace(&mut self, idx: TypeRef, ty: IrType) {
+    pub fn replace(&mut self, idx: TypeRef, ty: IrType) {
         self.types[idx.idx()] = ty;
     }
-    fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
+    pub fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
+        let add_tuple = |s: &mut IrTypes, elems: &[Type]| -> TypeRefs {
+            let idx = s.types.len() as u32;
+            s.types.extend((0..elems.len()).map(|_| IrType::Primitive(Primitive::Unit)));
+
+            for (i, ty) in elems.iter().enumerate() {
+                s.types[idx as usize + i] = s.from_resolved(ty, on_generic);
+            }
+            TypeRefs { idx, count: elems.len() as _ }
+        };
         match ty {
             Type::Prim(p) => IrType::Primitive(*p),
             Type::Id(id, generics) => {
@@ -117,24 +121,24 @@ impl IrTypeTable for IrTypes {
                 IrType::Array(self.add(elem_ty), b.1)
             }
             Type::Tuple(elems) => {
-                let idx = self.types.len() as u32;
-                self.types.extend((0..elems.len()).map(|_| IrType::Primitive(Primitive::Unit)));
-
-                for (i, ty) in elems.iter().enumerate() {
-                    self.types[i] = self.from_resolved(ty, on_generic);
-                }
-                IrType::Tuple(TypeRefs { idx, count: elems.len() as _ })
+                IrType::Tuple(add_tuple(self, elems))
             }
             Type::Generic(i) => IrType::Ref(on_generic.nth(*i as _)),
+            Type::LocalEnum(variants) => {
+                let idx = self.types.len() as u32;
+                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Never)).take(variants.len()));
+
+                for (i, args) in variants.iter().enumerate() {
+                    self.types[idx as usize + i] = IrType::Tuple(add_tuple(self, args));
+                }
+
+                IrType::Enum(TypeRefs { idx, count: variants.len() as _ })
+            }
             Type::Invalid => unreachable!("invalid 'Type' encountered during irgen"),
         }
     }
-    fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: &Self::Type, get_type: F) -> Layout {
+    pub fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: IrType, get_type: F) -> Layout {
         ty.layout(self, get_type)
-    }
-
-    fn get_ir_type(&self, r: TypeRef) -> Option<IrType> {
-        Some(self[r])
     }
 }
 
@@ -157,6 +161,8 @@ pub enum IrType {
     Array(TypeRef, u32),
     Tuple(TypeRefs),
     Enum(TypeRefs),  /// TypeRefs should point to tuples of arguments
+    
+    Const(ConstIrType),
 
     Ref(TypeRef), // just refers to a different index
 }
@@ -174,7 +180,7 @@ impl IrType {
             IrType::Primitive(p) => p.layout(),
             IrType::Id(id, generics) => {
                 // PERF: heap allocation + recalculation of enum layout
-                let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types).unwrap()).collect();
+                let generics: Vec<_> = generics.iter().map(|ty| types[ty].as_resolved_type(types)).collect();
                 get_type(id).layout(get_type, &generics)
             }
             IrType::Ptr(_) => Layout::PTR,
@@ -188,12 +194,13 @@ impl IrType {
                 layout
             }
             IrType::Enum(variants) => {
-                let mut layout = Enum::int_ty_from_variant_count(variants.len() as u32)
+                let tag_layout = Enum::int_ty_from_variant_count(variants.len() as u32)
                     .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
+                let mut layout = tag_layout;
 
                 for variant in variants.iter() {
                     let IrType::Tuple(args) = types[variant] else { panic!("invalid IrType found") };
-                    let mut variant_layout = layout;
+                    let mut variant_layout = tag_layout;
                     for arg in args.iter() {
                         variant_layout.accumulate(types[arg].layout(types, get_type));
                     }
@@ -201,37 +208,53 @@ impl IrType {
                 }
                 layout
             }
+            IrType::Const(_) => todo!("const IrType layout"),
             IrType::Ref(r) => types[r].layout(types, get_type),
         }
     }
-    pub fn as_resolved_type<IrTypes: IrTypeTable>(self, types: &IrTypes) -> Option<Type> {
-        Some(match self {
+    pub fn as_resolved_type(self, types: &IrTypes) -> Type {
+        match self {
             IrType::Primitive(p) => Type::Prim(p),
             IrType::Id(id, generics) => Type::Id(
                 id,
                 generics
                     .iter()
-                    .map(|ty| types.get_ir_type(ty)?.as_resolved_type(types))
-                    .collect::<Option<_>>()?
+                    .map(|ty| types[ty].as_resolved_type(types))
+                    .collect()
             ),
-            IrType::Ptr(pointee) => Type::Pointer(Box::new(types.get_ir_type(pointee)?.as_resolved_type(types)?)),
+            IrType::Ptr(pointee) => Type::Pointer(Box::new(types[pointee].as_resolved_type(types))),
             IrType::Array(member, count) => Type::Array(Box::new((
-                types.get_ir_type(member)?.as_resolved_type(types)?,
+                types[member].as_resolved_type(types),
                 count
             ))),
             IrType::Tuple(members) => Type::Tuple(
                 members
                     .iter()
-                    .map(|ty| types.get_ir_type(ty)?.as_resolved_type(types))
-                    .collect::<Option<_>>()?
+                    .map(|ty| types[ty].as_resolved_type(types))
+                    .collect()
             ),
-            IrType::Enum(variants) => todo!("enum as Type"), // find an alternative,
-                                                                        // converting to resolved
-                                                                        // type is a bad solution
-                                                                        // anyways
-            IrType::Ref(idx) => types.get_ir_type(idx)?.as_resolved_type(types)?,
-        })
+            IrType::Enum(variants) => Type::LocalEnum(
+                variants.iter()
+                    .map(|variant| {
+                        let IrType::Tuple(args) = types[variant] else { unreachable!() };
+                        args.iter()
+                            .map(|ty| types[ty].as_resolved_type(types))
+                            .collect()
+                    })
+                    .collect()
+            ),
+            IrType::Const(_) => todo!("Const IrType as Type"),
+            IrType::Ref(idx) => types[idx].as_resolved_type(types),
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ConstIrType {
+    Int,
+    Float,
+    Enum,
+    Type,
 }
 
 #[derive(Clone, Copy, Debug)]
