@@ -564,7 +564,6 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::EnumValueTag => {
-                // FIXME: like with EnumTag above, tag may not be at offset zero in the future. 
                 if let (Some(r), ty) = get_ref_and_type(&instructions, data.un_op) {
                     match tag_offset(ty, ir, ctx, module, types) {
                         Some(offset) => LLVMBuildExtractValue(builder, r, offset, NONE),

@@ -6,8 +6,8 @@ use llvm_sys::{
 use crate::{
     types::{Primitive, Layout},
     resolve::{types::{Type, Enum, ResolvedTypeDef, Struct}, self},
-    ir::{self, types::{IrTypes, TypeRefs, IrType}},
-    ast::TypeId
+    ir::{self, types::{IrTypes, TypeRefs, IrType}, builder::IrTypeTable},
+    ast::{TypeId, VariantId}
 };
 
 use super::{TypeInstance, EnumLayout};
@@ -159,18 +159,30 @@ pub fn struct_ty(ctx: LLVMContextRef, def: &Struct, module: &ir::Module, generic
 }
 
 pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &[Type]) -> (LLVMTypeRef, EnumLayout) {
-    let int_ty = Enum::int_ty_from_variant_count(def.variants.len() as u32);
+    enum_ty_with_fn(ctx, def.variants.len() as _, |variant_idx, layout| {
+        // PERF: searching for the variant id is suboptimal, maybe provide a Vec and A
+        // HashMap<String, VariantId>
+        let (_, (_, _, args)) = def.variants.iter()
+            .find(|(_, (id, _, _))| *id == variant_idx)
+            .unwrap();
+        args.iter().map(|arg| {
+            let mut offset = layout.size;
+            layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
+            offset as _
+        }).collect()
+    })
+}
+
+fn enum_ty_with_fn(ctx: LLVMContextRef, variant_count: u16, variant: impl Fn(VariantId, &mut Layout) -> Vec<u32>)
+-> (LLVMTypeRef, EnumLayout) {
+    let int_ty = Enum::int_ty_from_variant_count(variant_count as _);
     let tag_layout = int_ty.map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
     let mut layout = tag_layout;
-    let mut offsets = vec![Vec::new(); def.variants.len()];
-    for (_name, (variant_id, _ordinal, args)) in &def.variants {
+    let mut offsets = vec![Vec::new(); variant_count as usize];
+    for i in 0..variant_count {
         let mut variant_layout = layout;
-        let variant_offsets = args.iter().map(|arg| { 
-            let offset = variant_layout.size as u32;
-            variant_layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
-            offset
-        }).collect();
-        offsets[variant_id.idx()] = variant_offsets;
+        let variant_offsets = variant(VariantId::new(i), &mut variant_layout);
+        offsets[i as usize] = variant_offsets;
         layout.add_variant(variant_layout);
     }
 
@@ -207,9 +219,21 @@ unsafe fn llvm_ty_recursive(
             let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false, generics);
             LLVMArrayType(elem_ty, count)
         }
-        IrType::Tuple(_) | IrType::Enum(_) => {
+        IrType::Tuple(_) => {
             let layout = ty.layout(types, |id| &module.types[id.idx()].1);
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
+        }
+        IrType::Enum(variants) => {
+            enum_ty_with_fn(ctx, variants.count as _, |variant_id, layout| {
+                let Some(IrType::Tuple(args)) = types.get_ir_type(variants.nth(variant_id.idx() as _)) else {
+                    panic!("invalid type");
+                };
+                args.iter().map(|arg| {
+                    let offset = layout.size as _;
+                    layout.accumulate(types[arg].layout(types, |i| &module.types[i.idx()].1));
+                    offset
+                }).collect()
+            }).0
         }
         IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee, generics),
     }
