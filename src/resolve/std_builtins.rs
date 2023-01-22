@@ -6,8 +6,7 @@ use super::{scope::{Scopes, ScopeId, UnresolvedDefId}, types::DefId, type_info::
 /// for example because they can be constructed with special syntax (strings).
 #[derive(Debug)]
 pub struct Builtins {
-    pub str_type: TypeId,
-    pub str_eq: FunctionId,
+    values: Option<BuiltinValues>,
 }
 impl Builtins {
     pub fn resolve(scopes: &mut Scopes, std: ModuleId, ast: &Ast) -> Self {
@@ -31,13 +30,27 @@ impl Builtins {
         };
         let str_eq = str_def.methods["eq"];
 
-        Self { str_type, str_eq }
+        Self { values: Some(BuiltinValues { str_type, str_eq }) }
+    }
+
+    pub const fn nostd() -> Self {
+        Self { values: None }
+    }
+    
+    fn values(&self) -> &BuiltinValues {
+        self.values.as_ref().expect("Builtins not available because the project was compiled with --nostd")
     }
 
     pub fn str_info(&self) -> TypeInfo {
-        TypeInfo::Resolved(self.str_type, TypeRefs::EMPTY)
+        TypeInfo::Resolved(self.values().str_type, TypeRefs::EMPTY)
     }
-    pub fn str_ty(&self) -> IrType {
-        IrType::Id(self.str_type, TypeRefs::EMPTY)
-    }
+    pub fn str_ty(&self) -> TypeId { self.values().str_type }
+    pub fn str_ir_ty(&self) -> IrType { IrType::Id(self.values().str_type, TypeRefs::EMPTY) }
+    pub fn str_eq(&self) -> FunctionId { self.values().str_eq }
+}
+
+#[derive(Debug)]
+struct BuiltinValues {
+    str_type: TypeId,
+    str_eq: FunctionId,
 }

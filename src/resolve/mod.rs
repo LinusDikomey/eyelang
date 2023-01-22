@@ -42,7 +42,7 @@ pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, re
     let builtins = if let Some(std) = std {
         Builtins::resolve(&mut scopes, std, ast)
     } else {
-        panic!("compiling without std is not supported right now because builtins are required");
+        Builtins::nostd()
     };
 
     let mut symbols = SymbolTable::new(
@@ -492,8 +492,8 @@ impl<'a> Ctx<'a> {
                                 return;
                             }
                             for (arg_idx, ty) in args.iter().zip(arg_types) {
-                                self.types.specify_resolved_type(arg_idx, ty, generics,
-                                    self.errors, span, &self.symbols);
+                                let ty = ty.as_info(self.types, |i| generics.nth(i as _).into());
+                                self.types.specify_or_merge(arg_idx, ty, self.errors, span, &self.symbols);
                             }
                         }
                         None => self.errors.emit_span(Error::NonexistantEnumVariant, span),

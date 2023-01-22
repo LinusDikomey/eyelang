@@ -812,7 +812,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     Operator::And => BinOp::And,
                     
                     Operator::Equals | Operator::NotEquals
-                        if ir.types[ctx[l]].is_id(ctx.symbols.builtins.str_type)
+                        if ir.types[ctx[l]].is_id(ctx.symbols.builtins.str_ty())
                     => {
                         let l_val = val_expr(ir, l, ctx, noreturn);
                         if *noreturn { return Res::Val(Ref::UNDEF) }
@@ -820,7 +820,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                         if *noreturn { return Res::Val(Ref::UNDEF) }
 
                         let str_eq = ctx.functions.get(
-                            ctx.symbols.builtins.str_eq,
+                            ctx.symbols.builtins.str_eq(),
                             ctx.symbols,
                             vec![],
                             ir.create_reason(),
@@ -1035,7 +1035,7 @@ fn string_literal(ir: &mut IrBuilder, span: TSpan, ctx: &mut Ctx) -> Ref {
     let ptr = ir.build_string(lit.as_bytes(), true, i8_ptr_ty);
     let len = ir.build_int(lit.len() as u64, u64_ty);
     
-    let str_struct = ir.build_decl(ctx.symbols.builtins.str_ty());
+    let str_struct = ir.build_decl(ctx.symbols.builtins.str_ir_ty());
     
     let ptr_ref = ir.build_member_int(str_struct, 0, i8_ptr_ptr_ty);
     ir.build_store(ptr_ref, ptr);
@@ -1169,9 +1169,9 @@ fn gen_pat(
         }
         Expr::StringLiteral(span) => {
             let lit = string_literal(ir, *span, ctx);
-            let str_ty = ir.types.add(IrType::Id(ctx.symbols.builtins.str_type, TypeRefs::EMPTY));
+            let str_ty = ir.types.add(IrType::Id(ctx.symbols.builtins.str_ty(), TypeRefs::EMPTY));
             let lit_val = ir.build_load(lit,  str_ty);
-            let str_eq = ctx.functions.get(ctx.symbols.builtins.str_eq, ctx.symbols, vec![], ir.create_reason());
+            let str_eq = ctx.functions.get(ctx.symbols.builtins.str_eq(), ctx.symbols, vec![], ir.create_reason());
             let eq = ir.build_call(str_eq, [pat_val, lit_val], bool_ty);
             cond_match(ir, eq);
         }

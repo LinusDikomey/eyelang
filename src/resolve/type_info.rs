@@ -414,7 +414,7 @@ impl TypeTable {
                             TypeInfo::Tuple(elems, _) => Some(elems),
                             TypeInfo::Pointer(elem) | TypeInfo::Array(_, elem) => {
                                 Some(TypeRefs {
-                                    idx: elem.0,
+                                    idx: elem.idx() as _,
                                     count: 1,
                                 })
                             }
