@@ -84,28 +84,61 @@ main :: fn {
 ```
 
 ### Enums
-This is all a bit awkward right now because there is no switch/match and no string equality with ==.
-Despite the enum type being completely inferred here, an exhaustive switch would work pretty well.
+Enums can be used locally without a type definition.
 ```rust
 use std.print
+use std.println
 
 main :: fn {
     color := .NoColor
     inp := std.input("Which color do you want? ")
-    if inp.eq("red"): color = .Red
-        else if inp.eq("green"): color = .Green
-        else if inp.eq("blue"): color = .Blue
+    if inp == "red": color = .Red
+        else if inp == "green": color = .Green
+        else if inp == "blue": color = .Blue
     
     if color == .NoColor:
         print("You didn't select a valid color")
     else {
-        std.c.printf("Your color is %s!\n".ptr,
-            if color == .Red: "Red"
-            else if color == .Green: "Green"
-            else if color == .Blue: "Blue"
-            else "No Color"
-        )
+        print("Your color is ")
+        # match exhaustively checks patterns on a value. Removing any of the
+        # arms would create an error (even though the enum is completely inferred!)
+        println(match color {
+            .Red: "Red",
+            .Green: "Green",
+            .Blue: "Blue",
+            .NoColor: std.panic("unreachable"),
+        })
     }
+}
+```
+Enum variants can also have arguments. This is known as sum types/algebraic data types in many other languages.
+Note that implicit enums can infer to explicitly typed enums without having to name the type.
+```rust
+use std.print
+use std.println
+
+Fruit :: enum { Apple(i32) Banana Citrus }
+
+main :: fn {
+    # f is of type Fruit here because it is passed to print_fruit
+    f := .Banana
+    f = .Apple(5)
+
+    # This would create a compilation error because Orange is not a valid variant of Fruit
+    # f = .Orange
+
+    print_fruit(f)
+
+    print_fruit(.Banana)
+}
+
+print_fruit :: fn(f Fruit): match f {
+    .Apple(radius) {
+        print("Apple with radius ")
+        println(std.int_to_str(radius))
+    }
+    .Banana: println("A Banana"),
+    .Citrus: println("A Lemon?")
 }
 ```
 
