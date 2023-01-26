@@ -50,7 +50,7 @@ impl Type {
             Type::Tuple(tuple) => {
                 let mut l = Layout::EMPTY;
                 for ty in tuple {
-                    l.accumulate(ty.layout(ctx, generics))
+                    l.accumulate(ty.layout(ctx, generics));
                 }
                 l
             }

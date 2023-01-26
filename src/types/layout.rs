@@ -26,11 +26,16 @@ impl Layout {
     pub fn stride(&self) -> u64 {
         Self::align(self.size, self.alignment)
     }
-    pub fn accumulate(&mut self, other: Self) {
+
+    /// adds a member layout to the current layout while respecting alignment. Returns the start
+    /// offset of the member that was just added.
+    pub fn accumulate(&mut self, other: Self) -> u32 {
+        let start = Self::align(self.size, other.alignment);
         *self = Self {
-            size: Self::align(self.size, other.alignment) + other.size,
+            size: start + other.size,
             alignment: self.alignment.max(other.alignment),
         };
+        start as u32
     }
     pub fn add_variant(&mut self, variant: Self) {
         self.size = self.size.max(variant.size);

@@ -58,7 +58,7 @@ pub(super) unsafe fn llvm_global_ty_instanced(
         resolve::types::Type::Tuple(elems) => {
             let mut layout = Layout::EMPTY;
             for elem in elems {
-                layout.accumulate(elem.layout(|id| &module.types[id.idx()].1, generics))
+                layout.accumulate(elem.layout(|id| &module.types[id.idx()].1, generics));
             }
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
         }
@@ -170,10 +170,7 @@ pub fn struct_ty(ctx: LLVMContextRef, def: &Struct, module: &ir::Module, generic
     let mut layout = Layout::EMPTY;
     let member_offsets = def.members.iter()
         .map(|(_, ty)| {
-            let offset = layout.size;
-            layout.accumulate(ty.layout(|id| &module.types[id.idx()].1, generics));
-
-            offset as _
+            layout.accumulate(ty.layout(|id| &module.types[id.idx()].1, generics))
         }).collect::<Vec<_>>();
     (unsafe { LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _) }, member_offsets)
 }
@@ -186,9 +183,7 @@ pub fn enum_ty(ctx: LLVMContextRef, def: &Enum, module: &ir::Module, generics: &
             .find(|(_, (id, _, _))| *id == variant_idx)
             .unwrap();
         args.iter().map(|arg| {
-            let offset = layout.size;
-            layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics));
-            offset as _
+            layout.accumulate(arg.layout(|id| &module.types[id.idx()].1, generics))
         }).collect()
     })
 }
@@ -249,9 +244,7 @@ unsafe fn llvm_ty_recursive(
                     panic!("invalid type");
                 };
                 args.iter().map(|arg| {
-                    let offset = layout.size as _;
-                    layout.accumulate(types[arg].layout(types, |i| &module.types[i.idx()].1));
-                    offset
+                    layout.accumulate(types[arg].layout(types, |i| &module.types[i.idx()].1))
                 }).collect()
             }).0
         }
