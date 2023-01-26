@@ -304,8 +304,12 @@ unsafe fn build_func(
                     let IrType::Ptr(inner) = ty else {
                         panic!("Invalid IR, loading non-pointer type: {ty:?}, ref: {:?}", data.un_op);
                     };
-                    let pointee_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[inner]);
-                    LLVMBuildLoad2(builder, pointee_ty, val, NONE)
+                    let pointee_ty = ir.types[inner];
+                    let align = pointee_ty.layout(&ir.types, |id| &module.types[id.idx()].1).alignment;
+                    let pointee_ty = llvm_ty(ctx, module, &ir.types, types, pointee_ty);
+                    let loaded = LLVMBuildLoad2(builder, pointee_ty, val, NONE);
+                    LLVMSetAlignment(loaded, align as u32);
+                    loaded
                 } else {
                     ptr::null_mut()
                 }
@@ -515,8 +519,9 @@ unsafe fn build_func(
                             let OffsetsRef::Struct(offsets) = offsets else { panic!("invalid argument for Value") };
                             let offset = offsets[data.ref_int.1 as usize];
                             let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
+                            let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
                             let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
-                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty)
+                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty, align)
                         }
                         IrType::Tuple(elems) => {
                             // TODO: cache offsets
@@ -530,8 +535,9 @@ unsafe fn build_func(
                                 .alignment;
                             let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
                             let offset = Layout::align(layout.size, elem_align) as u32;
+                            let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
                             let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
-                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty)
+                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty, align)
                             
                         }
                         IrType::Primitive(_) | IrType::Ptr(_) | IrType::Enum(_)
@@ -595,9 +601,10 @@ unsafe fn build_func(
                     // pointer. Let's hope llvm can optimize this shit.
                     let offset = variant_offset(enum_ty, ir,
                         data.variant_member.1, data.variant_member.2, ctx, module, types);
+                    let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
                     let arg_llvm_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
                     let enum_llvm_ty = llvm_ty(ctx, module, &ir.types, types, enum_ty);
-                    extract_value_from_byte_array(ctx, builder, r, enum_llvm_ty, offset, arg_llvm_ty)
+                    extract_value_from_byte_array(ctx, builder, r, enum_llvm_ty, offset, arg_llvm_ty, align)
                 } else {
                     ptr::null_mut()
                 }
@@ -765,7 +772,7 @@ unsafe fn variant_offset(ty: IrType, ir: &ir::FunctionIr, variant: VariantId, ar
 
 unsafe fn extract_value_from_byte_array(
     ctx: LLVMContextRef, builder: LLVMBuilderRef,
-    r: LLVMValueRef, r_ty: LLVMTypeRef, offset: u32, value_ty: LLVMTypeRef,
+    r: LLVMValueRef, r_ty: LLVMTypeRef, offset: u32, value_ty: LLVMTypeRef, value_align: u32,
 ) -> LLVMValueRef {
     let alloced = LLVMBuildAlloca(builder, r_ty, NONE);
     LLVMBuildStore(builder, r, alloced);
@@ -773,7 +780,9 @@ unsafe fn extract_value_from_byte_array(
     let mut indices = [LLVMConstInt(i32, 0, FALSE), LLVMConstInt(i32, offset as _, FALSE)];
     let elem_ptr = LLVMBuildInBoundsGEP2(builder, r_ty, alloced,
         indices.as_mut_ptr(), indices.len() as _, NONE);
-    LLVMBuildLoad2(builder, value_ty, elem_ptr, NONE)
+    let load = LLVMBuildLoad2(builder, value_ty, elem_ptr, NONE);
+    LLVMSetAlignment(load, value_align);
+    load
 }
 
 unsafe fn inline_asm(
