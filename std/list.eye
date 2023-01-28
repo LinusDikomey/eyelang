@@ -15,7 +15,7 @@ List :: struct[T] {
     cap u64,
 
     new :: fn() -> List[T]: List(u64(0) as *T, 0, 0)
-    with_capacity :: fn(cap u64) -> List[T]: List(malloc(cap * T.size) as _, 0, cap)
+    with_capacity :: fn(cap u64) -> List[T]: List(malloc(cap * T.stride) as _, 0, cap)
 
     push :: fn(this *List[T], item T) {
         if this^.len < this^.cap {
@@ -29,9 +29,9 @@ List :: struct[T] {
     }
 
     realloc_to_cap :: fn(this *List[T], new_cap u64) {
-        new_buf := malloc(new_cap * T.size) as *T
+        new_buf := malloc(new_cap * T.stride) as *T
         if this^.len != 0 {
-            memcpy(new_buf as *i8, this^.buf as *i8, this^.len * T.size)
+            memcpy(new_buf as *i8, this^.buf as *i8, this^.len * T.stride)
         }
         this^.buf = new_buf
         this^.cap = new_cap

@@ -914,6 +914,13 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     );
                     layout_val(ir, layout.alignment)
                 }
+                MemberAccess::Stride(id) => {
+                    let layout = ctx.symbols.get_type(id).layout(
+                        |id| ctx.symbols.get_type(id),
+                        &[]
+                    );
+                    layout_val(ir, layout.stride())
+                }
                 MemberAccess::LocalSize(idx) => {
                     let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.size)
@@ -921,6 +928,10 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 MemberAccess::LocalAlign(idx) => {
                     let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.alignment)
+                }
+                MemberAccess::LocalStride(idx) => {
+                    let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
+                    layout_val(ir, layout.stride())
                 }
                 MemberAccess::StructMember(member_idx) => {
                     let mut member_ty = ir.types[ctx[left]];

@@ -398,13 +398,15 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                     TypeInfo::Generic(_) => todo!("generic member checking (traits?)"),
                     TypeInfo::SymbolItem(DefId::Type(id)) => {
                         match name {
-                            "size" => {
+                            "size" | "align" | "stride" => {
                                 ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), ctx.span(expr));
-                                break (MemberAccess::Size(id), TypeInfo::Primitive(Primitive::U64).into());
-                            }
-                            "align" => {
-                                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), ctx.span(expr));
-                                break (MemberAccess::Align(id), TypeInfo::Primitive(Primitive::U64).into());
+                                let access = match name {
+                                    "size" => MemberAccess::Size(id),
+                                    "align" => MemberAccess::Align(id),
+                                    "stride" => MemberAccess::Stride(id),
+                                    _ => unreachable!()
+                                };
+                                break (access, TypeInfo::Primitive(Primitive::U64).into());
                             }
                             _ => {}
                         }
@@ -448,13 +450,15 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                     }
                     TypeInfo::LocalTypeItem(idx) => {
                         match name {
-                            "size" => {
+                            "size" | "align" | "stride" => {
                                 ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), ctx.span(expr));
-                                break (MemberAccess::LocalSize(idx), TypeInfo::Primitive(Primitive::U64).into());
-                            }
-                            "align" => {
-                                ctx.specify(info.expected, TypeInfo::Primitive(Primitive::U64), ctx.span(expr));
-                                break (MemberAccess::LocalAlign(idx), TypeInfo::Primitive(Primitive::U64).into());
+                                let access = match name {
+                                    "size" => MemberAccess::LocalSize(idx),
+                                    "align" => MemberAccess::LocalAlign(idx),
+                                    "stride" => MemberAccess::LocalStride(idx),
+                                    _ => unreachable!()
+                                };
+                                break (access, TypeInfo::Primitive(Primitive::U64).into());
                             }
                             _ => todo!("member access on generics")
                         }

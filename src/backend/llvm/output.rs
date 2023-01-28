@@ -13,10 +13,12 @@ pub unsafe fn emit_bitcode(target: Option<&CStr>, module: super::Module, out: &s
     };
 
     target::LLVM_InitializeAllTargetInfos();
-    target::LLVM_InitializeAllTargets();
-    target::LLVM_InitializeAllTargetMCs();
-    target::LLVM_InitializeAllAsmParsers();
-    target::LLVM_InitializeAllAsmPrinters();
+    target::LLVM_InitializeNativeTarget();
+    //target::LLVM_InitializeAllTargets();
+    //target::LLVM_InitializeAllTargetMCs();
+    //target::LLVM_InitializeAllAsmParsers();
+    //target::LLVM_InitializeAllAsmPrinters();
+    target::LLVM_InitializeNativeAsmPrinter();
 
     let mut target: target_machine::LLVMTargetRef = ptr::null_mut();
     let mut error: *mut i8 = ptr::null_mut();

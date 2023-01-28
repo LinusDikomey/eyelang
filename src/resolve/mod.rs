@@ -533,8 +533,10 @@ pub enum ResolvedCall {
 pub enum MemberAccess {
     Size(TypeId),
     Align(TypeId),
+    Stride(TypeId),
     LocalSize(TypeRef),
     LocalAlign(TypeRef),
+    LocalStride(TypeRef),
     StructMember(u32),
     Symbol(DefId),
     Method(FunctionId),

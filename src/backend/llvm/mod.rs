@@ -3,7 +3,7 @@ use crate::{
     dmap::{self, DHashMap},
     types::{Primitive, Layout},
     BackendStats,
-    ir::{self, types::{IrType, TypeRef}, Tag}, 
+    ir::{self, types::{IrType, TypeRef, IrTypes}, Tag}, 
     resolve::{types::{ResolvedTypeDef, Type, Enum},
     const_val::ConstVal, self},
     backend::llvm::types::Numeric, ast::VariantId
@@ -265,7 +265,8 @@ unsafe fn build_func(
                 let param_var = LLVMBuildAlloca(builder, llvm_ty, NONE);
                 LLVMSetAlignment(param_var, layout.alignment as _);
                 let val = LLVMGetParam(llvm_func, data.int32);
-                LLVMBuildStore(builder, val, param_var);
+                let store = LLVMBuildStore(builder, val, param_var);
+                LLVMSetAlignment(store, layout.alignment as _);
                 param_var
             }
             ir::Tag::Uninit => {
@@ -315,10 +316,12 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::Store => {
-                let (val, _) = get_ref_and_type(&instructions, data.bin_op.1);
+                let (val, val_ty) = get_ref_and_type(&instructions, data.bin_op.1);
+                let align = val_ty.layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
                 if let Some(val) = val {
                     if let Some(ptr) = get_ref(&instructions, data.bin_op.0) {
-                        LLVMBuildStore(builder, val, ptr);
+                        let store = LLVMBuildStore(builder, val, ptr);
+                        LLVMSetAlignment(store, align);
                     }
                 }
                 ptr::null_mut()
@@ -518,10 +521,8 @@ unsafe fn build_func(
                             let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
                             let OffsetsRef::Struct(offsets) = offsets else { panic!("invalid argument for Value") };
                             let offset = offsets[data.ref_int.1 as usize];
-                            let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
-                            let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
-                            let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
-                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty, align)
+                            extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, r_ty,
+                                offset, ir.types[ty])
                         }
                         IrType::Tuple(elems) => {
                             // TODO: cache offsets
@@ -533,11 +534,9 @@ unsafe fn build_func(
                             let elem_align = ir.types[elems.nth(data.ref_int.1)]
                                 .layout(&ir.types, |id| &module.types[id.idx()].1)
                                 .alignment;
-                            let r_ty = llvm_ty(ctx, module, &ir.types, types, r_ty);
                             let offset = Layout::align(layout.size, elem_align) as u32;
-                            let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
-                            let ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
-                            extract_value_from_byte_array(ctx, builder, r, r_ty, offset, ty, align)
+                            extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, r_ty,
+                                offset, ir.types[ty])
                             
                         }
                         IrType::Primitive(_) | IrType::Ptr(_) | IrType::Enum(_)
@@ -601,10 +600,7 @@ unsafe fn build_func(
                     // pointer. Let's hope llvm can optimize this shit.
                     let offset = variant_offset(enum_ty, ir,
                         data.variant_member.1, data.variant_member.2, ctx, module, types);
-                    let align = ir.types[ty].layout(&ir.types, |id| &module.types[id.idx()].1).alignment as u32;
-                    let arg_llvm_ty = llvm_ty(ctx, module, &ir.types, types, ir.types[ty]);
-                    let enum_llvm_ty = llvm_ty(ctx, module, &ir.types, types, enum_ty);
-                    extract_value_from_byte_array(ctx, builder, r, enum_llvm_ty, offset, arg_llvm_ty, align)
+                    extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, enum_ty, offset, ir.types[ty])
                 } else {
                     ptr::null_mut()
                 }
@@ -771,15 +767,24 @@ unsafe fn variant_offset(ty: IrType, ir: &ir::FunctionIr, variant: VariantId, ar
 }
 
 unsafe fn extract_value_from_byte_array(
-    ctx: LLVMContextRef, builder: LLVMBuilderRef,
-    r: LLVMValueRef, r_ty: LLVMTypeRef, offset: u32, value_ty: LLVMTypeRef, value_align: u32,
+    ctx: LLVMContextRef, module: &ir::Module, type_instances: &mut [TypeInstance],
+    builder: LLVMBuilderRef, ir_types: &IrTypes,
+    r: LLVMValueRef, r_ty: IrType, offset: u32, value_ty: IrType,
 ) -> LLVMValueRef {
+    let r_align = r_ty.layout(ir_types, |id| &module.types[id.idx()].1).alignment as u32;
+    let r_ty = llvm_ty(ctx, module, ir_types, type_instances, r_ty);
     let alloced = LLVMBuildAlloca(builder, r_ty, NONE);
-    LLVMBuildStore(builder, r, alloced);
+    LLVMSetAlignment(alloced, r_align);
+    let store = LLVMBuildStore(builder, r, alloced);
+    LLVMSetAlignment(store, r_align);
+
     let i32 = LLVMInt32TypeInContext(ctx);
     let mut indices = [LLVMConstInt(i32, 0, FALSE), LLVMConstInt(i32, offset as _, FALSE)];
     let elem_ptr = LLVMBuildInBoundsGEP2(builder, r_ty, alloced,
         indices.as_mut_ptr(), indices.len() as _, NONE);
+
+    let value_align = value_ty.layout(ir_types, |id| &module.types[id.idx()].1).alignment as u32;
+    let value_ty = llvm_ty(ctx, module, ir_types, type_instances, value_ty);
     let load = LLVMBuildLoad2(builder, value_ty, elem_ptr, NONE);
     LLVMSetAlignment(load, value_align);
     load
