@@ -1,4 +1,3 @@
-use std.list.List
 
 Option :: enum[T] { Some(T) None }
 
@@ -21,5 +20,5 @@ eq :: fn[T](a Option[T], b Option[T]) -> bool: match a {
 }
 
 assert :: fn(b bool) {
-    if !b: std.panic("assertion failed")
+    if !b: panic("assertion failed")
 }

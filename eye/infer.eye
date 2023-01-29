@@ -1,4 +1,4 @@
-use std.string.str
+
 # print and parse are no longer intrinsics so these are added to make the program work
 print :: fn(s str, ...) {}
 parse :: fn(s str) -> i32: 0

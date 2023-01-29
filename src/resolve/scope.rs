@@ -50,10 +50,10 @@ pub struct Scope {
     locals: DHashMap<String, LocalDefId>,
 }
 impl Scope {
-    pub fn root(names: DHashMap<String, UnresolvedDefId>, module_ctx: ModuleCtx) -> Self {
+    pub fn root(names: DHashMap<String, UnresolvedDefId>, module_ctx: ModuleCtx, parent: Option<ModuleId>) -> Self {
         Self {
             module: module_ctx,
-            parent: None,
+            parent: parent.map(|id| ParentScope { id: ScopeId::module(id), can_see_locals: false }),
             names,
             locals: dmap::new(),
         }

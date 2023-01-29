@@ -1,9 +1,8 @@
-use std.string.str
 
 main :: fn {
-    mode := std.input("Enter operation: ")
-    a := std.input("First number: ").parse()
-    b := std.input("Second number: ").parse()
+    mode := input("Enter operation: ")
+    a := input("First number: ").parse()
+    b := input("Second number: ").parse()
     std.c.printf("Result: %d\n".ptr, calc(mode, a, b))
 }
 

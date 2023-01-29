@@ -1,4 +1,3 @@
-use std.println
 use std.c.printf
 
 Fruit :: enum { Apple Banana Pineapple }

@@ -30,7 +30,11 @@ impl Builtins {
         };
         let str_eq = str_def.methods["eq"];
 
-        Self { values: Some(BuiltinValues { str_type, str_eq }) }
+        let DefId::Module(prelude) = get_def_in_mod(scopes, std, "prelude") else {
+            panic!("Module expected for 'predlude'")
+        };
+
+        Self { values: Some(BuiltinValues { str_type, str_eq, prelude }) }
     }
 
     pub const fn nostd() -> Self {
@@ -53,4 +57,5 @@ impl Builtins {
 struct BuiltinValues {
     str_type: TypeId,
     str_eq: FunctionId,
+    prelude: ModuleId,
 }

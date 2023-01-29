@@ -25,16 +25,29 @@ mod expr;
 mod pat;
 mod exhaust;
 
-pub fn resolve_project(ast: &Ast, main_module: ModuleId, errors: &mut Errors, require_main: bool, std: Option<ModuleId>)
--> (SymbolTable, irgen::Functions, Option<FunctionId>) {
+pub fn resolve_project(
+    ast: &Ast,
+    main_module: ModuleId,
+    errors: &mut Errors,
+    require_main: bool,
+    std: Option<ModuleId>
+) -> (SymbolTable, irgen::Functions, Option<FunctionId>) {
     let mut ir_functions = irgen::Functions::new();
+
+    let prelude = std.map(|std| {
+        let Some(Definition::Module(prelude)) = ast[ast[std].definitions].get("prelude") else {
+            panic!("prelude module not found in std library")
+        };
+        *prelude
+    });
 
     // Add ids for definitions. Definitions that will have to be cross-resolved (use, const) are left as Unresolved
     let module_scopes: Vec<_> = ast.modules.iter().enumerate().map(|(i, module)| {
         let module_id = ModuleId::new(i as _);
         let module_ctx = ModuleCtx { src: ast.src(module_id).0, id: module_id, root: module.root_module };
         let names = scope_defs(&ast[module.definitions]);
-        Scope::root(names, module_ctx)
+        let prelude = prelude.and_then(|prelude| (module_id != prelude).then_some(prelude));
+        Scope::root(names, module_ctx, prelude)
     }).collect();   
     
     let mut scopes = Scopes::new(module_scopes);

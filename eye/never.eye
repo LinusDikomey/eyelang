@@ -1,8 +1,5 @@
 use std.c.printf
 use std.c.exit
-use std.print
-use std.println
-use std.string.str
 
 main :: fn {
     # exit() can coerce into any type because it never returns

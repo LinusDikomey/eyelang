@@ -1,5 +1,5 @@
 
-assert :: fn(b bool): if !b: std.println("An assertion failed!")
+assert :: fn(b bool): if !b: println("An assertion failed!")
 
 main :: fn {
     bools()

@@ -1,6 +1,3 @@
-use std.string.str
-use std.print
-use std.println
 
 main :: fn {
     std.c.printf("%d, %d, %d, %d\n".ptr, half(-3), half(0), half(1), half(7))

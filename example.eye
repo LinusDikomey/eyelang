@@ -1,5 +1,3 @@
-use std.println
-use std.string.str
 
 main :: fn {
     println("Hello, World")
