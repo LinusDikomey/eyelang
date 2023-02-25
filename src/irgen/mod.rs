@@ -352,7 +352,10 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
 } 
 
 pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
-    debug_assert_eq!(*noreturn, false, "generating expression with noreturn enabled means dead code will be generated");
+    debug_assert_eq!(*noreturn, false,
+        "generating expression with noreturn enabled means dead code will be generated, expression is: {:?}",
+        ctx.ast[expr],
+    );
     let r = match &ctx.ast[expr] {
         Expr::Block { items, .. } => {
             for item in &ctx.ast[*items] {
@@ -377,15 +380,9 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             Ref::UNIT
         }
         Expr::Return { val, .. } => {
-            let zero_sized = ir.types.layout(ir.types[ctx[*val]], |id| ctx.symbols.get_type(id)).size == 0;
-
-            if zero_sized {
-                ir.build_ret_undef();
-            } else {
-                let val = val_expr(ir, *val, ctx, noreturn);
-                if !*noreturn {
-                    ir.build_ret(val);
-                }
+            let val = val_expr(ir, *val, ctx, noreturn);
+            if !*noreturn {
+                ir.build_ret(val);
             }
             *noreturn = true;
             Ref::UNDEF
@@ -464,6 +461,9 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     let val = ctx.symbols.get_const(const_id);
 
                     return const_val::build(ir, val, ctx[expr]);
+                }
+                resolve::Ident::Type(idx) => {
+                    ir.build_type(idx)
                 }
             }
         }
@@ -1198,6 +1198,7 @@ fn gen_pat(
                 }
                 resolve::Ident::Global(_) => int!("global in pattern"),
                 resolve::Ident::Const(_) => int!("const in pattern"),
+                resolve::Ident::Type(_) => int!("type in pattern"),
             }
         }
         &Expr::BinOp(op @ (Operator::Range | Operator::RangeExclusive), l, r) => {

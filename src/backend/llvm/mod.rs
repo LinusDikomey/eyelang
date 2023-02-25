@@ -286,7 +286,6 @@ unsafe fn build_func(
             | ir::Tag::TraitFunc
             | ir::Tag::Type
             | ir::Tag::Trait
-            | ir::Tag::LocalType
             | ir::Tag::Module
             => ptr::null_mut(), // should never be used in runtime code
             ir::Tag::Decl => {
@@ -926,5 +925,6 @@ unsafe fn gen_const(ctx: LLVMContextRef, ty: LLVMTypeRef, val: &ConstVal) -> Opt
         ConstVal::String(s) => LLVMConstStringInContext(ctx, s.as_ptr().cast(), s.len() as u32, FALSE),
         ConstVal::EnumVariant(_val) => todo!("static enum values"),
         &ConstVal::Bool(b) => LLVMConstInt(LLVMInt1TypeInContext(ctx), b as _, FALSE),
+        ConstVal::Type(_) => todo!("Type LLVM irgen"), // this probably shouldn't even be possible at runtime
     })
 }

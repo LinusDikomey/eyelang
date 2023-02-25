@@ -348,7 +348,7 @@ impl Scopes {
             ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
             ast::UnresolvedType::Unresolved(path, generics) => {
                 let id = self.resolve_local_path(scope, path, errors, symbols, ast, ir);
-                match id {
+                match dbg!(id) {
                     LocalDefId::Type(idx) => {
                         if let Some((_, generics_span)) = generics {
                             errors.emit_span(Error::UnexpectedGenerics, generics_span.in_mod(self[scope].module.id));
@@ -367,9 +367,25 @@ impl Scopes {
                         )
                     }
                     LocalDefId::Def(DefId::Generic(i)) => TypeInfo::Generic(i),
+                    LocalDefId::Def(DefId::Const(id)) => {
+                        use const_val::ConstVal;
+                        match symbols.get_const(id) {
+                            ConstVal::Invalid => TypeInfo::Invalid,
+                            ConstVal::Type(ty) => return ty.as_info(types, |_| unreachable!()),
+                            ConstVal::Unit 
+                            | ConstVal::Int(_, _)
+                            | ConstVal::Float(_, _)
+                            | ConstVal::String(_) 
+                            | ConstVal::EnumVariant(_)
+                            | ConstVal::Bool(_) => {
+                                errors.emit_span(Error::TypeExpected, path.span().in_mod(self[scope].module.id));
+                                TypeInfo::Invalid
+                            }
+                        }
+                    }
                     LocalDefId::Var(_) | LocalDefId::Def(
                         DefId::Function(_) | DefId::Module(_) | DefId::Trait(_)
-                        | DefId::TraitFunc(_, _) | DefId::Global(_) | DefId::Const(_)
+                        | DefId::TraitFunc(_, _) | DefId::Global(_)
                     ) => {
                         errors.emit_span(Error::TypeExpected, path.span().in_mod(self[scope].module.id));
                         TypeInfo::Invalid

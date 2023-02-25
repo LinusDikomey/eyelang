@@ -57,9 +57,12 @@ pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
 
 pub fn eval(ir: &IrBuilder, params: &[ConstVal]) -> Result<ConstItem, Error> {
     let mut stack = StackMem::new();
-    unsafe {
-        eval_internal(ir, params, stack.new_frame())
-    }
+    let val = unsafe { eval_internal(ir, params, stack.new_frame()) }?;
+    assert!(
+        !matches!(val, ConstItem::Val(ConstVal::Invalid)),
+        "Constant evaluation yielded an invalid value, this is probably an internal error",
+    );
+    Ok(val)
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
@@ -217,9 +220,8 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
 
                 ConstItem::Symbol(ConstSymbol::TraitFunc(TraitId::from_bytes(buf), inst.data.trait_func.1))
             }
-            super::Tag::Type => ConstItem::Symbol(ConstSymbol::Type(inst.data.type_symbol)),
+            super::Tag::Type => ConstItem::Val(ConstVal::Type(ir.types[inst.data.ty].as_resolved_type(&ir.types))),
             super::Tag::Trait => ConstItem::Symbol(ConstSymbol::Trait(inst.data.trait_symbol)),
-            super::Tag::LocalType => ConstItem::Symbol(ConstSymbol::LocalType(TypeRef::new(inst.data.int32))),
             super::Tag::Module => ConstItem::Symbol(ConstSymbol::Module(ModuleId::new(inst.data.int32))),
 
             super::Tag::Decl => {

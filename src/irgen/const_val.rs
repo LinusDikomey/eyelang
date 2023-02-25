@@ -1,4 +1,4 @@
-use crate::{ir::{builder::IrBuilder, Ref, RefVal, types::TypeRef}, resolve::const_val::ConstVal};
+use crate::{ir::{builder::IrBuilder, Ref, RefVal, types::{TypeRef, TypeRefs}}, resolve::const_val::ConstVal};
 
 use super::Res;
 
@@ -29,5 +29,10 @@ pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeRef)  -> Res {
         ConstVal::String(bytes) => Res::Val(ir.build_string(&bytes,true, ty)),
         ConstVal::EnumVariant(_variant) => todo!(),
         &ConstVal::Bool(b) => Res::Val(Ref::val(if b { RefVal::True } else { RefVal::False })),
+        ConstVal::Type(ty) => {
+            let ty = ir.types.from_resolved(ty, TypeRefs::EMPTY);
+            let ty = ir.types.add(ty);
+            Res::Val(ir.build_type(ty))
+        }
     }
 }

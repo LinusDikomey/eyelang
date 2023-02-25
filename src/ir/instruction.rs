@@ -32,7 +32,6 @@ pub enum Tag {
     TraitFunc,
     Type,
     Trait,
-    LocalType,
     Module,
 
     Decl,
@@ -93,7 +92,7 @@ impl Tag {
             Tag::Type => Type,
             Tag::Trait => Trait,
             Tag::TraitFunc => TraitFunc,
-            Tag::LocalType | Tag::Decl => TypeTableIdx,
+            Tag::Decl => TypeTableIdx,
             Tag::Module => Int,
 
             Tag::RetUndef => None,

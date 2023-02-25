@@ -134,7 +134,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
         ast::Expr::Variable { span, id } => {
             let name = &ctx.scope().module.src()[span.range()];
             let resolved = ctx.scopes.resolve_local(ctx.scope, name, *span, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
-            let ident = match resolved {
+            let ident = match dbg!(resolved) {
                 LocalDefId::Def(DefId::Invalid) => {
                     ctx.types.invalidate(info.expected);
                     Ident::Invalid
@@ -154,9 +154,13 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                     ctx.specify(info.expected, ty, span.in_mod(ctx.scope().module.id));
                     Ident::Const(const_id)
                 }
+                LocalDefId::Def(DefId::Type(id)) => {
+                    let idx = ctx.types.add(TypeInfo::Resolved(id, TypeRefs::EMPTY));
+                    Ident::Type(idx)
+                }
                 LocalDefId::Def(def) => {
                     ctx.specify(info.expected, TypeInfo::SymbolItem(def), span.in_mod(ctx.scope().module.id));
-                    Ident::Invalid
+                    todo!("Definition of {def:?} as expression is not yet implemented");
                 }
                 LocalDefId::Var(var) => {
                     lval = true;
@@ -167,7 +171,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                 }
                 LocalDefId::Type(idx) => {
                     ctx.specify(info.expected, TypeInfo::LocalTypeItem(idx), span.in_mod(ctx.scope().module.id));
-                    Ident::Invalid
+                    Ident::Type(idx)
                 }
             };
             ctx.set_ident(*id, ident);
@@ -574,6 +578,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
             (Res::Val { use_hint: UseHint::Can, lval: false }, call)
         }
         _other => {
+            dbg!(_other);
             if ctx.types.invalidate(called_ty) {
                 ctx.errors.emit_span(
                     Error::FunctionOrStructTypeExpected,

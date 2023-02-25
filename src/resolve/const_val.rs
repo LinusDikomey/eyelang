@@ -41,6 +41,7 @@ pub enum ConstVal {
     String(Vec<u8>),
     EnumVariant(String), // TODO: enum variant args
     Bool(bool),
+    Type(Type),
 }
 impl ConstVal {
     pub fn type_info(&self, types: &mut TypeTable) -> TypeInfo {
@@ -54,6 +55,7 @@ impl ConstVal {
                 types.add_enum_variants(std::iter::once((name.clone(), TypeRefs::EMPTY)))
             ),
             ConstVal::Bool(_) => TypeInfo::Primitive(Primitive::Bool),
+            ConstVal::Type(_) => TypeInfo::Primitive(Primitive::Type),
         }
     }
 
@@ -79,6 +81,7 @@ impl fmt::Display for ConstVal {
             ConstVal::String(s) => write!(f, "{}", String::from_utf8_lossy(s)),
             ConstVal::EnumVariant(variant) => write!(f, ".{variant}"),
             ConstVal::Bool(b) => write!(f, "{b}"),
+            ConstVal::Type(ty) => write!(f, "{ty:?} (TODO: display properly)"), // TODO: proper display
         }
     }
 }
@@ -86,12 +89,9 @@ impl fmt::Display for ConstVal {
 #[derive(Debug, Clone)]
 pub enum ConstSymbol {
     Func(FunctionId),
-    //GenericFunc(u32),
     Type(TypeId),
-    TypeValue(Type),
     Trait(TraitId),
     TraitFunc(TraitId, u32),
-    LocalType(TypeRef),
     Module(ModuleId),
 }
 impl ConstSymbol {
@@ -101,11 +101,6 @@ impl ConstSymbol {
             (Self::Type(l), Self::Type(r)) => l == r,
             (Self::Trait(l), Self::Trait(r)) => l == r,
             (Self::TraitFunc(l_key, l_idx), Self::TraitFunc(r_key, r_idx)) => l_key == r_key && l_idx == r_idx,
-            (Self::LocalType(l), Self::LocalType(r)) => {
-                let IrType::Id(_l_id, _l_generics) = types[*l] else { unreachable!() };
-                let IrType::Id(_r_id, _r_generics) = types[*r] else { unreachable!() };
-                todo!()
-            }
             (Self::Module(l), Self::Module(r)) => l == r,
             _ => false,
         }
@@ -114,10 +109,8 @@ impl ConstSymbol {
         match self {
             &ConstSymbol::Func(id) => DefId::Function(id),
             &ConstSymbol::Type(id) => DefId::Type(id),
-            ConstSymbol::TypeValue(_) => todo!(),
             &ConstSymbol::Trait(id) => DefId::Trait(id),
             &ConstSymbol::TraitFunc(id, idx) => DefId::TraitFunc(id, idx),
-            ConstSymbol::LocalType(_) => todo!(),
             &ConstSymbol::Module(id) => DefId::Module(id),
         }
     }
@@ -159,8 +152,10 @@ pub fn eval(
         ir,
         exhaustions: &mut exhaustions,
     };
-    let mut noreturn = false;
-    _ = super::expr::check_expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);
+    {
+        let mut noreturn = false;
+        _ = super::expr::check_expr(expr, ExprInfo { expected: ty, ret: ty, noreturn: &mut noreturn }, ctx, false);
+    }
     
     if before_error_count < errors.error_count() {
         // this is not a perfect solution but right now expressions with errors can result in crashed during irgen.
@@ -174,6 +169,7 @@ pub fn eval(
 
     let ir_types = types.finalize_const();
     let mut builder = IrBuilder::new(ir_types, &types, irgen::CreateReason::Comptime);
+    let mut noreturn = false;
     let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
         ast,
         symbols: &symbols,
@@ -190,7 +186,7 @@ pub fn eval(
         builder.build_ret(val);
     }
 
-    match ir::eval::eval(&builder, &[]) {
+    match dbg!(ir::eval::eval(&builder, &[])) {
         Ok(val) => val,
         Err(err) => {
             errors.emit_span(err, ast[expr].span_in(ast, scopes[scope].module.id));

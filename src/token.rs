@@ -202,6 +202,7 @@ pub enum Keyword {
     Else,
     Match,
     While,
+    For,
     Extern,
     Root,
     Use,
@@ -225,6 +226,7 @@ impl From<Keyword> for &'static str {
             Keyword::Else => "else",
             Keyword::Match => "match",
             Keyword::While => "while",
+            Keyword::For => "for",
             Keyword::Extern => "extern",
             Keyword::Root => "root",
             Keyword::Use => "use",
@@ -273,6 +275,7 @@ impl FromStr for Keyword {
             "else" => Keyword::Else,
             "match" => Keyword::Match,
             "while" => Keyword::While,
+            "for" => Keyword::For,
 
             "extern" => Keyword::Extern,
             "root" => Keyword::Root,

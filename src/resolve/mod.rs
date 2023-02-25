@@ -382,6 +382,7 @@ pub enum Ident {
     Var(VarId),
     Global(GlobalId),
     Const(ConstId),
+    Type(TypeRef),
 }
 
 #[derive(Clone, Copy, Debug)]

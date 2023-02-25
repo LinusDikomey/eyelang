@@ -253,6 +253,10 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { int32: module.inner() }, Tag::Module, ty)
     }*/
 
+    pub fn build_type(&mut self, ty: TypeRef) -> Ref {
+        self.add(Data { ty }, Tag::Type, IrType::Primitive(Primitive::Type))
+    }
+
     fn ty(&mut self, ty: impl Into<IdxOrTy>) -> TypeRef {
         match ty.into() {
             IdxOrTy::Idx(idx) => idx,
