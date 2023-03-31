@@ -186,7 +186,7 @@ pub fn eval(
         builder.build_ret(val);
     }
 
-    match dbg!(ir::eval::eval(&builder, &[])) {
+    match ir::eval::eval(&builder, &[]) {
         Ok(val) => val,
         Err(err) => {
             errors.emit_span(err, ast[expr].span_in(ast, scopes[scope].module.id));

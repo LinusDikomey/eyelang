@@ -106,21 +106,22 @@ impl<'a> Lexer<'a> {
                 ',' => TokenType::Comma,
                 ';' => TokenType::Semicolon,
                 '.' => {
-                    if let Some('.') = self.peek() {
-                        self.step();
-                        match self.peek() {
-                            Some('.') => {
-                                self.step();
-                                TokenType::TripleDot
+                    match self.peek() {
+                        Some('.') => {
+                            self.step();
+                            match self.peek() {
+                                Some('.') => {
+                                    self.step();
+                                    TokenType::TripleDot
+                                }
+                                Some('<') => {
+                                    self.step();
+                                    TokenType::DotDotLessThan
+                                }
+                                _ => TokenType::DotDot
                             }
-                            Some('<') => {
-                                self.step();
-                                TokenType::DotDotLessThan
-                            }
-                            _ => TokenType::DotDot
                         }
-                    } else {
-                        TokenType::Dot
+                        _ => TokenType::Dot
                     }
                 }
                 

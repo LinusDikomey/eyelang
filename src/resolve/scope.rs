@@ -348,7 +348,7 @@ impl Scopes {
             ast::UnresolvedType::Primitive(p, _) => TypeInfo::Primitive(*p),
             ast::UnresolvedType::Unresolved(path, generics) => {
                 let id = self.resolve_local_path(scope, path, errors, symbols, ast, ir);
-                match dbg!(id) {
+                match id {
                     LocalDefId::Type(idx) => {
                         if let Some((_, generics_span)) = generics {
                             errors.emit_span(Error::UnexpectedGenerics, generics_span.in_mod(self[scope].module.id));

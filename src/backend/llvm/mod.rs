@@ -53,7 +53,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     // Set up the module
     let module_name = ffi::CString::new(module.name.as_bytes()).unwrap();
     let llvm_module = LLVMModuleCreateWithNameInContext(module_name.as_ptr(), ctx);
-    
+
     let init_time = start_time.elapsed();
 
     // define types
@@ -86,28 +86,27 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
     // define function headers
     let start_time = Instant::now();
 
-    let funcs = module.funcs.iter().enumerate()
-        .map(|(i, func)| {
-            let ir_func = &module.funcs[i];
-            let (ret, mut params) = if ir_func.ir.is_some() {
-                let ret = llvm_global_ty(ctx, &func.return_type, module, &mut types);
-                let params = func.params.iter()
-                    .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
-                    .collect::<Vec<_>>();
-                (ret, params)
-            } else {
-                let ret = llvm_global_ty(ctx, &func.return_type, module, &mut types);
-                let params = func.params.iter()
-                    .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
-                    .collect::<Vec<_>>();
-                (ret, params)
-            };
+    let funcs = module.funcs.iter()
+        .map(|func| {
+            let ret = llvm_global_ty(ctx, &func.return_type, module, &mut types);
+            let mut params = func.params.iter()
+                .map(|(_name, ty)| llvm_global_ty(ctx, ty, module, &mut types))
+                .collect::<Vec<_>>();
             
             
             let varargs = llvm_bool(func.varargs);
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
             let name = ffi::CString::new(func.name.as_bytes()).unwrap();
-            (LLVMAddFunction(llvm_module, name.as_ptr(), func_ty), func_ty)
+            let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), func_ty);
+            for (i, (_, ty)) in func.params.iter().enumerate() {
+                let llvm_param = LLVMGetParam(llvm_func, i as _);
+                let s = LLVMPrintValueToString(llvm_param);
+                let layout = ty.layout(|id| &module.types[id.idx()].1, &[]);
+                eprintln!("Applying alignment {} to {:?}", layout.alignment, unsafe { ffi::CStr::from_ptr(s) });
+                LLVMSetParamAlignment(llvm_param, layout.alignment as _);
+                //LLVMSetAlignment(llvm_param, layout.alignment as _);
+            }
+            (llvm_func, func_ty)
         })
         .collect::<Vec<_>>();
 
@@ -134,14 +133,16 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
         eprintln!("\n ---------- LLVM IR BEGIN ----------\n");
         LLVMDumpModule(llvm_module);
         eprintln!("\n ---------- LLVM IR END ------------\n");
-        
     }
+    
+    /*
     #[cfg(debug_assertions)]
     llvm::analysis::LLVMVerifyModule(
         llvm_module,
         llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction,
         std::ptr::null_mut()
     );
+    */
 
     // done building
     LLVMDisposeBuilder(builder);
