@@ -1,5 +1,5 @@
 use crate::{
-    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId, VariantId},
+    ast::{self, ModuleId, Definition, ExprRef, Ast, TypeDef, FunctionId, TypeId, GlobalId, ConstId, VariantId, GenericDef},
     error::{Errors, Error},
     dmap::{DHashMap, self},
     span::{Span, TSpan},
@@ -267,7 +267,7 @@ fn func_signature(
 ) -> FunctionHeader {
     let generics: Vec<String> = func.generics
         .iter()
-        .map(|span| scopes[scope].module.src()[span.range()].to_owned())
+        .map(|generic| scopes[scope].module.src()[generic.name.range()].to_owned())
         .collect();
 
     let generic_defs = generics
@@ -319,7 +319,7 @@ fn struct_def(
 
     let generics = def.generics
         .iter()
-        .map(|name_span| ast.src(scopes[scope].module.id).0[name_span.range()].to_owned())
+        .map(|name_span| ast.src(scopes[scope].module.id).0[name_span.name.range()].to_owned())
         .collect();
 
     Struct {
@@ -330,9 +330,9 @@ fn struct_def(
     }
 }
 
-fn generic_scope(generics: &[TSpan], scopes: &mut Scopes, scope: ScopeId, ast: &Ast) -> ScopeId {
-    let names = generics.iter().enumerate().map(|(i, name_span)| {
-        let name = &ast.src(scopes[scope].module.id).0[name_span.range()];
+fn generic_scope(generics: &[GenericDef], scopes: &mut Scopes, scope: ScopeId, ast: &Ast) -> ScopeId {
+    let names = generics.iter().enumerate().map(|(i, generic)| {
+        let name = &ast.src(scopes[scope].module.id).0[generic.name.range()];
         (name.to_owned(), UnresolvedDefId::Resolved(DefId::Generic(i as u8)))
     }).collect();
 

@@ -102,6 +102,7 @@ impl<'a> Parser<'a> {
 
     fn parse_module(&mut self, root_module: ModuleId) -> Result<Module, CompileError> {
         let mut definitions = dmap::new();
+        let mut impls = Vec::new();
         let mut uses = Vec::new();
 
         while !self.toks.is_at_end() {
@@ -115,12 +116,16 @@ impl<'a> Parser<'a> {
             
             let mut item_counts = Counts::new();
 
-            let (name, name_span, def) = match self.parse_item(&mut item_counts)? {
+            let def = match self.parse_item(&mut item_counts)? {
                 Item::Definition {
                     name,
                     name_span,
                     def,
-                } => (name, name_span, def),
+                } => Some((name, name_span, def)),
+                Item::Impl(impl_) => {
+                    impls.push(impl_);
+                    None
+                }
                 Item::Expr(r) => match &self.ast[r] {
                     Expr::Declare {
                         pat,
@@ -131,11 +136,11 @@ impl<'a> Parser<'a> {
                             ty: annotated_ty.clone(),
                             val: None
                         });
-                        (
+                        Some((
                             self.src[name.range()].to_owned(),
                             name,
                             Definition::Global(id),
-                        )
+                        ))
                     },
                     Expr::DeclareWithVal {
                         pat,
@@ -147,11 +152,11 @@ impl<'a> Parser<'a> {
                             ty: annotated_ty.clone(),
                             val: Some((*val, item_counts))
                         });
-                        (
+                        Some((
                             self.src[name.range()].to_owned(),
                             name,
                             Definition::Global(id),
-                        )
+                        ))
                     },
                     _ => {
                         return Err(CompileError {
@@ -165,17 +170,20 @@ impl<'a> Parser<'a> {
                     }
                 },
             };
-            if let Some(_existing) = definitions.insert(name, def) {
-                return Err(Error::DuplicateDefinition.at(
-                    name_span.start,
-                    name_span.end,
-                    self.toks.module,
-                ));
+            if let Some((name, name_span, def)) = def {
+                if let Some(_existing) = definitions.insert(name, def) {
+                    return Err(Error::DuplicateDefinition.at(
+                        name_span.start,
+                        name_span.end,
+                        self.toks.module,
+                    ));
+                }
             }
         }
         uses.shrink_to_fit();
         Ok(Module {
             definitions: self.ast.add_defs(definitions),
+            impls,
             uses,
             root_module,
         })
@@ -207,6 +215,7 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
 
         let mut defs = dmap::new();
+        let mut impls = Vec::new();
         let mut items = Vec::new();
 
         while self.toks.current()?.ty != TokenType::RBrace {
@@ -222,6 +231,7 @@ impl<'a> Parser<'a> {
                         return Err(Error::DuplicateDefinition.at(start, end, self.toks.module));
                     }
                 }
+                Item::Impl(impl_) => impls.push(impl_),
                 Item::Expr(item) => items.push(item),
             }
         }
@@ -310,6 +320,10 @@ impl<'a> Parser<'a> {
                             name_span: ident_span,
                             def,
                         }
+                    }
+                    // Trait implementation
+                    Some(TokenType::Keyword(Keyword::Can)) => {
+                        Item::Impl(self.parse_trait_impl(ident_span)?)
                     }
                     // Variable or constant declaration with explicit type
                     Some(TokenType::Colon) => {
@@ -545,6 +559,32 @@ impl<'a> Parser<'a> {
             generics,
             functions,
         })
+    }
+
+    fn parse_trait_impl(&mut self, ty: TSpan) -> EyeResult<TraitImpl> {
+        self.toks.step_assert(TokenType::Keyword(Keyword::Can));
+        let trait_path = self.parse_path()?;
+
+        let mut functions = dmap::new();
+
+        self.toks.step_expect(TokenType::LBrace)?;
+        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+            let name = p.toks.step_expect(TokenType::Ident)?;
+            let name_span = name.span();
+            let name = name.get_val(p.src).to_owned();
+            p.toks.step_expect(TokenType::DoubleColon)?;
+            let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
+            let function = p.parse_function_def(fn_tok)?;
+            let previous = functions.insert(name, function);
+            if previous.is_some() {
+                return Err(CompileError::new(
+                    Error::DuplicateDefinition,
+                    name_span.in_mod(p.toks.module)
+                ))
+            }
+            Ok(Delimit::OptionalIfNewLine)
+        })?;
+        Ok(TraitImpl { ty, trait_path })
     }
 
     fn parse_stmt(&mut self, ident_count: &mut Counts) -> EyeResult<ExprRef> {
@@ -983,14 +1023,23 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_optional_generics(&mut self) -> Result<Option<(TSpan, Vec<TSpan>)>, CompileError> {
+    fn parse_optional_generics(&mut self) -> Result<Option<(TSpan, Vec<GenericDef>)>, CompileError> {
         self.toks
             .step_if(TokenType::LBracket)
             .map(|l| {
                 let mut generics = Vec::new();
                 let r = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
-                    generics.push(p.toks.step_expect(TokenType::Ident)?.span());
-                    Ok(())
+                    let name = p.toks.step_expect(TokenType::Ident)?.span();
+                    let mut requirements = Vec::new();
+                    if p.toks.step_if(TokenType::Colon).is_some() {
+                        loop {
+                            requirements.push(p.parse_path()?);
+                            if p.toks.step_if(TokenType::Plus).is_none() { break }
+                        }
+                        p.toks.step_if(TokenType::Ident);
+                    }
+                    generics.push(GenericDef { name, requirements });
+                    Ok(Delimit::OptionalIfNewLine)
                 })?;
                 Ok((TSpan::new(l.start, r.end), generics))
             })

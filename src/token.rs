@@ -91,9 +91,9 @@ pub enum TokenType {
 }
 impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (s, is_text) = self.text_repr();
-        if is_text {
-            cwrite!(f, "#i;c<{}>", s)
+        let (s, is_keyword) = self.text_repr();
+        if is_keyword {
+            cwrite!(f, "keyword #i;m<{}>", s)
         } else {
             cwrite!(f, "#c<{}>", s)
         }
@@ -102,7 +102,7 @@ impl fmt::Display for TokenType {
 impl TokenType {
     /// returns a raw text representation of the token type and wether it is a text
     fn text_repr(self) -> (&'static str, bool) {
-        let mut is_text = false;
+        let mut is_keyword = false;
         let s = match self {
             TokenType::Colon => ":",
             TokenType::DoubleColon => "::",
@@ -145,10 +145,10 @@ impl TokenType {
             TokenType::StringLiteral => "string literal",
             TokenType::IntLiteral => "int literal",
             TokenType::FloatLiteral => "float literal",
-            TokenType::Keyword(kw) => { is_text = true; kw.into() },
+            TokenType::Keyword(kw) => { is_keyword = true; kw.into() },
             TokenType::Ident => "identifier",
         };
-        (s, is_text)
+        (s, is_keyword)
     }
 }
 
@@ -198,6 +198,7 @@ pub enum Keyword {
     Struct,
     Enum,
     Trait,
+    Can,
     If,
     Else,
     Match,
@@ -222,6 +223,7 @@ impl From<Keyword> for &'static str {
             Keyword::Struct => "struct",
             Keyword::Enum => "enum",
             Keyword::Trait => "trait",
+            Keyword::Can => "can",
             Keyword::If => "if",
             Keyword::Else => "else",
             Keyword::Match => "match",
@@ -270,7 +272,10 @@ impl FromStr for Keyword {
             "as" => Keyword::As,
             "struct" => Keyword::Struct,
             "enum" => Keyword::Enum,
+
             "trait" => Keyword::Trait,
+            "can" => Keyword::Can,
+
             "if" => Keyword::If,
             "else" => Keyword::Else,
             "match" => Keyword::Match,

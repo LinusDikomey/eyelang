@@ -5,7 +5,7 @@ use crate::{
     ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self, types::{TypeRef, IrType, TypeRefs, IrTypes}}, dmap,
+    irgen, ir::{builder::IrBuilder, Ref, self, types::{TypeRefs, IrTypes}}, dmap,
 };
 
 use super::{

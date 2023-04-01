@@ -225,12 +225,18 @@ impl ModuleId {
 #[derive(Debug, Clone)]
 pub struct Module {
     pub definitions: Defs,
+    pub impls: Vec<TraitImpl>,
     pub uses: Vec<IdentPath>,
     pub root_module: ModuleId,
 }
 impl Module {
     pub fn empty(ast: &mut Ast, root_module: ModuleId) -> Self {
-        Self { definitions: ast.add_defs(dmap::new()), uses: Vec::new(), root_module }
+        Self {
+            definitions: ast.add_defs(dmap::new()),
+            impls: Vec::new(),
+            uses: Vec::new(),
+            root_module,
+        }
     }
 }
 
@@ -260,7 +266,14 @@ pub struct Defs(u32);
 #[derive(Debug, Clone)]
 pub enum Item {
     Definition { name: String, name_span: TSpan, def: Definition },
+    Impl(TraitImpl),
     Expr(ExprRef)
+}
+
+#[derive(Debug, Clone)]
+pub struct TraitImpl {
+    pub ty: TSpan,
+    pub trait_path: IdentPath,
 }
 
 #[derive(Debug, Clone)]
@@ -284,7 +297,7 @@ id!(u16, 2: VariantId);
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
     pub name: String,
-    pub generics: Vec<TSpan>,
+    pub generics: Vec<GenericDef>,
     pub members: Vec<(String, UnresolvedType, u32, u32)>,
     pub methods: DHashMap<String, FunctionId>
 }
@@ -297,7 +310,7 @@ impl StructDefinition {
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
     pub name: String,
-    pub generics: Vec<TSpan>,
+    pub generics: Vec<GenericDef>,
     pub variants: Vec<(TSpan, String, Vec<UnresolvedType>)>,
 }
 impl EnumDefinition {
@@ -308,7 +321,7 @@ impl EnumDefinition {
 
 #[derive(Debug, Clone)]
 pub struct TraitDefinition {
-    pub generics: Vec<TSpan>,
+    pub generics: Vec<GenericDef>,
     pub functions: DHashMap<String, (TSpan, Function)>,
 }
 
@@ -320,13 +333,19 @@ pub struct GlobalDefinition {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
-    pub generics: Vec<TSpan>,
+    pub generics: Vec<GenericDef>,
     //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprRef>,
     pub counts: Counts,
     pub span: TSpan,
+}
+
+#[derive(Clone, Debug)]
+pub struct GenericDef {
+    pub name: TSpan,
+    pub requirements: Vec<IdentPath>,
 }
 
 #[derive(Debug, Clone, eye_derive::EnumSizeDebug)]

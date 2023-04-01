@@ -6,7 +6,7 @@ use crate::{
     ir::types::ConstIrType,
 };
 
-use super::{ConstVal, builder::IrBuilder, types::{IrType, TypeRef}};
+use super::{ConstVal, builder::IrBuilder, types::IrType};
 
 #[derive(Clone, Debug)]
 enum LocalVal {

@@ -8,7 +8,7 @@ use crate::{
 
 use super::{
     const_val::{ConstVal, ConstSymbol},
-    type_info::{TypeInfo, TypeTable, TypeInfoOrIndex, EnumVariants},
+    type_info::{TypeInfo, TypeTable, TypeInfoOrIndex},
     Ident,
     Var,
     ResolvedCall,
