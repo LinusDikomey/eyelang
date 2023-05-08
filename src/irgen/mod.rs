@@ -448,7 +448,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
         Expr::Unit(_) => Ref::UNIT,
         Expr::Variable { id, .. } => {
             match ctx.idents[id.idx()] {
-                resolve::Ident::Invalid => int!(),
+                resolve::Ident::Invalid => return Res::Val(Ref::UNDEF),
                 resolve::Ident::Var(var_id) => return Res::Var(ctx.var_refs[var_id.idx()]),
                 resolve::Ident::Global(global_id) => {
                     let ty = &ctx.symbols.get_global(global_id).1;
@@ -457,11 +457,8 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     let ptr_ty = ir.types.add(IrType::Ptr(ty));
                     return Res::Var(ir.build_global(global_id, ptr_ty))
                 }
-                resolve::Ident::Const(const_id) => {
-                    let val = ctx.symbols.get_const(const_id);
-
-                    return const_val::build(ir, val, ctx[expr]);
-                }
+                resolve::Ident::Function(_) => return Res::Val(Ref::UNIT), // implement function pointers here
+                resolve::Ident::Module(_) => return Res::Val(Ref::UNDEF),
                 resolve::Ident::Type(idx) => {
                     ir.build_type(idx)
                 }
@@ -1197,7 +1194,8 @@ fn gen_pat(
                     ctx.var_refs[var_id.idx()] = var;
                 }
                 resolve::Ident::Global(_) => int!("global in pattern"),
-                resolve::Ident::Const(_) => int!("const in pattern"),
+                resolve::Ident::Function(_) => int!("function in pattern"),
+                resolve::Ident::Module(_) => int!("module in pattern"),
                 resolve::Ident::Type(_) => int!("type in pattern"),
             }
         }

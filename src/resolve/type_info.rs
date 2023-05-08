@@ -8,7 +8,7 @@ use crate::{
     ast::{TypeId, FunctionId},
     ir::types::{IrTypes, IrType, TypeRefs, TypeRef, ConstIrType}};
 
-use super::types::{Type, SymbolTable, DefId, Enum};
+use super::types::{Type, SymbolTable, Enum};
 
 #[derive(Clone, Debug)]
 pub struct TypeTable {
@@ -335,11 +335,9 @@ impl TypeTable {
                     IrType::Enum(TypeRefs { idx: variants_start, count: variants.count() })
                 }
                 TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
-
-                // these types should never be encountered by runtime code (this probably isn't enforced properly)
-                TypeInfo::SymbolItem(_)
-                | TypeInfo::MethodItem { .. }
-                | TypeInfo::LocalTypeItem(_) => IrType::Primitive(Primitive::Never),
+                TypeInfo::FunctionItem(_, _) => IrType::Primitive(Primitive::Unit),
+                TypeInfo::MethodItem { .. }
+                | TypeInfo::Type => IrType::Primitive(Primitive::Never),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as _)), // this gets replaced with the proper generic types
                 TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
             };
@@ -364,9 +362,9 @@ impl TypeTable {
                 TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
                 TypeInfo::Enum(_) => IrType::Const(ConstIrType::Enum),
                 TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
-                TypeInfo::SymbolItem(_)
+                TypeInfo::FunctionItem(_, _)
                 | TypeInfo::MethodItem { .. } => todo!(),
-                | TypeInfo::LocalTypeItem(_) => panic!("comptime type supplied when building ir"),
+                | TypeInfo::Type => panic!("comptime type supplied when building ir"),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as u32)),
                 TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
             };
@@ -489,12 +487,13 @@ pub enum TypeInfo {
     Array(Option<u32>, TypeRef),
     Enum(EnumVariants),
     Tuple(TypeRefs, TupleCountMode),
-    SymbolItem(DefId),
     MethodItem {
         function: FunctionId,
+        generics: TypeRefs,
         this_ty: TypeRef,
     },
-    LocalTypeItem(TypeRef),
+    FunctionItem(FunctionId, TypeRefs),
+    Type,
     Generic(u8),
     Invalid,
 }
@@ -502,25 +501,29 @@ impl TypeInfo {
     pub const UNIT: Self = Self::Primitive(Primitive::Unit);
 
     pub fn as_string(&self, types: &TypeTable, symbols: &SymbolTable) -> Cow<'static, str> {
+        let generics_string = |generics: TypeRefs| {
+            let mut generics_string = String::new();
+            if generics.count > 0 {
+                generics_string.push('[');
+                for (i, generic) in generics.iter().enumerate() {
+                    let generic = types[generic];
+                    generics_string += &*generic.as_string(types, symbols);
+                    if i != generics.len() - 1 {
+                        generics_string += ", ";
+                    }
+                }
+                generics_string.push(']');
+            }
+            generics_string
+        };
+
         match *self {
             TypeInfo::Unknown => "<unknown>".into(),
             TypeInfo::Int => "<integer>".into(),
             TypeInfo::Float => "<float>".into(),
             TypeInfo::Primitive(p) => Into::<&'static str>::into(p).into(),
             TypeInfo::Resolved(id, generics) => {
-                let mut generics_string = String::new();
-                if generics.count > 0 {
-                    generics_string.push('<');
-                    for (i, generic) in generics.iter().enumerate() {
-                        let generic = types[generic];
-                        generics_string += &*generic.as_string(types, symbols);
-                        if i != generics.len() - 1 {
-                            generics_string += ", ";
-                        }
-                    }
-                    generics_string.push('>');
-                }
-                format!("{}{}", symbols.get_type(id).name(), generics_string).into()
+                format!("{}{}", symbols.get_type(id).name(), generics_string(generics)).into()
             }
             TypeInfo::Pointer(inner) => format!("*{}", types[inner].as_string(types, symbols)).into(),
             TypeInfo::Array(count, inner) => format!(
@@ -576,14 +579,15 @@ impl TypeInfo {
                 s.push(')');
                 s.into()
             }
-            TypeInfo::SymbolItem(id) => format!("<symbol item: {id:?}?>").into(),
-            TypeInfo::MethodItem { function, this_ty } => format!(
+            TypeInfo::MethodItem { function, generics, this_ty } => format!(
                 "<method {} with {}>",
                 symbols.get_func(function).name,
                 types[this_ty].as_string(types, symbols)
             ).into(),
+            TypeInfo::FunctionItem(id, generics) => format!("fn {}{}",
+                symbols.get_func(id).name, generics_string(generics)).into(),
+            TypeInfo::Type => "<type>".into(),
             TypeInfo::Generic(i) => format!("<generic #{i}>").into(),
-            TypeInfo::LocalTypeItem(idx) => format!("<type {}>", types.get(idx).as_string(types, symbols)).into(),
             TypeInfo::Invalid => "<invalid>".into(),
         }
     }
@@ -636,7 +640,7 @@ fn merge_infos(
                 generics
                     .iter()
                     .zip(other_generics.iter())
-                    .all(|(a, b)|types.try_merge(a, b, symbols).is_ok())
+                    .all(|(a, b)| types.try_merge(a, b, symbols).is_ok())
             }
         } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
             if let Enum(variants) = other {
@@ -735,32 +739,17 @@ fn merge_infos(
             }
             Some(Tuple(res_ty, mode))
         }
-        SymbolItem(id) => {
-            if let SymbolItem(id2) = other {
-                (id == id2).then_some(ty)
-            } else {
-                None
-            }
+        FunctionItem(id, generics) => {
+            if let FunctionItem(id2, generics2) = other {
+                debug_assert_eq!(generics.count, generics2.count);
+                (id == id2 && generics.iter().zip(generics2.iter()).all(|(a, b)| types.try_merge(a, b, symbols).is_ok()))
+                    .then_some(ty)
+            } else { None }
         }
-        
-        Generic(i) => {
-            // TODO: proper generic type checking
-            match other {
-                Generic(i2) if i == i2 => Some(ty),
-                _ => None
-            }
-        }
+        Type => matches!(other, Type).then_some(ty),
+        Generic(i) => matches!(other, Generic(i2) if i == i2).then_some(ty),
         Invalid => Some(Invalid), // invalid type 'spreading'
         MethodItem { .. } => todo!("merge {ty:?} with {other:?}"), // might be unreachable?
-        LocalTypeItem(t1) => {
-            let LocalTypeItem(t2) = other else { return None };
-            match merge_infos(types.get(t1), types.get(t2), types, symbols) {
-                Some(ty) => {
-                    Some(LocalTypeItem(types.add(ty)))
-                }
-                None => None
-            }
-        }
     }
 }
 

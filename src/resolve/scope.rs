@@ -475,7 +475,7 @@ impl<'a> ExprInfo<'a> {
     pub fn with_noreturn<'b>(&self, noreturn: &'b mut bool) -> ExprInfo<'b> {
         ExprInfo { expected: self.expected, ret: self.ret, noreturn }
     }
-    pub fn _reborrow(&mut self) -> ExprInfo<'_> {
+    pub fn reborrow(&mut self) -> ExprInfo<'_> {
         ExprInfo { expected: self.expected, ret: self.ret, noreturn: &mut *self.noreturn }
     }
 }

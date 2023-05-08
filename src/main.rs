@@ -4,7 +4,6 @@
     int_roundings,
     array_chunks,
     if_let_guard,
-    is_some_and,
 )]
 #![warn(unused_qualifications)]
 
@@ -119,7 +118,7 @@ pub struct Args {
     file: Option<String>,
 
     /// Enable debug logging
-    #[clap(short, long)]
+    #[clap(long)]
     log: bool,
 
     /// Used for providing a custom link command. Use '[OBJ]' and '[OUT]' as placeholders for object and out file.
@@ -168,6 +167,10 @@ pub struct Args {
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
     #[clap(long)]
     crash_on_error: bool,
+
+    /// Libraries to link against
+    #[clap(short, long)]
+    link: Vec<String>,
 
     #[cfg_attr(
         feature = "llvm-backend",
@@ -267,6 +270,7 @@ impl fmt::Display for Stats {
 
 pub struct FileStats {
     name: String,
+
     lex: Duration,
     parse: Duration,
 }

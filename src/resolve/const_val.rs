@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     types::{IntType, FloatType, Primitive},
-    ast::{ModuleId, FunctionId, TraitId, TypeId, ExprRef, UnresolvedType, Ast},
+    ast::{ModuleId, TraitId, TypeId, ExprRef, UnresolvedType, Ast, FunctionId},
     error::Errors,
     parser::Counts,
     irgen, ir::{builder::IrBuilder, Ref, self, types::{TypeRefs, IrTypes}}, dmap,

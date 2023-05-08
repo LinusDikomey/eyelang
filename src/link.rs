@@ -27,7 +27,7 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
         let mut cmd = Command::new("eval");
         cmd.arg(link.replace("[OBJ]", obj).replace("[OUT]", out));
         cmd
-    } else if let Some(cmd) = link_cmd(obj, out) {
+    } else if let Some(cmd) = link_cmd(obj, out, &args.link) {
         cmd
     } else {
         eprintln!("No link command known for this OS. You can manually link the object file created: {obj}");
@@ -43,7 +43,7 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
     ok
 }
 
-fn link_cmd(obj: &str, out: &str) -> Option<Command> {
+fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
     let Some(os) = OS else { return None; };
     Some(match os {
         Os::Linux => {
@@ -56,6 +56,9 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
                 "help/linux/entry.o",
                 "-o", out,
             ]);
+            for lib in link {
+                cmd.arg(format!("-l{lib}"));
+            }
             cmd
         }
         Os::Windows => {
@@ -81,6 +84,9 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
                 "/OPT:REF,NOICF",
                 "/DEBUG",
             ]);
+            for lib in link {
+                cmd.arg(lib);
+            }
             cmd
         }
         Os::Osx => {
@@ -100,6 +106,9 @@ fn link_cmd(obj: &str, out: &str) -> Option<Command> {
                 sdk_path.trim(),
                 "-o", out,
             ]);
+            for lib in link {
+                cmd.arg(format!("-l{lib}"));
+            }
             cmd
         }
     })

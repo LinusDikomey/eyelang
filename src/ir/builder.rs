@@ -228,9 +228,6 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { extra_len: (extra, variant.len() as u32) }, Tag::EnumLit, ty)
     }
     
-    pub fn build_func(&mut self, func_symbol: SymbolKey, ty: TypeTableIndex) -> Ref {
-        self.add(Data { symbol: func_symbol }, Tag::Func, ty)
-    }
 
     pub fn build_trait_func(&mut self, trait_symbol: SymbolKey, func_idx: u32, ty: TypeTableIndex) -> Ref {
         let symbol_extra = self.extra_data(&trait_symbol.bytes());
@@ -251,7 +248,11 @@ impl<'a> IrBuilder<'a> {
 
     pub fn build_module(&mut self, module: ModuleId, ty: TypeTableIndex) -> Ref {
         self.add(Data { int32: module.inner() }, Tag::Module, ty)
-    }*/
+    }
+    pub fn build_func(&mut self, func_symbol: FunctionId, ty: TypeRef) -> Ref {
+        self.add(Data { func_symbol }, Tag::Func, ty)
+    }
+    */
 
     pub fn build_type(&mut self, ty: TypeRef) -> Ref {
         self.add(Data { ty }, Tag::Type, IrType::Primitive(Primitive::Type))

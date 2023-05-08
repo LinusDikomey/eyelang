@@ -22,6 +22,7 @@ fclose :: fn(handle *FILE) -> i32 extern
 fread :: fn(ptr *i8, size u64, count u64, stream *FILE ) -> u64 extern
 
 sleep :: fn(seconds u32) extern
+usleep :: fn(usecs u64) extern
 
 rand :: fn -> i32 extern
 srand :: fn(seed u32) extern

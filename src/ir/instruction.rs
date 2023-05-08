@@ -1,7 +1,7 @@
 use std::fmt;
 
 use color_format::cwrite;
-use crate::ast::{TypeId, FunctionId, TraitId, GlobalId, VariantId};
+use crate::ast::{TypeId, TraitId, GlobalId, VariantId, self};
 
 use super::{Ref, BlockIndex, types::TypeRef};
 
@@ -149,7 +149,7 @@ pub union Data {
     pub bin_op: (Ref, Ref),
     pub ref_int: (Ref, u32),
     pub asm: (u32, u16, u16), // extra_index, length of string, amount of arguments
-    pub func_symbol: FunctionId,
+    pub func_symbol: ast::FunctionId,
     pub type_symbol: TypeId,
     pub trait_symbol: TraitId,
     pub global_symbol: GlobalId,

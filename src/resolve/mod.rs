@@ -381,8 +381,9 @@ pub enum Ident {
     Invalid,
     Var(VarId),
     Global(GlobalId),
-    Const(ConstId),
     Type(TypeRef),
+    Function(FunctionId),
+    Module(ModuleId),
 }
 
 #[derive(Clone, Copy, Debug)]
