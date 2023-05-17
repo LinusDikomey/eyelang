@@ -22,6 +22,7 @@ pub enum UseHint {
     Can,
 }
 
+#[derive(Debug)]
 pub enum Res {
     Val { use_hint: UseHint, lval: bool },
     Type(TypeRef),
@@ -162,7 +163,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                 LocalDefId::Def(DefId::Const(const_id)) => {
                     let ty = ctx.symbols.consts[const_id.idx()].type_info(ctx.types);
                     ctx.specify(info.expected, ty, span.in_mod(ctx.scope().module.id));
-                    todo!("evaluate const here")
+                    (Ident::Const(const_id), Res::Val { use_hint: UseHint::Should, lval: false })
                 }
                 LocalDefId::Def(DefId::Function(func_id)) => {
                     let generics = ctx.types.add_multiple_unknown(ctx.symbols.get_func(func_id).generic_count() as _);
@@ -189,8 +190,6 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                     
                 }
                 LocalDefId::Var(var) => {
-                    lval = true;
-
                     let ty = ctx.var(var).ty;
                     ctx.merge(info.expected, ty, span.in_mod(ctx.scope().module.id));
                     (Ident::Var(var), Res::Val { use_hint: UseHint::Should, lval: true })
@@ -467,16 +466,28 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                         ctx.ir
                     );
                     match def {
-                        DefId::Type(type_id) => (
+                        DefId::Type(_) => (
                             MemberAccess::Symbol(def),
                             TypeInfo::Type.into(),
                         ),
+                        DefId::Function(id) => {
+                            let generic_count = ctx.symbols.get_func(id).generic_count() as _;
+                            let generics = ctx.types.add_multiple_unknown(generic_count);
+                            (
+                                MemberAccess::Symbol(def),
+                                TypeInfo::FunctionItem(id, generics).into()
+                            )
+                        }
+                        DefId::Module(module_id) => {
+                            ctx.symbols.member_accesses[id.idx()] = MemberAccess::Symbol(def);
+                            return Res::Module(module_id);
+                        }
                         DefId::Global(global_id) => (
                             MemberAccess::Symbol(def),
                             ctx.symbols.get_global(global_id).1.as_info(ctx.types, |_| unreachable!("generic global?"))
                         ),
-                        _ => (MemberAccess::Symbol(def), TypeInfo::Invalid.into()),
-                        DefId::Invalid => (MemberAccess::Invalid, TypeInfo::Invalid.into())
+                        DefId::Invalid => (MemberAccess::Invalid, TypeInfo::Invalid.into()),
+                        _ => (MemberAccess::Symbol(def), TypeInfo::Unknown.into())
                     }
                 }
                 Res::Invalid => (MemberAccess::Invalid, TypeInfo::Invalid.into())
@@ -590,7 +601,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
     let called_ty = ctx.types.add_unknown();
 
     match check_expr(call.called_expr, info.with_expected(called_ty), ctx.reborrow(), false) {
-        Res::Val { use_hint, lval } => {}
+        Res::Val { .. } => {}
         Res::Type(called_type) => {
             match ctx.types.get(called_type) {
                 TypeInfo::Resolved(type_id, generics) => {

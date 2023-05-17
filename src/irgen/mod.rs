@@ -462,6 +462,10 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 resolve::Ident::Type(idx) => {
                     ir.build_type(idx)
                 }
+                resolve::Ident::Const(id) => {
+                    let val = ctx.symbols.get_const(id);
+                    return const_val::build(ir, val, ctx[expr]);
+                }
             }
         }
         Expr::Hole(_) => return Res::Hole,
@@ -1197,6 +1201,12 @@ fn gen_pat(
                 resolve::Ident::Function(_) => int!("function in pattern"),
                 resolve::Ident::Module(_) => int!("module in pattern"),
                 resolve::Ident::Type(_) => int!("type in pattern"),
+                resolve::Ident::Const(id) => {
+                    let val = ctx.symbols.get_const(id);
+                    let val = const_val::build(ir, val, ty).val(ir, ty);
+                    let eq = ir.build_bin_op(BinOp::Eq, pat_val, val, bool_ty);
+                    cond_match(ir, eq)
+                }
             }
         }
         &Expr::BinOp(op @ (Operator::Range | Operator::RangeExclusive), l, r) => {

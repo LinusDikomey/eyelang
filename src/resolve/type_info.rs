@@ -158,6 +158,7 @@ impl TypeTable {
         });
 
         self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(ty);
+        self.ty_dbg("specified", ty);
     }
     pub fn specify_resolved_type(
         &mut self,
@@ -339,7 +340,7 @@ impl TypeTable {
                 TypeInfo::MethodItem { .. }
                 | TypeInfo::Type => IrType::Primitive(Primitive::Never),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as _)), // this gets replaced with the proper generic types
-                TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
+                TypeInfo::Invalid => IrType::Primitive(Primitive::Never), // NOCHECKIN //panic!("Invalid types shouldn't reach type finalization (index {i})"),
             };
         }
 

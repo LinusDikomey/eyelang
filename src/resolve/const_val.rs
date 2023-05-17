@@ -95,7 +95,7 @@ pub enum ConstSymbol {
     Module(ModuleId),
 }
 impl ConstSymbol {
-    pub fn equal_to(&self, other: &ConstSymbol, types: &IrTypes) -> bool {
+    pub fn equal_to(&self, other: &ConstSymbol, _types: &IrTypes) -> bool {
         match (self, other) {
             (Self::Func(l), Self::Func(r)) => l == r,
             (Self::Type(l), Self::Type(r)) => l == r,

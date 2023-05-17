@@ -102,9 +102,7 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
                 let llvm_param = LLVMGetParam(llvm_func, i as _);
                 let s = LLVMPrintValueToString(llvm_param);
                 let layout = ty.layout(|id| &module.types[id.idx()].1, &[]);
-                eprintln!("Applying alignment {} to {:?}", layout.alignment, unsafe { ffi::CStr::from_ptr(s) });
                 LLVMSetParamAlignment(llvm_param, layout.alignment as _);
-                //LLVMSetAlignment(llvm_param, layout.alignment as _);
             }
             (llvm_func, func_ty)
         })

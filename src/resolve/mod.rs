@@ -384,6 +384,7 @@ pub enum Ident {
     Type(TypeRef),
     Function(FunctionId),
     Module(ModuleId),
+    Const(ConstId),
 }
 
 #[derive(Clone, Copy, Debug)]

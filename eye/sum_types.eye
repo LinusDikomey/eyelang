@@ -1,4 +1,3 @@
-
 Option :: enum[T] { Some(T) None }
 
 main :: fn {

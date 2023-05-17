@@ -173,7 +173,7 @@ impl Scopes {
                 if let Some(parent) = self[scope].parent {
                     scope = parent.id;
                 } else {
-                        errors.emit_span(Error::UnknownIdent, name_span);
+                    errors.emit_span(Error::UnknownIdent, name_span);
                     return DefId::Invalid;
                 }
             }
