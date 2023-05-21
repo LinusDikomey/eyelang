@@ -172,7 +172,6 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                     (Ident::Function(func_id), Res::Val { use_hint: UseHint::Should, lval: false })
                 }
                 LocalDefId::Def(DefId::Module(module_id)) => {
-                    ctx.types.invalidate(info.expected);
                     (Ident::Module(module_id), Res::Module(module_id))
                 }
                 LocalDefId::Def(DefId::Type(ty)) => {
@@ -466,10 +465,14 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
                         ctx.ir
                     );
                     match def {
-                        DefId::Type(_) => (
-                            MemberAccess::Symbol(def),
-                            TypeInfo::Type.into(),
-                        ),
+                        DefId::Type(id) => {
+                            ctx.symbols.member_accesses[id.idx()] = MemberAccess::Symbol(def);
+                            ctx.specify(info.expected, TypeInfo::Type, ctx.span(expr));
+                            let generics = ctx.types.add_multiple_unknown(ctx.symbols.generic_count(id) as _);
+
+                            let ty = ctx.types.add(TypeInfo::Resolved(id, generics));
+                            return Res::Type(ty);
+                        }
                         DefId::Function(id) => {
                             let generic_count = ctx.symbols.get_func(id).generic_count() as _;
                             let generics = ctx.types.add_multiple_unknown(generic_count);
