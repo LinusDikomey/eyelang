@@ -728,8 +728,6 @@ fn call_type_id(
                     ctx.span(call_expr)
                 );
             }
-            let generics = ctx.types.add_multiple_unknown(def.generic_count() as _);
-            
             
             let arg_types = ctx.types.add_multiple_unknown(def.members.len() as _);
             for (i, (_, ty)) in def.members.iter().enumerate() {

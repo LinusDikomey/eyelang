@@ -31,7 +31,7 @@ impl Builtins {
         let str_eq = str_def.methods["eq"];
 
         let DefId::Module(prelude) = get_def_in_mod(scopes, std, "prelude") else {
-            panic!("Module expected for 'predlude'")
+            panic!("Module expected for 'predude'")
         };
 
         Self { values: Some(BuiltinValues { str_type, str_eq, prelude }) }

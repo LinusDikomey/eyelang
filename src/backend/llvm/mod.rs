@@ -100,7 +100,6 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), func_ty);
             for (i, (_, ty)) in func.params.iter().enumerate() {
                 let llvm_param = LLVMGetParam(llvm_func, i as _);
-                let s = LLVMPrintValueToString(llvm_param);
                 let layout = ty.layout(|id| &module.types[id.idx()].1, &[]);
                 LLVMSetParamAlignment(llvm_param, layout.alignment as _);
             }

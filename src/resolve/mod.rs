@@ -69,7 +69,7 @@ pub fn resolve_project(
         ast.member_access_count as usize,
     );
 
-    // resolve types, function signatures
+    // resolve types, function signatures, trait function signatures
     for (i, module) in ast.modules.iter().enumerate() {
         let scope = ScopeId::module(ModuleId::new(i as _));
         for (name, def) in &ast[module.definitions] {
@@ -128,94 +128,6 @@ fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, U
     }).collect()
 }
 
-fn scope_bodies(
-    scopes: &mut Scopes,
-    scope: ScopeId,
-    defs: &DHashMap<String, Definition>,
-    ast: &Ast,
-    symbols: &mut SymbolTable,
-    errors: &mut Errors,
-    ir_functions: &mut irgen::Functions
-) {
-
-    fn gen_func_body(
-        id: FunctionId,
-        scopes: &mut Scopes,
-        scope: ScopeId,
-        generics_ctx: &[String],
-        ast: &Ast,
-        symbols: &mut SymbolTable,
-        errors: &mut Errors,
-        ir_functions: &mut irgen::Functions
-    ) {
-        
-        let func = &ast[id];
-        if let Some(body) = func.body {
-            let generic_count = symbols.get_func(id).generic_count();
-        
-            let mut types = TypeTable::new(generic_count);
-            let mut vars = vec![];
-            let mut idents = vec![Ident::Invalid; func.counts.idents as usize];
-            let mut exhaustions = Vec::new();
-            func_body(body, id, generics_ctx, Ctx {
-                scopes,
-                scope,
-                ast,
-                symbols,
-                types: &mut types,
-                idents: &mut idents,
-                vars: &mut vars,
-                errors,
-                ir: ir_functions,
-                exhaustions: &mut exhaustions,
-            });
-
-            for (exhaustion, ty, span) in exhaustions {
-                let Some(exhausted) = exhaustion.is_exhausted(types[ty], &mut types, symbols) else {
-                    errors.emit_span(
-                        Error::Internal(format!("exhaustion type mismatch: {:?}", types[ty])),
-                        span.in_mod(scopes[scope].module.id)
-                    );
-                    continue
-                };
-                if !exhausted {
-                    errors.emit_span(Error::Inexhaustive, span.in_mod(scopes[scope].module.id));
-                }
-            }
-
-            symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
-                body,
-                idents,
-                vars,
-                types,
-            })
-        }
-    }
-
-    for (_name, def) in defs {
-        match def {
-            Definition::Function(func_id) => gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions),
-            Definition::Type(id) => {
-                match symbols.get_type(*id) {
-                    ResolvedTypeDef::Struct(def) => {
-                        // PERF: cloning generics here
-                        let generics = def.generics.clone();
-                        // PERF: collecting here (ownership reasons)
-                        for method_id in def.methods.values().copied().collect::<Vec<_>>() {
-                            gen_func_body(method_id, scopes, scope, &generics, ast, symbols, errors, ir_functions);
-                        }
-                        
-                    }
-                    ResolvedTypeDef::Enum(_) => {}
-                }
-                
-            }
-            Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
-            | Definition::Const { .. } | Definition::Global(_) => {}
-        }
-    }
-}
-
 fn resolve_def(
     name: &str,
     def: &Definition,
@@ -247,10 +159,18 @@ fn resolve_def(
             let (ty, val) = global(def, ast, scopes, scope, symbols, errors, ir);
             symbols.place_global(id, name.to_owned(), ty, val);
         }
-        Definition::Trait(_)
-        | Definition::Module(_)
-        | Definition::Use(_)
-        | Definition::Const { .. } => {}
+        Definition::Use(_) => {
+            scopes.resolve_use(scope, name, errors, symbols, ast, ir);
+        }
+        Definition::Const { .. } => {
+            scopes.resolve_const(scope, name, errors, symbols, ast, ir);
+        }
+        Definition::Trait(_) => {
+            todo!("resolve trait definitions")
+        }
+        // module definitions don't have to be resolved as they just point to another module that
+        // will be resolved seperately
+        Definition::Module(_) => {}
     }
 }
 
@@ -374,6 +294,94 @@ fn global(def: &ast::GlobalDefinition, ast: &Ast, scopes: &mut Scopes, scope: Sc
     }
 
     (ty, None)
+}
+
+fn scope_bodies(
+    scopes: &mut Scopes,
+    scope: ScopeId,
+    defs: &DHashMap<String, Definition>,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ir_functions: &mut irgen::Functions
+) {
+
+    fn gen_func_body(
+        id: FunctionId,
+        scopes: &mut Scopes,
+        scope: ScopeId,
+        generics_ctx: &[String],
+        ast: &Ast,
+        symbols: &mut SymbolTable,
+        errors: &mut Errors,
+        ir_functions: &mut irgen::Functions
+    ) {
+        
+        let func = &ast[id];
+        if let Some(body) = func.body {
+            let generic_count = symbols.get_func(id).generic_count();
+        
+            let mut types = TypeTable::new(generic_count);
+            let mut vars = vec![];
+            let mut idents = vec![Ident::Invalid; func.counts.idents as usize];
+            let mut exhaustions = Vec::new();
+            func_body(body, id, generics_ctx, Ctx {
+                scopes,
+                scope,
+                ast,
+                symbols,
+                types: &mut types,
+                idents: &mut idents,
+                vars: &mut vars,
+                errors,
+                ir: ir_functions,
+                exhaustions: &mut exhaustions,
+            });
+
+            for (exhaustion, ty, span) in exhaustions {
+                let Some(exhausted) = exhaustion.is_exhausted(types[ty], &mut types, symbols) else {
+                    errors.emit_span(
+                        Error::Internal(format!("exhaustion type mismatch: {:?}", types[ty])),
+                        span.in_mod(scopes[scope].module.id)
+                    );
+                    continue
+                };
+                if !exhausted {
+                    errors.emit_span(Error::Inexhaustive, span.in_mod(scopes[scope].module.id));
+                }
+            }
+
+            symbols.get_func_mut(id).resolved_body = Some(ResolvedFunc {
+                body,
+                idents,
+                vars,
+                types,
+            })
+        }
+    }
+
+    for (_name, def) in defs {
+        match def {
+            Definition::Function(func_id) => gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions),
+            Definition::Type(id) => {
+                match symbols.get_type(*id) {
+                    ResolvedTypeDef::Struct(def) => {
+                        // PERF: cloning generics here
+                        let generics = def.generics.clone();
+                        // PERF: collecting here (ownership reasons)
+                        for method_id in def.methods.values().copied().collect::<Vec<_>>() {
+                            gen_func_body(method_id, scopes, scope, &generics, ast, symbols, errors, ir_functions);
+                        }
+                        
+                    }
+                    ResolvedTypeDef::Enum(_) => {}
+                }
+                
+            }
+            Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
+            | Definition::Const { .. } | Definition::Global(_) => {}
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

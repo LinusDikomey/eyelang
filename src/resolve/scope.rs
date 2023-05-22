@@ -136,39 +136,13 @@ impl Scopes {
         scope
     }
     
-    pub fn resolve(&mut self, mut scope: ScopeId, name: &str, name_span: Span, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> DefId {
+    pub fn resolve(
+        &mut self, mut scope: ScopeId, name: &str, name_span: Span, errors: &mut Errors,
+        symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions
+    ) -> DefId {
         loop {
-            if let Some(def_id) = self[scope].names.get_mut(name) {
-                return match def_id {
-                    UnresolvedDefId::Resolved(id) => *id,
-    
-                    // TODO: when parent scopes are mutable somehow, update in self.names so resolval is cached :
-                    UnresolvedDefId::Const { .. } => {
-                        let UnresolvedDefId::Const { expr, ty, counts } = std::mem::replace(
-                            def_id, UnresolvedDefId::Resolving,
-                        ) else { unreachable!() };
-                        let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
-                            const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
-                            const_val::ConstItem::Symbol(def) => def.as_def_id(),
-                        };
-                        self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
-                        def
-                    }
-                    UnresolvedDefId::Use(_) => {
-                        let UnresolvedDefId::Use(path) = std::mem::replace(
-                            def_id, UnresolvedDefId::Resolving
-                        ) else { unreachable!() };
-
-                        let def = self.resolve_global_path(scope, &path, errors, symbols, ast, ir);
-                        self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
-                        def
-                    }
-
-                    UnresolvedDefId::Resolving => {
-                        errors.emit_span(Error::RecursiveDefinition, name_span);
-                        DefId::Invalid
-                    }
-                }
+            if let Some(def_id) = self.resolve_scope_name(scope, name, name_span, errors, symbols, ast, ir) {
+                return def_id;
             } else {
                 if let Some(parent) = self[scope].parent {
                     scope = parent.id;
@@ -179,6 +153,81 @@ impl Scopes {
             }
         }
         
+    }
+
+    /// Tries to resolve a name in the provided scope. Will *not* check parent scopes or locals.
+    /// This is just a utility function called by resolve/resolve_local
+    fn resolve_scope_name(
+        &mut self, scope: ScopeId, name: &str, name_span: Span, errors: &mut Errors,
+        symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions,
+    ) -> Option<DefId> {
+        let Some(def_id) = self[scope].names.get_mut(name) else { return None };
+        Some(match def_id {
+            UnresolvedDefId::Resolved(id) => *id,
+            UnresolvedDefId::Const { .. } => {
+                let UnresolvedDefId::Const { expr, ty, counts } = std::mem::replace(
+                    def_id, UnresolvedDefId::Resolving,
+                ) else { unreachable!() };
+                let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
+                    const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
+                    const_val::ConstItem::Symbol(def) => def.as_def_id(),
+                };
+                self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
+                def
+            }
+            UnresolvedDefId::Use(_) => {
+                let UnresolvedDefId::Use(path) = std::mem::replace(
+                    def_id, UnresolvedDefId::Resolving
+                ) else { unreachable!() };
+
+                let def = self.resolve_global_path(scope, &path, errors, symbols, ast, ir);
+                self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
+                def
+            }
+
+            UnresolvedDefId::Resolving => {
+                errors.emit_span(Error::RecursiveDefinition, name_span);
+                DefId::Invalid
+            }
+        })
+    }
+
+
+    /// Resolves a potentially unresolved use item
+    pub fn resolve_use(
+        &mut self, scope: ScopeId, name: &str,
+        errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions,
+    ) {
+        let unresolved = self[scope].names.get_mut(name).unwrap();
+        let path = match unresolved {
+            UnresolvedDefId::Resolved(_) => return,
+            UnresolvedDefId::Use(path) => *path,
+            _ => unreachable!()
+        };
+        *unresolved = UnresolvedDefId::Resolving;
+        let def = self.resolve_global_path(scope, &path, errors, symbols, ast, ir);
+        self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
+    }
+
+    /// Resolves a potentially unresolved constant
+    pub fn resolve_const(
+        &mut self, scope: ScopeId, name: &str,
+        errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions,
+    ) {
+        let unresolved = self[scope].names.get_mut(name).unwrap();
+        match unresolved {
+            UnresolvedDefId::Resolved(_) => return,
+            UnresolvedDefId::Const { .. } => {}
+            _ => unreachable!()
+        }
+        let UnresolvedDefId::Const { expr, ty, counts } = std::mem::replace(
+            unresolved, UnresolvedDefId::Resolving,
+        ) else { unreachable!() };
+        let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
+            const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
+            const_val::ConstItem::Symbol(def) => def.as_def_id(),
+        };
+        self[scope].names.insert(name.to_owned(), UnresolvedDefId::Resolved(def));
     }
 
     /// Resolves everything in a path except the last segment.
@@ -202,8 +251,10 @@ impl Scopes {
             };
             match self.resolve(scope, segment, segment_span.in_mod(self[id].module.id), errors, symbols, ast, ir_functions) {
                 DefId::Module(id) => current_module = Some(id),
-                _ => {
-                    errors.emit_span(Error::ModuleExpected, segment_span.in_mod(self[id].module.id));
+                other => {
+                    if other != DefId::Invalid {
+                        errors.emit_span(Error::ModuleExpected, segment_span.in_mod(self[id].module.id));
+                    }
                     return None;
                 }
             }
@@ -413,36 +464,16 @@ impl Scopes {
         })
     }
 
-    pub fn resolve_local(&mut self, scope: ScopeId, name: &str, name_span: TSpan, errors: &mut Errors, symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions) -> LocalDefId {
+    pub fn resolve_local(
+        &mut self, scope: ScopeId, name: &str, name_span: TSpan, errors: &mut Errors,
+        symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions
+    ) -> LocalDefId {
         if let Some(local) = self[scope].locals.get(name) {
             local.clone()
-        } else if let Some(def) = self[scope].names.get_mut(name) {
-            match def {
-                UnresolvedDefId::Resolved(def) => LocalDefId::Def(*def),
-                UnresolvedDefId::Const { .. } => {
-                    let UnresolvedDefId::Const { expr, ty, counts } = std::mem::replace(
-                        def, UnresolvedDefId::Resolving
-                    ) else { unreachable!() };
-                    let def = match const_val::eval(expr, &ty, counts, self, scope, errors, ast, symbols, ir) {
-                        const_val::ConstItem::Val(val) => DefId::Const(symbols.add_const(val)),
-                        const_val::ConstItem::Symbol(def) => def.as_def_id(),
-                    };
-                    *self[scope].names.get_mut(name).unwrap() = UnresolvedDefId::Resolved(def);
-                    LocalDefId::Def(def)
-                }
-                UnresolvedDefId::Use(_) => {
-                    let UnresolvedDefId::Use(path) = std::mem::replace(
-                        def, UnresolvedDefId::Resolving
-                    ) else { unreachable!() };
-                    let def = self.resolve_global_path(scope, &path, errors, symbols, ast, ir);
-                    *self[scope].names.get_mut(name).unwrap() = UnresolvedDefId::Resolved(def);
-                    LocalDefId::Def(def)
-                }
-                UnresolvedDefId::Resolving => {
-                    errors.emit_span(Error::RecursiveDefinition, name_span.in_mod(self[scope].module.id));
-                    LocalDefId::Def(DefId::Invalid)
-                }
-            }
+        } else if let Some(def_id) = self.resolve_scope_name(
+            scope, name, name_span.in_mod(self[scope].module.id), errors, symbols, ast, ir
+        ) {
+            return LocalDefId::Def(def_id);
         } else {
             match self[scope].parent {
                 Some(ParentScope { id: parent, can_see_locals: true }) => {

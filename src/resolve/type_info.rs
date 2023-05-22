@@ -340,7 +340,8 @@ impl TypeTable {
                 TypeInfo::MethodItem { .. }
                 | TypeInfo::Type => IrType::Primitive(Primitive::Never),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as _)), // this gets replaced with the proper generic types
-                TypeInfo::Invalid => IrType::Primitive(Primitive::Never), // NOCHECKIN //panic!("Invalid types shouldn't reach type finalization (index {i})"),
+                // should never be used in typechecke code
+                TypeInfo::Invalid => IrType::Primitive(Primitive::Never),
             };
         }
 
@@ -365,7 +366,7 @@ impl TypeTable {
                 TypeInfo::Tuple(elems, _) => IrType::Tuple(TypeRefs { idx: elems.idx, count: elems.count }),
                 TypeInfo::FunctionItem(_, _)
                 | TypeInfo::MethodItem { .. } => todo!(),
-                | TypeInfo::Type => panic!("comptime type supplied when building ir"),
+                TypeInfo::Type => IrType::Primitive(Primitive::Type),
                 TypeInfo::Generic(i) => IrType::Ref(self.generics.nth(i as u32)),
                 TypeInfo::Invalid => panic!("Invalid types shouldn't reach type finalization"),
             };

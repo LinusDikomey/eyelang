@@ -197,6 +197,7 @@ impl SymbolTable {
         }
     }   
     pub fn place_func(&mut self, id: FunctionId, func: FunctionHeader) {
+        debug_assert!(self.funcs[id.idx()].is_none(), "function header resolved twice");
         self.funcs[id.idx()] = Some(func);
     }
     /*
