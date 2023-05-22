@@ -2,7 +2,12 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{help::{write_delimited, write_delimited_with}, ast::{TypeId, FunctionId, TraitId}, resolve::types::{Struct, ResolvedTypeDef, Type}, ir::types::ConstIrType};
+use crate::{
+    help::{write_delimited, write_delimited_with},
+    ast::{TypeId, FunctionId, TraitId},
+    resolve::types::{Struct, ResolvedTypeDef, Type, Enum},
+    ir::types::ConstIrType,
+};
 
 use super::{
     Function,
@@ -181,6 +186,25 @@ impl fmt::Display for StructDisplay<'_> {
         let Self { s, info } = self;
         for (name, m) in &s.members {
             cwrite!(f, "  #g<{}> #m<{}>\n", name, m.display(*info))?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for Enum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (variant, (_, variant_val, variant_types)) in &self.variants {
+            if variant_types.is_empty() {
+                cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
+            } else {
+                cwrite!(f, "  #m<{}>", variant)?;
+
+                for ty in variant_types {
+                    write!(f, "TODO: render types here")?;
+                }
+
+                cwriteln!(f, " = #c<{}>", variant_val)?;
+            }
         }
         Ok(())
     }

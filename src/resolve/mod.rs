@@ -10,7 +10,7 @@ use crate::{
 };
 
 use self::{
-    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum},
+    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum, TraitDef},
     type_info::{TypeTable, TypeInfo, TypeInfoOrIndex},
     scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
     const_val::ConstVal, expr::val_expr, std_builtins::Builtins, exhaust::Exhaustion
@@ -154,23 +154,24 @@ fn resolve_def(
             };
             symbols.place_type(id, def);
         }
-        &Definition::Global(id) => {
-            let def = &ast[id];
-            let (ty, val) = global(def, ast, scopes, scope, symbols, errors, ir);
-            symbols.place_global(id, name.to_owned(), ty, val);
+        &Definition::Trait(id) => {
+            let def = trait_def(&ast[id], scopes, scope, ast, symbols, errors, ir);
+            symbols.place_trait(id, def);
         }
+        // module definitions don't have to be resolved as they just point to another module that
+        // will be resolved seperately
+        Definition::Module(_) => {}
         Definition::Use(_) => {
             scopes.resolve_use(scope, name, errors, symbols, ast, ir);
         }
         Definition::Const { .. } => {
             scopes.resolve_const(scope, name, errors, symbols, ast, ir);
         }
-        Definition::Trait(_) => {
-            todo!("resolve trait definitions")
+        &Definition::Global(id) => {
+            let def = &ast[id];
+            let (ty, val) = global(def, ast, scopes, scope, symbols, errors, ir);
+            symbols.place_global(id, name.to_owned(), ty, val);
         }
-        // module definitions don't have to be resolved as they just point to another module that
-        // will be resolved seperately
-        Definition::Module(_) => {}
     }
 }
 
@@ -283,6 +284,28 @@ fn enum_def(
         ))
         .collect();
     Enum { name, variants, generic_count: def.generic_count() }
+}
+
+fn trait_def(
+    def: &ast::TraitDefinition,
+    scopes: &mut Scopes,
+    scope: ScopeId,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    errors: &mut Errors,
+    ir: &mut irgen::Functions,
+) -> TraitDef {
+    let scope = generic_scope(&def.generics, scopes, scope, ast);
+    let functions = def.functions
+        .iter()
+        .map(|(func_name, (_span, func))| {
+            let header = func_signature(func_name.to_owned(), def.generics.len() as u8, func,
+                scopes, scope, symbols, errors, ast, ir);
+            (func_name.to_owned(), header)
+        })
+        .collect();
+
+    TraitDef { functions }
 }
 
 fn global(def: &ast::GlobalDefinition, ast: &Ast, scopes: &mut Scopes, scope: ScopeId, symbols: &mut SymbolTable, errors: &mut Errors, ir: &mut irgen::Functions)

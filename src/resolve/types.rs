@@ -1,9 +1,8 @@
-use core::fmt;
-use color_format::{cwriteln, cwrite};
-
 use crate::{
     types::{Primitive, Layout, IntType},
-    dmap::DHashMap, ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId, VariantId}, ir::types::TypeRef
+    dmap::DHashMap,
+    ast::{ModuleId, FunctionId, TypeId, TypeDef, ExprRef, CallId, TraitId, GlobalId, ConstId, VariantId},
+    ir::types::TypeRef,
 };
 
 use super::{
@@ -219,7 +218,19 @@ impl SymbolTable {
         }
     }
     pub fn place_type(&mut self, id: TypeId, ty: ResolvedTypeDef) {
+        debug_assert!(
+            matches!(self.types[id.idx()].1, MaybeTypeDef::NotGenerated { .. }),
+            "type was resolved twice",
+        );
         self.types[id.idx()].1 = MaybeTypeDef::Some(ty);
+    }
+
+    pub fn place_trait(&mut self, id: TraitId, trait_def: TraitDef) {
+        debug_assert!(
+            self.traits[id.idx()].is_none(),
+            "trait was resolved twice",
+        );
+        self.traits[id.idx()] = Some(trait_def);
     }
     /*
     pub fn add_trait(&mut self, t: TraitDef) -> SymbolKey {
@@ -371,11 +382,6 @@ impl Struct {
 }
 
 #[derive(Debug, Clone)]
-pub struct TraitDef {
-    pub functions: DHashMap<String, (u32, FunctionHeader)>
-}
-
-#[derive(Debug, Clone)]
 pub struct Enum {
     pub name: String,
     pub variants: DHashMap<String, (VariantId, u32, Vec<Type>)>,
@@ -411,21 +417,9 @@ impl Enum {
     }
     
 }
-impl fmt::Display for Enum {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (variant, (_, variant_val, variant_types)) in &self.variants {
-            if variant_types.is_empty() {
-                cwriteln!(f, "  #m<{}> = #c<{}>", variant, variant_val)?;
-            } else {
-                cwrite!(f, "  #m<{}>", variant)?;
 
-                for ty in variant_types {
-                    write!(f, "TODO: render types here")?;
-                }
-
-                cwriteln!(f, " = #c<{}>", variant_val)?;
-            }
-        }
-        Ok(())
-    }
+#[derive(Debug, Clone)]
+pub struct TraitDef {
+    pub functions: DHashMap<String, FunctionHeader>
 }
+
