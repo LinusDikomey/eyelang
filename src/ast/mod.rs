@@ -272,8 +272,10 @@ pub enum Item {
 
 #[derive(Debug, Clone)]
 pub struct TraitImpl {
-    pub ty: TSpan,
+    pub impl_generics: Vec<GenericDef>,
     pub trait_path: IdentPath,
+    pub trait_generics: Option<(Vec<UnresolvedType>, TSpan)>,
+    pub ty: UnresolvedType,
 }
 
 #[derive(Debug, Clone)]

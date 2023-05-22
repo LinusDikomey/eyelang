@@ -199,7 +199,7 @@ impl fmt::Display for Enum {
             } else {
                 cwrite!(f, "  #m<{}>", variant)?;
 
-                for ty in variant_types {
+                for _ty in variant_types {
                     write!(f, "TODO: render types here")?;
                 }
 

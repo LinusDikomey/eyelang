@@ -58,7 +58,7 @@ impl TokenReader {
         self.index -= 1;
     }
 
-    /// steps over the current token and returns it. Token type checks only happen in debug mode.
+    /// Steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
         let tok = unsafe { self.step().unwrap_unchecked() };

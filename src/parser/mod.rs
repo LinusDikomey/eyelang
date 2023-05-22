@@ -274,9 +274,14 @@ impl<'a> Parser<'a> {
                     def: Definition::Use(path),
                 }
             }
+            // Trait implementation
+            TokenType::Keyword(Keyword::Impl) => {
+                let impl_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Impl));
+                Item::Impl(self.parse_trait_impl(impl_tok)?)
+            }
             // either a struct, constant or a variable
             TokenType::Ident => {
-                let ident = self.toks.step_expect(TokenType::Ident)?;
+                let ident = self.toks.step_assert(TokenType::Ident);
                 let ident_span = ident.span();
                 let name = ident.get_val(self.src);
                 match self.toks.peek().map(|t| t.ty) {
@@ -320,10 +325,6 @@ impl<'a> Parser<'a> {
                             name_span: ident_span,
                             def,
                         }
-                    }
-                    // Trait implementation
-                    Some(TokenType::Keyword(Keyword::Can)) => {
-                        Item::Impl(self.parse_trait_impl(ident_span)?)
                     }
                     // Variable or constant declaration with explicit type
                     Some(TokenType::Colon) => {
@@ -561,9 +562,13 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_trait_impl(&mut self, ty: TSpan) -> EyeResult<TraitImpl> {
-        self.toks.step_assert(TokenType::Keyword(Keyword::Can));
+    fn parse_trait_impl(&mut self, impl_tok: Token) -> EyeResult<TraitImpl> {
+        debug_assert_eq!(impl_tok.ty, TokenType::Keyword(Keyword::Impl));
+        let impl_generics = self.parse_optional_generics()?;
         let trait_path = self.parse_path()?;
+        let trait_generics = self.parse_optional_generic_instance()?;
+        self.toks.step_expect(TokenType::Keyword(Keyword::For))?;
+        let ty = self.parse_type()?;
 
         let mut functions = dmap::new();
 
@@ -584,7 +589,12 @@ impl<'a> Parser<'a> {
             }
             Ok(Delimit::OptionalIfNewLine)
         })?;
-        Ok(TraitImpl { ty, trait_path })
+        Ok(TraitImpl {
+            impl_generics: impl_generics.map_or(Vec::new(), |g| g.1),
+            trait_path,
+            trait_generics,
+            ty,
+        })
     }
 
     fn parse_stmt(&mut self, ident_count: &mut Counts) -> EyeResult<ExprRef> {

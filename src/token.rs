@@ -198,7 +198,7 @@ pub enum Keyword {
     Struct,
     Enum,
     Trait,
-    Can,
+    Impl,
     If,
     Else,
     Match,
@@ -223,7 +223,7 @@ impl From<Keyword> for &'static str {
             Keyword::Struct => "struct",
             Keyword::Enum => "enum",
             Keyword::Trait => "trait",
-            Keyword::Can => "can",
+            Keyword::Impl => "impl",
             Keyword::If => "if",
             Keyword::Else => "else",
             Keyword::Match => "match",
@@ -274,7 +274,7 @@ impl FromStr for Keyword {
             "enum" => Keyword::Enum,
 
             "trait" => Keyword::Trait,
-            "can" => Keyword::Can,
+            "impl" => Keyword::Impl,
 
             "if" => Keyword::If,
             "else" => Keyword::Else,

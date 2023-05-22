@@ -110,8 +110,8 @@ impl Type {
             Self::Generic(idx) => {
                 return on_generic(*idx);
             }
-            Self::LocalEnum(variants) => unreachable!(), // this shouldn't happen as LocalEnum
-                                                         // can't be created with a type annotation
+            Self::LocalEnum(_) => unreachable!(),   // this shouldn't happen as LocalEnum
+                                                    // can't be created with a type annotation
             Self::Invalid => TypeInfo::Invalid
         })
     }

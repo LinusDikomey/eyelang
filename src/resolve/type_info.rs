@@ -323,10 +323,6 @@ impl TypeTable {
                 TypeInfo::Pointer(pointee) => IrType::Ptr(pointee),
                 TypeInfo::Array(size, elem) => IrType::Array(elem, size.unwrap_or(0)),
                 TypeInfo::Enum(variants) => {
-                    let tag_ty = Enum::int_ty_from_variant_count(variants.count).map_or(
-                        IrType::Primitive(Primitive::Unit),
-                        |ty| IrType::Primitive(ty.into())
-                    );
                     let variants_start = ir_types.len() as u32;
                     ir_types.extend((0..variants.count()).map(|_| IrType::Primitive(Primitive::Never)));
 
