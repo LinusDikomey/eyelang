@@ -267,6 +267,10 @@ impl SymbolTable {
     pub fn get_const(&self, id: ConstId) -> &ConstVal {
         &self.consts[id.idx()]
     }
+
+    pub fn get_trait(&self, id: TraitId) -> &TraitDef {
+        &self.traits[id.idx()].as_ref().unwrap()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -347,6 +351,32 @@ impl FunctionHeader {
     pub fn generic_count(&self) -> u8 {
         self.inherited_generic_count + self.generics.len() as u8
     }
+
+    pub fn matches_trait_function_signature(&self, trait_function_signature: &Self) -> bool {
+        if self.generics.len() != trait_function_signature.generics.len() {
+            return false;
+        }
+
+        // TODO: this doesn't handle generics and self types properly
+        let types_match = |a, b| a == b;
+
+        if self.varargs != trait_function_signature.varargs {
+            return false;
+        }
+        if !types_match(&self.return_type, &trait_function_signature.return_type) {
+            return false;
+        }
+
+        if self.params.len() != trait_function_signature.params.len() {
+            return false;
+        }
+        for ((_, param), (_, expected_param)) in self.params.iter().zip(trait_function_signature.params.iter()) {
+            if !types_match(param, expected_param) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -420,6 +450,7 @@ impl Enum {
 
 #[derive(Debug, Clone)]
 pub struct TraitDef {
+    pub name: String,
     pub functions: DHashMap<String, FunctionHeader>
 }
 

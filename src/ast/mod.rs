@@ -276,6 +276,13 @@ pub struct TraitImpl {
     pub trait_path: IdentPath,
     pub trait_generics: Option<(Vec<UnresolvedType>, TSpan)>,
     pub ty: UnresolvedType,
+    pub functions: DHashMap<String, Function>,
+    pub impl_keyword_start: u32,
+}
+impl TraitImpl {
+    pub fn header_span(&self) -> TSpan {
+        TSpan::new(self.impl_keyword_start, self.ty.span().end)
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -496,7 +496,7 @@ impl<'a> Parser<'a> {
             UnresolvedType::Primitive(Primitive::Unit, self.toks.previous().unwrap().span())
         };
 
-        let end = self.toks.last_src_pos();
+        let end = self.toks.previous().unwrap().end;
 
         let ident_count = params.len() as u32;
 
@@ -585,7 +585,7 @@ impl<'a> Parser<'a> {
                 return Err(CompileError::new(
                     Error::DuplicateDefinition,
                     name_span.in_mod(p.toks.module)
-                ))
+                ));
             }
             Ok(Delimit::OptionalIfNewLine)
         })?;
@@ -594,6 +594,8 @@ impl<'a> Parser<'a> {
             trait_path,
             trait_generics,
             ty,
+            functions,
+            impl_keyword_start: impl_tok.start,
         })
     }
 

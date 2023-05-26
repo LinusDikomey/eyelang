@@ -75,6 +75,10 @@ pub fn resolve_project(
         for (name, def) in &ast[module.definitions] {
             resolve_def(name, def, ast, &mut symbols, &mut scopes, scope, errors, &mut ir_functions);
         }
+
+        for trait_impl in &module.impls {
+            resolve_trait_impl(trait_impl, ast, &mut symbols, &mut scopes, scope, errors, &mut ir_functions);
+        }
     }
 
     let main = require_main.then_some(()).and_then(|()| {
@@ -155,7 +159,7 @@ fn resolve_def(
             symbols.place_type(id, def);
         }
         &Definition::Trait(id) => {
-            let def = trait_def(&ast[id], scopes, scope, ast, symbols, errors, ir);
+            let def = trait_def(name, &ast[id], scopes, scope, ast, symbols, errors, ir);
             symbols.place_trait(id, def);
         }
         // module definitions don't have to be resolved as they just point to another module that
@@ -287,6 +291,7 @@ fn enum_def(
 }
 
 fn trait_def(
+    name: &str,
     def: &ast::TraitDefinition,
     scopes: &mut Scopes,
     scope: ScopeId,
@@ -305,7 +310,7 @@ fn trait_def(
         })
         .collect();
 
-    TraitDef { functions }
+    TraitDef { name: name.to_owned(), functions }
 }
 
 fn global(def: &ast::GlobalDefinition, ast: &Ast, scopes: &mut Scopes, scope: ScopeId, symbols: &mut SymbolTable, errors: &mut Errors, ir: &mut irgen::Functions)
@@ -317,6 +322,79 @@ fn global(def: &ast::GlobalDefinition, ast: &Ast, scopes: &mut Scopes, scope: Sc
     }
 
     (ty, None)
+}
+
+
+fn resolve_trait_impl(
+    trait_impl: &ast::TraitImpl,
+    ast: &Ast,
+    symbols: &mut SymbolTable,
+    scopes: &mut Scopes,
+    scope: ScopeId,
+    errors: &mut Errors,
+    ir: &mut irgen::Functions,
+) {
+    if trait_impl.impl_generics.len() > u8::MAX as _ {
+        errors.emit_span(
+            Error::TooManyGenerics(trait_impl.impl_generics.len()),
+            trait_impl.header_span().in_mod(scopes[scope].module.id),
+        );
+    }
+    let scope = generic_scope(&trait_impl.impl_generics, scopes, scope, ast);
+    let generic_count = trait_impl.impl_generics.len() as u8;
+    // TODO: add Self definition
+    let trait_id = match scopes.resolve_global_path(scope, &trait_impl.trait_path, errors, symbols, ast, ir) {
+        DefId::Trait(trait_id) => trait_id,
+        DefId::Invalid => return,
+        _ => {
+            errors.emit_span(Error::TraitExpected, trait_impl.trait_path.span().in_mod(scopes[scope].module.id));
+            return;
+        }
+    };
+    let ty = scopes.resolve_ty(scope, &trait_impl.ty, errors, symbols, ast, ir);
+
+    if !trait_impl.trait_generics.as_ref().map_or(true, |(types, _)| types.is_empty()) {
+        todo!("Generic traits");
+    }
+
+    let mut valid_found_function_count = 0;
+
+    for (name, func) in &trait_impl.functions {
+        let signature = func_signature(name.clone(), generic_count, func, scopes, scope, symbols, errors, ast, ir);
+
+        let trait_def = symbols.get_trait(trait_id);
+        let Some(def_func) = symbols.get_trait(trait_id).functions.get(name) else {
+            errors.emit_span(
+                Error::NotATraitMember {
+                    trait_name: trait_def.name.clone(),
+                    function: name.clone(),
+                },
+                func.span.in_mod(scopes[scope].module.id)
+            );
+            continue;
+        };
+        valid_found_function_count += 1;
+        if !signature.matches_trait_function_signature(def_func) {
+            errors.emit_span(Error::TraitSignatureMismatch, func.span.in_mod(scopes[scope].module.id));
+        }
+    }
+
+    let trait_def = symbols.get_trait(trait_id);
+
+    // This will have to be refactored when functions can have default implementations but it's
+    // fine for now. It avoids costly checking if all functions are implemented in the happy path.
+    if valid_found_function_count < trait_def.functions.len() {
+        let unimplemented: Vec<String> =
+            trait_def.functions
+                .keys()
+                .filter(|name| !trait_impl.functions.contains_key(*name))
+                .map(String::clone)
+                .collect();
+        errors.emit_span(
+            Error::NotAllFunctionsImplemented { unimplemented },
+            trait_impl.header_span().in_mod(scopes[scope].module.id)
+        );
+    }
 }
 
 fn scope_bodies(

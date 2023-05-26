@@ -172,6 +172,7 @@ pub enum Error {
     TypeExpected,
     ModuleExpected,
     FunctionOrTypeExpected,
+    TraitExpected,
     IntExpected,
     FloatExpected,
     MismatchedType { expected: String, found: String },
@@ -215,6 +216,12 @@ pub enum Error {
     HoleLHSOnly,
     CantMutateHole,
     InvalidGlobalVarPattern,
+    NotATraitMember {
+        trait_name: String,
+        function: String,
+    },
+    NotAllFunctionsImplemented { unimplemented: Vec<String>, },
+    TraitSignatureMismatch,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -244,6 +251,7 @@ impl Error {
             Error::TypeExpected => "expected a type",
             Error::ModuleExpected => "expected a module",
             Error::FunctionOrTypeExpected => "expected a type or function",
+            Error::TraitExpected => "expected a trait",
             Error::IntExpected => "integer expected",
             Error::FloatExpected => "float expected",
             Error::MismatchedType { .. } => "type mismatch",
@@ -286,7 +294,10 @@ impl Error {
             Error::TooManyGenerics(_) => "too many generics",
             Error::HoleLHSOnly => "hole can only used on left-hand side of an assignment",
             Error::CantMutateHole => "can't mutate hole",
-            Error::InvalidGlobalVarPattern => "invalid pattern for a global variable definition"
+            Error::InvalidGlobalVarPattern => "invalid pattern for a global variable definition",
+            Error::NotATraitMember { .. } => "not a member of the implemented trait",
+            Error::NotAllFunctionsImplemented { .. } => "not all functions of the trait are implemented",
+            Error::TraitSignatureMismatch => "signature doesn't match the function's signature in the trait definition",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -346,6 +357,23 @@ impl Error {
             Error::InvalidGlobalVarPattern => cformat!(
                 "only a single #c<identifier> can be used as a pattern when creating global variables"
             ),
+            Error::NotATraitMember { trait_name, function } => cformat!(
+                "the function #m<{function}> is not a member of the trait #m<{trait_name}>",
+            ),
+            Error::NotAllFunctionsImplemented { unimplemented } => {
+                assert!(!unimplemented.is_empty());
+                if unimplemented.len() == 1 {
+                    cformat!("missing function: #m<{}>", unimplemented[0])
+                } else {
+                    let mut it = unimplemented.iter();
+                    let mut s = format!("missing functions: #m<{}>", it.next().unwrap());
+                    for f in it {
+                        use std::fmt::Write;
+                        cwrite!(&mut s, ", #m<{f}>").unwrap();
+                    }
+                    s
+                }
+            }
             _ => return None
         })
     }
