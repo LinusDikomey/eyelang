@@ -579,8 +579,9 @@ impl<'a> Parser<'a> {
             let name = name.get_val(p.src).to_owned();
             p.toks.step_expect(TokenType::DoubleColon)?;
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-            let function = p.parse_function_def(fn_tok)?;
-            let previous = functions.insert(name, function);
+            let func = p.parse_function_def(fn_tok)?;
+            let func_id = p.ast.add_func(func);
+            let previous = functions.insert(name, func_id);
             if previous.is_some() {
                 return Err(CompileError::new(
                     Error::DuplicateDefinition,

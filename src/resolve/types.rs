@@ -12,7 +12,7 @@ use super::{
     Var,
     ResolvedCall,
     MemberAccess,
-    std_builtins::Builtins
+    std_builtins::Builtins, trait_impls::TraitImpls
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -22,7 +22,7 @@ pub enum Type {
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
     Tuple(Vec<Type>),
-    /// A generic type (commonly T) that will be replaced by a concrete type in generic instantiations.
+    /// A generic type that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
 
     // a local enum that will only be created from inference
@@ -165,6 +165,7 @@ pub struct SymbolTable {
     pub traits: Vec<Option<TraitDef>>,
     pub consts: Vec<ConstVal>,
     pub globals: Vec<Option<(String, Type, Option<ConstVal>)>>,
+    pub trait_impls: TraitImpls,
     pub expr_types: Vec<TypeRef>,
     pub calls: Vec<Option<ResolvedCall>>,
     pub member_accesses: Vec<MemberAccess>,
@@ -190,6 +191,7 @@ impl SymbolTable {
             traits: (0..trait_count).map(|_| None).collect(),
             consts: Vec::new(),
             globals: vec![None; global_count],
+            trait_impls: TraitImpls::new(),
             expr_types: vec![TypeRef::NONE; expr_count],
             calls: vec![None; call_count],
             member_accesses: vec![MemberAccess::Invalid; member_access_count],
@@ -451,6 +453,7 @@ impl Enum {
 #[derive(Debug, Clone)]
 pub struct TraitDef {
     pub name: String,
-    pub functions: DHashMap<String, FunctionHeader>
+    /// values represent: (index in trait, function header in trait def)
+    pub functions: DHashMap<String, (u32, FunctionHeader)>
 }
 

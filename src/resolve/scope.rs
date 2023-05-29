@@ -131,7 +131,8 @@ impl Scopes {
         }
 
         // function bodies
-        super::scope_bodies(self, scope, defs, &ast, symbols, errors, ir_functions);
+        // TODO: Allow local impls? Then pass them here
+        super::scope_bodies(self, scope, defs, &ast, symbols, errors, ir_functions, &[]);
 
         scope
     }

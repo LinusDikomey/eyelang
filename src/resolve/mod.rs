@@ -19,6 +19,7 @@ use self::{
 pub mod const_val;
 mod scope;
 pub mod std_builtins;
+mod trait_impls;
 pub mod types;
 pub mod type_info;
 mod expr;
@@ -105,7 +106,8 @@ pub fn resolve_project(
     // function bodies
     for (i, module) in ast.modules.iter().enumerate() {
         let scope = ScopeId::module(ModuleId::new(i as _));
-        scope_bodies(&mut scopes, scope, &ast[module.definitions], &ast, &mut symbols, errors, &mut ir_functions);
+        scope_bodies(&mut scopes, scope, &ast[module.definitions], &ast, &mut symbols, errors,
+            &mut ir_functions, &module.impls);
     }
 
     (symbols, ir_functions, main)
@@ -303,10 +305,11 @@ fn trait_def(
     let scope = generic_scope(&def.generics, scopes, scope, ast);
     let functions = def.functions
         .iter()
-        .map(|(func_name, (_span, func))| {
+        .zip(0..)
+        .map(|((func_name, (_span, func)), i)| {
             let header = func_signature(func_name.to_owned(), def.generics.len() as u8, func,
                 scopes, scope, symbols, errors, ast, ir);
-            (func_name.to_owned(), header)
+            (func_name.to_owned(), (i, header))
         })
         .collect();
 
@@ -341,7 +344,7 @@ fn resolve_trait_impl(
         );
     }
     let scope = generic_scope(&trait_impl.impl_generics, scopes, scope, ast);
-    let generic_count = trait_impl.impl_generics.len() as u8;
+    let impl_generic_count = trait_impl.impl_generics.len() as u8;
     // TODO: add Self definition
     let trait_id = match scopes.resolve_global_path(scope, &trait_impl.trait_path, errors, symbols, ast, ir) {
         DefId::Trait(trait_id) => trait_id,
@@ -353,17 +356,24 @@ fn resolve_trait_impl(
     };
     let ty = scopes.resolve_ty(scope, &trait_impl.ty, errors, symbols, ast, ir);
 
-    if !trait_impl.trait_generics.as_ref().map_or(true, |(types, _)| types.is_empty()) {
-        todo!("Generic traits");
-    }
+    let trait_generics = trait_impl.trait_generics
+        .as_ref()
+        .map_or(&[] as &[_], |(trait_generics, _span)| trait_generics.as_slice())
+        .iter()
+        .map(|generic| scopes.resolve_ty(scope, &generic, errors, symbols, ast, ir))
+        .collect();
 
     let mut valid_found_function_count = 0;
 
-    for (name, func) in &trait_impl.functions {
-        let signature = func_signature(name.clone(), generic_count, func, scopes, scope, symbols, errors, ast, ir);
+    // will be replaced with the correct function ids
+    let mut functions = vec![ast::FunctionId::new(u64::MAX); symbols.get_trait(trait_id).functions.len()];
+
+    for (name, func_id) in &trait_impl.functions {
+        let func = &ast[*func_id];
+        let signature = func_signature(name.clone(), impl_generic_count, func, scopes, scope, symbols, errors, ast, ir);
 
         let trait_def = symbols.get_trait(trait_id);
-        let Some(def_func) = symbols.get_trait(trait_id).functions.get(name) else {
+        let Some((trait_func_idx, def_func)) = symbols.get_trait(trait_id).functions.get(name) else {
             errors.emit_span(
                 Error::NotATraitMember {
                     trait_name: trait_def.name.clone(),
@@ -373,10 +383,14 @@ fn resolve_trait_impl(
             );
             continue;
         };
+
         valid_found_function_count += 1;
+        functions[*trait_func_idx as usize] = *func_id;
+        
         if !signature.matches_trait_function_signature(def_func) {
             errors.emit_span(Error::TraitSignatureMismatch, func.span.in_mod(scopes[scope].module.id));
         }
+        symbols.place_func(*func_id, signature);
     }
 
     let trait_def = symbols.get_trait(trait_id);
@@ -394,7 +408,28 @@ fn resolve_trait_impl(
             Error::NotAllFunctionsImplemented { unimplemented },
             trait_impl.header_span().in_mod(scopes[scope].module.id)
         );
+        return;
     }
+
+    #[cfg(debug_assertions)]
+    for func_id in &functions {
+        assert_ne!(*func_id, FunctionId::new(u64::MAX));
+    }
+
+    let (generic_ty, type_generics) = match ty {
+        Type::Prim(p) => (trait_impls::GenericType::Primitive(p), vec![]),
+        Type::Id(id, generics) => (trait_impls::GenericType::Id(id), generics),
+        _ => todo!("support trait impl for {ty:?}")
+    };
+
+    let resolved_impl = trait_impls::ResolvedTraitImpl {
+        trait_id,
+        impl_generic_count,
+        trait_generics,
+        type_generics,
+        functions,
+    };
+    symbols.trait_impls.add_impl(generic_ty, resolved_impl);
 }
 
 fn scope_bodies(
@@ -404,7 +439,8 @@ fn scope_bodies(
     ast: &Ast,
     symbols: &mut SymbolTable,
     errors: &mut Errors,
-    ir_functions: &mut irgen::Functions
+    ir_functions: &mut irgen::Functions,
+    impls: &[ast::TraitImpl],
 ) {
 
     fn gen_func_body(
@@ -481,6 +517,14 @@ fn scope_bodies(
             }
             Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
             | Definition::Const { .. } | Definition::Global(_) => {}
+        }
+    }
+    for trait_impl in impls {
+        for (_name, func_id) in &trait_impl.functions {
+            // TODO: handle generics
+            assert!(trait_impl.impl_generics.is_empty());
+            assert!(trait_impl.trait_generics.as_ref().map_or(true, |(v, _)| v.is_empty()));
+            gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions)
         }
     }
 }
