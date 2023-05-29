@@ -146,7 +146,6 @@ fn reduce_expr_any(
             if exhaustion != Exhaustion::Full && exhaustion != Exhaustion::Invalid {
                 // This might lead to full exhaustion cases leading to errors such as single-variant enums,
                 // but this doesn't feel like a sensible use case.
-                eprintln!("{exhaustion:?}");
                 ctx.errors.emit_span(Error::Inexhaustive, ctx.ref_span(*pat));
             }
 

@@ -37,6 +37,10 @@ pub fn project(
     } else {
         file(module_path, &mut ast, &mut errors, main_mod, main_mod, debug, stats);
     }
+
+    if errors.error_count() > 0 {
+        return (Err(()), ast, errors);
+    }
     
     let mut std_mod = is_std.then_some(main_mod);
     

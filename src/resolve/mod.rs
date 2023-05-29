@@ -476,6 +476,8 @@ fn scope_bodies(
             });
 
             for (exhaustion, ty, span) in exhaustions {
+                // ignore invalid types, they already emitted an error elsewhere
+                if matches!(types[ty], TypeInfo::Invalid) { continue }
                 let Some(exhausted) = exhaustion.is_exhausted(types[ty], &mut types, symbols) else {
                     errors.emit_span(
                         Error::Internal(format!("exhaustion type mismatch: {:?}", types[ty])),

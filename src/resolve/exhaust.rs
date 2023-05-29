@@ -1,4 +1,4 @@
-use crate::dmap::DHashMap;
+use crate::{dmap::DHashMap, types::Primitive};
 
 use super::{types::{SymbolTable, ResolvedTypeDef}, type_info::{TypeInfo, TypeTable}};
 
@@ -40,7 +40,18 @@ impl Exhaustion {
     /// None means a type is mismatched
     pub fn is_exhausted(&self, ty: TypeInfo, types: &mut TypeTable, symbols: &SymbolTable) -> Option<bool> {
         Some(match self {
-            Exhaustion::None => false,
+            Exhaustion::None => match ty {
+                TypeInfo::Primitive(Primitive::Never) => true,
+                TypeInfo::Enum(variants) => variants.count() == 0,
+                TypeInfo::Resolved(id, _) => {
+                    if let ResolvedTypeDef::Enum(enum_def) = &symbols.get_type(id) {
+                        enum_def.variants.len() == 0
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
             Exhaustion::Full => true,
             Exhaustion::UnsignedInt(ranges) => {
                 match ty {
