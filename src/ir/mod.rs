@@ -108,6 +108,9 @@ impl BlockIndex {
     pub fn bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
+    pub fn idx(self) -> u32 {
+        self.0
+    }
 }
 impl fmt::Display for BlockIndex {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

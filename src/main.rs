@@ -83,12 +83,25 @@ impl Default for Cmd {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Backend {
+    // Emit C code
+    C,
+
     // Run with the llvm backend
     #[cfg(feature = "llvm-backend")]
     LLVM,
     /// W.I.P.! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
     /// This backend is primarily used for fast compilations. It is mostly unfinished right now.
     X86,
+}
+impl fmt::Display for Backend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match *self {
+            Self::C => "C",
+            Self::LLVM => "LLVM",
+            Self::X86 => "x86",
+        };
+        f.write_str(s)
+    }
 }
 impl Default for Backend {
     fn default() -> Self {
@@ -390,6 +403,29 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             let _ = output_name;
             cprintln!("#g<Check successful ✅>");
         }
+        (Cmd::Run | Cmd::Build, Backend::C) => {
+            let c_path = PathBuf::from(format!("./eyebuild/{output_name}.c"));
+            let file = std::fs::File::create(&c_path).expect("Couldn't create C file");
+            backend::c::emit(&ir, file).expect("Failed to emit C code");
+            let status = std::process::Command::new("gcc")
+                .arg(c_path)
+                .args(["-o", &exe_file])
+                .status()
+                .expect("Failed to compile C code using gcc");
+
+            if !status.success() {
+                panic!("gcc failed");
+            }
+            if args.cmd == Cmd::Run {
+                if args.lib {
+                    cprintln!("#r<There is nothing to run> because --lib was passed.");
+                    return true;
+                }
+                exec();
+            } else {
+                cprintln!("#g<Built #u<{}>>", output_name);
+            }
+        },
         #[cfg(feature = "llvm-backend")]
         (Cmd::Run | Cmd::Build | Cmd::Jit, Backend::LLVM) => unsafe {
             let context = llvm::core::LLVMContextCreate();
@@ -437,7 +473,7 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
                 }
             }
         },
-        (Cmd::Jit, Backend::X86) => panic!("JIT compilation is not supported with the x86 backend"),
+        (Cmd::Jit, _) => panic!("JIT compilation is not supported with the {} backend", args.backend),
         (Cmd::Run | Cmd::Build, Backend::X86) => todo!("X86 backend isn't available right now"),
         /*(Cmd::Run | Cmd::Build, Backend::X86) => {
             let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
