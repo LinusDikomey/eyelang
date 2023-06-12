@@ -13,7 +13,7 @@ use super::{
     Ident,
     ResolvedCall,
     scope::{ExprInfo, LocalDefId, ScopeId},
-    types::{DefId, TupleCountMode, Type}, MemberAccess, pat
+    types::{DefId, TupleCountMode, Type, ResolvedTypeBody}, MemberAccess, pat
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -484,38 +484,39 @@ fn val_member_access(ctx: Ctx, expr: ExprRef, left: ExprRef, left_ty: TypeRef, n
     loop {
         deref_ty = match deref_ty {
             TypeInfo::Pointer(inner) => ctx.types.get(inner),
-            TypeInfo::Resolved(id, generics) => match ctx.symbols.get_type(id) {
-                ResolvedTypeDef::Struct(s) => {
-                    let member = s.members
-                        .iter()
-                        .enumerate()
-                        .find(|(_, (member_name, _))| member_name == name);
-                    if let Some((i, (_, ty))) = member {
-                        let ty = ty.as_info(ctx.types, |i| generics.nth(i as u32).into());
-                        break (MemberAccess::StructMember(i as _), ty);
-                    } else if let Some(&id) = s.methods.get(name) {
-                        let func_generic_count = ctx.symbols.get_func(id).generic_count() as usize;
-                        let generics = if generics.len() == func_generic_count {
-                            generics
-                        } else {
-                            debug_assert!(func_generic_count > generics.len());
-                            ctx.types.add_multiple_info_or_index(generics
-                                .iter()
-                                .map(TypeInfoOrIndex::Idx)
-                                .chain(
-                                    std::iter::repeat(TypeInfo::Unknown.into())
-                                        .take(func_generic_count - generics.len())
-                                )
-                            )
-                        };
-                        let ty = TypeInfo::MethodItem { function: id, generics, this_ty: left_ty };
-                        break (MemberAccess::Method(id), ty.into());
-                    } else {
-                        ctx.errors.emit_span(Error::NonexistantMember, ctx.span(expr));
-                        break (MemberAccess::Invalid, TypeInfo::Invalid.into());
+            TypeInfo::Resolved(id, generics) => {
+                let ty = ctx.symbols.get_type(id);
+                match &ty.body {
+                    ResolvedTypeBody::Struct(s) => {
+                        let member = s.members
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (member_name, _))| member_name == name);
+                        if let Some((i, (_, ty))) = member {
+                            let ty = ty.as_info(ctx.types, |i| generics.nth(i as u32).into());
+                            break (MemberAccess::StructMember(i as _), ty);
+                        }
                     }
+                    ResolvedTypeBody::Enum(_) => { }
                 }
-                ResolvedTypeDef::Enum(_) => {
+                if let Some(&id) = ty.methods.get(name) {
+                    let func_generic_count = ctx.symbols.get_func(id).generic_count() as usize;
+                    let generics = if generics.len() == func_generic_count {
+                        generics
+                    } else {
+                        debug_assert!(func_generic_count > generics.len());
+                        ctx.types.add_multiple_info_or_index(generics
+                            .iter()
+                            .map(TypeInfoOrIndex::Idx)
+                            .chain(
+                                std::iter::repeat(TypeInfo::Unknown.into())
+                                    .take(func_generic_count - generics.len())
+                            )
+                        )
+                    };
+                    let ty = TypeInfo::MethodItem { function: id, generics, this_ty: left_ty };
+                    break (MemberAccess::Method(id), ty.into());
+                } else {
                     ctx.errors.emit_span(Error::NonexistantMember, ctx.span(expr));
                     break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                 }
@@ -549,33 +550,35 @@ fn type_member_access(ctx: Ctx, expr: ExprRef, ty: TypeRef, name: &str, name_spa
         "stride" => return (MemberAccess::LocalStride(ty), U64),
         _ => match ctx.types.get(ty) {
             TypeInfo::Resolved(id, generics) => {
-                match ctx.symbols.get_type(id) {
-                    ResolvedTypeDef::Struct(def) => if let Some(&method) = def.methods.get(name) {
-                        let func_generic_count = ctx.symbols.get_func(method).generic_count();
-                        let generics = if func_generic_count as u32 > generics.count {
-                            ctx.types.add_multiple_info_or_index(generics
-                                .iter()
-                                .map(TypeInfoOrIndex::Idx)
-                                .chain(
-                                    std::iter::repeat(TypeInfoOrIndex::Type(TypeInfo::Unknown))
-                                        .take(func_generic_count as usize - generics.count as usize)
-                                )
-                            )
-                        } else {
-                            debug_assert_eq!(func_generic_count as u32, generics.count);
-                            generics
-                        };
-                        return (
-                            MemberAccess::Symbol(DefId::Function(method)),
-                            TypeInfo::FunctionItem(method, generics).into()
-                        );
-                    }
-                    ResolvedTypeDef::Enum(def) => if let Some(variant) = def.variants.get(name) {
+                let def = ctx.symbols.get_type(id);
+                match &def.body {
+                    ResolvedTypeBody::Struct(def) => {}
+                    ResolvedTypeBody::Enum(def) => if let Some(variant) = def.variants.get(name) {
                         return (
                             MemberAccess::EnumItem(id, variant.1),
                             TypeInfo::Resolved(id, generics).into(),
                         )
                     }
+                }
+                if let Some(&method) = def.methods.get(name) {
+                    let func_generic_count = ctx.symbols.get_func(method).generic_count();
+                    let generics = if func_generic_count as u32 > generics.count {
+                        ctx.types.add_multiple_info_or_index(generics
+                            .iter()
+                            .map(TypeInfoOrIndex::Idx)
+                            .chain(
+                                std::iter::repeat(TypeInfoOrIndex::Type(TypeInfo::Unknown))
+                                    .take(func_generic_count as usize - generics.count as usize)
+                            )
+                        )
+                    } else {
+                        debug_assert_eq!(func_generic_count as u32, generics.count);
+                        generics
+                    };
+                    return (
+                        MemberAccess::Symbol(DefId::Function(method)),
+                        TypeInfo::FunctionItem(method, generics).into()
+                    );
                 }
                 Some(trait_impls::GenericType::Id(id))
             }
@@ -724,8 +727,9 @@ fn call_func(
 fn call_type_id(
     mut ctx: Ctx, id: ast::TypeId, generics: TypeRefs, call: &ast::Call, call_expr: ExprRef, mut info: ExprInfo
 ) -> ResolvedCall {
-    match ctx.symbols.get_type(id) {
-        ResolvedTypeDef::Struct(def) => {
+    let ty = ctx.symbols.get_type(id);
+    match &ty.body {
+        ResolvedTypeBody::Struct(def) => {
             if call.args.count as usize != def.members.len() {
                 ctx.errors.emit_span(
                     Error::InvalidArgCount {
@@ -751,7 +755,7 @@ fn call_type_id(
             
             ResolvedCall::Struct { type_id: id, generics }
         }
-        ResolvedTypeDef::Enum(_) => {
+        ResolvedTypeBody::Enum(_) => {
             ctx.errors.emit_span(
                 Error::FunctionOrStructTypeExpected,
                 ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id),

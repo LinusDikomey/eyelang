@@ -54,7 +54,7 @@ fn write_type<W: Write>(f: &mut W, ty: &Type) -> Result<bool> {
     }
     Ok(true)
 }
-fn primitive<W: Write>(mut f: &mut W, p: Primitive) -> Result<bool> {
+fn primitive<W: Write>(f: &mut W, p: Primitive) -> Result<bool> {
     let s = match p {
         Primitive::I8 => "int8_t",
         Primitive::U8 | Primitive::Bool => "uint8_t",

@@ -1,6 +1,6 @@
 use std.c.printf
 
-Fruit :: enum { Apple Banana Pineapple }
+Fruit :: enum { Apple, Banana, Pineapple }
 
 main :: fn {
     # when no arm is matched, undefined values will be returned from the match expression right now

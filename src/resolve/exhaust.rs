@@ -1,6 +1,6 @@
 use crate::{dmap::DHashMap, types::Primitive};
 
-use super::{types::{SymbolTable, ResolvedTypeDef}, type_info::{TypeInfo, TypeTable}};
+use super::{types::{SymbolTable, ResolvedTypeBody}, type_info::{TypeInfo, TypeTable}};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
@@ -44,7 +44,7 @@ impl Exhaustion {
                 TypeInfo::Primitive(Primitive::Never) => true,
                 TypeInfo::Enum(variants) => variants.count() == 0,
                 TypeInfo::Resolved(id, _) => {
-                    if let ResolvedTypeDef::Enum(enum_def) = &symbols.get_type(id) {
+                    if let ResolvedTypeBody::Enum(enum_def) = &symbols.get_type(id).body {
                         enum_def.variants.len() == 0
                     } else {
                         false
@@ -81,7 +81,7 @@ impl Exhaustion {
             Exhaustion::Enum(exhausted_variants) => {
                 match ty {
                     TypeInfo::Resolved(symbol, generics) => {
-                        let ResolvedTypeDef::Enum(enum_def) = &symbols.get_type(symbol) else { return None };
+                        let ResolvedTypeBody::Enum(enum_def) = &symbols.get_type(symbol).body else { return None };
                         for (name, (_, _, arg_types)) in &enum_def.variants {
                             let Some(args) = exhausted_variants.get(name) else { return Some(false) };
                             if args.len() != arg_types.len() { return None };

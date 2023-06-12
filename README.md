@@ -117,7 +117,7 @@ Note that implicit enums can infer to explicitly typed enums without having to n
 use std.print
 use std.println
 
-Fruit :: enum { Apple(i32) Banana Citrus }
+Fruit :: enum { Apple(i32), Banana, Citrus }
 
 main :: fn {
     # f is of type Fruit here because it is passed to print_fruit

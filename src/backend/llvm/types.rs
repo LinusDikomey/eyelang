@@ -5,7 +5,7 @@ use llvm_sys::{
 
 use crate::{
     types::{Primitive, Layout},
-    resolve::{types::{Type, Enum, ResolvedTypeDef, Struct}, self},
+    resolve::{types::{Type, Enum, Struct, ResolvedTypeBody}, self},
     ir::{self, types::{IrTypes, TypeRefs, IrType}},
     ast::{TypeId, VariantId}
 };
@@ -142,7 +142,7 @@ pub(super) unsafe fn get_id_ty<'a>(
                 let TypeInstance::Generic(map) = &instances[id.idx()] else { unreachable!() };
                 (*ty, OffsetsRef::Struct(&map[generics].1))
             } else {
-                let ResolvedTypeDef::Struct(def) = &module.types[id.idx()].1 else { unreachable!() };
+                let ResolvedTypeBody::Struct(def) = &module.types[id.idx()].1.body else { unreachable!() };
                 let (ty, offsets) = struct_ty(ctx, def, module, generics);
 
                 let TypeInstance::Generic(map) = &mut instances[id.idx()] else { unreachable!() };
@@ -156,7 +156,7 @@ pub(super) unsafe fn get_id_ty<'a>(
                 let TypeInstance::GenericEnum(map) = &instances[id.idx()] else { unreachable!() };
                 (*ty, OffsetsRef::Enum(&map[generics].1))
             } else {
-                let ResolvedTypeDef::Enum(def) = &module.types[id.idx()].1 else { unreachable!() };
+                let ResolvedTypeBody::Enum(def) = &module.types[id.idx()].1.body else { unreachable!() };
                 let (ty, offsets) = enum_ty(ctx, def, module, generics);
                 let TypeInstance::GenericEnum(map) = &mut instances[id.idx()] else { unreachable!() };
                 map.insert(generics.to_vec(), (ty, offsets));

@@ -4,7 +4,7 @@ use crate::{
     types::{Primitive, Layout},
     BackendStats,
     ir::{self, types::{IrType, TypeRef, IrTypes}, Tag}, 
-    resolve::{types::{ResolvedTypeDef, Type, Enum},
+    resolve::{types::{Type, Enum, ResolvedTypeBody},
     const_val::ConstVal, self},
     backend::llvm::types::Numeric, ast::VariantId
 };
@@ -62,20 +62,20 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
 
     let mut types = module.types.iter()
         .map(|(_, ty)| {
-            match ty {
-                ResolvedTypeDef::Struct(def) => {
-                    if def.generic_count() != 0 { return TypeInstance::Generic(dmap::new()); }
+            if ty.generic_count() > 0 {
+                return match ty.body {
+                    ResolvedTypeBody::Struct{ .. } => TypeInstance::Generic(dmap::new()),
+                    ResolvedTypeBody::Enum(_) => TypeInstance::GenericEnum(dmap::new()),
+                }
+            }
+            match &ty.body {
+                ResolvedTypeBody::Struct(def) => {
                     let (ty, offsets) = struct_ty(ctx, def, module, &[]);
                     TypeInstance::Simple(ty, offsets)
                 }
-                ResolvedTypeDef::Enum(def) => {
-                    // TODO: enums with data
-                    if def.generic_count == 0 {
-                        let (ty, offsets) = enum_ty(ctx, def, module, &[]);
-                        TypeInstance::SimpleEnum(ty, offsets)
-                    } else {
-                        TypeInstance::GenericEnum(dmap::new())
-                    }
+                ResolvedTypeBody::Enum(def) => {
+                    let (ty, offsets) = enum_ty(ctx, def, module, &[]);
+                    TypeInstance::SimpleEnum(ty, offsets)
                 }
             }
         })
@@ -399,7 +399,7 @@ unsafe fn build_func(
                 if let (Some(l), Some(r)) = (l, r) {
                     let is_enum_ty = || {
                         if let IrType::Id(id, _) = ty {
-                            matches!(module.types[id.idx()].1, ResolvedTypeDef::Enum(_))
+                            matches!(module.types[id.idx()].1.body, ResolvedTypeBody::Enum(_))
                         } else { false }
                     };
     

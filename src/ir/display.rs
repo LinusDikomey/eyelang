@@ -5,7 +5,7 @@ use color_format::{cwrite, cwriteln};
 use crate::{
     help::{write_delimited, write_delimited_with},
     ast::{TypeId, FunctionId, TraitId},
-    resolve::types::{Struct, ResolvedTypeDef, Type, Enum},
+    resolve::types::{Struct, ResolvedTypeDef, Type, Enum, ResolvedTypeBody},
     ir::types::ConstIrType,
 };
 
@@ -223,9 +223,9 @@ pub struct TypeDefDisplay<'a> {
 impl fmt::Display for TypeDefDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { def, info } = self;
-        match def {
-            ResolvedTypeDef::Struct(s) => write!(f, "{}", s.display(*info)),
-            ResolvedTypeDef::Enum(e) => write!(f, "{e}"),
+        match &def.body {
+            ResolvedTypeBody::Struct(s) => write!(f, "{}", s.display(*info)),
+            ResolvedTypeBody::Enum(e) => write!(f, "{e}"),
         }
     }
 }

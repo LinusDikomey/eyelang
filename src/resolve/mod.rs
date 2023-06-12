@@ -10,7 +10,7 @@ use crate::{
 };
 
 use self::{
-    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum, TraitDef},
+    types::{DefId, Type, SymbolTable, FunctionHeader, Struct, ResolvedTypeDef, Enum, TraitDef, ResolvedTypeBody},
     type_info::{TypeTable, TypeInfo, TypeInfoOrIndex},
     scope::{ModuleCtx, Scope, ExprInfo, UnresolvedDefId, Scopes, ScopeId},
     const_val::ConstVal, expr::val_expr, std_builtins::Builtins, exhaust::Exhaustion
@@ -151,12 +151,8 @@ fn resolve_def(
         }
         &Definition::Type(id) => {
             let def = match &ast[id] {
-                TypeDef::Struct(s) => ResolvedTypeDef::Struct(
-                    struct_def(name.to_owned(), s, scopes, scope, ast, symbols, errors, ir)
-                ),
-                TypeDef::Enum(e) => ResolvedTypeDef::Enum(
-                    enum_def(name.to_owned(), e, scopes, scope, ast, symbols, errors, ir)
-                ),
+                TypeDef::Struct(s) => struct_def(name.to_owned(), s, scopes, scope, ast, symbols, errors, ir),
+                TypeDef::Enum(e) => enum_def(name.to_owned(), e, scopes, scope, ast, symbols, errors, ir),
             };
             symbols.place_type(id, def);
         }
@@ -231,14 +227,14 @@ fn struct_def(
     symbols: &mut SymbolTable,
     errors: &mut Errors,
     ir: &mut irgen::Functions
-) -> Struct {    
+) -> ResolvedTypeDef {    
     let scope = generic_scope(&def.generics, scopes, scope, ast);
     
     let members = def.members.iter().map(|(name, ty, _, _)| {
         (name.clone(), scopes.resolve_ty(scope, ty, errors, symbols, ast, ir))
     }).collect();
 
-    let symbols = def.methods.iter().map(|(name, id)| {
+    let methods = def.methods.iter().map(|(name, id)| {
         let header = func_signature(name.to_owned(), def.generic_count(), &ast[*id], scopes, scope, symbols, errors, ast, ir);
         symbols.place_func(*id, header);
         (name.clone(), *id)
@@ -249,11 +245,11 @@ fn struct_def(
         .map(|name_span| ast.src(scopes[scope].module.id).0[name_span.name.range()].to_owned())
         .collect();
 
-    Struct {
+    ResolvedTypeDef {
         name,
-        members,
-        methods: symbols,
+        methods,
         generics,
+        body: types::ResolvedTypeBody::Struct(Struct { members })
     }
 }
 
@@ -275,8 +271,9 @@ fn enum_def(
     symbols: &mut SymbolTable,
     errors: &mut Errors,
     ir: &mut irgen::Functions,
-) -> Enum {
+) -> ResolvedTypeDef {
     let scope = generic_scope(&def.generics, scopes, scope, ast);
+
     let variants = def.variants
         .iter()
         .enumerate()
@@ -289,7 +286,34 @@ fn enum_def(
             )
         ))
         .collect();
-    Enum { name, variants, generic_count: def.generic_count() }
+
+    let methods = def.methods.iter().map(|(name, id)| {
+        let header = func_signature(
+            name.to_owned(),
+            def.generic_count(),
+            &ast[*id],
+            scopes,
+            scope,
+            symbols,
+            errors,
+            ast,
+            ir,
+        );
+        symbols.place_func(*id, header);
+        (name.clone(), *id)
+    }).collect();
+
+    let generics = def.generics
+        .iter()
+        .map(|name_span| ast.src(scopes[scope].module.id).0[name_span.name.range()].to_owned())
+        .collect();
+
+    ResolvedTypeDef {
+        name,
+        methods,
+        generics,
+        body: types::ResolvedTypeBody::Enum(Enum { variants })
+    }
 }
 
 fn trait_def(
@@ -503,19 +527,13 @@ fn scope_bodies(
         match def {
             Definition::Function(func_id) => gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions),
             Definition::Type(id) => {
-                match symbols.get_type(*id) {
-                    ResolvedTypeDef::Struct(def) => {
-                        // PERF: cloning generics here
-                        let generics = def.generics.clone();
-                        // PERF: collecting here (ownership reasons)
-                        for method_id in def.methods.values().copied().collect::<Vec<_>>() {
-                            gen_func_body(method_id, scopes, scope, &generics, ast, symbols, errors, ir_functions);
-                        }
-                        
-                    }
-                    ResolvedTypeDef::Enum(_) => {}
+                let def = symbols.get_type(*id);
+                // PERF: cloning generics here
+                let generics = def.generics.clone();
+                // PERF: collecting here (multiple borrowing reasons)
+                for method_id in def.methods.values().copied().collect::<Vec<_>>() {
+                    gen_func_body(method_id, scopes, scope, &generics, ast, symbols, errors, ir_functions);
                 }
-                
             }
             Definition::Trait(_) | Definition::Module(_) | Definition::Use(_)
             | Definition::Const { .. } | Definition::Global(_) => {}
@@ -651,7 +669,8 @@ impl<'a> Ctx<'a> {
                 }
             }
             TypeInfo::Resolved(id, generics) => {
-                if let ResolvedTypeDef::Enum(def) = self.symbols.get_type(id) {
+                let def = self.symbols.get_type(id);
+                if let ResolvedTypeBody::Enum(def) = &def.body {
                     match def.variants.get(name) {
                         Some((_id, _, arg_types)) => {
                             if args.len() != arg_types.len() {

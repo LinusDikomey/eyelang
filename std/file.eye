@@ -5,7 +5,7 @@ use root.list.List
 use root.panic
 
 File :: struct { handle *FILE }
-FileMode :: enum { Read ReadWrite Create CreateReadWrite Append AppendReadWrite }
+FileMode :: enum { Read, ReadWrite, Create, CreateReadWrite, Append, AppendReadWrite }
 
 file_mode_str :: fn(m FileMode) -> *i8: match m {
     .Read: "r",

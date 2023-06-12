@@ -20,7 +20,7 @@ PI :: 3.14
 
 circle_area :: fn(r f64) -> f64: PI * r * r
 
-Fruit :: enum { Apple Banana }
+Fruit :: enum { Apple, Banana }
 
 fruit_to_string :: fn(f Fruit) -> str:
     if f == .Apple: "Apple"

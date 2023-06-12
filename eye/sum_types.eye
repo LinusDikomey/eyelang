@@ -1,4 +1,4 @@
-Option :: enum[T] { Some(T) None }
+Option :: enum[T] { Some(T), None }
 
 main :: fn {
     opt: Option[_] = .Some(3)

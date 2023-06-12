@@ -1,7 +1,7 @@
 use std::{ops::Index, borrow::Cow};
 
 use crate::{
-    resolve::types::{TupleCountMode, ResolvedTypeDef},
+    resolve::types::{TupleCountMode, ResolvedTypeBody},
     error::{Errors, Error},
     span::Span,
     types::Primitive,
@@ -640,7 +640,7 @@ fn merge_infos(
                     .zip(other_generics.iter())
                     .all(|(a, b)| types.try_merge(a, b, symbols).is_ok())
             }
-        } else if let ResolvedTypeDef::Enum(def) = symbols.get_type(id) {
+        } else if let ResolvedTypeBody::Enum(def) = &symbols.get_type(id).body {
             if let Enum(variants) = other {
                 merge_implicit_and_explicit_enum(def, generics, variants, types, symbols)
             } else {
@@ -686,7 +686,7 @@ fn merge_infos(
                     merge_implicit_enums(variants, other_variants, types, symbols)
                 }
                 Resolved(id, generics) => {
-                    let ResolvedTypeDef::Enum(def) = symbols.get_type(id) else { return None };
+                    let ResolvedTypeBody::Enum(def) = &symbols.get_type(id).body else { return None };
                     merge_implicit_and_explicit_enum(def, generics, variants, types, symbols).then_some(other)
                 }
                 _ => None

@@ -3,7 +3,7 @@ use std::ops::Index;
 use crate::{
     ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId, VariantId},
     resolve::{
-        types::{SymbolTable, MaybeTypeDef, ResolvedTypeDef, Type, ResolvedFunc, Enum},
+        types::{SymbolTable, MaybeTypeDef, Type, ResolvedFunc, Enum, ResolvedTypeBody},
         self,
         type_info::TypeInfo, VarId, MemberAccess},
     ir::{self, Function, builder::{IrBuilder, BinOp, IdxOrTy}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}, BlockIndex},
@@ -411,7 +411,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             // TODO: enums with args
             let (variant_id, tag, int_ty) = match ir.inferred_types[ctx[expr]] {
                 TypeInfo::Resolved(id, _generics) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    let ResolvedTypeBody::Enum(def) = &ctx.symbols.get_type(id).body else { int!() };
                     let (variant_id, tag, _) = def.variants[name];
                     (variant_id, tag, def.int_ty())
                 }
@@ -713,7 +713,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                     call_val
                 }
                 resolve::ResolvedCall::Struct { type_id, .. } => {
-                    let ResolvedTypeDef::Struct(def) = ctx.symbols.get_type(*type_id) else { int!() };
+                    let ResolvedTypeBody::Struct(def) = &ctx.symbols.get_type(*type_id).body else { int!() };
                     debug_assert_eq!(def.members.len(), call.args.count as usize);
                     let ty = ctx[expr];
 
@@ -977,7 +977,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 }
                 MemberAccess::Symbol(_) | MemberAccess::Method(_) => Ref::UNDEF,
                 MemberAccess::EnumItem(id, variant) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    let ResolvedTypeBody::Enum(def) = &ctx.symbols.get_type(id).body else { int!() };
                     let int_ty = ir.types.add(IrType::Primitive(def.int_ty().map_or(Primitive::Unit, Into::into)));
                     ir.build_int(variant as u64, int_ty)
                 }
@@ -1121,7 +1121,7 @@ fn gen_pat(
                     )
                 }
                 TypeInfo::Resolved(id, generics) => {
-                    let ResolvedTypeDef::Enum(def) = ctx.symbols.get_type(id) else { int!() };
+                    let ResolvedTypeBody::Enum(def) = &ctx.symbols.get_type(id).body else { int!() };
                     let variant = def.variants.get(name).unwrap();
                     let types = ir.types.add_multiple(
                         (0..variant.2.len()).map(|_| IrType::Primitive(Primitive::Never))

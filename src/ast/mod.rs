@@ -321,6 +321,7 @@ pub struct EnumDefinition {
     pub name: String,
     pub generics: Vec<GenericDef>,
     pub variants: Vec<(TSpan, String, Vec<UnresolvedType>)>,
+    pub methods: DHashMap<String, FunctionId>,
 }
 impl EnumDefinition {
     pub fn generic_count(&self) -> u8 {

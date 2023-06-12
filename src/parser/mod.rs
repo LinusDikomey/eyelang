@@ -399,7 +399,6 @@ impl<'a> Parser<'a> {
         let mut methods = dmap::new();
         self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
-            let ident_span = ident.span();
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                 let method = p.parse_function_def(fn_tok)?;
@@ -408,7 +407,7 @@ impl<'a> Parser<'a> {
                 if let Some(_existing) = methods.insert(name, func_id) {
                     return Err(CompileError::new(
                         Error::DuplicateDefinition,
-                        ident_span.in_mod(p.toks.module),
+                        ident.span().in_mod(p.toks.module),
                     ));
                 }
                 Ok(Delimit::No)
@@ -433,28 +432,52 @@ impl<'a> Parser<'a> {
 
         self.toks.step_expect(TokenType::LBrace)?;
         let mut variants = Vec::new();
-        while self.toks.step_if(TokenType::RBrace).is_none() {
-            let tok = self.toks.step_expect(TokenType::Ident)?;
-            let mut span = tok.span();
-            let variant = tok.get_val(self.src).to_owned();
-            let args = self.toks.step_if(TokenType::LParen).map_or_else(
-                || Ok(Vec::new()),
-                |_| {
+        let mut methods = dmap::new();
+
+        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+            let ident = p.toks.step_expect(TokenType::Ident)?;
+            match p.toks.peek().map(|t| t.ty) {
+                Some(TokenType::LParen) => { 
+                    p.toks.step_assert(TokenType::LParen);
+                    let mut span = ident.span();
+                    let variant = ident.get_val(p.src).to_owned();
                     let mut args = vec![];
-                    span.end = self.parse_delimited(
+                    span.end = p.parse_delimited(
                         TokenType::Comma,
                         TokenType::RParen,
                         |p| Ok(args.push(p.parse_type()?))
                     )?.end;
-                    Ok(args)
+                    variants.push((span, variant, args));
+                    Ok(Delimit::OptionalIfNewLine)
                 }
-            )?;
-            variants.push((span, variant, args));
-        }
+                Some(TokenType::DoubleColon) => {
+                    p.toks.step_assert(TokenType::DoubleColon);
+
+                    let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
+                    let method = p.parse_function_def(fn_tok)?;
+                    let func_id = p.ast.add_func(method);
+                    let name = ident.get_val(p.src).to_owned();
+                    if let Some(_existing) = methods.insert(name, func_id) {
+                        return Err(CompileError::new(
+                            Error::DuplicateDefinition,
+                            ident.span().in_mod(p.toks.module),
+                        ));
+                    }
+                    Ok(Delimit::No)
+                }
+                _ => {
+                    // enum variant without arguments
+                    variants.push((ident.span(), ident.get_val(p.src).to_owned(), Vec::new()));
+                    Ok(Delimit::OptionalIfNewLine)
+                }
+            }
+        })?;
+
         Ok(EnumDefinition {
             name,
             generics: generics.map_or(Vec::new(), |g| g.1),
             variants,
+            methods,
         })
     }
     

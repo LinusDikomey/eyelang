@@ -304,33 +304,38 @@ impl From<DefId> for ConstSymbol {
 }
 
 #[derive(Debug)]
-pub enum ResolvedTypeDef {
+pub enum ResolvedTypeBody {
     Struct(Struct),
     Enum(Enum),
 }
+
+#[derive(Debug)]
+pub struct ResolvedTypeDef {
+    pub name: String,
+    pub methods: DHashMap<String, FunctionId>,
+    pub generics: Vec<String>,
+    pub body: ResolvedTypeBody,
+
+}
 impl ResolvedTypeDef {
     pub fn name(&self) -> &str {
-        match self {
-            Self::Struct(s) => &s.name,
-            Self::Enum(e) => &e.name,
-        }
+        &self.name
     }
+
     pub fn generic_count(&self) -> u8 {
-        match self {
-            Self::Struct(struct_) => struct_.generic_count(),
-            Self::Enum(enum_) => enum_.generic_count,
-        }
+        self.generics.len() as u8
     }
+
     pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
-        match self {
-            Self::Struct(struct_) => {
+        match &self.body {
+            ResolvedTypeBody::Struct(struct_) => {
                 let mut layout = Layout::EMPTY;
                 for (_, ty) in struct_.members.iter() {
                     layout.accumulate(ty.layout(ctx, generics));
                 }
                 layout
             }
-            Self::Enum(enum_) => {
+            ResolvedTypeBody::Enum(enum_) => {
                 enum_.layout(ctx, generics)
             }
         }
@@ -402,22 +407,12 @@ pub enum TupleCountMode {
 
 #[derive(Debug, Clone)]
 pub struct Struct {
-    pub name: String,
     pub members: Vec<(String, Type)>,
-    pub methods: DHashMap<String, FunctionId>,
-    pub generics: Vec<String>,
-}
-impl Struct {
-    pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Enum {
-    pub name: String,
     pub variants: DHashMap<String, (VariantId, u32, Vec<Type>)>,
-    pub generic_count: u8,
 }
 impl Enum {
     pub fn layout<'a>(&self, ctx: impl Fn(TypeId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
