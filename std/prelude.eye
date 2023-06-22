@@ -6,6 +6,8 @@ use root.println
 use root.input
 use root.panic
 
+use root.option.Option
+
 use root.string.str
 
 use root.list.List

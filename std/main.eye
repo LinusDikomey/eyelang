@@ -1,4 +1,5 @@
 use string.str
+use option.Option
 
 print :: fn(s str) { 
     c.printf("%.*s".ptr, i32(s.len), s.ptr)
