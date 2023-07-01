@@ -751,9 +751,10 @@ fn merge_infos(
     }
 }
 
-fn merge_implicit_and_explicit_enum(def: &Enum, generics: TypeRefs, variants: EnumVariants,
-    types: &mut TypeTable, symbols: &SymbolTable)
--> bool {
+fn merge_implicit_and_explicit_enum(
+    def: &Enum, generics: TypeRefs, variants: EnumVariants,
+    types: &mut TypeTable, symbols: &SymbolTable,
+) -> bool {
     for i in variants.idx .. variants.idx + variants.count {
         let (name, arg_types) = &types.enum_variants[i as usize];
         let Some((_, _, def_arg_types)) = def.variants.get(name) else { return false };

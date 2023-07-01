@@ -3,7 +3,7 @@ use crate::{
     error::Error,
     token::{FloatLiteral, IntLiteral, Operator},
     types::Primitive,
-    resolve::{exhaust::Exhaustion, types::ResolvedTypeDef, trait_impls},
+    resolve::{exhaust::Exhaustion, trait_impls},
     dmap, span::TSpan, ir::types::{TypeRefs, TypeRef},
 };
 
@@ -521,7 +521,7 @@ fn val_member_access(ctx: Ctx, expr: ExprRef, left: ExprRef, left_ty: TypeRef, n
                     break (MemberAccess::Invalid, TypeInfo::Invalid.into());
                 }
             }
-            TypeInfo::Unknown => {
+            TypeInfo::Unknown | TypeInfo::Enum(_) => {
                 ctx.errors.emit_span(Error::TypeMustBeKnownHere, ctx.span(left));
                 break (MemberAccess::Invalid, TypeInfo::Invalid.into());
             }
@@ -532,7 +532,7 @@ fn val_member_access(ctx: Ctx, expr: ExprRef, left: ExprRef, left_ty: TypeRef, n
             TypeInfo::FunctionItem(_, _) | TypeInfo::MethodItem { .. }
             | TypeInfo::Type
             | TypeInfo::Int | TypeInfo::Float | TypeInfo::Primitive(_)
-            | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) | TypeInfo::Enum(_) => {
+            | TypeInfo::Array(_, _) | TypeInfo::Tuple(_, _) => {
                 ctx.errors.emit_span(Error::NonexistantMember, ctx.span(expr));
                 break (MemberAccess::Invalid, TypeInfo::Invalid.into());
             }
