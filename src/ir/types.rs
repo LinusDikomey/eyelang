@@ -134,6 +134,7 @@ impl IrTypes {
 
                 IrType::Enum(TypeRefs { idx, count: variants.len() as _ })
             }
+            Type::TraitSelf => unreachable!(),
             Type::Invalid => unreachable!("invalid 'Type' encountered during irgen"),
         }
     }
@@ -277,6 +278,10 @@ impl TypeRef {
 pub struct TypeRefs { pub idx: u32, pub count: u32 }
 impl TypeRefs {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
+
+    pub fn from_single(r: TypeRef) -> Self {
+        Self { idx: r.0, count: 1 }
+    }
     
     pub fn iter(self) -> impl Iterator<Item = TypeRef> {
         (self.idx .. self.idx + self.count).map(TypeRef)

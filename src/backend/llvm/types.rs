@@ -48,22 +48,22 @@ pub(super) unsafe fn llvm_global_ty_instanced(
     generics: &[Type]
 ) -> LLVMTypeRef {
     match ty {
-        resolve::types::Type::Prim(p) => llvm_primitive_ty(ctx, *p),
-        resolve::types::Type::Id(id, generics) => get_id_ty(*id, generics, ctx, module, instances).0,
-        resolve::types::Type::Pointer(_) => LLVMPointerTypeInContext(ctx, 0),
-        resolve::types::Type::Array(inner) => {
+        Type::Prim(p) => llvm_primitive_ty(ctx, *p),
+        Type::Id(id, generics) => get_id_ty(*id, generics, ctx, module, instances).0,
+        Type::Pointer(_) => LLVMPointerTypeInContext(ctx, 0),
+        Type::Array(inner) => {
             let (inner, size) = &**inner;
             LLVMArrayType(llvm_global_ty(ctx, inner, module, instances), *size)
         }
-        resolve::types::Type::Tuple(elems) => {
+        Type::Tuple(elems) => {
             let mut layout = Layout::EMPTY;
             for elem in elems {
                 layout.accumulate(elem.layout(|id| &module.types[id.idx()].1, generics));
             }
             LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
         }
-        resolve::types::Type::Generic(i) => llvm_global_ty_instanced(ctx, &generics[*i as usize], module, instances, generics),
-        resolve::types::Type::LocalEnum(variants) => {
+        Type::Generic(i) => llvm_global_ty_instanced(ctx, &generics[*i as usize], module, instances, generics),
+        Type::LocalEnum(variants) => {
             let int_ty = Enum::int_ty_from_variant_count(variants.len() as _);
             let tag_layout = int_ty
                 .map_or(Layout::EMPTY, |ty| Primitive::from(ty).layout());
@@ -83,7 +83,8 @@ pub(super) unsafe fn llvm_global_ty_instanced(
                 LLVMArrayType(LLVMInt8TypeInContext(ctx), layout.size as _)
             }
         }
-        resolve::types::Type::Invalid => unreachable!(),
+        Type::TraitSelf => unreachable!(),
+        Type::Invalid => unreachable!(),
     }
 }
 

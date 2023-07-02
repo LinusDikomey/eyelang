@@ -50,6 +50,7 @@ fn write_type<W: Write>(f: &mut W, ty: &Type) -> Result<bool> {
         Type::Tuple(_) => todo!(),
         Type::Generic(_) => todo!(),
         Type::LocalEnum(_) => todo!(),
+        Type::TraitSelf => unreachable!(),
         Type::Invalid => todo!(),
     }
     Ok(true)

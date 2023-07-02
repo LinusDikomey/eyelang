@@ -134,6 +134,7 @@ impl<'a, F: Fn(TypeId) -> &'a str + Copy> fmt::Display for TypeDisplay<'a, F> {
                 }, ", ")?;
                 write!(f, "}}")
             }
+            Type::TraitSelf => write!(f, "Self"),
             Type::Invalid => write!(f, "[invalid]"),
         }
     }

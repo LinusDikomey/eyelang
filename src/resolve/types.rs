@@ -24,9 +24,10 @@ pub enum Type {
     Tuple(Vec<Type>),
     /// A generic type that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
-
-    // a local enum that will only be created from inference
+    /// a local enum that will only be created from inference
     LocalEnum(Vec<Vec<Type>>),
+    /// Self type (only used in trait definitions)
+    TraitSelf,
     Invalid
 }
 impl Type {
@@ -67,6 +68,7 @@ impl Type {
                 }
                 layout
             }
+            Type::TraitSelf => unreachable!("TraitSelf should always be replaced in concrete instances"),
             Type::Invalid => Layout::EMPTY,
         }
     }
@@ -112,6 +114,7 @@ impl Type {
             }
             Self::LocalEnum(_) => unreachable!(),   // this shouldn't happen as LocalEnum
                                                     // can't be created with a type annotation
+            Self::TraitSelf => unreachable!(),
             Self::Invalid => TypeInfo::Invalid
         })
     }
@@ -144,6 +147,7 @@ impl Type {
                 )
                 .collect()
             ),
+            Type::TraitSelf => unreachable!(),
             Type::Invalid => Type::Invalid,
         }
     }

@@ -544,7 +544,7 @@ fn type_member_access(ctx: Ctx, expr: ExprRef, ty: TypeRef, name: &str, name_spa
 -> (MemberAccess, TypeInfoOrIndex)
 {
     const U64: TypeInfoOrIndex = TypeInfoOrIndex::Type(TypeInfo::Primitive(Primitive::U64));
-    let generic_ty = match name {
+    match name {
         "size"   => return (MemberAccess::LocalSize  (ty), U64),
         "align"  => return (MemberAccess::LocalAlign (ty), U64),
         "stride" => return (MemberAccess::LocalStride(ty), U64),
@@ -580,26 +580,22 @@ fn type_member_access(ctx: Ctx, expr: ExprRef, ty: TypeRef, name: &str, name_spa
                         TypeInfo::FunctionItem(method, generics).into()
                     );
                 }
-                Some(trait_impls::GenericType::Id(id))
             }
-            TypeInfo::Primitive(p) => Some(trait_impls::GenericType::Primitive(p)),
-            _ => None
+            _ => {}
         }
     };
 
-    // qualifies for trait resolval
-    if let Some(generic_ty) = generic_ty {
-        match ctx.symbols.trait_impls.from_type(&ctx.symbols, generic_ty, name) {
-            trait_impls::TraitMethodResult::Found { func, impl_generic_count } => {
-                // TODO: generics
-                return (
-                    MemberAccess::Symbol(DefId::Function(func)),
-                    TypeInfo::FunctionItem(func, TypeRefs::EMPTY).into(),
-                );
-            }
-            trait_impls::TraitMethodResult::None => {}
-            trait_impls::TraitMethodResult::Multiple => todo!("handle multiple trait candidates")
+    // try trait resolval
+    match ctx.symbols.trait_impls.from_type(&ctx.symbols, ctx.types, ty, name) {
+        trait_impls::TraitMethodResult::Found { func, impl_generic_count } => {
+            // TODO: generics
+            return (
+                MemberAccess::Symbol(DefId::Function(func)),
+                TypeInfo::FunctionItem(func, TypeRefs::EMPTY).into(),
+            );
         }
+        trait_impls::TraitMethodResult::None => {}
+        trait_impls::TraitMethodResult::Multiple => todo!("handle multiple trait candidates")
     }
 
     ctx.errors.emit_span(
