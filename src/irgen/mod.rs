@@ -6,7 +6,7 @@ use crate::{
         types::{SymbolTable, MaybeTypeDef, Type, ResolvedFunc, Enum, ResolvedTypeBody},
         self,
         type_info::TypeInfo, VarId, MemberAccess},
-    ir::{self, Function, builder::{IrBuilder, BinOp, IdxOrTy}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}, BlockIndex},
+    ir::{self, Function, builder::{IrBuilder, BinOp, IdxOrTy, Terminator}, Ref, RefVal, types::{IrType, TypeRef, TypeRefs}, BlockIndex},
     token::{IntLiteral, Operator, AssignType, FloatLiteral}, span::TSpan, types::Primitive, dmap::{DHashMap, self}
 };
 
@@ -293,10 +293,10 @@ fn gen_func(
     }, &mut noreturn);
     if !noreturn {  
         if return_type == Type::Prim(Primitive::Unit) {
-            builder.build_ret_undef();
+            builder.terminate_block(Terminator::Ret(Ref::UNIT));
         } else {
             let val = body_res.val(&mut builder, symbols.expr_types[body.body.idx()]);
-            builder.build_ret(val);
+            builder.terminate_block(Terminator::Ret(val));
         }
     }
 
@@ -382,13 +382,13 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
         Expr::Return { val, .. } => {
             let val = val_expr(ir, *val, ctx, noreturn);
             if !*noreturn {
-                ir.build_ret(val);
+                ir.terminate_block(Terminator::Ret(val));
             }
             *noreturn = true;
             Ref::UNDEF
         }
         Expr::ReturnUnit { .. } => {
-            ir.build_ret_undef();
+            ir.terminate_block(Terminator::Ret(Ref::UNIT));
             *noreturn = true;
             Ref::UNDEF
         }
@@ -499,13 +499,13 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             if *noreturn { return Res::Val(Ref::UNDEF) }
             let then_block = ir.create_block();
             let after_block = ir.create_block();
-            ir.build_branch(cond, then_block, after_block);
+            ir.terminate_block(Terminator::Branch { cond, on_true: then_block, on_false: after_block });
             
             ir.begin_block(then_block);
             let mut then_noreturn = false;
             gen_expr(ir, then, ctx, &mut then_noreturn);
             if !then_noreturn {
-                ir.build_goto(after_block);
+                ir.terminate_block(Terminator::Goto(after_block));
             }
 
             ir.begin_block(after_block);
@@ -521,7 +521,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             let mut then_noreturn = false;
             gen_expr(ir, then, ctx, &mut then_noreturn);
             if !then_noreturn {
-                ir.build_goto(after_block);
+                ir.terminate_block(Terminator::Goto(after_block));
             }
 
             ir.begin_block(after_block);
@@ -534,7 +534,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             let then_block = ir.create_block();
             let else_block = ir.create_block();
 
-            ir.build_branch(cond, then_block, else_block);
+            ir.terminate_block(Terminator::Branch { cond, on_true: then_block, on_false: else_block });
             ir.begin_block(then_block);
             
             let ty = ctx[expr];
@@ -580,8 +580,8 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 all_noreturn &= branch_noreturn;
 
                 if !branch_noreturn {
-                    ir.build_goto(after_block);
                     phi_vals.push((ir.current_block(), branch_val));
+                    ir.terminate_block(Terminator::Goto(after_block));
                 }
                 if let Some(next) = next_block {
                     ir.begin_block(next);
@@ -603,7 +603,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 let cond = val_expr(ir, cond, ctx, noreturn);
                 if !*noreturn {
                     let body_block = ir.create_block();
-                    ir.build_branch(cond, body_block, after_block);
+                    ir.terminate_block(Terminator::Branch { cond, on_true: body_block, on_false: after_block });
                     ir.begin_block(body_block);
                 }
             })
@@ -708,7 +708,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
 
                     if func_noreturn {
                         *noreturn = true;
-                        ir.build_ret_undef();
+                        ir.terminate_block(Terminator::Ret(Ref::UNDEF));
                     }
                     call_val
                 }
@@ -901,36 +901,15 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                 ir.build_int(val, ty)
             }
             match ctx[id] {
-                MemberAccess::Size(id) => {
-                    let layout = ctx.symbols.get_type(id).layout(
-                        |id| ctx.symbols.get_type(id),
-                        &[]
-                    );
-                    layout_val(ir, layout.size)
-                }
-                MemberAccess::Align(id) => {
-                    let layout = ctx.symbols.get_type(id).layout(
-                        |id| ctx.symbols.get_type(id),
-                        &[]
-                    );
-                    layout_val(ir, layout.alignment)
-                }
-                MemberAccess::Stride(id) => {
-                    let layout = ctx.symbols.get_type(id).layout(
-                        |id| ctx.symbols.get_type(id),
-                        &[]
-                    );
-                    layout_val(ir, layout.stride())
-                }
-                MemberAccess::LocalSize(idx) => {
+                MemberAccess::Size(idx) => {
                     let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.size)
                 }
-                MemberAccess::LocalAlign(idx) => {
+                MemberAccess::Align(idx) => {
                     let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.alignment)
                 }
-                MemberAccess::LocalStride(idx) => {
+                MemberAccess::Stride(idx) => {
                     let layout = ir.types.layout(ir.types[idx], |id| ctx.symbols.get_type(id));
                     layout_val(ir, layout.stride())
                 }
@@ -1070,7 +1049,7 @@ fn gen_pat(
         match on_mismatch(ir) {
             Some(on_mismatch) => {
                 let on_match = ir.create_block();
-                ir.build_branch(cond, on_match, on_mismatch);
+                ir.terminate_block(Terminator::Branch { cond, on_true: on_match, on_false: on_mismatch });
                 ir.begin_block(on_match);
             }
             None => {}
@@ -1162,7 +1141,11 @@ fn gen_pat(
                 } else {
                     if let Some(on_mismatch_branch) = on_mismatch(ir) {
                         let on_tag_match = ir.create_block();
-                        ir.build_branch(tag_matches, on_tag_match, on_mismatch_branch);
+                        ir.terminate_block(Terminator::Branch {
+                            cond: tag_matches,
+                            on_true: on_tag_match,
+                            on_false: on_mismatch_branch,
+                        });
                         ir.begin_block(on_tag_match);
                     }
 
@@ -1174,7 +1157,11 @@ fn gen_pat(
             } else {
                 if let Some(on_mismatch) = on_mismatch(ir) {
                     let on_match = ir.create_block();
-                    ir.build_branch(tag_matches, on_match, on_mismatch);
+                    ir.terminate_block(Terminator::Branch {
+                        cond: tag_matches,
+                        on_true: on_match,
+                        on_false: on_mismatch,
+                    });
                     ir.begin_block(on_match);
                 }
             }
@@ -1293,7 +1280,7 @@ fn build_then_else(
             after_block = Some(after);
             after
         };
-        ir.build_goto(after);
+        ir.terminate_block(Terminator::Goto(after));
     };
 
     if !then_noreturn {
@@ -1335,7 +1322,7 @@ fn build_while_loop(
 ) -> Ref {
     let cond_block = ir.create_block();
     let after_block = ir.create_block();
-    ir.build_goto(cond_block);
+    ir.terminate_block(Terminator::Goto(cond_block));
 
     ir.begin_block(cond_block);
     build_cond(ir, ctx, noreturn, after_block);
@@ -1343,7 +1330,7 @@ fn build_while_loop(
     let mut body_noreturn = false;
     gen_expr(ir, body, ctx, &mut body_noreturn);
     if !body_noreturn {
-        ir.build_goto(cond_block);
+        ir.terminate_block(Terminator::Goto(cond_block));
     }
     ir.begin_block(after_block);
     Ref::UNIT

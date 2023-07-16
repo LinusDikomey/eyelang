@@ -250,13 +250,15 @@ fn func(file: &mut File, module: &Module, func: &Function) -> Result<()> {
 
                 writeln!(file, ");")?;
             }
-            Tag::RetUndef => {
-                writeln!(file, "    return;")?;
-            }
             Tag::Ret => {
-                write!(file, "    return ")?;
-                r(file, ir, unsafe { inst.data.un_op })?;
-                writeln!(file, ";")?;
+                let value = unsafe { inst.data.un_op };
+                if value == Ref::UNDEF {
+                    writeln!(file, "    return;")?;
+                } else {
+                    write!(file, "    return ")?;
+                    r(file, ir, unsafe { inst.data.un_op })?;
+                    writeln!(file, ";")?;
+                }
             }
             _ => todo!("tag {}", inst.tag),
 

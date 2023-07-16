@@ -6,6 +6,7 @@ use crate::{
 
 use super::{RefVal, FunctionId, types::{TypeRef, IrType, IrTypes}};
 
+#[derive(Clone, Copy, Debug)]
 pub enum BinOp {
     Add,
     Sub,
@@ -25,11 +26,23 @@ pub enum BinOp {
     GE,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum Terminator {
+    Ret(Ref),
+    Goto(BlockIndex),
+    Branch {
+        cond: Ref,
+        on_true: BlockIndex,
+        on_false: BlockIndex,
+    },
+}
+
 #[derive(Debug)]
 pub struct IrBuilder<'a> {
     pub inst: Vec<Instruction>,
     pub emit: bool,
     current_block: u32,
+    current_block_terminated: bool,
     next_block: u32,
     pub blocks: Vec<u32>,
     pub extra: Vec<u8>,
@@ -48,6 +61,7 @@ impl<'a> IrBuilder<'a> {
             }],
             emit: true,
             current_block: 0,
+            current_block_terminated: false,
             next_block: 1,
             blocks: vec![0],
             extra: Vec::new(),
@@ -79,7 +93,7 @@ impl<'a> IrBuilder<'a> {
     #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     #[cfg_attr(debug_assertions, track_caller)]
     fn add(&mut self, data: Data, tag: Tag, ty: impl Into<IdxOrTy>) -> Ref {
-        debug_assert!(!tag.is_untyped(), "The IR instruction {tag:?} doesn't need a type");
+        debug_assert!(!self.current_block_terminated);
         debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
         let ty = self.ty(ty);
         self.add_inst(Instruction {
@@ -90,35 +104,9 @@ impl<'a> IrBuilder<'a> {
         })
     }
 
-    /*
-    #[must_use = "Use add_unused_untyped if the result of this instruction isn't needed."]
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn _add_untyped(&mut self, tag: Tag, data: Data) -> Ref {
-        debug_assert!(tag.is_untyped(), "The IR instruction {tag:?} needs a type");
-        debug_assert!(tag.is_usable(), "The IR instruction {tag:?} doesn't have a usable result");
-        self.add_inst(Instruction {
-            data,
-            tag,
-            ty: TypeTableIndex::NONE,
-            used: false
-        })
-    }
-
-    #[cfg_attr(debug_assertions, track_caller)]
-    pub fn _add_unused(&mut self, tag: Tag, data: Data, ty: TypeTableIndex) {
-        debug_assert!(!tag.is_untyped(), "The unused IR instruction {tag:?} doesn't need a type");
-        self.add_inst(Instruction {
-            data,
-            tag,
-            ty,
-            used: false
-        });
-    }
-    */
-
-    #[cfg_attr(debug_assertions, track_caller)]
-    fn add_unused_untyped(&mut self, tag: Tag, data: Data) {
-        debug_assert!(tag.is_untyped(), "The unused IR instruction {tag:?} needs a type");
+    fn add_unused(&mut self, tag: Tag, data: Data) {
+        debug_assert!(!tag.is_usable());
         self.add_inst(Instruction {
             data,
             tag,
@@ -143,18 +131,15 @@ impl<'a> IrBuilder<'a> {
         idx
     }
 
-    pub fn currently_terminated(&self) -> bool {
-        self.inst.last().map_or(false, |last| last.tag.is_terminator())
-    }
-
     #[track_caller]
     pub fn begin_block(&mut self, idx: BlockIndex) {
         if self.emit {
             debug_assert!(
-                self.currently_terminated(),
+                self.current_block_terminated,
                 "Can't begin next block without exiting previous one"
             );
             self.current_block = idx.0;
+            self.current_block_terminated = false;
             debug_assert_eq!(self.blocks[idx.0 as usize], u32::MAX,
                 "begin_block called twice on the same block");
             let block_pos = self.inst.len() as u32;
@@ -173,6 +158,8 @@ impl<'a> IrBuilder<'a> {
     }
 
     pub fn finish(self) -> FunctionIr<IrTypes> {
+        debug_assert!(self.current_block_terminated, "Last IR block wasn't terminated");
+
         #[cfg(debug_assertions)]
         for pos in &self.blocks {
             assert_ne!(*pos, u32::MAX, "block wasn't initialized");
@@ -190,14 +177,20 @@ impl<'a> IrBuilder<'a> {
     /// -------------------- instruction builders --------------------
     /// --------------------------------------------------------------
 
-    #[cfg_attr(debug_assertions, track_caller)]
-    pub fn build_ret(&mut self, val: Ref) {
-        self.add_unused_untyped(Tag::Ret, Data { un_op: val });
-    }
+    pub fn terminate_block(&mut self, terminator: Terminator) {
+        debug_assert!(!self.current_block_terminated, "Tried to terminate block twice");
+        self.current_block_terminated = true;
+        let (tag, data) = match terminator {
+            Terminator::Ret(val) => (Tag::Ret, Data { un_op: val }),
+            Terminator::Goto(block) => (Tag::Goto, Data { block }),
+            Terminator::Branch { cond, on_true, on_false } => {
 
-    #[cfg_attr(debug_assertions, track_caller)]
-    pub fn build_ret_undef(&mut self) {
-        self.add_unused_untyped(Tag::RetUndef, Data { none: () });
+                let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
+                self.extra_data(&on_false.0.to_le_bytes());
+                (Tag::Branch, Data { ref_int: (cond, branch_extra )})
+            }
+        };
+        self.add_inst(Instruction { data, tag, ty: TypeRef::NONE, used: false });
     }
 
     pub fn build_param(&mut self, param_idx: u32, param_ptr_ty: impl Into<IdxOrTy>) -> Ref {
@@ -276,7 +269,7 @@ impl<'a> IrBuilder<'a> {
     }
 
     pub fn build_store(&mut self, var: Ref, val: Ref) {
-        self.add_unused_untyped(Tag::Store, Data { bin_op: (var, val) });
+        self.add_unused(Tag::Store, Data { bin_op: (var, val) });
     }
 
     pub fn build_string(&mut self, string: &[u8], null_terminate: bool, ty: impl Into<IdxOrTy>) -> Ref {
@@ -384,16 +377,6 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { un_op: val }, Tag::Cast, target_ty)
     }
 
-    pub fn build_goto(&mut self, block: BlockIndex) {
-        self.add_unused_untyped(Tag::Goto, Data { block });
-    }
-
-    pub fn build_branch(&mut self, cond: Ref, on_true: BlockIndex, on_false: BlockIndex) {
-        let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
-        self.extra_data(&on_false.0.to_le_bytes());
-        self.add_unused_untyped(Tag::Branch, Data { ref_int: (cond, branch_extra) });
-    }
-
     pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: impl Into<IdxOrTy>)
     -> Ref {
         let extra = self.extra.len() as u32;
@@ -416,7 +399,7 @@ impl<'a> IrBuilder<'a> {
             count += 1;
         }
         assert!(count <= u16::MAX as usize, "too many arguments for inline assembly");
-        self.add_unused_untyped(Tag::Asm, Data { asm: (extra, asm_str.len() as u16, count as u16) });
+        self.add_unused(Tag::Asm, Data { asm: (extra, asm_str.len() as u16, count as u16) });
     }
 }
 

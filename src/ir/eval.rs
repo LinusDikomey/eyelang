@@ -175,7 +175,6 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                 ConstItem::Val(ConstVal::Invalid)
             }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
-            super::Tag::RetUndef => break ConstItem::Val(ConstVal::Invalid),
             super::Tag::Param => todo!("should give pointer to param"),
             super::Tag::Uninit => ConstItem::Val(ConstVal::Invalid),
             super::Tag::Int => {

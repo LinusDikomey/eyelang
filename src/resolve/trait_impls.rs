@@ -56,7 +56,7 @@ impl TraitImpls {
         let Some(impls) = self.by_type.get(&generic_type) else { return TraitMethodResult::None };
         for trait_impl in impls {
             let trait_def = symbols.get_trait(trait_impl.trait_id);
-            if let Some((func_index, trait_def_func_header)) = trait_def.functions.get(function_name) {
+            if let Some((func_index, _trait_def_func_header)) = trait_def.functions.get(function_name) {
                 return TraitMethodResult::Found {
                     func: trait_impl.functions[*func_index as usize],
                     impl_generic_count: trait_impl.impl_generic_count,

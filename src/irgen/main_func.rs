@@ -1,6 +1,6 @@
 use crate::{
     resolve::{types::Type, type_info::TypeTable},
-    ir::{Function, builder::IrBuilder, FunctionId, types::{IrTypes, IrType}},
+    ir::{Function, builder::{IrBuilder, Terminator}, FunctionId, types::{IrTypes, IrType}},
     types::{Primitive, IntType},
     ast::ModuleId
 };
@@ -31,7 +31,7 @@ pub fn main_wrapper(eye_main: FunctionId, _module: ModuleId, main_return_ty: Typ
         Some(_) => builder.build_cast(main_val, i32_ty),
         None => builder.build_int(0, i32_ty)
     };
-    builder.build_ret(exit_code);
+    builder.terminate_block(Terminator::Ret(exit_code));
     
     let ir = builder.finish();
 

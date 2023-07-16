@@ -16,10 +16,10 @@ pub struct Instruction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
+#[allow(unused)] // FIXME: these instructions should be cleaned up if they still aren't used
 pub enum Tag {
     BlockBegin,
     Ret,
-    RetUndef,
     Param,
 
     Uninit,
@@ -95,7 +95,6 @@ impl Tag {
             Tag::Decl => TypeTableIdx,
             Tag::Module => Int,
 
-            Tag::RetUndef => None,
             Tag::Call => Call,
             Tag::Global => Global,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
@@ -112,20 +111,15 @@ impl Tag {
         }
     }
 
-    pub fn is_untyped(self) -> bool {
-        matches!(self,
-            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
-            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
-        )
-    }
+    /// returns true if this instruction yields a value
     pub fn is_usable(self) -> bool {
         !matches!(self,
-            Tag::BlockBegin | Tag::Ret | Tag::RetUndef
+            Tag::BlockBegin | Tag::Ret
             | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
         )
     }
     pub fn is_terminator(self) -> bool {
-        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret | Tag::RetUndef)
+        matches!(self, Tag::Goto | Tag::Branch | Tag::Ret)
     }
 }
 impl fmt::Display for Tag {

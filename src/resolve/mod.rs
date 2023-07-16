@@ -721,12 +721,9 @@ pub enum ResolvedCall {
 
 #[derive(Debug, Clone, Copy)]
 pub enum MemberAccess {
-    Size(TypeId),
-    Align(TypeId),
-    Stride(TypeId),
-    LocalSize(TypeRef),
-    LocalAlign(TypeRef),
-    LocalStride(TypeRef),
+    Size(TypeRef),
+    Align(TypeRef),
+    Stride(TypeRef),
     StructMember(u32),
     Symbol(DefId),
     Method(FunctionId),

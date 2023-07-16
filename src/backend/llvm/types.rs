@@ -5,7 +5,7 @@ use llvm_sys::{
 
 use crate::{
     types::{Primitive, Layout},
-    resolve::{types::{Type, Enum, Struct, ResolvedTypeBody}, self},
+    resolve::types::{Type, Enum, Struct, ResolvedTypeBody},
     ir::{self, types::{IrTypes, TypeRefs, IrType}},
     ast::{TypeId, VariantId}
 };

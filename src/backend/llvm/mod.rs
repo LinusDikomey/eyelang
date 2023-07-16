@@ -190,7 +190,6 @@ unsafe fn build_func(
         } else {
             let i = r.into_ref().unwrap() as usize;
             let tag = ir.inst[i].tag;
-            debug_assert!(!tag.is_untyped(), "Tried to get type of untyped instruction {tag:?}");
             debug_assert!(tag.is_usable(), "Tried to get value of unusable instruction {tag:?}");
             
             let r = instructions[i];
@@ -242,19 +241,21 @@ unsafe fn build_func(
                 ptr::null_mut()
             }
             ir::Tag::Ret => {
-                let (r, _) = get_ref_and_type(&instructions, data.un_op);
-                if let Some(r) = r {
-                    LLVMBuildRet(builder, r)
+                let value = data.un_op;
+                if value == ir::Ref::UNDEF {
+                    if is_resolved_void_type(&func.return_type) {
+                        LLVMBuildRetVoid(builder)
+                    } else {
+                        let val = LLVMGetUndef(llvm_global_ty(ctx, &func.return_type, module, types));
+                        LLVMBuildRet(builder, val)
+                    }
                 } else {
-                    LLVMBuildRetVoid(builder)
-                }
-            }
-            ir::Tag::RetUndef => {
-                if is_resolved_void_type(&func.return_type) {
-                    LLVMBuildRetVoid(builder)
-                } else {
-                    let val = LLVMGetUndef(llvm_global_ty(ctx, &func.return_type, module, types));
-                    LLVMBuildRet(builder, val)
+                    let (r, _) = get_ref_and_type(&instructions, data.un_op);
+                    if let Some(r) = r {
+                        LLVMBuildRet(builder, r)
+                    } else {
+                        LLVMBuildRetVoid(builder)
+                    }
                 }
             }
             ir::Tag::Param => {

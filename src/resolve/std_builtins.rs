@@ -34,7 +34,7 @@ impl Builtins {
             panic!("Module expected for 'predude'")
         };
 
-        Self { values: Some(BuiltinValues { str_type, str_eq, prelude }) }
+        Self { values: Some(BuiltinValues { str_type, str_eq, _prelude: prelude }) }
     }
 
     pub const fn nostd() -> Self {
@@ -57,5 +57,5 @@ impl Builtins {
 struct BuiltinValues {
     str_type: TypeId,
     str_eq: FunctionId,
-    prelude: ModuleId,
+    _prelude: ModuleId,
 }

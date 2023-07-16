@@ -7,8 +7,10 @@ pub struct SignedInt(pub u128, pub bool);
 #[derive(Clone, Debug, PartialEq, Eq)]
 // FIXME: exhaustion of tuples/enum arguments is wrong
 pub enum Exhaustion {
-    None, // no values exhausted
-    Full, // all values exhausted
+    /// no values exhausted
+    None,
+    /// all values exhausted
+    Full,
     UnsignedInt(Vec<Range>),
     SignedInt {
         neg: Vec<Range>,

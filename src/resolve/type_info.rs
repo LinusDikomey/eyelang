@@ -577,7 +577,7 @@ impl TypeInfo {
                 s.push(')');
                 s.into()
             }
-            TypeInfo::MethodItem { function, generics, this_ty } => format!(
+            TypeInfo::MethodItem { function, generics: _, this_ty } => format!(
                 "<method {} with {}>",
                 symbols.get_func(function).name,
                 types[this_ty].as_string(types, symbols)

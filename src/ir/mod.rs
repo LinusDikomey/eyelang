@@ -102,7 +102,7 @@ impl fmt::Display for RefVal {
 }
 
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
     pub fn bytes(self) -> [u8; 4] {

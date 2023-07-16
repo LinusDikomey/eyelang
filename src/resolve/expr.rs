@@ -540,19 +540,19 @@ fn val_member_access(ctx: Ctx, expr: ExprRef, left: ExprRef, left_ty: TypeRef, n
     }
 }
 
-fn type_member_access(ctx: Ctx, expr: ExprRef, ty: TypeRef, name: &str, name_span: TSpan)
+fn type_member_access(ctx: Ctx, _expr: ExprRef, ty: TypeRef, name: &str, name_span: TSpan)
 -> (MemberAccess, TypeInfoOrIndex)
 {
     const U64: TypeInfoOrIndex = TypeInfoOrIndex::Type(TypeInfo::Primitive(Primitive::U64));
     match name {
-        "size"   => return (MemberAccess::LocalSize  (ty), U64),
-        "align"  => return (MemberAccess::LocalAlign (ty), U64),
-        "stride" => return (MemberAccess::LocalStride(ty), U64),
+        "size"   => return (MemberAccess::Size  (ty), U64),
+        "align"  => return (MemberAccess::Align (ty), U64),
+        "stride" => return (MemberAccess::Stride(ty), U64),
         _ => match ctx.types.get(ty) {
             TypeInfo::Resolved(id, generics) => {
                 let def = ctx.symbols.get_type(id);
                 match &def.body {
-                    ResolvedTypeBody::Struct(def) => {}
+                    ResolvedTypeBody::Struct(_) => {}
                     ResolvedTypeBody::Enum(def) => if let Some(variant) = def.variants.get(name) {
                         return (
                             MemberAccess::EnumItem(id, variant.1),

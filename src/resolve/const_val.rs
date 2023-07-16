@@ -5,7 +5,7 @@ use crate::{
     ast::{ModuleId, TraitId, TypeId, ExprRef, UnresolvedType, Ast, FunctionId},
     error::Errors,
     parser::Counts,
-    irgen, ir::{builder::IrBuilder, Ref, self, types::{TypeRefs, IrTypes}}, dmap,
+    irgen, ir::{builder::{IrBuilder, Terminator}, Ref, self, types::{TypeRefs, IrTypes}}, dmap,
 };
 
 use super::{
@@ -183,7 +183,7 @@ pub fn eval(
     let val = res.val(&mut builder, ty);
 
     if !noreturn {
-        builder.build_ret(val);
+        builder.terminate_block(Terminator::Ret(val));
     }
 
     match ir::eval::eval(&builder, &[]) {
