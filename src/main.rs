@@ -97,6 +97,7 @@ impl fmt::Display for Backend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match *self {
             Self::C => "C",
+            #[cfg(feature = "llvm-backend")]
             Self::LLVM => "LLVM",
             Self::X86 => "x86",
         };
@@ -474,7 +475,9 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
             }
         },
         (Cmd::Jit, _) => panic!("JIT compilation is not supported with the {} backend", args.backend),
-        (Cmd::Run | Cmd::Build, Backend::X86) => todo!("X86 backend isn't available right now"),
+        (Cmd::Run | Cmd::Build, Backend::X86) => {
+            backend::x86_64::generate(&ir);
+        }
         /*(Cmd::Run | Cmd::Build, Backend::X86) => {
             let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
             let asm_file =
