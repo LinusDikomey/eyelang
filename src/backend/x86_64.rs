@@ -20,43 +20,43 @@ impl fmt::Display for Register {
     }
 }
 
-#[allow(non_camel_case_types)]
-pub enum Inst {
-    ret,
-    mov,
-    add,
-    sub,
-    mul,
-}
-impl fmt::Display for Inst {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Inst::*;
-        let s = match self {
-            ret => "ret",
-            mov => "mov",
-            add => "add",
-            sub => "sub",
-            mul => "mul",
-        };
-
-        write!(f, "{s}")
-    }
-}
-
-
-impl super::Inst for Inst {
-    type Register = Register;
-
-    fn arg_types(&self) -> &'static [ArgType] {
-        use Inst::*;
-        use ArgType::*;
-
-        match self {
-            ret => &[],
-            mov => &[Def, Use],
-            add | sub | mul => &[UseDef, Use],
+macro_rules! inst {
+    ($($name: ident $($arg: ident)* ,)*) => {
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum Inst {
+            $($name),*
         }
-    }
+        impl fmt::Display for Inst {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let s = match *self {
+                    $( Self::$name => stringify!($name) ),*
+                };
+                write!(f, "{s}")
+            }
+        }
+        impl super::Inst for Inst {
+            type Register = Register;
+
+            fn arg_types(&self) -> &'static [ArgType] {
+                match *self {
+                    $( Self::$name => &[$( ArgType::$arg ),*]),*
+                }
+            }
+        }
+    };
+}
+
+inst! {
+    ret,
+    mov Def Use,
+    add UseDef Use,
+    sub UseDef Use,
+    mul UseDef Use,
+    jmp Label,
+    jz,
+    jnz,
+    cmp Use,
 }
 
 pub fn generate(module: &ir::Module) {
@@ -104,15 +104,18 @@ fn generate_func(func: &ir::Function) -> Option<MachineCode<Inst>> {
     let mut mapper = RegisterMapper::new(ir.inst.len());
 
     for (i, inst) in ir.inst.iter().enumerate() {
-        generate_inst(i as u32, &mut code, &mut mapper, inst);
+        generate_inst(i as u32, &mut code, &mut mapper, inst, &ir.extra);
     }
     Some(code)
 }
 
-fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMapper, inst: &ir::Instruction) {
+fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMapper, inst: &ir::Instruction, extra: &[u8]) {
     use ir::Tag;
     match inst.tag {
-        Tag::BlockBegin => {}
+        Tag::BlockBegin => {
+            let block = unsafe { inst.data.block };
+            code.label(block);
+        }
         Tag::Int => {
             let res = mapper.get(res);
             let int = unsafe { inst.data.int };
@@ -135,7 +138,48 @@ fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMa
 
             code.inst(op, [Arg::Virtual(l), Arg::Virtual(r)]);
         }
-        Tag::Ret => code.inst(Inst::ret, []),
+        Tag::Ret => {
+            let value = unsafe { inst.data.un_op };
+            if let Some(val) = value.into_val() {
+                match val {
+                    ir::RefVal::True | ir::RefVal::False => {
+                        let val = if val == ir::RefVal::True { 1 } else { 0 };
+                        code.inst(Inst::mov, [Arg::Physical(Register::eax), Arg::Imm(val)]);
+                    }
+                    ir::RefVal::Unit | ir::RefVal::Undef => {}
+                }
+            } else {
+                let reg = mapper.get(value.into_ref().unwrap());
+                code.inst(Inst::mov, [Arg::Physical(Register::eax), Arg::Virtual(reg)]);
+            }
+            code.inst(Inst::ret, []);
+        }
+        Tag::Goto => {
+            code.inst(Inst::jmp, [Arg::Label(unsafe { inst.data.block })]);
+        }
+        Tag::Branch => {
+            let (val, i) = unsafe { inst.data.ref_int };
+            let i = i as usize;
+            let mut bytes = [0; 4];
+            bytes.copy_from_slice(&extra[i..i+4]);
+            let on_true = ir::BlockIndex::from_bytes(bytes);
+            bytes.copy_from_slice(&extra[i+4..i+8]);
+            let on_false = ir::BlockIndex::from_bytes(bytes);
+
+            if let Some(val) = val.into_val() {
+                match val {
+                    ir::RefVal::True => code.inst(Inst::jmp, [Arg::Label(on_true)]),
+                    ir::RefVal::False => code.inst(Inst::jmp, [Arg::Label(on_false)]),
+                    _ => panic!("invalid ir"),
+                }
+            } else {
+                let r = mapper.get(val.into_ref().unwrap());
+                code.inst(Inst::cmp, [Arg::Virtual(r)]);
+                code.inst(Inst::jz, [Arg::Label(on_false)]);
+                code.inst(Inst::jnz, [Arg::Label(on_true)]);
+            };
+        }
+        Tag::Call => {} // TODO
         other => todo!("unimplemented instruction in x86_64 backend: {other:?}"),
     }
 }

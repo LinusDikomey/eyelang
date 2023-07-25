@@ -1,6 +1,6 @@
 use std::fmt::{self, Display};
 
-use color_format::cwrite;
+use color_format::{cwrite, cwriteln};
 
 use crate::ir;
 
@@ -13,10 +13,18 @@ pub mod llvm;
 
 pub mod x86_64;
 
+enum Instruction<I> {
+    Specific {
+        instruction: I,
+        arguments_index: u32,
+    },
+    Label(ir::BlockIndex),
+}
+
 /// Represents the machine code of a single function
 pub struct MachineCode<I: Inst> {
     /// the instructions along with a start index into `arguments`
-    instructions: Vec<(I, u32)>,
+    instructions: Vec<Instruction<I>>,
     arguments: Vec<Arg<I::Register>>,
 }
 impl<I: Inst> MachineCode<I> {
@@ -27,45 +35,54 @@ impl<I: Inst> MachineCode<I> {
         }
     }
 
-    pub fn inst<const N: usize>(&mut self, i: I, args: [Arg<I::Register>; N]) {
-        debug_assert_eq!(i.arg_types().len(), N);
-        let argument_index = self.arguments.len() as u32;
+    pub fn label(&mut self, index: ir::BlockIndex) {
+        self.instructions.push(Instruction::Label(index));
+    }
+
+    pub fn inst<const N: usize>(&mut self, instruction: I, args: [Arg<I::Register>; N]) {
+        debug_assert_eq!(instruction.arg_types().len(), N);
+        let arguments_index = self.arguments.len() as u32;
         self.arguments.extend(args);
-        self.instructions.push((i, argument_index));
+        self.instructions.push(Instruction::Specific { instruction, arguments_index });
     }
 }
 impl<I: Inst + Display> Display for MachineCode<I> where I::Register: Display {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Machine Code:")?;
         for inst in &self.instructions {
-            write!(f, "  ")?;
-            let arg_types = inst.0.arg_types();
-            let args = &self.arguments[inst.1 as usize .. inst.1 as usize + arg_types.len()];
-            let defs = args
-                .iter()
-                .zip(arg_types.iter().copied())
-                .map_while(|(arg, ty)| (ty != ArgType::Use).then_some(arg));
+            match inst {
+                Instruction::Label(i) => cwriteln!(f, "#blue<block{}>:", i.idx())?,
+                Instruction::Specific { instruction, arguments_index: arg_idx } => {
+                    write!(f, "  ")?;
+                    let arg_types = instruction.arg_types();
+                    let args = &self.arguments[*arg_idx as usize .. *arg_idx as usize + arg_types.len()];
+                    let defs = args
+                        .iter()
+                        .zip(arg_types.iter().copied())
+                        .map_while(|(arg, ty)| (!matches!(ty, ArgType::Use | ArgType::Label)).then_some(arg));
 
-            let uses = args
-                .iter()
-                .zip(arg_types.iter().copied())
-                .skip_while(|(_, ty)| *ty == ArgType::Def)
-                .map(|x| x.0);
+                    let uses = args
+                        .iter()
+                        .zip(arg_types.iter().copied())
+                        .skip_while(|(_, ty)| *ty == ArgType::Def)
+                        .map(|x| x.0);
 
-            let mut has_defs = false;
-            for def in defs {
-                has_defs = true;
-                write!(f, "{} ", def)?;
-            }
+                    let mut has_defs = false;
+                    for def in defs {
+                        has_defs = true;
+                        write!(f, "{} ", def)?;
+                    }
 
-            if has_defs {
-                write!(f, "= ")?;
+                    if has_defs {
+                        write!(f, "= ")?;
+                    }
+                    cwrite!(f, "#y<{}>", instruction)?;
+                    for arg in uses {
+                        write!(f, " {}", arg)?;
+                    }
+                    writeln!(f)?;
+                }
             }
-            cwrite!(f, "#y<{}>", inst.0)?;
-            for arg in uses {
-                write!(f, " {}", arg)?;
-            }
-            writeln!(f)?;
         }
         Ok(())
     }
@@ -75,6 +92,7 @@ pub enum Arg<R> {
     Virtual(VirtualRegister),
     Physical(R),
     Imm(u64),
+    Label(ir::BlockIndex),
 }
 impl<R: Display> Display for Arg<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -82,6 +100,7 @@ impl<R: Display> Display for Arg<R> {
             Self::Virtual(virt) => cwrite!(f, "#cyan<%{}>", virt.0),
             Self::Physical(phys) => cwrite!(f, "#green<{}>", phys),
             Self::Imm(x) => cwrite!(f, "#red<{}>", x),
+            Self::Label(i) => cwrite!(f, "#blue<block{}>", i.idx()),
         }
     }
 }
@@ -101,6 +120,7 @@ pub enum ArgType {
     Use,
     Def,
     UseDef,
+    Label,
 }
 
 pub fn generate(module: &ir::Module) {

@@ -108,6 +108,9 @@ impl BlockIndex {
     pub fn bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }
+    pub fn from_bytes(bytes: [u8; 4]) -> Self {
+        Self(u32::from_le_bytes(bytes))
+    }
     pub fn idx(self) -> u32 {
         self.0
     }
