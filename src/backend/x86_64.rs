@@ -1,8 +1,7 @@
 use std::{alloc::Layout, fmt, mem::MaybeUninit};
+use crate::ir;
 
-use crate::{backend::{ArgType, Arg}, ir};
-
-use super::{MachineCode, VirtualRegister};
+use super::machine_code::{Arg, ArgType, MachineCode, VirtualRegister};
 
 
 macro_rules! register {
@@ -42,7 +41,7 @@ macro_rules! inst {
                 write!(f, "{s}")
             }
         }
-        impl super::Inst for Inst {
+        impl super::machine_code::Inst for Inst {
             type Register = Register;
 
             fn arg_types(&self) -> &'static [ArgType] {
@@ -98,18 +97,18 @@ impl RegisterMapper {
                     let ptr = std::alloc::alloc(Layout::array::<VirtualRegister>(size).unwrap())
                         as *mut MaybeUninit<Arg<Register>>;
                     let mut slice = Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, size));
-                    slice.fill(MaybeUninit::new(Arg::Virtual(VirtualRegister(0))));
+                    slice.fill(MaybeUninit::new(Arg::Virtual(VirtualRegister::UNASSIGNED)));
                     std::mem::transmute(slice)
                 }
             },
-            next: VirtualRegister(1),
+            next: VirtualRegister::FIRST,
         }
     }
 
     pub fn get(&mut self, ir_register: u32) -> Arg<Register> {
-        if matches!(self.ir_values[ir_register as usize], Arg::Virtual(VirtualRegister(0))) {
+        if matches!(self.ir_values[ir_register as usize], Arg::Virtual(VirtualRegister::UNASSIGNED)) {
             self.ir_values[ir_register as usize] = Arg::Virtual(self.next);
-            self.next.0 += 1;
+            self.next = self.next.next();
         }
         self.ir_values[ir_register as usize]
     }
@@ -131,7 +130,13 @@ fn generate_func(func: &ir::Function) -> Option<MachineCode<Inst>> {
     Some(code)
 }
 
-fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMapper, inst: &ir::Instruction, extra: &[u8]) {
+fn generate_inst(
+    res: u32,
+    code: &mut MachineCode<Inst>,
+    mapper: &mut RegisterMapper,
+    inst: &ir::Instruction,
+    extra: &[u8],
+) {
     use ir::Tag;
     match inst.tag {
         Tag::BlockBegin => {
