@@ -27,6 +27,7 @@ pub enum Type {
     /// a local enum that will only be created from inference
     LocalEnum(Vec<Vec<Type>>),
     /// Self type (only used in trait definitions)
+    #[allow(dead_code)] // FIXME: remove this allow when it's used
     TraitSelf,
     Invalid
 }

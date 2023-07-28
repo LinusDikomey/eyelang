@@ -72,6 +72,7 @@ pub enum TraitMethodResult {
         func: ast::FunctionId,
         impl_generic_count: u8,
     },
+    #[allow(dead_code)] //FIXME: this allow should be removed when this is actually emitted
     Multiple,
     None,
 }

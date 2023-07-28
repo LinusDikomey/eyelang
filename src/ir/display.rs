@@ -309,7 +309,6 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::types::IrType, types: &Ir
         IrType::Const(ConstIrType::Int) => write!(f, "int"),
         IrType::Const(ConstIrType::Float) => write!(f, "enum"),
         IrType::Const(ConstIrType::Enum) => write!(f, "float"),
-        IrType::Const(ConstIrType::Type) => write!(f, "type"),
         IrType::Ref(r) => display_type(f, types[r], types, info)
     }
 }

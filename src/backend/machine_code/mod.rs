@@ -15,8 +15,8 @@ pub enum Instruction<I> {
 /// Represents the machine code of a single function
 pub struct MachineCode<I: Inst> {
     /// the instructions along with a start index into `arguments`
-    instructions: Vec<Instruction<I>>,
-    arguments: Vec<Arg<I::Register>>,
+    pub instructions: Vec<Instruction<I>>,
+    pub arguments: Vec<Arg<I::Register>>,
 }
 impl<I: Inst> MachineCode<I> {
     pub fn new() -> Self {
@@ -85,6 +85,7 @@ pub enum Arg<R> {
     Physical(R),
     Imm(u64),
     Label(ir::BlockIndex),
+    FunctionLabel(ir::FunctionId),
 }
 impl<R: Display> Display for Arg<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -93,6 +94,7 @@ impl<R: Display> Display for Arg<R> {
             Self::Physical(phys) => cwrite!(f, "#green<{}>", phys),
             Self::Imm(x) => cwrite!(f, "#red<{}>", x),
             Self::Label(i) => cwrite!(f, "#blue<block{}>", i.idx()),
+            Self::FunctionLabel(i) => cwrite!(f, "#blue<func{}>", i.idx()),
         }
     }
 }

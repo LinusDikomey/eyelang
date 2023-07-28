@@ -587,7 +587,7 @@ fn type_member_access(ctx: Ctx, _expr: ExprRef, ty: TypeRef, name: &str, name_sp
 
     // try trait resolval
     match ctx.symbols.trait_impls.from_type(&ctx.symbols, ctx.types, ty, name) {
-        trait_impls::TraitMethodResult::Found { func, impl_generic_count } => {
+        trait_impls::TraitMethodResult::Found { func, impl_generic_count: _ } => {
             // TODO: generics
             return (
                 MemberAccess::Symbol(DefId::Function(func)),

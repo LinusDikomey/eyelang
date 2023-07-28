@@ -1,7 +1,7 @@
-use std::{alloc::Layout, fmt, mem::MaybeUninit};
-use crate::ir;
+use std::{fmt, path::Path, process::Command, fs::File};
+use crate::{ir, RunResult};
 
-use super::machine_code::{Arg, ArgType, MachineCode, VirtualRegister};
+use super::machine_code::{Arg, ArgType, MachineCode, VirtualRegister, Instruction, Inst as _};
 
 
 macro_rules! register {
@@ -63,6 +63,7 @@ inst! {
     jz,
     jnz,
     cmp Use,
+    call Label,
 }
 
 const PARAM_REGISTERS: [Register; 6] = [
@@ -74,14 +75,101 @@ const PARAM_REGISTERS: [Register; 6] = [
     Register::r9,
 ];
 
-pub fn generate(module: &ir::Module) {
-    for func in &module.funcs {
-        let code = generate_func(func);
-        if let Some(code) = code {
-            println!("Machine code for function {}:\n{}\n\n", func.name, code);
+struct MachineIR<'a> {
+    extern_functions: Vec<&'a str>,
+    functions: Vec<(&'a str, MachineCode<Inst>)>,
+}
+impl<'a> MachineIR<'a> {
+    fn emit_assembly<W: std::io::Write>(&self, w: &mut W, module: &ir::Module) -> std::io::Result<()> {
+        writeln!(w, "global main\n")?;
+        writeln!(w, "section .data\n")?;
+        for name in &self.extern_functions {
+            writeln!(w, "extern {}", name)?;
         }
+        for (function_index, (name, code)) in self.functions.iter().enumerate() {
+            writeln!(w, "{}:", name)?;
+
+            for inst in &code.instructions {
+                match *inst {
+                    Instruction::Label(idx) => writeln!(w, "_f{function_index}_b{}:", idx.idx())?,
+                    Instruction::Specific { instruction, arguments_index } => {
+                        let arg_count = instruction.arg_types().len();
+                        let args = &code.arguments[arguments_index as usize .. arguments_index as usize + arg_count];
+                        emit_instruction(w, instruction, args, function_index, module)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
+
+fn emit_instruction<W: std::io::Write>(
+    w: &mut W,
+    inst: Inst,
+    args: &[Arg<Register>],
+    function_index: usize,
+    module: &ir::Module,
+) -> std::io::Result<()> {
+    write!(w, "    {}", inst)?;
+    let mut first = true;
+    for arg in args {
+        if first {
+            write!(w, " ")?;
+            first = false;
+        } else {
+            write!(w, ", ")?;
+        }
+        match arg {
+            Arg::Label(idx) => write!(w, "_f{function_index}_b{}", idx.idx())?,
+            Arg::FunctionLabel(id) => write!(w, "{}", module.funcs[id.idx()].name)?,
+            Arg::Virtual(_virt) => {
+                eprintln!("virtual register encountered during machine code emit");
+                write!(w, "{}", 0)?;
+            }
+            Arg::Physical(phys) => write!(w, "{phys}")?,
+            Arg::Imm(value) => write!(w, "{value}")?,
+        }
+    }
+    writeln!(w)
+}
+
+pub fn generate(module: &ir::Module, asm_file_path: impl AsRef<Path>, obj_file: impl AsRef<Path>) -> RunResult {
+    let mut machine_ir = MachineIR {
+        extern_functions: vec![],
+        functions: vec![],
+    };
+
+    for func in &module.funcs {
+        let name = &func.name;
+        if let Some(ir) = &func.ir {
+            let code = generate_func(ir);
+            machine_ir.functions.push((name, code));
+        } else {
+            machine_ir.extern_functions.push(name);
+        };
+    }
+
+    let asm_file_path = asm_file_path.as_ref();
+    let mut asm_file = File::create(asm_file_path).map_err(|_| "Failed to create assembly file")?;
+    machine_ir.emit_assembly(&mut asm_file, module).map_err(|_| "Failed to write to assembly file")?;
+    assemble(asm_file_path, obj_file.as_ref())
+}
+
+fn assemble(asm: &Path, output: &Path) -> RunResult {
+    let status = Command::new("nasm")
+        .arg("-f")
+        .arg("elf64")
+        .arg(asm)
+        .arg("-o")
+        .arg(output)
+        .status()
+        .map_err(|_| "Failed to invoke assembler")?;
+
+    status.success().then_some(()).ok_or("Assembler failed")
+}
+
 
 struct RegisterMapper {
     ir_values: Box<[Arg<Register>]>,
@@ -90,17 +178,9 @@ struct RegisterMapper {
 impl RegisterMapper {
     pub fn new(size: usize) -> Self {
         Self {
-            ir_values: if size == 0 {
-                Box::new([])
-            } else {
-                unsafe {
-                    let ptr = std::alloc::alloc(Layout::array::<VirtualRegister>(size).unwrap())
-                        as *mut MaybeUninit<Arg<Register>>;
-                    let mut slice = Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, size));
-                    slice.fill(MaybeUninit::new(Arg::Virtual(VirtualRegister::UNASSIGNED)));
-                    std::mem::transmute(slice)
-                }
-            },
+            // PERF: can this cause 2 allocs if the vec overallocates?
+            // Can be allocated manually but 
+            ir_values: vec![Arg::Virtual(VirtualRegister::UNASSIGNED); size].into_boxed_slice(),
             next: VirtualRegister::FIRST,
         }
     }
@@ -118,16 +198,14 @@ impl RegisterMapper {
     }
 }
 
-fn generate_func(func: &ir::Function) -> Option<MachineCode<Inst>> {
-    let Some(ir) = &func.ir else { return None };
-
+fn generate_func(ir: &ir::FunctionIr) -> MachineCode<Inst> {
     let mut code = MachineCode::new();
     let mut mapper = RegisterMapper::new(ir.inst.len());
 
     for (i, inst) in ir.inst.iter().enumerate() {
         generate_inst(i as u32, &mut code, &mut mapper, inst, &ir.extra);
     }
-    Some(code)
+    code
 }
 
 fn generate_inst(
@@ -220,7 +298,22 @@ fn generate_inst(
                 code.inst(Inst::jnz, [Arg::Label(on_true)]);
             };
         }
-        Tag::Call => {} // TODO
+        Tag::Call => {
+            // TODO: call arguments
+            let start = unsafe { inst.data.extra_len.0 as usize };
+            let mut bytes = [0; 8];
+            bytes.copy_from_slice(&extra[start..start+8]);
+            let func = ir::FunctionId::from_bytes(bytes);
+            /*
+            let refs = (0..inst.data.extra_len.1).map(|i| {
+                let mut ref_bytes = [0; 4];
+                let begin = 8 + start + (4 * i) as usize;
+                ref_bytes.copy_from_slice(&extra[begin..begin+4]);
+                ir::Ref::from_bytes(ref_bytes)
+            });
+            */
+            code.inst(Inst::call, [Arg::FunctionLabel(func)])
+        }
         other => todo!("unimplemented instruction in x86_64 backend: {other:?}"),
     }
 }

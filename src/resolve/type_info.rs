@@ -160,7 +160,7 @@ impl TypeTable {
         self.types[curr_idx.idx()] = TypeInfoOrIndex::Type(ty);
         self.ty_dbg("specified", ty);
     }
-    pub fn specify_resolved_type(
+    pub fn _specify_resolved_type(
         &mut self,
         idx: TypeRef,
         other: &Type,
@@ -272,12 +272,12 @@ impl TypeTable {
         self.types[idx.idx()] = entry;
     }
 
-    pub fn reserve_enum_variants(&mut self, count: usize) -> EnumVariants {
+    pub fn _reserve_enum_variants(&mut self, count: usize) -> EnumVariants {
         let idx = self.enum_variants.len() as u32;
         self.enum_variants.extend(std::iter::repeat((String::new(), TypeRefs::EMPTY)).take(count));
         EnumVariants { idx, count: count as _ }
     }
-    pub fn replace_enum_variant(&mut self, idx: usize, name: String, args: TypeRefs) {
+    pub fn _replace_enum_variant(&mut self, idx: usize, name: String, args: TypeRefs) {
         self.enum_variants[idx] = (name, args);
     }
 

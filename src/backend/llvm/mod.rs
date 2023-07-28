@@ -98,11 +98,16 @@ pub unsafe fn module(ctx: LLVMContextRef, module: &ir::Module, print_ir: bool) -
             let func_ty = LLVMFunctionType(ret, params.as_mut_ptr(), params.len() as u32, varargs);
             let name = ffi::CString::new(func.name.as_bytes()).unwrap();
             let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), func_ty);
+            // FIXME: setting parameter alignment doesn't seem to be possible without deciding on
+            // byval/byref
+            // https://groups.google.com/g/llvm-dev/c/13B1X6vM3lM
+            /*
             for (i, (_, ty)) in func.params.iter().enumerate() {
                 let llvm_param = LLVMGetParam(llvm_func, i as _);
                 let layout = ty.layout(|id| &module.types[id.idx()].1, &[]);
                 LLVMSetParamAlignment(llvm_param, layout.alignment as _);
             }
+            */
             (llvm_func, func_ty)
         })
         .collect::<Vec<_>>();

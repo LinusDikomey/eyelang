@@ -49,6 +49,7 @@ pub fn link(obj: &str, out: &str, args: &Args) -> RunResult {
             \n{SEPARATOR_LINE}{}\n{SEPARATOR_LINE}{}\n{SEPARATOR_LINE}",
             stdout, stderr,
         );
+        eprintln!("huuh");
         "Linking command failed"
     })
 }

@@ -200,6 +200,7 @@ fn main() {
         ast::UnresolvedType::debug_sizes();
     }
     if let Err(err) = run(&args) {
+        eprintln!("sus");
         ceprintln!("#underline;red<Error>: {err}");
         std::process::exit(42)
     }
@@ -410,6 +411,7 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
     }
 
     link::link(&obj_file, &exe_file, args)?;
+    eprintln!("after link");
 
     if args.cmd == Cmd::Run {
         if args.lib {
@@ -493,7 +495,8 @@ fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunR
             }
         }
         Backend::X86 => {
-            backend::x86_64::generate(ir);
+            let asm_file = format!("eyebuild/{}.asm", params.project_name);
+            backend::x86_64::generate(ir, &asm_file, params.obj_file)?;
         }
     }
     Ok(())

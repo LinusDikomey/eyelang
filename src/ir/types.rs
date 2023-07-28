@@ -255,7 +255,6 @@ pub enum ConstIrType {
     Int,
     Float,
     Enum,
-    Type,
 }
 
 #[derive(Clone, Copy, Debug)]
