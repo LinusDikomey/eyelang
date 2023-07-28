@@ -1,23 +1,30 @@
-use std::{alloc::Layout, fmt};
+use std::{alloc::Layout, fmt, mem::MaybeUninit};
 
 use crate::{backend::{ArgType, Arg}, ir};
 
 use super::{MachineCode, VirtualRegister};
 
 
-
-#[allow(non_camel_case_types)]
-pub enum Register {
-    eax,
-}
-impl fmt::Display for Register {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Register::*;
-        let s = match self {
-            eax => "eax",
-        };
-        write!(f, "{s}")
+macro_rules! register {
+    ($($reg: ident)*) => {
+        #[allow(non_camel_case_types)]
+        #[derive(Clone, Copy, Debug)]
+        pub enum Register {
+            $( $reg ),*
+        }
+        impl fmt::Display for Register {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let name = match *self {
+                    $( Self::$reg => stringify!($reg)),*
+                };
+                write!(f, "{name}")
+            }
+        }
     }
+}
+
+register! {
+    rax rdi rsi rdx rcx r8 r9
 }
 
 macro_rules! inst {
@@ -59,6 +66,15 @@ inst! {
     cmp Use,
 }
 
+const PARAM_REGISTERS: [Register; 6] = [
+    Register::rdi,
+    Register::rsi,
+    Register::rdx,
+    Register::rcx,
+    Register::r8,
+    Register::r9,
+];
+
 pub fn generate(module: &ir::Module) {
     for func in &module.funcs {
         let code = generate_func(func);
@@ -69,31 +85,37 @@ pub fn generate(module: &ir::Module) {
 }
 
 struct RegisterMapper {
-    instructions: Box<[VirtualRegister]>,
+    ir_values: Box<[Arg<Register>]>,
     next: VirtualRegister,
 }
 impl RegisterMapper {
     pub fn new(size: usize) -> Self {
         Self {
-            instructions: unsafe {
-                let ptr = std::alloc::alloc_zeroed(Layout::array::<VirtualRegister>(size).unwrap())
-                    as *mut VirtualRegister;
-                Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, size))
+            ir_values: if size == 0 {
+                Box::new([])
+            } else {
+                unsafe {
+                    let ptr = std::alloc::alloc(Layout::array::<VirtualRegister>(size).unwrap())
+                        as *mut MaybeUninit<Arg<Register>>;
+                    let mut slice = Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr, size));
+                    slice.fill(MaybeUninit::new(Arg::Virtual(VirtualRegister(0))));
+                    std::mem::transmute(slice)
+                }
             },
             next: VirtualRegister(1),
         }
     }
 
-    pub fn get(&mut self, ir_register: u32) -> VirtualRegister {
-        if self.instructions[ir_register as usize].0 == 0 {
-            self.instructions[ir_register as usize] = self.next;
+    pub fn get(&mut self, ir_register: u32) -> Arg<Register> {
+        if matches!(self.ir_values[ir_register as usize], Arg::Virtual(VirtualRegister(0))) {
+            self.ir_values[ir_register as usize] = Arg::Virtual(self.next);
             self.next.0 += 1;
         }
-        self.instructions[ir_register as usize]
+        self.ir_values[ir_register as usize]
     }
 
-    pub fn mark(&mut self, ir_register: u32, mapped: VirtualRegister) {
-        self.instructions[ir_register as usize] = mapped
+    pub fn mark(&mut self, ir_register: u32, mapped: Arg<Register>) {
+        self.ir_values[ir_register as usize] = mapped
     }
 }
 
@@ -116,10 +138,14 @@ fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMa
             let block = unsafe { inst.data.block };
             code.label(block);
         }
+        Tag::Param => {
+            let i = unsafe { inst.data.int32 };
+            assert!(i < 6, "more than 6 parameters aren't supported right now");
+            mapper.mark(res, Arg::Physical(PARAM_REGISTERS[i as usize]));
+        }
         Tag::Int => {
-            let res = mapper.get(res);
             let int = unsafe { inst.data.int };
-            code.inst(Inst::mov, [Arg::Virtual(res), Arg::Imm(int)])
+            mapper.mark(res, Arg::Imm(int));
         }
         Tag::Add | Tag::Sub | Tag::Mul => {
             let op = match inst.tag {
@@ -134,9 +160,19 @@ fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMa
 
             let l = mapper.get(l);
             let r = mapper.get(r);
-            mapper.mark(res, l);
-
-            code.inst(op, [Arg::Virtual(l), Arg::Virtual(r)]);
+            if let (Arg::Imm(l), Arg::Imm(r)) = (l, r) {
+                // TODO: handle overflow here
+                let value = match inst.tag {
+                    Tag::Add => l.wrapping_add(r),
+                    Tag::Sub => l.wrapping_sub(r),
+                    Tag::Mul => l.wrapping_mul(r),
+                    _ => unreachable!()
+                };
+                mapper.mark(res, Arg::Imm(value))
+            } else {
+                mapper.mark(res, l);
+                code.inst(op, [l, r]);
+            }
         }
         Tag::Ret => {
             let value = unsafe { inst.data.un_op };
@@ -144,13 +180,13 @@ fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMa
                 match val {
                     ir::RefVal::True | ir::RefVal::False => {
                         let val = if val == ir::RefVal::True { 1 } else { 0 };
-                        code.inst(Inst::mov, [Arg::Physical(Register::eax), Arg::Imm(val)]);
+                        code.inst(Inst::mov, [Arg::Physical(Register::rax), Arg::Imm(val)]);
                     }
                     ir::RefVal::Unit | ir::RefVal::Undef => {}
                 }
             } else {
                 let reg = mapper.get(value.into_ref().unwrap());
-                code.inst(Inst::mov, [Arg::Physical(Register::eax), Arg::Virtual(reg)]);
+                code.inst(Inst::mov, [Arg::Physical(Register::rax), reg]);
             }
             code.inst(Inst::ret, []);
         }
@@ -174,7 +210,7 @@ fn generate_inst(res: u32, code: &mut MachineCode<Inst>, mapper: &mut RegisterMa
                 }
             } else {
                 let r = mapper.get(val.into_ref().unwrap());
-                code.inst(Inst::cmp, [Arg::Virtual(r)]);
+                code.inst(Inst::cmp, [r]);
                 code.inst(Inst::jz, [Arg::Label(on_false)]);
                 code.inst(Inst::jnz, [Arg::Label(on_true)]);
             };

@@ -88,6 +88,7 @@ impl<I: Inst + Display> Display for MachineCode<I> where I::Register: Display {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum Arg<R> {
     Virtual(VirtualRegister),
     Physical(R),
