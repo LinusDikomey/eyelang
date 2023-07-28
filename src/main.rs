@@ -50,6 +50,8 @@ macro_rules! log {
 }
 pub(crate) use log;
 
+const SEPARATOR_LINE: &str = "------------------------------\n";
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 enum Cmd {
     /// Check a file or project for errors and warnings.
@@ -64,16 +66,6 @@ enum Cmd {
     /// Only basic error highlighting is implemented right now.
     #[cfg(feature = "lsp")]
     Lsp,
-}
-impl Cmd {
-    pub fn is_compiled(self) -> bool {
-        match self {
-            Cmd::Check => false,
-            #[cfg(feature = "lsp")]
-            Cmd::Lsp => false,
-            _ => true,
-        }
-    }
 }
 impl Default for Cmd {
     fn default() -> Self {
@@ -173,10 +165,10 @@ pub struct Args {
     #[clap(long)]
     ir: bool,
 
-    /// Print the llvm IR to stderr.
+    /// Print the IR of the selected backend (if the backend creates an ir) to stderr.
     /// This will still normally execute the subcommand.
     #[clap(long)]
-    llvm_ir: bool,
+    backend_ir: bool,
 
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
     #[clap(long)]
@@ -207,23 +199,25 @@ fn main() {
         ast::Expr::debug_sizes();
         ast::UnresolvedType::debug_sizes();
     }
-    let errors = run(&args);
-    if errors {
+    if let Err(err) = run(&args) {
+        ceprintln!("#underline;red<Error>: {err}");
         std::process::exit(42)
     }
 }
 
-fn run(args: &Args) -> bool {
+type RunResult = Result<(), &'static str>;
+
+fn run(args: &Args) -> RunResult {
     #[cfg(feature = "lsp")]
     if let Cmd::Lsp = args.cmd {
         match lsp::lsp(args) {
             Ok(()) => {}
             Err(err) => {
                 lsp::debug(format!("Exited with err: {:?}", err));
-                std::process::exit(123)
+                Err("LSP exited with error")
             }
         }
-        return false;
+        Ok(())
     }
 
     let path = Path::new(args.file.as_deref().unwrap_or("./"));
@@ -250,7 +244,7 @@ impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "----------------------------------------\n\
+            "{SEPARATOR_LINE}\
             Timings of {} files:",
             self.file_times.len()
         )?;
@@ -269,10 +263,10 @@ impl fmt::Display for Stats {
             overall_lex += file.lex;
             overall_parse += file.parse;
         }
-        writeln!(
+        write!(
             f,
             "\nOverall: {:?}:\n\tlex: {:?}\n\tparse: {:?}\n\tresolve: {:?}\n\tirgen: {:?}\n\
-            ----------------------------------------",
+            {SEPARATOR_LINE}",
             overall_lex + overall_parse + self.resolve + self.irgen,
             overall_lex,
             overall_parse,
@@ -300,7 +294,7 @@ impl fmt::Display for BackendStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "----------------------------------------\nBackend Timings ({}):",
+            "{SEPARATOR_LINE}Backend Timings ({}):",
             self.name
         )?;
         writeln!(f, "\tInit: {:?}", self.init)?;
@@ -311,15 +305,15 @@ impl fmt::Display for BackendStats {
             self.func_header_creation
         )?;
         writeln!(f, "\tEmit: {:?}", self.emit)?;
-        writeln!(
+        write!(
             f,
-            "Overall: {:?}\n----------------------------------------",
+            "Overall: {:?}\n{SEPARATOR_LINE}",
             self.init + self.type_creation + self.func_header_creation + self.emit
         )
     }
 }
 
-fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
+fn run_path(path: &Path, args: &Args, project_name: &str) -> RunResult {
     let mut stats = Stats::default();
     let (symbols, ir, main, ast) = {
         let debug_options = compile::Debug {
@@ -342,165 +336,167 @@ fn run_path(path: &Path, args: &Args, output_name: &str) -> bool {
         );
         if errors.error_count() > 0 {
             errors.print(&ast);
-            return true;
+            return Err("Compiler exited with errors")
         } else if errors.warning_count() > 0 {
             errors.print(&ast);
         }
         match res {
             Ok((symbols, ir, main)) => (symbols, ir, main, ast),
-            Err(()) => return true,
+            Err(()) => return Err("Compiler exited with errors"),
         }
     };
 
-    let reduce_start_time = Instant::now();
-    let ir = ir.finish_module(symbols, &ast, main);
-    stats.irgen += reduce_start_time.elapsed();
+    match (args.cmd, args.backend) {
+        (Cmd::Check, _) => cprintln!("#g<Check successful ✅>"),
+        (Cmd::Run | Cmd::Build | Cmd::Jit, _) => {
+            let reduce_start_time = Instant::now();
+            let ir = ir.finish_module(symbols, &ast, main);
+            stats.irgen += reduce_start_time.elapsed();
 
-    if args.ir {
-        eprintln!("\n\n{ir}\n");
+            if args.ir {
+                eprintln!("\n\n{ir}\n");
+            }
+            build_project(args, &ir, project_name)?;
+        }
+        #[cfg(feature = "lsp")]
+        (Cmd::Lsp, _) => unreachable!(),
     }
 
     if args.timings {
         println!("{stats}");
     }
 
-    let obj_file = format!("eyebuild/{output_name}.o");
-    let exe_file = format!("eyebuild/{output_name}");
-    let exec = || {
-        cprintln!("#g<Running {}>...", output_name);
-        let mut command = std::process::Command::new(&exe_file);
-        // use the exec() syscall on unix systems or just spawn a child process and pass on it's exit code otherwise.
-        #[cfg(unix)]
-        {
-            let error = std::os::unix::prelude::CommandExt::exec(&mut command);
-            panic!("Failed to exec the executable command: {error:?}");
-        }
-        #[cfg(not(unix))]
-        {
-            let status = command
-                .spawn()
-                .expect("Failed to run the executable command")
-                .wait()
-                .expect("Running process failed");
-            std::process::exit(status.code().unwrap_or(0));
-        }
-    };
+    Ok(())
+}
 
-    if args.cmd.is_compiled() {
-        // create eyebuild directory
-        if !std::fs::try_exists("eyebuild")
-            .expect("Failed to check availability of eyebuild directory")
-        {
-            match std::fs::create_dir("eyebuild") {
-                Ok(()) => (),
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
-                Err(err) => panic!("Failed to create eyebuild directory: {}", err),
-            }
+fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult {
+    let obj_file = format!("eyebuild/{project_name}.o");
+    let exe_file = format!("eyebuild/{project_name}");
+
+    // create eyebuild directory
+    if !std::fs::try_exists("eyebuild")
+        .expect("Failed to check availability of eyebuild directory")
+    {
+        match std::fs::create_dir("eyebuild") {
+            Ok(()) => (),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(_) => return Err("Failed to create eyebuild directory"),
         }
     }
 
-    match (args.cmd, args.backend) {
-        (Cmd::Check, _) => {
-            let _ = output_name;
-            cprintln!("#g<Check successful ✅>");
+    let jit = args.cmd == Cmd::Jit;
+    if jit {
+        if args.lib {
+            return Err("There is nothing to run in the jit because --lib was passed");
         }
-        (Cmd::Run | Cmd::Build, Backend::C) => {
-            let c_path = PathBuf::from(format!("./eyebuild/{output_name}.c"));
-            let file = std::fs::File::create(&c_path).expect("Couldn't create C file");
-            backend::c::emit(&ir, file).expect("Failed to emit C code");
-            let status = std::process::Command::new("gcc")
-                .arg(c_path)
-                .args(["-o", &exe_file])
-                .status()
-                .expect("Failed to compile C code using gcc");
+        if args.backend != Backend::LLVM {
+            return Err("This backend doesn't support running via JIT. Only the LLVM backend supports JIT right now");
+        }
+    }
+    
+    let params = BackendParams {
+        timings: args.timings,
+        show_backend_ir: args.backend_ir,
+        jit,
+        obj_file: &obj_file,
+        project_name,
+    };
 
-            if !status.success() {
-                panic!("gcc failed");
-            }
-            if args.cmd == Cmd::Run {
-                if args.lib {
-                    cprintln!("#r<There is nothing to run> because --lib was passed.");
-                    return true;
-                }
-                exec();
-            } else {
-                cprintln!("#g<Built #u<{}>>", output_name);
-            }
-        },
-        #[cfg(feature = "llvm-backend")]
-        (Cmd::Run | Cmd::Build | Cmd::Jit, Backend::LLVM) => unsafe {
+    run_backend(ir, args.backend, params)?;
+
+    if args.emit_obj {
+        cprintln!("#g<Object successfully emitted!>");
+        return Ok(());
+    }
+
+    link::link(&obj_file, &exe_file, args)?;
+
+    if args.cmd == Cmd::Run {
+        if args.lib {
+            return Err("There is nothing to run> because --lib was passed");
+        }
+        cprintln!("#g<Running {}>...", project_name);
+        execute_file(&exe_file);
+    } else {
+        cprintln!("#g<Built #u<{}>>", project_name);
+    }
+    Ok(())
+}
+
+fn execute_file(file: impl AsRef<Path>) -> ! {
+    let mut command = std::process::Command::new(file.as_ref());
+    // use the exec() syscall on unix systems or just spawn a child process and pass on it's exit code otherwise.
+    #[cfg(unix)]
+    {
+        let error = std::os::unix::prelude::CommandExt::exec(&mut command);
+        panic!("Failed to exec the executable command: {error:?}");
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .spawn()
+            .expect("Failed to run the executable command")
+            .wait()
+            .expect("Running process failed");
+        std::process::exit(status.code().unwrap_or(0));
+    }
+}
+
+struct BackendParams<'a> {
+    timings: bool,
+    show_backend_ir: bool,
+    jit: bool,
+    obj_file: &'a str,
+    project_name: &'a str,
+}
+
+fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunResult {
+    match backend {
+        Backend::LLVM => unsafe {
             let context = llvm::core::LLVMContextCreate();
-            let (llvm_module, stats) = backend::llvm::module(context, &ir, args.llvm_ir);
-            if args.timings {
+            let (llvm_module, stats) = backend::llvm::module(context, ir, params.show_backend_ir);
+            if params.timings {
                 println!("{stats}");
             }
-            if args.cmd == Cmd::Jit {
-                if args.lib {
-                    cprintln!("#r<There is nothing to run> because --lib was passed.");
-                    return true;
-                }
+            if params.jit {
                 cprintln!("#g<JIT running>...\n");
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
                 println!("\nResult of JIT execution: {ret_val}");
+                return Ok(())
             } else {
                 let bitcode_emit_start_time = std::time::Instant::now();
-                backend::llvm::output::emit_bitcode(None, llvm_module, &obj_file);
-                if args.timings {
+                backend::llvm::output::emit_bitcode(None, llvm_module, params.obj_file);
+                if params.timings {
                     println!(
                         "LLVM backend bitcode emit time: {:?}",
                         bitcode_emit_start_time.elapsed()
                     );
                 }
                 llvm::core::LLVMContextDispose(context);
-
-                if args.emit_obj {
-                    cprintln!("#g<Object successfully emitted!>");
-                    return false;
-                }
-                if !link::link(&obj_file, &exe_file, args) {
-                    cprintln!("#r<Aborting because linking failed>");
-                    return false;
-                }
-                if args.cmd == Cmd::Run {
-                    if args.lib {
-                        cprintln!("#r<There is nothing to run> because --lib was passed.");
-                        return true;
-                    }
-                    exec();
-                } else {
-                    cprintln!("#g<Built #u<{}>>", output_name);
-                }
             }
-        },
-        (Cmd::Jit, _) => panic!("JIT compilation is not supported with the {} backend", args.backend),
-        (Cmd::Run | Cmd::Build, Backend::X86) => {
-            backend::x86_64::generate(&ir);
         }
-        /*(Cmd::Run | Cmd::Build, Backend::X86) => {
-            let asm_path = PathBuf::from(format!("./eyebuild/{output_name}.asm"));
-            let asm_file =
-                std::fs::File::create(&asm_path).expect("Failed to create assembly file");
-            unsafe { backend::x86::emit(&ir, asm_file) };
-            if !backend::x86::assemble(&asm_path, Path::new(&obj_file)) {
-                eprintln!("Assembler failed! Exiting");
-                return true;
+        Backend::C => {
+            let c_path = PathBuf::from(format!("./eyebuild/{}.c", params.project_name));
+            let file = std::fs::File::create(&c_path).expect("Couldn't create C file");
+            backend::c::emit(&ir, file).expect("Failed to emit C code");
+            let status = std::process::Command::new("gcc")
+                .arg(c_path)
+                .arg("-c") // generate an object file
+                .args(["-o", params.obj_file])
+                .status()
+                .expect("Failed to compile C code using gcc");
+
+            if !status.success() {
+                return Err("gcc failed");
             }
-            if !link::link(&obj_file, &exe_file, args) {
-                ceprintln!("#r<Aborting because linking failed>");
-                return true;
-            }
-            if args.cmd == Cmd::Run {
-                exec();
-            } else {
-                cprintln!("#g<Built #u<{}>>", output_name);
-            }
-        }*/
-        #[cfg(feature = "lsp")]
-        (Cmd::Lsp, _) => unreachable!(),
+        }
+        Backend::X86 => {
+            backend::x86_64::generate(ir);
+        }
     }
-    false
+    Ok(())
 }
 
 fn std_path() -> PathBuf {

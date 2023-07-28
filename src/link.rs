@@ -1,6 +1,6 @@
-use std::process::Command;
+use std::process::{Command, self};
 
-use crate::Args;
+use crate::{Args, RunResult};
 
 #[allow(unused)]
 enum Os {
@@ -22,7 +22,7 @@ const OS: Option<Os> = Some(Os::Osx);
 const OS: Option<Os> = None;
 
 
-pub fn link(obj: &str, out: &str, args: &Args) -> bool {
+pub fn link(obj: &str, out: &str, args: &Args) -> RunResult {
     let mut cmd = if let Some(link) = &args.link_cmd {
         let mut cmd = Command::new("eval");
         cmd.arg(link.replace("[OBJ]", obj).replace("[OUT]", out));
@@ -31,16 +31,26 @@ pub fn link(obj: &str, out: &str, args: &Args) -> bool {
         cmd
     } else {
         eprintln!("No link command known for this OS. You can manually link the object file created: {obj}");
-        return false;
+        return Err("No link command known");
     };
+
+    cmd.stdout(process::Stdio::piped());
+    cmd.stderr(process::Stdio::piped());
 
     let proc = cmd.spawn().expect("Failed to spawn linker process");
     let output = proc.wait_with_output().expect("Linker process is invalid");
-    let ok = output.status.success();
-    if !ok {
-        eprintln!("Linking command failed!");
-    }
-    ok
+
+    output.status.success().then_some(()).ok_or_else(|| {
+        use crate::SEPARATOR_LINE;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "The linker failed with the following output:\
+            \n{SEPARATOR_LINE}{}\n{SEPARATOR_LINE}{}\n{SEPARATOR_LINE}",
+            stdout, stderr,
+        );
+        "Linking command failed"
+    })
 }
 
 fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
