@@ -87,6 +87,7 @@ impl<'a> Parser<'a> {
                     if self.toks.step_if(delim).is_none() {
                         if let Some(after) = self.toks.peek() {
                             if !after.new_line && after.ty != end {
+                                dbg!(after);
                                 return Err(Error::UnexpectedToken {
                                     expected: ExpectedTokens::AnyOf(vec![delim, end]),
                                     found: after.ty

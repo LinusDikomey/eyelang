@@ -48,6 +48,7 @@ impl<'a> Lexer<'a> {
                 |(x, _)| *x,
             )
     }
+
     fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
         fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors, module: ModuleId) {
             if let Some((start, end)) = invalid.take() {
@@ -87,7 +88,10 @@ impl<'a> Lexer<'a> {
                                         break;
                                     }
                                 }
-                                '\n' => break,
+                                '\n' => {
+                                    self.newline = true;
+                                    break;
+                                }
                                 _ => {}
                             }
                         }

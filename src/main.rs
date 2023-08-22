@@ -211,14 +211,13 @@ type RunResult = Result<(), &'static str>;
 fn run(args: &Args) -> RunResult {
     #[cfg(feature = "lsp")]
     if let Cmd::Lsp = args.cmd {
-        match lsp::lsp(args) {
-            Ok(()) => {}
+        return match lsp::lsp(args) {
+            Ok(()) => Ok(()),
             Err(err) => {
                 lsp::debug(format!("Exited with err: {:?}", err));
                 Err("LSP exited with error")
             }
-        }
-        Ok(())
+        };
     }
 
     let path = Path::new(args.file.as_deref().unwrap_or("./"));
@@ -404,6 +403,10 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
     };
 
     run_backend(ir, args.backend, params)?;
+    if args.cmd == Cmd::Jit {
+        // we are finished
+        return Ok(());
+    }
 
     if args.emit_obj {
         cprintln!("#g<Object successfully emitted!>");
@@ -411,7 +414,6 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
     }
 
     link::link(&obj_file, &exe_file, args)?;
-    eprintln!("after link");
 
     if args.cmd == Cmd::Run {
         if args.lib {
@@ -461,7 +463,7 @@ fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunR
                 println!("{stats}");
             }
             if params.jit {
-                cprintln!("#g<JIT running>...\n");
+                cprintln!("#g<JIT running>...");
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
