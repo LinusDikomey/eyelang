@@ -373,8 +373,10 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
     let obj_file = format!("eyebuild/{project_name}.o");
     let exe_file = format!("eyebuild/{project_name}");
 
+    let jit = args.cmd == Cmd::Jit;
+
     // create eyebuild directory
-    if !std::fs::try_exists("eyebuild")
+    if !jit && !std::fs::try_exists("eyebuild")
         .expect("Failed to check availability of eyebuild directory")
     {
         match std::fs::create_dir("eyebuild") {
@@ -384,7 +386,6 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
         }
     }
 
-    let jit = args.cmd == Cmd::Jit;
     if jit {
         if args.lib {
             return Err("There is nothing to run in the jit because --lib was passed");
