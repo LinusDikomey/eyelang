@@ -551,49 +551,11 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             let matched = val_expr(ir, val, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
 
-            let extra = &ctx.ast[ExprExtra { idx: extra_branches, count: branch_count * 2 }];
-            let mut all_noreturn = true;
-            let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
-
-            let after_block = ir.create_block();
-
-            let mut phi_vals = vec![];
-
-            for (i, [pat, branch]) in extra.array_chunks().enumerate() {
-                let mut next_block = None;
-                gen_pat(ir, *pat, matched, ctx[val], &mut |ir| {
-                    if let Some(next) = next_block { return Some(next) };
-                    if i as u32 == branch_count - 1 {
-                        None
-                    } else {
-                        let next = ir.create_block();
-                        next_block = Some(next);
-                        Some(next)
-                    }
-                }, bool_ty, ctx);
-
-                let mut branch_noreturn = false;    
-                let branch_val = val_expr(ir, *branch, ctx, &mut branch_noreturn);
-                all_noreturn &= branch_noreturn;
-
-                if !branch_noreturn {
-                    phi_vals.push((ir.current_block(), branch_val));
-                    ir.terminate_block(Terminator::Goto(after_block));
-                }
-                if let Some(next) = next_block {
-                    ir.begin_block(next);
-                }
-            }
-            ir.begin_block(after_block);
-            *noreturn = all_noreturn;
-            if all_noreturn {
-                Ref::UNDEF
-            } else {
-                match phi_vals.as_slice() {
-                    [(_, r)] => *r, // don't build a phi when only one branch yields a value
-                    _ => ir.build_phi(phi_vals, ctx[expr])
-                }
-            }
+            let extra: &[ExprRef] = &ctx.ast[ExprExtra { idx: extra_branches, count: branch_count * 2 }];
+            let expected_ty = ctx[expr];
+            let (branches, rest) = extra.as_chunks();
+            debug_assert!(rest.is_empty(), "rest remained in match branch data");
+            build_match(ir, ctx, noreturn, matched, val, branches, expected_ty)
         }
         &Expr::While { cond, body, .. } => {
             build_while_loop(ir, ctx, noreturn, body, |ir, ctx, noreturn, after_block| {
@@ -1008,6 +970,59 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
     Res::Val(r)
 }
 
+fn build_match(
+    ir: &mut IrBuilder,
+    ctx: &mut Ctx,
+    noreturn: &mut bool,
+    matched: Ref,
+    matched_expr: ExprRef,
+    branches: &[[ExprRef; 2]],
+    expected_ty: TypeRef,
+) -> Ref {
+    let mut all_noreturn = true;
+    let bool_ty = ir.types.add(IrType::Primitive(Primitive::Bool));
+
+    let after_block = ir.create_block();
+
+    let mut phi_vals = vec![];
+
+    for (i, [pat, branch]) in branches.iter().copied().enumerate() {
+        let mut next_block = None;
+        gen_pat(ir, pat, matched, ctx[matched_expr], &mut |ir| {
+            if let Some(next) = next_block { return Some(next) };
+            if i == branches.len() - 1 {
+                None
+            } else {
+                let next = ir.create_block();
+                next_block = Some(next);
+                Some(next)
+            }
+        }, bool_ty, ctx);
+
+        let mut branch_noreturn = false;    
+        let branch_val = val_expr(ir, branch, ctx, &mut branch_noreturn);
+        all_noreturn &= branch_noreturn;
+
+        if !branch_noreturn {
+            phi_vals.push((ir.current_block(), branch_val));
+            ir.terminate_block(Terminator::Goto(after_block));
+        }
+        if let Some(next) = next_block {
+            ir.begin_block(next);
+        }
+    }
+    ir.begin_block(after_block);
+    *noreturn = all_noreturn;
+    if all_noreturn {
+        Ref::UNDEF
+    } else {
+        match phi_vals.as_slice() {
+            [(_, r)] => *r, // don't build a phi when only one branch yields a value
+            _ => ir.build_phi(phi_vals, expected_ty)
+        }
+    }
+}
+
 fn string_literal(ir: &mut IrBuilder, span: TSpan, ctx: &mut Ctx) -> Ref {
     // PERF a little suboptimal
     let lit = ctx.src()[span.start as usize + 1 .. span.end as usize]
@@ -1078,7 +1093,7 @@ fn gen_pat(
         Expr::BoolLiteral { val, .. } => if *val {
             cond_match(ir, pat_val);
         } else {
-            let negated_val = ir.build_neg(pat_val, bool_ty);
+            let negated_val = ir.build_not(pat_val, bool_ty);
             cond_match(ir, negated_val);
         }
         Expr::EnumLiteral { ident, args, .. } => {

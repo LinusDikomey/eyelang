@@ -4,6 +4,7 @@
     int_roundings,
     array_chunks,
     if_let_guard,
+    slice_as_chunks,
 )]
 #![warn(unused_qualifications)]
 
