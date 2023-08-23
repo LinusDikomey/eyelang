@@ -1,0 +1,12 @@
+Compiling queue ...
+Running queue...
+first: Other
+Some(Other)
+First now: Some(A)
+Some(A)
+Some(B)
+Some(C)
+Some(D)
+Some(E)
+None
+None

@@ -468,8 +468,7 @@ fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunR
                 let ret_val = backend::llvm::output::run_jit(llvm_module);
                 llvm::core::LLVMContextDispose(context);
 
-                println!("\nResult of JIT execution: {ret_val}");
-                return Ok(())
+                std::process::exit(ret_val as i32);
             } else {
                 let bitcode_emit_start_time = std::time::Instant::now();
                 backend::llvm::output::emit_bitcode(None, llvm_module, params.obj_file);

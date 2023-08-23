@@ -13,16 +13,19 @@ memcpy :: fn(dest *i8, src *i8, n u64) extern
 atoi :: fn(s *i8) -> i32 extern
 
 
-FILE :: struct { }
+FILE :: struct {
+    invalid :: fn -> *FILE: root.null()
+}
 
-INVALID_FILE :: fn -> *FILE: 0 as *FILE
 
 fopen :: fn(path *i8, mode *i8) -> *FILE extern
 fclose :: fn(handle *FILE) -> i32 extern
-fread :: fn(ptr *i8, size u64, count u64, stream *FILE ) -> u64 extern
+fread :: fn(ptr *i8, size u64, count u64, stream *FILE) -> u64 extern
 
 sleep :: fn(seconds u32) extern
 usleep :: fn(usecs u64) extern
+
+time :: fn(time *i64) -> i64 extern
 
 rand :: fn -> i32 extern
 srand :: fn(seed u32) extern
