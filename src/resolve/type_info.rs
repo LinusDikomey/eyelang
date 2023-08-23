@@ -800,7 +800,7 @@ fn merge_implicit_enums(a: EnumVariants, b: EnumVariants, types: &mut TypeTable,
                     return None;
                 }
                 for (a, b) in arg_types.iter().zip(other_arg_types.iter()) {
-                    if let Err(_) = types.try_merge(a, b, symbols) {
+                    if types.try_merge(a, b, symbols).is_err() {
                         return None; // argument merge fails -> fail merge
                     }
                 }

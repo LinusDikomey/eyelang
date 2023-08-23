@@ -26,7 +26,7 @@ pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeRef)  -> Res {
             }
         }
         ConstVal::Float(_, val) => Res::Val(ir.build_float(*val, ty)),
-        ConstVal::String(bytes) => Res::Val(ir.build_string(&bytes,true, ty)),
+        ConstVal::String(bytes) => Res::Val(ir.build_string(bytes, true, ty)),
         ConstVal::EnumVariant(_variant) => todo!(),
         &ConstVal::Bool(b) => Res::Val(Ref::val(if b { RefVal::True } else { RefVal::False })),
         ConstVal::Type(ty) => {

@@ -238,15 +238,15 @@ fn func(file: &mut File, module: &Module, func: &Function) -> Result<()> {
                 let called = &module.funcs[func.idx()];
                 write!(file, "{}(", called.name)?;
                 
-                (0..refs).map(|i| {
+                for i in 0..refs {
                     if i != 0 {
                         write!(file, ", ")?;
                     }
                     let mut ref_bytes = [0; 4];
                     let begin = 8 + start + (4 * i) as usize;
                     ref_bytes.copy_from_slice(&ir.extra[begin..begin+4]);
-                    r(file, ir, Ref::from_bytes(ref_bytes))
-                }).collect::<Result<()>>()?;
+                    r(file, ir, Ref::from_bytes(ref_bytes))?;
+                }
 
                 writeln!(file, ");")?;
             }

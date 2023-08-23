@@ -39,7 +39,8 @@ pub enum ConstVal {
     Int(Option<IntType>, i128),
     Float(Option<FloatType>, f64),
     String(Vec<u8>),
-    EnumVariant(String), // TODO: enum variant args
+    #[allow(unused)] // TODO: enum variant args
+    EnumVariant(String),
     Bool(bool),
     Type(Type),
 }
@@ -86,7 +87,7 @@ impl fmt::Display for ConstVal {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ConstSymbol {
     Func(FunctionId),
     Type(TypeId),
@@ -106,12 +107,12 @@ impl ConstSymbol {
         }
     }
     pub fn as_def_id(&self) -> DefId {
-        match self {
-            &ConstSymbol::Func(id) => DefId::Function(id),
-            &ConstSymbol::Type(id) => DefId::Type(id),
-            &ConstSymbol::Trait(id) => DefId::Trait(id),
-            &ConstSymbol::TraitFunc(id, idx) => DefId::TraitFunc(id, idx),
-            &ConstSymbol::Module(id) => DefId::Module(id),
+        match *self {
+            ConstSymbol::Func(id) => DefId::Function(id),
+            ConstSymbol::Type(id) => DefId::Type(id),
+            ConstSymbol::Trait(id) => DefId::Trait(id),
+            ConstSymbol::TraitFunc(id, idx) => DefId::TraitFunc(id, idx),
+            ConstSymbol::Module(id) => DefId::Module(id),
         }
     }
 }
@@ -172,7 +173,7 @@ pub fn eval(
     let mut noreturn = false;
     let res = irgen::gen_expr(&mut builder, expr, &mut irgen::Ctx {
         ast,
-        symbols: &symbols,
+        symbols,
         var_refs: &mut var_refs,
         idents: &idents,
         module: scopes[scope].module.id,

@@ -132,7 +132,7 @@ impl Scopes {
 
         // function bodies
         // TODO: Allow local impls? Then pass them here
-        super::scope_bodies(self, scope, defs, &ast, symbols, errors, ir_functions, &[]);
+        super::scope_bodies(self, scope, defs, ast, symbols, errors, ir_functions, &[]);
 
         scope
     }
@@ -144,13 +144,11 @@ impl Scopes {
         loop {
             if let Some(def_id) = self.resolve_scope_name(scope, name, name_span, errors, symbols, ast, ir) {
                 return def_id;
+            } else if let Some(parent) = self[scope].parent {
+                scope = parent.id;
             } else {
-                if let Some(parent) = self[scope].parent {
-                    scope = parent.id;
-                } else {
-                    errors.emit_span(Error::UnknownIdent, name_span);
-                    return DefId::Invalid;
-                }
+                errors.emit_span(Error::UnknownIdent, name_span);
+                return DefId::Invalid;
             }
         }
         
@@ -162,7 +160,7 @@ impl Scopes {
         &mut self, scope: ScopeId, name: &str, name_span: Span, errors: &mut Errors,
         symbols: &mut SymbolTable, ast: &Ast, ir: &mut irgen::Functions,
     ) -> Option<DefId> {
-        let Some(def_id) = self[scope].names.get_mut(name) else { return None };
+        let def_id = self[scope].names.get_mut(name)?;
         Some(match def_id {
             UnresolvedDefId::Resolved(id) => *id,
             UnresolvedDefId::Const { .. } => {
@@ -368,8 +366,7 @@ impl Scopes {
                 .iter()
                 .map(|ty| resolve_ty(self, ty, symbols, errors))
                 .collect()
-        } else {
-            if generic_count != 0 {
+        } else if generic_count != 0 {
                 if let Some(on_omitted) = on_omitted_generic {
                     vec![on_omitted; generic_count as usize]
                 } else {
@@ -379,9 +376,8 @@ impl Scopes {
                     );
                     return None;
                 }
-            } else {
-                vec![]
-            }
+        } else {
+            vec![]
         };
         Some(generics)
     }

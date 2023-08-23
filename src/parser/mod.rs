@@ -111,7 +111,7 @@ impl<'a> Parser<'a> {
             let name_pat = |pat: ExprRef, s: &Self|  match &s.ast[pat] {
                 Expr::Variable { span, .. } => Ok(*span),
                 expr => {
-                    Err(Error::InvalidGlobalVarPattern.at_span(expr.span_in(&s.ast, s.toks.module)))
+                    Err(Error::InvalidGlobalVarPattern.at_span(expr.span_in(s.ast, s.toks.module)))
                 }
             };
             
@@ -132,7 +132,7 @@ impl<'a> Parser<'a> {
                         pat,
                         annotated_ty,
                     } => {
-                        let name = name_pat(*pat, &self)?;
+                        let name = name_pat(*pat, self)?;
                         let id = self.ast.add_global(GlobalDefinition {
                             ty: annotated_ty.clone(),
                             val: None
@@ -148,7 +148,7 @@ impl<'a> Parser<'a> {
                         annotated_ty,
                         val,
                     } => {
-                        let name = name_pat(*pat, &self)?;
+                        let name = name_pat(*pat, self)?;
                         let id = self.ast.add_global(GlobalDefinition {
                             ty: annotated_ty.clone(),
                             val: Some((*val, item_counts))
@@ -446,7 +446,7 @@ impl<'a> Parser<'a> {
                     span.end = p.parse_delimited(
                         TokenType::Comma,
                         TokenType::RParen,
-                        |p| Ok(args.push(p.parse_type()?))
+                        |p| p.parse_type().map(|ty| args.push(ty)),
                     )?.end;
                     variants.push((span, variant, args));
                     Ok(Delimit::OptionalIfNewLine)

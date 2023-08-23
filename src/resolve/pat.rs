@@ -74,22 +74,22 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
             }
             let mut range_side = |expr_ref| {
                 let expr = &ctx.ast[expr_ref];
-                match expr {
-                    &Expr::IntLiteral(l) => {
+                match *expr {
+                    Expr::IntLiteral(l) => {
                         let lit = IntLiteral::parse(ctx.src(l));
                         ctx.specify(expected, TypeInfo::Int, ctx.span(expr_ref));
                         Kind::Int(exhaust::SignedInt(lit.val, false))
                     }
-                    &Expr::FloatLiteral(_) => {
+                    Expr::FloatLiteral(_) => {
                         ctx.specify(expected, TypeInfo::Float, ctx.span(expr_ref));
                         Kind::Float
                     }
-                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::IntLiteral(l) = ctx.ast[inner] => {
+                    Expr::UnOp(_, UnOp::Neg, inner) if let Expr::IntLiteral(l) = ctx.ast[inner] => {
                         let lit = IntLiteral::parse(ctx.src(l));
                         ctx.specify(expected, TypeInfo::Int, ctx.span(expr_ref));
                         Kind::Int(exhaust::SignedInt(lit.val, true))
                     }
-                    &Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(_) = ctx.ast[inner] => {
+                    Expr::UnOp(_, UnOp::Neg, inner) if let Expr::FloatLiteral(_) = ctx.ast[inner] => {
                         ctx.specify(expected, TypeInfo::Float, ctx.span(expr_ref));
                         Kind::Float
                     }
@@ -100,11 +100,8 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
                     }
                 }
             };
-            let l = range_side(l);
-            let r = range_side(r);
-            match (l, r) {
-                (Kind::Int(l), Kind::Int(r)) => _ = exhaustion.exhaust_int_range(l, r),
-                _ => ()
+            if let (Kind::Int(l), Kind::Int(r)) = (range_side(l), range_side(r)) {
+                exhaustion.exhaust_int_range(l, r);
             }
         }
         &Expr::Tuple(span, members) => {
@@ -122,7 +119,7 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
                     false
                 }
             };
-            for (i, (&item_pat, ty)) in ctx.ast[members].into_iter().zip(member_types.iter()).enumerate() {
+            for (i, (&item_pat, ty)) in ctx.ast[members].iter().zip(member_types.iter()).enumerate() {
                 if do_exhaust_checks {
                     let Exhaustion::Tuple(members) = exhaustion else { unreachable!() };
                     pat(item_pat, ty, ctx.reborrow(), &mut members[i]);
@@ -140,10 +137,9 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
         | Expr::FunctionCall { .. } => {
             ctx.errors.emit_span(
                 Error::NotAPattern { coming_soon: true },
-                expr.span_in(&ctx.ast, ctx.scopes[ctx.scope].module.id)
+                expr.span_in(ctx.ast, ctx.scopes[ctx.scope].module.id)
             );
         }
-
         Expr::Block { .. }
         | Expr::Declare { .. }
         | Expr::DeclareWithVal { .. }
@@ -166,7 +162,7 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
         => {
             ctx.errors.emit_span(
                 Error::NotAPattern { coming_soon: false },
-                expr.span_in(&ctx.ast, ctx.scopes[ctx.scope].module.id)
+                expr.span_in(ctx.ast, ctx.scopes[ctx.scope].module.id)
             );
         }
         
@@ -178,7 +174,7 @@ fn enum_variant_pat(exhaustion: &mut Exhaustion, expected: TypeRef, variant: &st
     match exhaustion {
         Exhaustion::None => {
             let mut variants = dmap::with_capacity(1);
-            let args = ctx.ast[args].into_iter().zip(arg_types.iter()).map(|(arg, arg_ty)| {
+            let args = ctx.ast[args].iter().zip(arg_types.iter()).map(|(arg, arg_ty)| {
                 let mut variant_exhaustion = Exhaustion::None;
                 pat(*arg, arg_ty, ctx.reborrow(), &mut variant_exhaustion);
                 variant_exhaustion

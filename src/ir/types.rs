@@ -91,6 +91,8 @@ impl IrTypes {
     pub fn replace(&mut self, idx: TypeRef, ty: IrType) {
         self.types[idx.idx()] = ty;
     }
+    
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
         let add_tuple = |s: &mut IrTypes, elems: &[Type]| -> TypeRefs {
             let idx = s.types.len() as u32;

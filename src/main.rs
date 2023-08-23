@@ -315,7 +315,7 @@ impl fmt::Display for BackendStats {
 
 fn run_path(path: &Path, args: &Args, project_name: &str) -> RunResult {
     let mut stats = Stats::default();
-    let (symbols, ir, main, ast) = {
+    let (project, ast) = {
         let debug_options = compile::Debug {
             tokens: args.tokens,
             reconstruct_src: args.reconstruct_src,
@@ -341,7 +341,7 @@ fn run_path(path: &Path, args: &Args, project_name: &str) -> RunResult {
             errors.print(&ast);
         }
         match res {
-            Ok((symbols, ir, main)) => (symbols, ir, main, ast),
+            Ok(project) => (project, ast),
             Err(()) => return Err("Compiler exited with errors"),
         }
     };
@@ -350,7 +350,7 @@ fn run_path(path: &Path, args: &Args, project_name: &str) -> RunResult {
         (Cmd::Check, _) => cprintln!("#g<Check successful ✅>"),
         (Cmd::Run | Cmd::Build | Cmd::Jit, _) => {
             let reduce_start_time = Instant::now();
-            let ir = ir.finish_module(symbols, &ast, main);
+            let ir = project.ir.finish_module(project.symbols, &ast, project.main);
             stats.irgen += reduce_start_time.elapsed();
 
             if args.ir {
@@ -484,7 +484,7 @@ fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunR
         Backend::C => {
             let c_path = PathBuf::from(format!("./eyebuild/{}.c", params.project_name));
             let file = std::fs::File::create(&c_path).expect("Couldn't create C file");
-            backend::c::emit(&ir, file).expect("Failed to emit C code");
+            backend::c::emit(ir, file).expect("Failed to emit C code");
             let status = std::process::Command::new("gcc")
                 .arg(c_path)
                 .arg("-c") // generate an object file

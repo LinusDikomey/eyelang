@@ -74,8 +74,8 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
         }
         Os::Windows => {
             // FIXME: don't hardcode the sdk path
-            let msvc_path = r#"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.29.30133"#;
-            let sdk_path = r#"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0"#;
+            let msvc_path = r"C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.29.30133";
+            let sdk_path = r"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0";
             let mut cmd = Command::new(format!(r#"{}\bin\Hostx64\x64\link.exe"#, msvc_path));
             cmd.args([
                 "/NOLOGO",

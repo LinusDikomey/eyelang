@@ -354,7 +354,7 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
                 Ref::from_bytes(ref_bytes)
             });
             cwrite!(f, "#r<{}>(", info.funcs[func.idx()].name)?;
-            write_delimited_with(f, refs, |f, r| write_ref(f, r), ", ")?;
+            write_delimited_with(f, refs, write_ref, ", ")?;
             cwrite!(f, ")")
         }
         DataVariant::ExtraBranchRefs => {

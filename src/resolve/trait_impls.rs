@@ -36,7 +36,7 @@ impl TraitImpls {
         self.by_type.entry(impl_ty).or_default().push(resolved_impl);
     }
 
-    pub fn from_type(&self, symbols: &SymbolTable, types: &TypeTable, ty: TypeRef, function_name: &str) -> TraitMethodResult {
+    pub fn on_type(&self, symbols: &SymbolTable, types: &TypeTable, ty: TypeRef, function_name: &str) -> TraitMethodResult {
         let (generic_type, _generics) = match types.get(ty) {
             TypeInfo::Unknown => todo!("unknown type"),
             TypeInfo::Int | TypeInfo::Float => todo!("partially unknown types"),

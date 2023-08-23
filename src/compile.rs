@@ -19,6 +19,12 @@ pub struct Dependency {
     pub is_std: bool,
 }
 
+pub struct CompiledProject {
+    pub symbols: SymbolTable,
+    pub ir: irgen::Functions,
+    pub main: Option<ast::FunctionId>,
+}
+
 pub fn project(
     module_path: &Path,
     debug: Debug,
@@ -26,7 +32,7 @@ pub fn project(
     require_main_func: bool,
     stats: &mut Stats,
     is_std: bool,
-) -> (Result<(SymbolTable, irgen::Functions, Option<ast::FunctionId>), ()>, Ast, Errors) {
+) -> (Result<CompiledProject, ()>, Ast, Errors) {
     let mut errors = Errors::new();
     let mut ast = Ast::new();
     
@@ -66,7 +72,7 @@ pub fn project(
     let (symbols, ir_funs, main) = resolve::resolve_project(&ast, main_mod, &mut errors, require_main_func, std_mod);
     stats.resolve = resolve_start_time.elapsed();
     
-    (Ok((symbols, ir_funs, main)), ast, errors)
+    (Ok(CompiledProject { symbols, ir: ir_funs, main }), ast, errors)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

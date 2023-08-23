@@ -47,7 +47,7 @@ impl Exhaustion {
                 TypeInfo::Enum(variants) => variants.count() == 0,
                 TypeInfo::Resolved(id, _) => {
                     if let ResolvedTypeBody::Enum(enum_def) = &symbols.get_type(id).body {
-                        enum_def.variants.len() == 0
+                        enum_def.variants.is_empty()
                     } else {
                         false
                     }

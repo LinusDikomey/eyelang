@@ -464,7 +464,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             let cast_info = ctx.scopes.resolve_type_info(ctx.scope, ty, ctx.types, ctx.errors, ctx.symbols, ctx.ast, ctx.ir);
             ctx.types.specify_or_merge(
                 info.expected, cast_info,
-                ctx.errors, span.in_mod(ctx.scope().module.id), &ctx.symbols
+                ctx.errors, span.in_mod(ctx.scope().module.id), ctx.symbols
             );
         }
         ast::Expr::Root(_) => {
@@ -548,45 +548,42 @@ fn type_member_access(ctx: Ctx, _expr: ExprRef, ty: TypeRef, name: &str, name_sp
         "size"   => return (MemberAccess::Size  (ty), U64),
         "align"  => return (MemberAccess::Align (ty), U64),
         "stride" => return (MemberAccess::Stride(ty), U64),
-        _ => match ctx.types.get(ty) {
-            TypeInfo::Resolved(id, generics) => {
-                let def = ctx.symbols.get_type(id);
-                match &def.body {
-                    ResolvedTypeBody::Struct(_) => {}
-                    ResolvedTypeBody::Enum(def) => if let Some(variant) = def.variants.get(name) {
-                        return (
-                            MemberAccess::EnumItem(id, variant.1),
-                            TypeInfo::Resolved(id, generics).into(),
-                        )
-                    }
-                }
-                if let Some(&method) = def.methods.get(name) {
-                    let func_generic_count = ctx.symbols.get_func(method).generic_count();
-                    let generics = if func_generic_count as u32 > generics.count {
-                        ctx.types.add_multiple_info_or_index(generics
-                            .iter()
-                            .map(TypeInfoOrIndex::Idx)
-                            .chain(
-                                std::iter::repeat(TypeInfoOrIndex::Type(TypeInfo::Unknown))
-                                    .take(func_generic_count as usize - generics.count as usize)
-                            )
-                        )
-                    } else {
-                        debug_assert_eq!(func_generic_count as u32, generics.count);
-                        generics
-                    };
+        _ => if let TypeInfo::Resolved(id, generics) = ctx.types.get(ty) {
+            let def = ctx.symbols.get_type(id);
+            match &def.body {
+                ResolvedTypeBody::Struct(_) => {}
+                ResolvedTypeBody::Enum(def) => if let Some(variant) = def.variants.get(name) {
                     return (
-                        MemberAccess::Symbol(DefId::Function(method)),
-                        TypeInfo::FunctionItem(method, generics).into()
-                    );
+                        MemberAccess::EnumItem(id, variant.1),
+                        TypeInfo::Resolved(id, generics).into(),
+                    )
                 }
             }
-            _ => {}
+            if let Some(&method) = def.methods.get(name) {
+                let func_generic_count = ctx.symbols.get_func(method).generic_count();
+                let generics = if func_generic_count as u32 > generics.count {
+                    ctx.types.add_multiple_info_or_index(generics
+                        .iter()
+                        .map(TypeInfoOrIndex::Idx)
+                        .chain(
+                            std::iter::repeat(TypeInfoOrIndex::Type(TypeInfo::Unknown))
+                                .take(func_generic_count as usize - generics.count as usize)
+                        )
+                    )
+                } else {
+                    debug_assert_eq!(func_generic_count as u32, generics.count);
+                    generics
+                };
+                return (
+                    MemberAccess::Symbol(DefId::Function(method)),
+                    TypeInfo::FunctionItem(method, generics).into()
+                );
+            }
         }
     };
 
     // try trait resolval
-    match ctx.symbols.trait_impls.from_type(&ctx.symbols, ctx.types, ty, name) {
+    match ctx.symbols.trait_impls.on_type(ctx.symbols, ctx.types, ty, name) {
         trait_impls::TraitMethodResult::Found { func, impl_generic_count: _ } => {
             // TODO: generics
             return (
@@ -622,7 +619,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
                 _ => {
                     ctx.errors.emit_span(
                         Error::FunctionOrTypeExpected,
-                        ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id)
+                        ctx.ast[call.called_expr].span_in(ctx.ast, ctx.scope().module.id)
                     );
                     return Res::Invalid
                 }
@@ -631,7 +628,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
         Res::Module(_) => {
             ctx.errors.emit_span(
                 Error::FunctionOrTypeExpected,
-                ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id)
+                ctx.ast[call.called_expr].span_in(ctx.ast, ctx.scope().module.id)
             );
             return Res::Invalid
         }
@@ -652,7 +649,7 @@ fn call(id: CallId, call_expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx) -> Res
             if ctx.types.invalidate(called_ty) {
                 ctx.errors.emit_span(
                     Error::FunctionOrStructTypeExpected,
-                    ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id)
+                    ctx.ast[call.called_expr].span_in(ctx.ast, ctx.scope().module.id)
                 );
             }
             (Res::Invalid, ResolvedCall::Invalid)
@@ -696,7 +693,7 @@ fn call_func(
     }
     
     let call_span = ctx.span(call_expr);
-    ctx.types.specify_or_merge(info.expected, ret, ctx.errors, call_span, &ctx.symbols);
+    ctx.types.specify_or_merge(info.expected, ret, ctx.errors, call_span, ctx.symbols);
     
     let params = sig.params
         .iter()
@@ -754,7 +751,7 @@ fn call_type_id(
         ResolvedTypeBody::Enum(_) => {
             ctx.errors.emit_span(
                 Error::FunctionOrStructTypeExpected,
-                ctx.ast[call.called_expr].span_in(&ctx.ast, ctx.scope().module.id),
+                ctx.ast[call.called_expr].span_in(ctx.ast, ctx.scope().module.id),
             );
             ResolvedCall::Invalid
         }

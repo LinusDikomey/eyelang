@@ -324,7 +324,7 @@ impl Error {
                 cformat!("expected #g<{}{}> argument{} but #r<{}> were found",
                     if varargs { "at least" } else { "" },
                     expected,
-                    if expected == 1 { "" } else { "" },
+                    if expected == 1 { "" } else { "s" },
                     found
                 )
             }

@@ -268,7 +268,7 @@ impl SymbolTable {
         def
     }
     pub fn get_global(&self, key: GlobalId) -> &(String, Type, Option<ConstVal>) {
-        &self.globals[key.idx()].as_ref().unwrap()
+        self.globals[key.idx()].as_ref().unwrap()
     }
 
     pub fn get_const(&self, id: ConstId) -> &ConstVal {
@@ -276,7 +276,7 @@ impl SymbolTable {
     }
 
     pub fn get_trait(&self, id: TraitId) -> &TraitDef {
-        &self.traits[id.idx()].as_ref().unwrap()
+        self.traits[id.idx()].as_ref().unwrap()
     }
 }
 

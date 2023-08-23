@@ -54,7 +54,7 @@ pub fn resolve_project(
     let mut scopes = Scopes::new(module_scopes);
 
     let builtins = if let Some(std) = std {
-        Builtins::resolve(&mut scopes, std, ast)
+        Builtins::resolve(&scopes, std, ast)
     } else {
         Builtins::nostd()
     };
@@ -85,7 +85,7 @@ pub fn resolve_project(
     let main = require_main.then_some(()).and_then(|()| {
         if let Some(&UnresolvedDefId::Resolved(DefId::Function(id))) = scopes[ScopeId::module(main_module)].get_def("main") {
             let main = symbols.get_func(id);
-            if main.varargs || main.params.len() != 0 {
+            if main.varargs || !main.params.is_empty() {
                 errors.emit_span(Error::MainArgs, ast.functions[id.idx()].span.in_mod(main_module));
             }
             match main.return_type {
@@ -106,7 +106,7 @@ pub fn resolve_project(
     // function bodies
     for (i, module) in ast.modules.iter().enumerate() {
         let scope = ScopeId::module(ModuleId::new(i as _));
-        scope_bodies(&mut scopes, scope, &ast[module.definitions], &ast, &mut symbols, errors,
+        scope_bodies(&mut scopes, scope, &ast[module.definitions], ast, &mut symbols, errors,
             &mut ir_functions, &module.impls);
     }
 
@@ -115,7 +115,7 @@ pub fn resolve_project(
 }
 
 /// add all order independent definitions to a scope
-fn scope_defs<'a>(defs: &'a DHashMap<String, Definition>,) -> DHashMap<String, UnresolvedDefId> {
+fn scope_defs(defs: &DHashMap<String, Definition>) -> DHashMap<String, UnresolvedDefId> {
     defs.iter().map(|(name, def)| {
         let def_id = match def {
             &Definition::Function(id) => UnresolvedDefId::Resolved(DefId::Function(id)),
@@ -384,7 +384,7 @@ fn resolve_trait_impl(
         .as_ref()
         .map_or(&[] as &[_], |(trait_generics, _span)| trait_generics.as_slice())
         .iter()
-        .map(|generic| scopes.resolve_ty(scope, &generic, errors, symbols, ast, ir))
+        .map(|generic| scopes.resolve_ty(scope, generic, errors, symbols, ast, ir))
         .collect();
 
     let mut valid_found_function_count = 0;
@@ -523,7 +523,7 @@ fn scope_bodies(
         }
     }
 
-    for (_name, def) in defs {
+    for def in defs.values() {
         match def {
             Definition::Function(func_id) => gen_func_body(*func_id, scopes, scope, &[], ast, symbols, errors, ir_functions),
             Definition::Type(id) => {
@@ -540,7 +540,7 @@ fn scope_bodies(
         }
     }
     for trait_impl in impls {
-        for (_name, func_id) in &trait_impl.functions {
+        for func_id in trait_impl.functions.values() {
             // TODO: handle generics
             assert!(trait_impl.impl_generics.is_empty());
             assert!(trait_impl.trait_generics.as_ref().map_or(true, |(v, _)| v.is_empty()));
@@ -683,13 +683,13 @@ impl<'a> Ctx<'a> {
                             }
                             for (arg_idx, ty) in args.iter().zip(arg_types) {
                                 let ty = ty.as_info(self.types, |i| generics.nth(i as _).into());
-                                self.types.specify_or_merge(arg_idx, ty, self.errors, span, &self.symbols);
+                                self.types.specify_or_merge(arg_idx, ty, self.errors, span, self.symbols);
                             }
                         }
                         None => self.errors.emit_span(Error::NonexistantEnumVariant, span),
                     }
                 } else {
-                    let found = ty.as_string(&self.types, &self.symbols).into_owned();
+                    let found = ty.as_string(self.types, self.symbols).into_owned();
                     self.errors.emit_span(Error::MismatchedType {
                         expected: "an enum".to_string(), found
                     }, span);
@@ -731,7 +731,7 @@ pub enum MemberAccess {
     Invalid,
 }
 
-fn func_body<'a>(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mut ctx: Ctx) {
+fn func_body(body: ExprRef, func_id: FunctionId, generics_ctx: &[String], mut ctx: Ctx) {
     let scope = ctx.scopes.child(ctx.scope, dmap::new(), dmap::new(), false);
     let mut ctx = ctx.with_scope(scope);
     let signature = ctx.symbols.get_func(func_id);

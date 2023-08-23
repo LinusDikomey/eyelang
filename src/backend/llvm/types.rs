@@ -6,7 +6,7 @@ use llvm_sys::{
 use crate::{
     types::{Primitive, Layout},
     resolve::types::{Type, Enum, Struct, ResolvedTypeBody},
-    ir::{self, types::{IrTypes, TypeRefs, IrType}},
+    ir::{self, types::{IrTypes, IrType}},
     ast::{TypeId, VariantId}
 };
 
@@ -95,7 +95,7 @@ pub(super) unsafe fn llvm_ty(
     type_instances: &mut [TypeInstance],
     ty: IrType
 ) -> LLVMTypeRef {
-    llvm_ty_recursive(ctx, module, types, type_instances, ty, false, TypeRefs::EMPTY)
+    llvm_ty_recursive(ctx, module, types, type_instances, ty, false)
 }
 
 pub unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, p: Primitive) -> LLVMTypeRef {
@@ -220,7 +220,6 @@ unsafe fn llvm_ty_recursive(
     type_instances: &mut [TypeInstance],
     ty: IrType,
     pointee: bool,
-    generics: TypeRefs,
 ) -> LLVMTypeRef {
     match ty {
         IrType::Primitive(Primitive::Unit) if pointee => llvm_primitive_ty(ctx, Primitive::I8),
@@ -232,7 +231,7 @@ unsafe fn llvm_ty_recursive(
         }
         IrType::Ptr(_) => LLVMPointerTypeInContext(ctx, 0),
         IrType::Array(inner, count) => {
-            let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false, generics);
+            let elem_ty = llvm_ty_recursive(ctx, module, types, type_instances, types[inner], false);
             LLVMArrayType(elem_ty, count)
         }
         IrType::Tuple(_) => {
@@ -250,6 +249,6 @@ unsafe fn llvm_ty_recursive(
             }).0
         }
         IrType::Const(_) => panic!("Invalid const type in LLVM backend"),
-        IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee, generics),
+        IrType::Ref(idx) => llvm_ty_recursive(ctx, module, types, type_instances, types[idx], pointee),
     }
 }

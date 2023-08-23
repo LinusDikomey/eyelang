@@ -199,7 +199,7 @@ unsafe fn build_func(
             
             let r = instructions[i];
             let ty = ir.types[ir.inst[i].ty];
-            ((r != ptr::null_mut()).then_some(r), ty)
+            ((!r.is_null()).then_some(r), ty)
         }
     };
     let get_ref_and_type = |instructions: &[LLVMValueRef], r: ir::Ref| get_ref_and_type_ptr(instructions, r);
@@ -555,7 +555,7 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::EnumTag => {
-                if let (Some(r), ty) = get_ref_and_type(&&instructions, data.un_op) {
+                if let (Some(r), ty) = get_ref_and_type(&instructions, data.un_op) {
                     let IrType::Ptr(pointee) = ty else { panic!("invalid ir") };
                     let offset = tag_offset(ir.types[pointee], ir, ctx, module, types);
                     if let Some(offset) = offset {

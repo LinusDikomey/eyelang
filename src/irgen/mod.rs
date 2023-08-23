@@ -1,4 +1,4 @@
-use std::ops::Index;
+use std::{ops::Index, cmp::Ordering};
 
 use crate::{
     ast::{Ast, ExprRef, Expr, ModuleId, FunctionId, UnOp, ExprExtra, MemberAccessId, VariantId},
@@ -16,8 +16,6 @@ mod main_func;
 /// Macro for internal errors. Indicates that type checking went wrong or some internal assumption was broken
 macro_rules! int {
     () => {{
-        
-        line!();
         ::color_format::ceprintln!("#r<internal irgen error> at #u<{}:{}:{}>",
             ::core::file!(), ::core::line!(), ::core::column!()
         );
@@ -151,7 +149,7 @@ impl Functions {
         let generic_header = symbols.get_func(ast_id);
 
         let mut name = generic_header.name.to_owned();
-        if generic_instance.len() > 0 {
+        if !generic_instance.is_empty() {
             name.push('[');
             let mut first = true;
             for ty in &generic_instance {
@@ -180,7 +178,7 @@ impl Functions {
             generic_header.module,
             generic_header.resolved_body.as_ref(),
             ast,
-            &symbols,
+            symbols,
             self,
             &generic_instance,
             CreateReason::Runtime, // FIXME: proper CreateReason?
@@ -249,8 +247,7 @@ fn gen_func(
     functions: &mut Functions,
     generics: &[Type],
     create_reason: CreateReason,
-)
--> Function {
+) -> Function {
     let Some(body) = body else {
         return Function {
             name,
@@ -352,7 +349,7 @@ fn val_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut boo
 } 
 
 pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut bool) -> Res {
-    debug_assert_eq!(*noreturn, false,
+    debug_assert!(!*noreturn,
         "generating expression with noreturn enabled means dead code will be generated, expression is: {:?}",
         ctx.ast[expr],
     );
@@ -648,31 +645,35 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
                             Res::Hole => int!(),
                         };
                         if *noreturn { return Res::Val(Ref::UNDEF) }
-                        if req_ptr_count < ptr_count {
-                            if val_is_var {
-                                val = ir.build_load(val, this_ty);
-                                ptr_count -= 1;
+                        match req_ptr_count.cmp(&ptr_count) {
+                            Ordering::Less => {
+                                if val_is_var {
+                                    val = ir.build_load(val, this_ty);
+                                    ptr_count -= 1;
+                                }
+                                let mut loaded_ty = this_ty;
+                                while req_ptr_count < ptr_count {
+                                    let IrType::Ptr(pointee) = ir.types[loaded_ty] else { int!() };
+                                    loaded_ty = pointee;
+                                    val = ir.build_load(val, loaded_ty);
+                                    ptr_count -= 1;
+                                }
                             }
-                            let mut loaded_ty = this_ty;
-                            while req_ptr_count < ptr_count {
-                                let IrType::Ptr(pointee) = ir.types[loaded_ty] else { int!() };
-                                loaded_ty = pointee;
-                                val = ir.build_load(val, loaded_ty);
-                                ptr_count -= 1;
+                            Ordering::Greater => {
+                                let mut current_ref_ty = if val_is_var {
+                                    ir.types.add(IrType::Ptr(this_ty))
+                                } else {
+                                    this_ty
+                                };
+                                while req_ptr_count > ptr_count {
+                                    current_ref_ty = ir.types.add(IrType::Ptr(current_ref_ty));
+                                    let var = ir.build_decl(current_ref_ty);
+                                    ir.build_store(var, val);
+                                    val = var;
+                                    ptr_count += 1;
+                                }
                             }
-                        } else if req_ptr_count > ptr_count { 
-                            let mut current_ref_ty = if val_is_var {
-                                ir.types.add(IrType::Ptr(this_ty))
-                            } else {
-                                this_ty
-                            };
-                            while req_ptr_count > ptr_count {
-                                current_ref_ty = ir.types.add(IrType::Ptr(current_ref_ty));
-                                let var = ir.build_decl(current_ref_ty);
-                                ir.build_store(var, val);
-                                val = var;
-                                ptr_count += 1;
-                            }
+                            Ordering::Equal => {}
                         }
                         Some(val)
                     } else {
@@ -1033,7 +1034,7 @@ fn string_literal(ir: &mut IrBuilder, span: TSpan, ctx: &mut Ctx) -> Ref {
     
     let len_ref = ir.build_member_int(str_struct, 1, u64_ptr_ty);
     ir.build_store(len_ref, len);
-    return str_struct
+    str_struct
 }
 
 fn gen_pat(
@@ -1046,13 +1047,10 @@ fn gen_pat(
     ctx: &mut Ctx
 ) {
     let mut cond_match = |ir: &mut IrBuilder, cond: Ref| {
-        match on_mismatch(ir) {
-            Some(on_mismatch) => {
-                let on_match = ir.create_block();
-                ir.terminate_block(Terminator::Branch { cond, on_true: on_match, on_false: on_mismatch });
-                ir.begin_block(on_match);
-            }
-            None => {}
+        if let Some(on_mismatch) = on_mismatch(ir) {
+            let on_match = ir.create_block();
+            ir.terminate_block(Terminator::Branch { cond, on_true: on_match, on_false: on_mismatch });
+            ir.begin_block(on_match);
         }
     };
     match &ctx.ast[pat] {
@@ -1154,16 +1152,14 @@ fn gen_pat(
                         gen_pat(ir, arg, arg_val, arg_ty, on_mismatch, bool_ty, ctx);
                     }
                 }
-            } else {
-                if let Some(on_mismatch) = on_mismatch(ir) {
-                    let on_match = ir.create_block();
-                    ir.terminate_block(Terminator::Branch {
-                        cond: tag_matches,
-                        on_true: on_match,
-                        on_false: on_mismatch,
-                    });
-                    ir.begin_block(on_match);
-                }
+            } else if let Some(on_mismatch) = on_mismatch(ir) {
+                let on_match = ir.create_block();
+                ir.terminate_block(Terminator::Branch {
+                    cond: tag_matches,
+                    on_true: on_match,
+                    on_false: on_mismatch,
+                });
+                ir.begin_block(on_match);
             }
         }
         Expr::StringLiteral(span) => {
@@ -1307,12 +1303,10 @@ fn build_then_else(
         else_val
     } else if else_noreturn {
         then_val
+    } else if matches!(ir.types[ty], IrType::Primitive(Primitive::Unit)) {
+        Ref::UNIT
     } else {
-        if matches!(ir.types[ty], IrType::Primitive(Primitive::Unit)) {
-            Ref::UNIT
-        } else {
-            ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
-        }
+        ir.build_phi([(then_exit, then_val), (else_exit, else_val)], ty)
     }
 }
 fn build_while_loop(

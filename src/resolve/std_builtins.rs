@@ -9,20 +9,20 @@ pub struct Builtins {
     values: Option<BuiltinValues>,
 }
 impl Builtins {
-    pub fn resolve(scopes: &mut Scopes, std: ModuleId, ast: &Ast) -> Self {
-        fn get_def_in_mod(scopes: &mut Scopes, module: ModuleId, name: &str) -> DefId {
+    pub fn resolve(scopes: &Scopes, std: ModuleId, ast: &Ast) -> Self {
+        let get_def_in_mod = |module: ModuleId, name: &str| -> DefId {
             let def = scopes[ScopeId::module(module)].get_def(name)
                 .unwrap_or_else(|| panic!("definition '{name}' not found in std"));
             match def {
                 UnresolvedDefId::Resolved(def) => *def,
                 _ => panic!("invalid type of definition for '{name}' in std")
             }
-        }
-        let DefId::Module(string_mod) = get_def_in_mod(scopes, std, "string") else {
+        };
+        let DefId::Module(string_mod) = get_def_in_mod(std, "string") else {
             panic!("module expected for 'string'")
         };
         
-        let DefId::Type(str_type) = get_def_in_mod(scopes, string_mod, "str") else {
+        let DefId::Type(str_type) = get_def_in_mod(string_mod, "str") else {
             panic!("type expected for 'str'")
         };
         let TypeDef::Struct(str_def) = &ast[str_type] else {
@@ -30,7 +30,7 @@ impl Builtins {
         };
         let str_eq = str_def.methods["eq"];
 
-        let DefId::Module(prelude) = get_def_in_mod(scopes, std, "prelude") else {
+        let DefId::Module(prelude) = get_def_in_mod(std, "prelude") else {
             panic!("Module expected for 'predude'")
         };
 

@@ -189,7 +189,7 @@ impl EnumDefinition {
         for (_, name, args) in &self.variants {
             child.begin_line();
             child.write_add(name.as_str());
-            if args.len() > 0 {
+            if !args.is_empty() {
                 child.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
                     if i != 0 {
