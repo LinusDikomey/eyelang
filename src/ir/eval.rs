@@ -325,7 +325,6 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
             super::Tag::Cast => todo!(),
             super::Tag::Goto => {
                 let target = ir.blocks[inst.data.int32 as usize];
-                eprintln!("{pos} -> {target}");
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -345,7 +344,6 @@ unsafe fn eval_internal(ir: &IrBuilder, _params: &[ConstVal], _frame: StackFrame
                 bytes.copy_from_slice(&ir.extra[i+4..i+8]);
                 let b = u32::from_le_bytes(bytes);
                 let target = if val { ir.blocks[a as usize] } else { ir.blocks[b as usize] };
-                eprintln!("{pos} -> {target} (branch: {val})");
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {

@@ -2,9 +2,7 @@ use crate::{ir::{builder::IrBuilder, Ref, RefVal, types::{TypeRef, TypeRefs}}, r
 
 use super::Res;
 
-
-
-pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeRef)  -> Res {
+pub fn build(ir: &mut IrBuilder, val: &ConstVal, ty: TypeRef) -> Res {
     match val {
         ConstVal::Invalid => Res::Val(Ref::UNDEF),
         ConstVal::Unit => Res::Val(Ref::UNIT),

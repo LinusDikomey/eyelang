@@ -154,22 +154,33 @@ pub struct FunctionDisplay<'a> {
 impl<'a> fmt::Display for FunctionDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { func, info } = self;
-        write!(f, "(")?;
-        write_delimited_with(f, &func.params,
-            |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param.display(*info)), ", ")?;
-        if func.varargs {
-            if !func.params.is_empty() {
-                write!(f, ", ")?;
-            }
-            write!(f, "...")?;
-        }
-        cwriteln!(f, ") -#> #m<{}>", func.return_type.display(*info))?;
-
-        if let Some(ir) = &func.ir {
-            write!(f, "{}", ir.display(*info))?;
-        }
-        Ok(())
+        display_function(f, &func.params, func.varargs, &func.return_type, func.ir.as_ref(), *info)
     }
+}
+
+pub fn display_function<W: std::fmt::Write>(
+    f: &mut W,
+    params: &[(String, Type)],
+    varargs: bool,
+    return_type: &Type,
+    ir: Option<&FunctionIr>,
+    info: Info,
+) -> fmt::Result {
+    write!(f, "(")?;
+    write_delimited_with(f, params,
+        |f, (name, param)| cwrite!(f, "#g<{}> #m<{}>", name, param.display(info)), ", ")?;
+    if varargs {
+        if !params.is_empty() {
+            write!(f, ", ")?;
+        }
+        write!(f, "...")?;
+    }
+    cwriteln!(f, ") -#> #m<{}>", return_type.display(info))?;
+
+    if let Some(ir) = ir {
+        write!(f, "{}", ir.display(info))?;
+    }
+    Ok(())
 }
 
 impl Struct {
