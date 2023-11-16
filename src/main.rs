@@ -391,7 +391,13 @@ fn build_project(args: &Args, ir: &ir::Module, project_name: &str) -> RunResult 
         if args.lib {
             return Err("There is nothing to run in the jit because --lib was passed");
         }
-        if args.backend != Backend::LLVM {
+        let is_llvm;
+        #[cfg(feature = "llvm-backend")]
+        { is_llvm = args.backend == Backend::LLVM }
+        #[cfg(not(feature = "llvm-backend"))]
+        { is_llvm = false }
+        
+        if !is_llvm {
             return Err("This backend doesn't support running via JIT. Only the LLVM backend supports JIT right now");
         }
     }
@@ -458,6 +464,7 @@ struct BackendParams<'a> {
 
 fn run_backend(ir: &ir::Module, backend: Backend, params: BackendParams) -> RunResult {
     match backend {
+        #[cfg(feature = "llvm-backend")]
         Backend::LLVM => unsafe {
             let context = llvm::core::LLVMContextCreate();
             let (llvm_module, stats) = backend::llvm::module(context, ir, params.show_backend_ir);

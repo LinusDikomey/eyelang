@@ -228,6 +228,9 @@ impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
         let ast = c.ast();
         match &self {
+            &Self::Function { id } => {
+                c.ast()[*id].repr(c, false);
+            }
             Self::Block { span: _, items, defs } => {
                 c.write_add("{\n");
                 let child = c.child();

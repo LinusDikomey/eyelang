@@ -201,7 +201,8 @@ impl SymbolTable {
             calls: vec![None; call_count],
             member_accesses: vec![MemberAccess::Invalid; member_access_count],
         }
-    }   
+    }
+
     pub fn place_func(&mut self, id: FunctionId, func: FunctionHeader) {
         debug_assert!(self.funcs[id.idx()].is_none(), "function header resolved twice");
         self.funcs[id.idx()] = Some(func);

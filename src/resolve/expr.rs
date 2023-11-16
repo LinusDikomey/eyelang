@@ -99,6 +99,14 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             pat::pat(*pat, ty, ctx.reborrow(), &mut exhaustion);
             ctx.add_exhaustion(exhaustion, ty, ctx.ast[*pat].span(ctx.ast));
         }
+        &ast::Expr::Function { id } => {
+            let span = ctx.ast[id].span;
+            // FIXME,NOCHECKIN: get_func fails, works in Expr::Variable branch, probably because the func should be checkd first
+            let generics = ctx.types.add_multiple_unknown(ctx.symbols.get_func(id).generic_count() as _);
+            ctx.specify(info.expected, TypeInfo::FunctionItem(id, generics),
+                span.in_mod(ctx.scope().module.id));
+            use_hint = UseHint::Should;
+        }
         ast::Expr::Return { val, .. } => {
             val_expr(*val, info.with_expected(info.ret), ctx, false);
             info.mark_noreturn();

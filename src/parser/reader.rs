@@ -157,9 +157,7 @@ pub enum Delimit {
     /// Don't expect a delimiter
     No,
     /// The delimiter may be omitted
-    #[allow(unused)]
     Optional,
-
     /// delimiter may be omitted if the next entry starts on a new line
     OptionalIfNewLine,
 }

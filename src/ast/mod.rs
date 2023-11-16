@@ -372,15 +372,30 @@ pub enum Expr {
     DeclareWithVal {
         pat: ExprRef,
         annotated_ty: UnresolvedType,
-        val: ExprRef
+        val: ExprRef,
     },
-    Return { start: u32, val: ExprRef },
-    ReturnUnit { start: u32 },
+    Function {
+        id: FunctionId,
+    },
+    Return {
+        start: u32,
+        val: ExprRef,
+    },
+    ReturnUnit {
+        start: u32,
+    },
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
     StringLiteral(TSpan),
-    BoolLiteral { start: u32, val: bool },
-    EnumLiteral { span: TSpan,  ident: TSpan, args: ExprExtra },
+    BoolLiteral {
+        start: u32,
+        val: bool,
+    },
+    EnumLiteral {
+        span: TSpan,
+        ident: TSpan,
+        args: ExprExtra,
+    },
     Record {
         span: TSpan,
         names: Vec<TSpan>,
@@ -440,9 +455,21 @@ pub enum Expr {
     FunctionCall(CallId),
     UnOp(u32, UnOp, ExprRef),
     BinOp(Operator, ExprRef, ExprRef),
-    MemberAccess { left: ExprRef, name: TSpan, id: MemberAccessId },
-    Index { expr: ExprRef, idx: ExprRef, end: u32 },
-    TupleIdx { expr: ExprRef, idx: u32, end: u32 },
+    MemberAccess {
+        left: ExprRef,
+        name: TSpan,
+        id: MemberAccessId,
+    },
+    Index {
+        expr: ExprRef,
+        idx: ExprRef,
+        end: u32,
+    },
+    TupleIdx {
+        expr: ExprRef,
+        idx: u32,
+        end: u32,
+    },
     Cast(TSpan, UnresolvedType, ExprRef),
     Root(u32),
     Asm {
@@ -462,17 +489,18 @@ impl Expr {
 
         match self {
             Expr::Block { span, .. }
-                | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
-                | Expr::Record { span, .. }
-                | Expr::Nested(span, _) 
-                | Expr::Unit(span)
-                | Expr::Variable { span, .. }
-                | Expr::Array(span, _)
-                | Expr::Tuple(span, _)
-                | Expr::Cast(span, _, _)    
-                | Expr::Match { span, .. }
-                | Expr::EnumLiteral { span, .. }
-                => *span,
+            | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
+            | Expr::Record { span, .. }
+            | Expr::Nested(span, _) 
+            | Expr::Unit(span)
+            | Expr::Variable { span, .. }
+            | Expr::Array(span, _)
+            | Expr::Tuple(span, _)
+            | Expr::Cast(span, _, _)    
+            | Expr::Match { span, .. }
+            | Expr::EnumLiteral { span, .. }
+            => *span,
+            Expr::Function { id } => ast[*id].span,
             Expr::Declare { pat, annotated_ty, .. } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
@@ -480,14 +508,14 @@ impl Expr {
             Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
             &Expr::Hole(start) => TSpan::new(start, start),
             Expr::If { start, then, .. }
-                | Expr::IfPat { start, then, .. }
-                => TSpan::new(*start, e(then) ),
+            | Expr::IfPat { start, then, .. }
+            => TSpan::new(*start, e(then) ),
             Expr::IfElse { start, else_, .. }
-                | Expr::IfPatElse { start, else_, .. }
-                => TSpan::new(*start, e(else_) ),
+            | Expr::IfPatElse { start, else_, .. }
+            => TSpan::new(*start, e(else_) ),
             Expr::While { start, body, .. }
-                | Expr::WhilePat { start, body, .. }
-                => TSpan::new(*start, e(body)),
+            | Expr::WhilePat { start, body, .. }
+            => TSpan::new(*start, e(body)),
             Expr::FunctionCall(call_id) => {
                 let Call { called_expr, args: _, end } = &ast[*call_id];
                 TSpan::new(s(called_expr), *end)

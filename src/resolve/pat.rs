@@ -132,6 +132,7 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
 
         Expr::FloatLiteral(_)
         | Expr::Record { .. } // very useful to match on records
+        | Expr::Function { .. }
         | Expr::Array(_, _)
         | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
         | Expr::FunctionCall { .. } => {

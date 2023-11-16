@@ -7,6 +7,7 @@ use crate::{
     types::Primitive, help::id,
 };
 
+use apb;
 mod reader;
 pub use reader::TokenTypes;
 use reader::*;
@@ -290,12 +291,7 @@ impl<'a> Parser<'a> {
                     Some(TokenType::DoubleColon) => {
                         self.toks.step_assert(TokenType::DoubleColon);
 
-                        let def = if let Some(fn_tok) =
-                            self.toks.step_if(TokenType::Keyword(Keyword::Fn))
-                        {
-                            let func = self.parse_function_def(fn_tok)?;
-                            Definition::Function(self.ast.add_func(func))
-                        } else if let Some(struct_tok) =
+                        let def = if let Some(struct_tok) =
                             self.toks.step_if(TokenType::Keyword(Keyword::Struct))
                         {
                             let def = self.struct_definition(name, struct_tok)?;
@@ -674,6 +670,10 @@ impl<'a> Parser<'a> {
         let start = first.start;
         let expr = match_or_unexpected_value!(first,
             self.toks.module, ExpectedTokens::Expr,
+            TokenType::Keyword(Keyword::Fn) => {
+                let func = self.parse_function_def(first)?;
+                Expr::Function { id: self.ast.add_func(func) }
+            },
             TokenType::LBrace => {
                 let block = self.parse_block_from_lbrace(first, counts)?;
                 return self.parse_factor_postfix(block, true, counts);

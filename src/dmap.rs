@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_types)]
+
 use std::collections::HashMap;
 
 /// Use to make `HashMaps` and `HashSets` across the compiler deterministic.

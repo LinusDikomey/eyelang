@@ -376,6 +376,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             }
             Ref::UNIT
         }
+        Expr::Function { .. } => Ref::UNDEF,
         Expr::Return { val, .. } => {
             let val = val_expr(ir, *val, ctx, noreturn);
             if !*noreturn {
@@ -1246,31 +1247,31 @@ fn gen_pat(
                 gen_pat(ir, *item, item_val, item_ty, on_mismatch, bool_ty, ctx);
             }
         }
-
         Expr::Record { .. } // very useful to match on records
-            | Expr::Block { .. }
-            | Expr::Declare { .. }
-            | Expr::DeclareWithVal { .. }
-            | Expr::Return { .. }
-            | Expr::ReturnUnit { .. }
-            | Expr::Array(_, _)
-            | Expr::If { .. } 
-            | Expr::IfPat { .. }
-            | Expr::IfElse { .. } 
-            | Expr::IfPatElse { .. }
-            | Expr::Match { .. } 
-            | Expr::While { .. } 
-            | Expr::WhilePat { .. }
-            | Expr::FunctionCall { .. } 
-            | Expr::UnOp(_, _, _) 
-            | Expr::BinOp(_, _, _) 
-            | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
-            | Expr::Index { .. } 
-            | Expr::TupleIdx { .. } 
-            | Expr::Cast(_, _, _)
-            | Expr::Root(_) 
-            | Expr::Asm { .. } 
-            => int!(),
+        | Expr::Function { .. }
+        | Expr::Block { .. }
+        | Expr::Declare { .. }
+        | Expr::DeclareWithVal { .. }
+        | Expr::Return { .. }
+        | Expr::ReturnUnit { .. }
+        | Expr::Array(_, _)
+        | Expr::If { .. } 
+        | Expr::IfPat { .. }
+        | Expr::IfElse { .. } 
+        | Expr::IfPatElse { .. }
+        | Expr::Match { .. } 
+        | Expr::While { .. } 
+        | Expr::WhilePat { .. }
+        | Expr::FunctionCall { .. } 
+        | Expr::UnOp(_, _, _) 
+        | Expr::BinOp(_, _, _) 
+        | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
+        | Expr::Index { .. } 
+        | Expr::TupleIdx { .. } 
+        | Expr::Cast(_, _, _)
+        | Expr::Root(_) 
+        | Expr::Asm { .. } 
+        => int!(),
     }
 }
 
