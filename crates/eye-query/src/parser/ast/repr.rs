@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use types::{IntType, FloatType};
 
-use crate::parser::token::AssignType;
+use crate::{parser::token::AssignType, Module};
 
 use super::*;
 
@@ -233,10 +233,10 @@ impl<C: Representer> Repr<C> for Expr {
             &Self::Function { id } => {
                 c.ast()[*id].repr(c, false);
             }
-            Self::Block { span: _, items, defs } => {
+            Self::Block { span: _, items, scope } => {
                 c.write_add("{\n");
                 let child = c.child();
-                for (name, def) in &ast[*defs] {
+                for (name, def) in &ast[*scope] {
                     def.repr(&child, name);
                     c.writeln("\n");
                 }
@@ -462,7 +462,7 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*r].repr(c);
                 c.write_add(")");
             }
-            Self::MemberAccess { left, name, id: _ } => {
+            Self::MemberAccess { left, name } => {
                 ast[*left].repr(c);
                 c.char('.');
                 c.write_add(c.src(*name));

@@ -475,7 +475,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char('.');
                 c.write_add(idx.to_string());
             }
-            Self::Cast(_, ty, expr) => {
+            Self::As(_, ty, expr) => {
                 ast[*expr].repr(c);
                 c.write_add(" as ");
                 ty.repr(c);

@@ -166,3 +166,43 @@ pub enum Delimit {
 impl From<()> for Delimit {
     fn from((): ()) -> Self { Self::Yes }
 }
+
+#[derive(Debug, Clone)]
+pub enum ExpectedTokens {
+    Specific(TokenType),
+    AnyOf(Vec<TokenType>),
+    Expr,
+    Type,
+}
+impl std::fmt::Display for ExpectedTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &Self::Specific(tok) => {
+                write!(f, "{}", tok)
+            }
+            Self::AnyOf(toks) => {
+                for (i, tok) in toks.iter().enumerate() {
+                    match i {
+                        0 => {}
+                        i if i != 0 || i == toks.len() -1 => {
+                            write!(f, " or ")?;
+                        }
+                        _ => write!(f, ", ")?,
+                    }
+                    write!(f, "{tok}")?;
+                }
+                Ok(())
+            }
+            Self::Expr => write!(f, "an expression"),
+            Self::Type => write!(f, "a type"),
+        }
+    }
+}
+impl<const N: usize> From<TokenTypes<N>> for ExpectedTokens {
+    fn from(t: TokenTypes<N>) -> Self {
+        match t.0.as_slice() {
+            [t] => Self::Specific(*t),
+            other => Self::AnyOf(other.to_vec())
+        }
+    }
+}

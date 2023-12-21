@@ -20,5 +20,4 @@ id!(TypeDefId);
 id!(TypeId);
 id!(ConstValueId);
 id!(TraitId);
-id!(GlobalId);
 

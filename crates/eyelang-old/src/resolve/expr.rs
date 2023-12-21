@@ -465,7 +465,7 @@ pub(super) fn check_expr(expr: ExprRef, mut info: ExprInfo, mut ctx: Ctx, hole_a
             let tuple_ty = ctx.types.add(TypeInfo::Tuple(elem_types, TupleCountMode::AtLeast));
             val_expr(expr, info.with_expected(tuple_ty), ctx, false);
         }
-        ast::Expr::Cast(span, ty, val) => {
+        ast::Expr::As(span, ty, val) => {
             // TODO: check casts properly, maybe defer check to end of function
             let val_ty = ctx.types.add_unknown();
             val_expr(*val, info.with_expected(val_ty), ctx.reborrow(), false);

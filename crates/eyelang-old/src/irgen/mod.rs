@@ -954,7 +954,7 @@ pub fn gen_expr(ir: &mut IrBuilder, expr: ExprRef, ctx: &mut Ctx, noreturn: &mut
             }
 
         }
-        Expr::Cast(_, _, val) => {
+        Expr::As(_, _, val) => {
             let val = val_expr(ir, *val, ctx, noreturn);
             if *noreturn { return Res::Val(Ref::UNDEF) }
 
@@ -1268,7 +1268,7 @@ fn gen_pat(
         | Expr::MemberAccess { .. } // maybe when variables are allowed. Also qualified enum variants!
         | Expr::Index { .. } 
         | Expr::TupleIdx { .. } 
-        | Expr::Cast(_, _, _)
+        | Expr::As(_, _, _)
         | Expr::Root(_) 
         | Expr::Asm { .. } 
         => int!(),

@@ -1,8 +1,7 @@
 use std::num::NonZeroU32;
 
+use id::ModuleId;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ModuleId(u32);
 
 #[derive(Debug, Clone, Copy)]
 pub struct TSpan {

@@ -157,7 +157,7 @@ pub(super) fn pat(pat_expr: ExprRef, expected: TypeRef, mut ctx: Ctx, exhaustion
         | Expr::BinOp(_, _, _) 
         | Expr::Index { .. } 
         | Expr::TupleIdx { .. } 
-        | Expr::Cast(_, _, _)
+        | Expr::As(_, _, _)
         | Expr::Root(_) 
         | Expr::Asm { .. } 
         => {

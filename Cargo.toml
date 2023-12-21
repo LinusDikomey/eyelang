@@ -7,5 +7,6 @@ members = [
     "crates/types",
     "crates/id", "crates/dmap",
 ]
+default-members = ["crates/eye-query"]
 
 resolver = "2"

@@ -774,15 +774,7 @@ impl<'a> Parser<'a> {
                 Expr::Match { span: TSpan::new(lbrace.start, rbrace.end), val, extra_branches, branch_count }
             },
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, counts)?,
-            TokenType::Keyword(Keyword::Primitive(p)) => {
-                let prim_span = first.span();
-                let inner = self.parse_factor(false, counts)?;
-                Expr::Cast(
-                    TSpan::new(start, self.toks.current_end_pos()),
-                    UnresolvedType::Primitive(p, prim_span),
-                    inner
-                )
-            },
+            TokenType::Keyword(Keyword::Primitive(p)) => todo!("primitive exprs"),
             TokenType::Keyword(Keyword::Root) => {
                 Expr::Root(start)
             },
@@ -894,10 +886,8 @@ impl<'a> Parser<'a> {
                 }
                 Some(TokenType::Keyword(Keyword::As)) if include_as => {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
-                    let span =
-                        TSpan::new(self.ast[expr].start(self.ast), self.toks.current_end_pos());
                     let target_ty = self.parse_type()?;
-                    Expr::Cast(span, target_ty, expr)
+                    Expr::As(expr, target_ty)
                 }
                 _ => break Ok(expr),
             };

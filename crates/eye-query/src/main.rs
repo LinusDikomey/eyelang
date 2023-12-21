@@ -9,7 +9,7 @@ mod parser;
 mod type_table;
 
 use id::{ScopeId, FunctionId, TypeDefId, ModuleId, ConstValueId, ProjectId, TypeId};
-use parser::ast::{self, Expr, Ast, ExprId};
+use parser::ast::{self, Ast, Expr, ExprId};
 use type_table::{TypeTable, LocalTypeId, TypeInfo};
 use types::{Type, UnresolvedType, Primitive};
 
@@ -94,9 +94,10 @@ impl Compiler {
     }
 
     pub fn modify_scope(&mut self, id: ScopeId, scope: ast::Scope) {
-        self.scopes[id] = scope;
+        self.scopes[id.idx()] = scope;
     }
 
+    /*
     pub fn add_function(&mut self, ast: ast::Function) -> FunctionId {
         let id = FunctionId(self.functions.len() as _);
         self.functions.push(Function {
@@ -111,6 +112,7 @@ impl Compiler {
         self.type_defs.push(TypeDef { ast: def, resolved: Resolvable::Unresolved });
         id
     }
+    */
 
     pub fn add_const_value(&mut self, value: ConstValue) -> ConstValueId {
         let id = ConstValueId(self.const_values.len() as _);
@@ -122,11 +124,11 @@ impl Compiler {
         &self.projects[id.idx()]
     }
 
-    pub fn get_module_scope(&mut self, module: ModuleId) -> ScopeId {
-        if let Some(scope_id) = self.modules[module.idx()].scope {
+    pub fn get_module_scope(&mut self, module_id: ModuleId) -> ScopeId {
+        if let Some(scope_id) = self.modules[module_id.idx()].scope {
             scope_id
         } else {
-            let module = self.modules[module.idx()];
+            let module = self.modules[module_id.idx()];
             let root = module.root;
             // The parent module has to have been parsed if we are looking at the child scope, so
             // unwrapping the scope should be fine. If this isn't the case anymore, maybe use
@@ -134,8 +136,6 @@ impl Compiler {
             let parent = module.parent
                 .map(|parent_module| self.modules[parent_module.idx()].scope.unwrap());
 
-            // create placeholder scope for now
-            let scope_id = self.add_scope(parser::ast::Scope::empty());
             let source = match std::fs::read_to_string(&module.path) {
                 Ok(source) => source,
                 Err(err) => panic!(
@@ -146,10 +146,13 @@ impl Compiler {
             };
             // TODO: handle errors, don't just create them here and ignore them
             let mut errors = Errors::new();
-            let scope = parser::parse(&source, self, &mut errors, module, scope_id, root, parent);
-            self.scopes[scope_id.idx()] = scope;
-            scope_id
+            let scope = parser::parse(&source, &mut errors, module_id);
+            self.add_scope(scope)
         }
+    }
+
+    pub fn resolve_module_definition(&mut self, module: ModuleId, name: &str) -> Option<Def> {
+        self.get_mo
     }
 
     pub fn resolve_definition(&mut self, scope: ScopeId, name: &str) -> Option<Def> {
@@ -397,16 +400,14 @@ struct Project {
 }
 struct Module {
     path: PathBuf,
-    /// None means the file hasn't been parsed yet. Not using Resolvable since Resolving is not a
-    /// valid state.
-    scope: Option<ScopeId>,
+    ast: Option<Ast>,
     root: ModuleId,
     parent: Option<ModuleId>,
 }
 impl Module {
     pub fn at_path(path: PathBuf, root: ModuleId, parent: Option<ModuleId>) -> Self {
         Self {
-            scope: None,
+            ast: None,
             path,
             root,
             parent,
@@ -415,11 +416,11 @@ impl Module {
 }
 
 struct ModuleItem {
-    ast: ast::Ast,
+    ast: Ast,
     resolved: Resolvable<Def>,
 }
 impl ModuleItem {
-    pub fn new(ast: ast::Ast) -> Self {
+    pub fn new(ast: Ast) -> Self {
         Self {
             ast,
             resolved: Resolvable::Unresolved,
@@ -429,7 +430,8 @@ impl ModuleItem {
 
 #[derive(Debug)]
 struct Function {
-    ast: ast::Function,
+    module: ModuleId,
+    id: ast::FunctionId,
     signature: Resolvable<Signature>,
 }
 

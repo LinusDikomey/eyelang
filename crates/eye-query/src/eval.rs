@@ -39,10 +39,10 @@ pub fn type_def(compiler: &mut Compiler, ty: id::TypeDefId) -> ResolvedTypeDef {
             let enclosing_scope = *enclosing_scope;
             // PERF: cloning fields
             let fields = def.fields
-                    .clone()
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), compiler.resolve_type(ty, enclosing_scope)))
-                    .collect();
+                .clone()
+                .iter()
+                .map(|(name, ty)| (name.clone(), compiler.resolve_type(ty, enclosing_scope)))
+                .collect();
             ResolvedTypeDef::Struct(crate::ResolvedStructDef {
                 fields,
             })

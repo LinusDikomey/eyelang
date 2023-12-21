@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::parser::{ast::{Ast, ModuleId}, token::TokenType};
+use crate::parser::{ast::{Ast, ModuleId}, token::TokenType, ExpectedTokens};
 use span::Span;
 pub type EyeResult<T> = Result<T, CompileError>;
 
@@ -104,46 +104,6 @@ pub struct CompileError {
 impl CompileError {
     pub fn new(err: Error, span: Span) -> Self {
         Self { err, span }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ExpectedTokens {
-    Specific(TokenType),
-    AnyOf(Vec<TokenType>),
-    Expr,
-    Type,
-}
-impl fmt::Display for ExpectedTokens {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            &Self::Specific(tok) => {
-                write!(f, "{}", tok)
-            }
-            Self::AnyOf(toks) => {
-                for (i, tok) in toks.iter().enumerate() {
-                    match i {
-                        0 => {}
-                        i if i != 0 || i == toks.len() -1 => {
-                            write!(f, " or ")?;
-                        }
-                        _ => write!(f, ", ")?,
-                    }
-                    write!(f, "{tok}")?;
-                }
-                Ok(())
-            }
-            Self::Expr => write!(f, "an expression"),
-            Self::Type => write!(f, "a type"),
-        }
-    }
-}
-impl<const N: usize> From<crate::parser::TokenTypes<N>> for ExpectedTokens {
-    fn from(t: crate::parser::TokenTypes<N>) -> Self {
-        match t.0.as_slice() {
-            [t] => Self::Specific(*t),
-            other => Self::AnyOf(other.to_vec())
-        }
     }
 }
 

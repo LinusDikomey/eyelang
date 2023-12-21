@@ -1,27 +1,60 @@
 use std::ops::Index;
-use id::{FunctionId, TypeId, TraitId, GlobalId, ScopeId, ModuleId, TypeDefId};
+use id::{TypeId, TraitId, ModuleId, TypeDefId};
 use span::{TSpan, Span, IdentPath};
 use dmap::{self, DHashMap};
 use types::{Primitive, UnresolvedType};
 
-use crate::{parser::{IdentId, Counts, token::Operator}, Resolvable, Def};
+use crate::{parser::{Counts, token::Operator}, Resolvable, Def};
 
 pub mod repr;
 
+id::id!(ScopeId);
 id::id!(ExprId);
 id::id!(CallId);
+id::id!(FunctionId);
+id::id!(GlobalId);
 
-/// Ast for a single item
+id::id!(
+    /// Identifiers inside ASTs all get assigned unique ids.
+    /// Inner functions inside functions will have indiviual identifier scopes meaning ids can and
+    /// will repeat.
+    IdentId
+);
+
+/// Ast for a single file
+#[derive(Debug)]
 pub struct Ast {
+    scopes: Vec<Scope>,
     exprs: Vec<Expr>,
-    calls: Vec<Call>
+    calls: Vec<Call>,
+    functions: Vec<Function>,
+    globals: Vec<Global>,
 }
 impl Ast {
     fn new() -> Self {
         Self {
+            scopes: Vec::new(),
             exprs: Vec::new(),
             calls: Vec::new(),
+            functions: Vec::new(),
+            globals: Vec::new(),
+
         }
+    }
+
+    fn top_level_scope_id(&self) -> ScopeId {
+        ScopeId((self.scopes.len() - 1) as _)
+    }
+    
+    fn top_level_scope(&self) -> &Scope {
+        // the last scope is guaranteed to exist and to represent the top level scope of this Ast
+        self.scopes.last().unwrap()
+    }
+}
+impl Index<ScopeId> for Ast {
+    type Output = Scope;
+    fn index(&self, index: ScopeId) -> &Self::Output {
+        &self.scopes[index.idx()]
     }
 }
 impl Index<ExprId> for Ast {
@@ -30,199 +63,97 @@ impl Index<ExprId> for Ast {
         &self.exprs[index.idx()]
     }
 }
-
-/*
-pub struct Ast {
-    pub modules: Vec<Module>,
-    pub sources: Vec<(String, PathBuf)>,
-    exprs: Vec<Expr>,
-    extra: Vec<ExprId>,
-    defs: Vec<DHashMap<String, Definition>>,
-    pub functions: Vec<Function>,
-    pub types: Vec<TypeDef>,
-    pub traits: Vec<TraitDefinition>,
-    pub globals: Vec<GlobalDefinition>,
-    pub calls: Vec<Call>,
-    pub member_access_count: u64,
-}
-impl Ast {
-    pub fn new() -> Self {
-        Self {
-            modules: Vec::new(),
-            sources: Vec::new(),
-            exprs: Vec::new(),
-            extra: Vec::new(),
-            defs: Vec::new(),
-            functions: Vec::new(),
-            types: Vec::new(),
-            traits: Vec::new(),
-            globals: Vec::new(),
-            calls: Vec::new(),
-            member_access_count: 0,
-        }
-    }
-    pub fn expr_count(&self) -> usize {
-        self.exprs.len()
-    }
-    pub fn add_expr(&mut self, expr: Expr) -> ExprId {
-        let r = ExprId(self.exprs.len() as u32);
-        self.exprs.push(expr);
-        r
-    }
-    pub fn add_defs(&mut self, defs: DHashMap<String, Definition>) -> Defs {
-        //defs.shrink_to_fit(); //PERF: test performance gains/losses of this
-        let idx = self.defs.len();
-        self.defs.push(defs);
-        Defs(idx as u32)
-    }
-
-    pub fn add_extra(&mut self, extra: &[ExprId]) -> ExprExtra {
-        let idx = ExprExtra { idx: self.extra.len() as u32, count: extra.len() as u32 };
-        self.extra.extend(extra);
-        idx
-    }
-
-    pub fn add_module(&mut self, module: Module, src: String, path: PathBuf) -> ModuleId {
-        let id = ModuleId(self.modules.len() as u32);
-        self.modules.push(module);
-        self.sources.push((src, path));
-        id
-    }
-
-    pub fn add_empty_module(&mut self, path: PathBuf, root_module: ModuleId) -> ModuleId {
-        let empty = Module::empty(self, root_module);
-        self.add_module(empty, String::new(), path)
-    }
-
-    pub fn add_empty_root_module(&mut self, path: PathBuf) -> ModuleId {
-        let empty = Module::empty(self, ModuleId(0)); // the zero id is replaced right below
-        let id = self.add_module(empty, String::new(), path);
-        self[id].root_module = id;
-        id
-    }
-
-    pub fn update(&mut self, id: ModuleId, module: Module, src: String, path: PathBuf) {
-        self.modules[id.0 as usize] = module;
-        self.sources[id.0 as usize] = (src, path);
-    }
-
-    pub fn add_func(&mut self, function: Function) -> FunctionId {
-        self.functions.push(function);
-        FunctionId((self.functions.len() - 1) as _)
-    }
-
-    pub fn add_type(&mut self, ty: TypeDef) -> TypeId {
-        self.types.push(ty);
-        TypeId((self.types.len() - 1) as _)
-    }
-
-    pub fn add_trait(&mut self, trait_def: TraitDefinition) -> TraitId {
-        self.traits.push(trait_def);
-        TraitId((self.traits.len() - 1) as _)
-    }
-
-    pub fn add_global(&mut self, global: GlobalDefinition) -> GlobalId {
-        self.globals.push(global);
-        GlobalId((self.globals.len() - 1) as _)
-    }
-    
-    /*
-    pub fn add_call(&mut self, call: Call) -> CallId {
-        self.calls.push(call);
-        CallId((self.calls.len() - 1) as _)
-    }
-
-    pub fn member_access_id(&mut self) -> MemberAccessId {
-        self.member_access_count += 1;
-        MemberAccessId(self.member_access_count - 1)
-    }
-    */
-    
-    pub fn src(&self, id: ModuleId) -> (&str, &Path) {
-        let t = &self.sources[id.0 as usize];
-        (&t.0, &t.1)
-    }
-}
-impl Index<ExprId> for Ast {
-    type Output = Expr;
-
-    fn index(&self, index: ExprId) -> &Self::Output {
-        &self.exprs[index.0 as usize]    
-    }   
-}
-impl IndexMut<ExprId> for Ast {
-    fn index_mut(&mut self, index: ExprId) -> &mut Self::Output {
-        &mut self.exprs[index.0 as usize]
-    }
-}
-impl Index<Defs> for Ast {
-    type Output = DHashMap<String, Definition>;
-
-    fn index(&self, index: Defs) -> &Self::Output {
-        &self.defs[index.0 as usize]
-    }
-}
-impl IndexMut<Defs> for Ast {
-    fn index_mut(&mut self, index: Defs) -> &mut Self::Output {
-        &mut self.defs[index.0 as usize]
-    }
-}
-impl Index<ModuleId> for Ast {
-    type Output = Module;
-
-    fn index(&self, index: ModuleId) -> &Self::Output {
-        &self.modules[index.0 as usize]
-    }
-}
-impl IndexMut<ModuleId> for Ast {
-    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
-        &mut self.modules[index.0 as usize]
-    }
-}
-impl Index<ExprExtra> for Ast {
-    type Output = [ExprId];
-
-    fn index(&self, index: ExprExtra) -> &Self::Output {
-        &self.extra[index.idx as usize .. index.idx as usize + index.count as usize]
-    }
-}
-impl Index<FunctionId> for Ast {
-    type Output = Function;
-
-    fn index(&self, id: FunctionId) -> &Self::Output {
-        &self.functions[id.idx()]
-    }
-}
-impl Index<TypeId> for Ast {
-    type Output = TypeDef;
-
-    fn index(&self, id: TypeId) -> &Self::Output {
-        &self.types[id.idx()]
-    }
-}
-impl Index<TraitId> for Ast {
-    type Output = TraitDefinition;
-
-    fn index(&self, id: TraitId) -> &Self::Output {
-        &self.traits[id.idx()]
-    }
-}
-impl Index<GlobalId> for Ast {
-    type Output = GlobalDefinition;
-
-    fn index(&self, id: GlobalId) -> &Self::Output {
-        &self.globals[id.idx()]
-    }
-}
 impl Index<CallId> for Ast {
     type Output = Call;
-
     fn index(&self, index: CallId) -> &Self::Output {
         &self.calls[index.idx()]
     }
 }
-*/
+impl Index<FunctionId> for Ast {
+    type Output = Function;
+    fn index(&self, index: FunctionId) -> &Self::Output {
+        &self.functions[index.idx()]
+    }
+}
+impl Index<GlobalId> for Ast {
+    type Output = Global;
+    fn index(&self, index: GlobalId) -> &Self::Output {
+        &self.globals[index.idx()]
+    }
+}
 
+pub struct AstBuilder {
+    scopes: Vec<Scope>,
+    exprs: Vec<Expr>,
+    calls: Vec<Call>,
+    functions: Vec<Function>,
+    globals: Vec<Global>,
+}
+impl AstBuilder {
+    pub fn new() -> Self {
+        Self {
+            exprs: Vec::new(),
+            calls: Vec::new(),
+            functions: Vec::new(),
+            scopes: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+
+    pub fn scope(&mut self, scope: Scope) -> ScopeId {
+        let id = ScopeId(self.scopes.len() as _);
+        self.scopes.push(scope);
+        id
+    }
+
+    pub fn expr(&mut self, expr: Expr) -> ExprId {
+        let id = ExprId(self.exprs.len() as _);
+        self.exprs.push(expr);
+        id
+    }
+
+    pub fn exprs(&mut self, exprs: impl IntoIterator<Item = Expr>) -> ExprExtra {
+        let idx = self.exprs.len();
+        self.exprs.extend(exprs);
+        let count = self.exprs.len() - idx;
+        ExprExtra { idx: idx as _, count: count as _ }
+    }
+
+    pub fn call(&mut self, call: Call) -> CallId {
+        let id = CallId(self.calls.len() as _);
+        self.calls.push(call);
+        id
+    }
+
+    pub fn function(&mut self, function: Function) -> FunctionId {
+        let id = FunctionId(self.functions.len() as _);
+        self.functions.push(function);
+        id
+    }
+
+    pub fn global(&mut self, global: Global) -> GlobalId {
+        let id = GlobalId(self.globals.len() as _);
+        self.globals.push(global);
+        id
+    }
+
+    pub fn get_expr(&self, expr: ExprId) -> &Expr {
+        &self.exprs[expr.idx()]
+    }
+
+    pub fn finish_with_top_level_scope(mut self, top_level_scope: Scope) -> Ast {
+        self.scopes.push(top_level_scope);
+        Ast {
+            exprs: self.exprs,
+            calls: self.calls,
+            functions: self.functions,
+            scopes: self.scopes,
+            globals: self.globals,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum TypeDef {
     Struct(StructDefinition),
     Enum(EnumDefinition),
@@ -242,9 +173,9 @@ impl TypeDef {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Scope {
-    pub definitions: DHashMap<String, ModuleItem>,
+    pub definitions: DHashMap<String, (ExprId, Counts)>,
     pub impls: Vec<TraitImpl>,
 }
 impl Scope {
@@ -256,6 +187,7 @@ impl Scope {
     }
 }
 
+#[derive(Debug)]
 pub struct ModuleItem {
     ast: Ast,
     resolved: Resolvable<Def>,
@@ -285,9 +217,15 @@ pub struct Defs(u32);
 
 #[derive(Debug, Clone)]
 pub enum Item {
-    Definition { name: String, name_span: TSpan, def: Definition },
+    Definition {
+        name: String,
+        name_span: TSpan,
+        value: ExprId,
+        counts: Counts,
+    },
+    Use(IdentPath),
     Impl(TraitImpl),
-    Expr(ExprId)
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +243,7 @@ impl TraitImpl {
     }
 }
 
+/*
 #[derive(Debug, Clone)]
 pub enum Definition {
     Function(FunctionId),
@@ -329,6 +268,7 @@ impl Definition {
         matches!(self, Self::Trait(..))
     }
 }
+*/
 
 // id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId ConstId MemberAccessId);
 // id!(u16, 2: VariantId);
@@ -359,25 +299,25 @@ impl EnumDefinition {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TraitDefinition {
     pub generics: Vec<GenericDef>,
     pub functions: DHashMap<String, (TSpan, Function)>,
 }
 
-pub struct GlobalDefinition {
+#[derive(Debug)]
+pub struct Global {
     pub ty: UnresolvedType,
     pub val: Option<(ExprId, Counts)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Function {
     pub generics: Vec<GenericDef>,
     pub params: Vec<(String, UnresolvedType, u32, u32)>,
-    //pub vararg: Option<(String, UnresolvedType, u32, u32)>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
-    pub body: Option<Ast>,
+    pub body: Option<ExprId>,
     pub counts: Counts,
     pub span: TSpan,
 }
@@ -391,7 +331,7 @@ pub struct GenericDef {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Block {
-        scope: Scope,
+        scope: ScopeId,
         items: ExprExtra,
         span: TSpan,
     },
@@ -503,7 +443,7 @@ pub enum Expr {
         idx: u32,
         end: u32,
     },
-    Cast(TSpan, UnresolvedType, ExprId),
+    As(ExprId, UnresolvedType),
     Root(u32),
     Asm {
         span: TSpan,
@@ -529,7 +469,6 @@ impl Expr {
             | Expr::Variable { span, .. }
             | Expr::Array(span, _)
             | Expr::Tuple(span, _)
-            | Expr::Cast(span, _, _)    
             | Expr::Match { span, .. }
             | Expr::EnumLiteral { span, .. }
             => *span,
@@ -562,6 +501,7 @@ impl Expr {
             Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::TupleIdx { expr, idx: _, end } => TSpan { start: s(expr), end: *end },
+            Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
             Expr::Asm { span, .. } => *span
         }
@@ -579,6 +519,7 @@ impl Expr {
     }
 }
 
+#[derive(Debug)]
 pub struct Call {
     pub called_expr: ExprId,
     pub args: ExprExtra,

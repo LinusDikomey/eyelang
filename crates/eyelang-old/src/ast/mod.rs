@@ -470,7 +470,7 @@ pub enum Expr {
         idx: u32,
         end: u32,
     },
-    Cast(TSpan, UnresolvedType, ExprRef),
+    As(ExprRef, UnresolvedType),
     Root(u32),
     Asm {
         span: TSpan,
@@ -496,7 +496,7 @@ impl Expr {
             | Expr::Variable { span, .. }
             | Expr::Array(span, _)
             | Expr::Tuple(span, _)
-            | Expr::Cast(span, _, _)    
+            | Expr::As(span, _, _)    
             | Expr::Match { span, .. }
             | Expr::EnumLiteral { span, .. }
             => *span,
