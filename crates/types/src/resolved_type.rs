@@ -3,14 +3,14 @@ use crate::Primitive;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Primitive(Primitive),
-    DefId { id: id::TypeDefId, generics: Vec<Type> },
+    DefId { id: id::TypeId, generics: Box<[Type]> },
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
-    Tuple(Vec<Type>),
+    Tuple(Box<[Type]>),
     /// A generic type that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
     /// a local enum that will only be created from inference
-    LocalEnum(Vec<Vec<Type>>),
+    LocalEnum(Box<[Box<[Type]>]>),
     /// Self type (only used in trait definitions)
     #[allow(dead_code)] // FIXME: remove this allow when it's used
     TraitSelf,

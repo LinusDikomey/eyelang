@@ -5,6 +5,7 @@ macro_rules! id {
         $(#[$($attrss)*])*
         pub struct $name(pub u32);
         impl $name {
+            pub const MISSING: Self = Self(u32::MAX);
             pub fn idx(self) -> usize {
                 self.0 as usize
             }
@@ -14,9 +15,6 @@ macro_rules! id {
 
 id!(ProjectId);
 id!(ModuleId);
-id!(ScopeId);
-id!(FunctionId);
-id!(TypeDefId);
 id!(TypeId);
 id!(ConstValueId);
 id!(TraitId);

@@ -4,7 +4,7 @@ use color_format::cwrite;
 use span::TSpan;
 use types::{Primitive, IntType, FloatType};
 
-use crate::parser::TokenTypes;
+use super::reader::TokenTypes;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {

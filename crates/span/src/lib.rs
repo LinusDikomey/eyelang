@@ -34,9 +34,16 @@ pub struct Span {
     pub module: ModuleId
 }
 impl Span {
+    pub const MISSING: Self = Self {
+        start: u32::MAX,
+        end: u32::MAX,
+        module: ModuleId::MISSING,
+    };
+
     pub fn new(start: u32, end: u32, module: ModuleId) -> Self {
         Self { start, end, module }
     }
+
 }
 
 #[derive(Debug, Clone, Copy)]

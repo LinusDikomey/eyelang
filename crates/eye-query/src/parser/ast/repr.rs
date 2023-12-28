@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use types::{IntType, FloatType};
 
-use crate::{parser::token::AssignType, Module};
+use crate::parser::token::AssignType;
 
 use super::*;
 
@@ -76,6 +76,7 @@ impl Representer for ReprPrinter<'_> {
 }
 
 
+/*
 impl<C: Representer> Repr<C> for Module {
     fn repr(&self, c: &C) {
         for (name, def) in &c.ast()[self.definitions] {
@@ -84,36 +85,30 @@ impl<C: Representer> Repr<C> for Module {
         }
     }
 }
+*/
 
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {
-        if !matches!(self, Self::Use(_)) {
+        if !matches!(self, Self::Path(_)) {
             c.write_start(name);
         }
-        if !matches!(self, Self::Global(_) | Self::Const { .. } | Self::Use(_)) {
-            c.write_add(" :: ");
-        }
         match self {
-            Self::Function(func) => c.ast()[*func].repr(c, false),
-            Self::Type(ty) => c.ast()[*ty].repr(c),
-            Self::Trait(t) => c.ast()[*t].repr(c),
-            Self::Module(_) => {}
-            Self::Use(path) => {
+            Self::Path(path) => {
                 c.write_start("use ");
                 path.repr(c);
                 
                 c.write_add(" as ");
                 c.write_add(name);
             }
-            Self::Const { ty, val, counts: _ } => {
+            Self::Expr { value, ty, counts: _ } => {
                 if let UnresolvedType::Infer(_) = ty {
                     c.write_add(" :: ");
-                }  else {
+                } else {
                     c.write_add(": ");
                     ty.repr(c);
                     c.write_add(" : ");
                 }
-                c.ast()[*val].repr(c);
+                c.ast()[*value].repr(c);
             }
             Self::Global(id) => {
                 let global = &c.ast()[*id];
@@ -135,10 +130,11 @@ impl Function {
         c.write_add("fn");
         if !self.params.is_empty() {
             c.write_add("(");
-            for (i, (name, param, _, _)) in self.params.iter().enumerate() {
-                c.write_add(name.as_str());
+            for (i, (name_span, ty)) in self.params.iter().enumerate() {
+                let name = c.src(*name_span);
+                c.write_add(name);
                 c.space();
-                param.repr(c);
+                ty.repr(c);
                 if i != self.params.len() - 1 {
                     c.write_add(", ");
                 }
@@ -226,23 +222,25 @@ impl TraitDefinition {
     }
 }
 
+
 impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
         let ast = c.ast();
-        match &self {
+        match self {
             &Self::Function { id } => {
-                c.ast()[*id].repr(c, false);
+                c.ast()[id].repr(c, false);
             }
+            &Self::Type { id } => c.ast()[id].repr(c),
             Self::Block { span: _, items, scope } => {
                 c.write_add("{\n");
                 let child = c.child();
-                for (name, def) in &ast[*scope] {
+                for (name, def) in &ast[*scope].definitions {
                     def.repr(&child, name);
                     c.writeln("\n");
                 }
                 for item in &ast[*items] {
                     child.write_start("");
-                    ast[*item].repr(&child);
+                    item.repr(&child);
                     child.writeln("");
                 }
                 c.write_start("}");
@@ -281,8 +279,8 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(c.src(*ident));
                 if args.count > 0 {
                     c.char('(');
-                    for arg in ast[*args].iter().copied() {
-                        ast[arg].repr(c);
+                    for arg in ast[*args].iter() {
+                        arg.repr(c);
                     }
                     c.char(')');
                 }
@@ -295,8 +293,11 @@ impl<C: Representer> Repr<C> for Expr {
                     }
                     c.write_add(c.src(*name));
                     c.space();
+                    // TODO: records will be thrown out, clean this up
+                    /*
                     let value = ast.extra[*values as usize + i];
                     ast[value].repr(c);
+                    */
                 }
                 c.write_add(" }")
             }
@@ -309,28 +310,28 @@ impl<C: Representer> Repr<C> for Expr {
             Self::Variable { span, .. } => c.write_add(c.src(*span)),
             Self::Hole(_) => c.char('_'),
             Self::Array(_, elems) => {
-                let elems = &ast[*elems];
+                let mut elems = ast[*elems].iter();
                 c.char('[');
-                let mut elems = elems.iter().copied();
                 if let Some(first) = elems.next() {
-                    ast[first].repr(c);
+                    first.repr(c);
                 }
                 for elem in elems {
                     c.write_add(", ");
-                    ast[elem].repr(c);
+                    elem.repr(c);
                 }
                 c.char(']');
             }
             Self::Tuple(_, elems) => {
-                let elems = &ast[*elems];
+                let mut elems_iter = ast[*elems].iter();
                 c.char('(');
-                let mut it = elems.iter().copied();
-                if let Some(f) = it.next() { ast[f].repr(c) };
-                for elem in it {
+                if let Some(elem) = elems_iter.next() {
+                    elem.repr(c);
+                };
+                for elem in elems_iter {
                     c.write_add(", ");
-                    ast[elem].repr(c);
+                    elem.repr(c);
                 }
-                if elems.len() == 1 {
+                if elems.count() == 1 {
                     c.char(',');
                 }
                 c.char(')');
@@ -391,8 +392,7 @@ impl<C: Representer> Repr<C> for Expr {
                 let match_c = c.child();
                 for [pat, branch] in ast[extra].array_chunks() {
                     c.begin_line();
-                    ast[*pat].repr(&match_c);
-                    let branch = &ast[*branch];
+                    pat.repr(&match_c);
                     if !matches!(branch, Expr::Block { .. }) {
                         match_c.write_add(": ");
                     }
@@ -432,7 +432,7 @@ impl<C: Representer> Repr<C> for Expr {
                 called.repr(c);
                 c.write_add("(");
                 for (i, arg) in args.iter().enumerate() {
-                    ast[*arg].repr(c);
+                    arg.repr(c);
                     if i != (args.len() - 1) {
                         c.write_add(", ");
                     }
@@ -477,18 +477,18 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char('.');
                 c.write_add(idx.to_string());
             }
-            Self::Cast(_, ty, expr) => {
-                ast[*expr].repr(c);
+            Self::As(val, ty) => {
+                ast[*val].repr(c);
                 c.write_add(" as ");
                 ty.repr(c);
-            },
+            }
             Self::Root(_) => c.write_add("root"),
             Self::Asm { span: _, asm_str_span, args } => {
                 c.write_add("asm(");
                 c.write_add(c.src(*asm_str_span));
                 for arg in &ast[*args] {
                     c.write_add(", ");
-                    ast[*arg].repr(c);
+                    arg.repr(c);
                 }
                 c.char(')');
             }
@@ -523,7 +523,7 @@ impl<R: Representer> Repr<R> for IdentPath {
 impl<R: Representer> Repr<R> for UnresolvedType {
     fn repr(&self, c: &R) {
         match self {
-            Self::Primitive(p, _) => p.repr(c),
+            Self::Primitive { ty, .. } => ty.repr(c),
             Self::Unresolved(path, generics) => {
                 path.repr(c);
                 if let Some((generics, _)) = generics {
@@ -543,7 +543,7 @@ impl<R: Representer> Repr<R> for UnresolvedType {
                 inner.repr(c);
             }
             Self::Array(array) => {
-                let (inner, _, size) = &**array;
+                let (inner, size, _) = &**array;
                 c.char('[');
                 inner.repr(c);
                 c.write_add("; ");

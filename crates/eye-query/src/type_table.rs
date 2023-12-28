@@ -1,8 +1,9 @@
-use id::TypeDefId;
+use id::TypeId;
 use types::{Type, Primitive};
 
 id::id!(LocalTypeId);
 
+#[derive(Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIdx>,
 }
@@ -89,6 +90,8 @@ impl TypeTable {
         self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unify(a_ty, info, self));
     }
 }
+
+#[derive(Debug)]
 enum TypeInfoOrIdx {
     TypeInfo(TypeInfo),
     Idx(LocalTypeId),
@@ -111,7 +114,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> TypeInfo {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct TypeIds {
     start: u32,
     count: u32,
@@ -122,11 +125,12 @@ impl TypeIds {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum TypeInfo {
     Unknown,
     Primitive(Primitive),
-    TypeDef(TypeDefId, TypeIds),
+    Integer,
+    TypeDef(TypeId, TypeIds),
     Pointer(LocalTypeId),
     Array {
         element: LocalTypeId,

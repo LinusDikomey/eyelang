@@ -14,12 +14,12 @@ use types::{UnresolvedType, Primitive};
 use crate::{error::{CompileError, Error, Errors}, parser::reader::match_or_unexpected};
 
 use self::{
-    ast::{Expr, Item, Global, GenericDef, StructDefinition, Function, ExprId, TraitDefinition, TraitImpl, UnOp, TypeDef, IdentId},
+    ast::{Expr, Item, Global, GenericDef, Function, ExprId, TraitDefinition, TraitImpl, UnOp, IdentId, Definition, ScopeId},
     token::{TokenType, Keyword, Operator}, reader::{Delimit, match_or_unexpected_value},
 };
 
 pub fn parse(
-    source: &str,
+    source: String,
     errors: &mut Errors,
     module: ModuleId,
 ) -> Option<ast::Ast> {
@@ -32,7 +32,7 @@ pub fn parse(
     };
 
     match parser.parse_module() {
-        Ok(scope) => Some(ast_builder.finish_with_top_level_scope(scope)),
+        Ok(scope) => Some(ast_builder.finish_with_top_level_scope(source, scope)),
         Err(err) => {
             errors.emit_err(err);
             None
@@ -118,93 +118,110 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_module(&mut self) -> ParseResult<ast::Scope> {
-        let mut definitions = dmap::new();
-        let mut impls = Vec::new();
-
-        while !self.toks.is_at_end() {
-            let start = self.toks.current().unwrap().start;
-            let name_pat = |pat: &Expr, s: &Self|  match pat {
-                Expr::Variable { span, .. } => Ok(*span),
-                expr => {
-                    Err(Error::InvalidGlobalVarPattern.at_span(expr.span_in(s.ast, s.toks.module)))
-                }
-            };
-            
-            let mut item_counts = Counts::new();
-
-            let def = match self.parse_item(&mut item_counts)? {
-                Item::Definition {
-                    name,
-                    name_span,
-                    value,
-                    counts,
-                } => Some((name, name_span, def)),
-                Item::Impl(impl_) => {
-                    impls.push(impl_);
-                    None
-                }
-                Item::Expr(r) => match &self.ast.get_expr(r) {
-                    Expr::Declare {
-                        pat,
-                        annotated_ty,
-                    } => {
-                        let name = name_pat(self.ast.get_expr(*pat), self)?;
-                        let id = self.ast.add_global(Global {
-                            ty: annotated_ty.clone(),
-                            val: None
-                        });
-                        Some((
-                            self.src[name.range()].to_owned(),
-                            name,
-                            Definition::Global(id),
-                        ))
-                    },
-                    Expr::DeclareWithVal {
-                        pat,
-                        annotated_ty,
-                        val,
-                    } => {
-                        let name = name_pat(self.ast.get_expr(*pat), self)?;
-                        let id = self.ast.add_global(Global {
-                            ty: annotated_ty.clone(),
-                            val: Some((*val, item_counts))
-                        });
-                        Some((
-                            self.src[name.range()].to_owned(),
-                            name,
-                            Definition::Global(id),
-                        ))
-                    },
-                    _ => {
-                        return Err(CompileError {
-                            err: Error::InvalidTopLevelBlockItem,
-                            span: Span {
-                                start,
-                                end: self.toks.current_end_pos(),
-                                module: self.toks.module,
-                            },
-                        })
-                    }
-                },
-            };
-            if let Some((name, name_span, def)) = def {
-                if let Some(_existing) = definitions.insert(name, def) {
-                    return Err(Error::DuplicateDefinition.at(
-                        name_span.start,
-                        name_span.end,
-                        self.toks.module,
-                    ));
-                }
-            }
-        }
-        Ok(ast::Scope {
-            definitions: self.ast.add_defs(definitions),
-            impls,
-        })
+    fn parse_module(&mut self) -> ParseResult<ScopeId> {
+        self.parse_items_until(|p| p.toks.is_at_end(), None, Self::on_module_level_expr)
     }
 
-    fn parse_block_or_expr(&mut self, counts: &mut Counts) -> ParseResult<Expr> {
+    fn parse_items_until(
+        &mut self,
+        mut end: impl FnMut(&mut Self) -> bool,
+        parent: Option<ScopeId>,
+        mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, Expr, Span, Counts) -> ParseResult<()>,
+    ) -> ParseResult<ScopeId> {
+        let scope_id = self.ast.scope(ast::Scope::empty(parent));
+        let mut scope = ast::Scope::empty(parent);
+
+        while !end(self) {
+            let start = self.toks.current().unwrap().start; 
+
+            let mut counts = Counts::new();
+
+            match self.parse_item(scope_id, &mut counts)? {
+                Item::Definition { name, name_span, value, counts } => {
+                    let prev = scope.definitions.insert(name, Definition::Expr {
+                        value,
+                        ty: UnresolvedType::Infer(0),
+                        counts,
+                    });
+                    if let Some(_) = prev {
+                        return Err(Error::DuplicateDefinition.at(
+                            name_span.start,
+                            name_span.end,
+                            self.toks.module,
+                        ));
+                    }
+                }
+                Item::Use(path) => {
+                    let (_, _, name) = path.segments(self.src);
+                    let name = name.map_or("root", |(name, _)| name).to_owned();
+                    scope.definitions.insert(name, Definition::Path(path));
+                }
+                Item::Impl(impl_) => {
+                    scope.impls.push(impl_);
+                }
+                Item::Expr(r) => {
+                    let span = Span {
+                        start,
+                        end: self.toks.current_end_pos(),
+                        module: self.toks.module,
+                    };
+                    on_expr(self, &mut scope, r, span, counts)?;
+                }
+            };
+        }
+        Ok(scope_id)
+    }
+
+    fn on_module_level_expr(
+        &mut self,
+        scope: &mut ast::Scope,
+        expr: Expr,
+        span: Span,
+        counts: Counts,
+    ) -> ParseResult<()> {
+        let expr = self.ast.expr(expr);
+        let name_pat = |pat: &Expr, s: &Self| match pat {
+            Expr::Variable { span, .. } => Ok(*span),
+            expr => {
+                todo!("can't return error right now because retrieving span with AstBuilder doesn't work")
+                // Err(Error::InvalidGlobalVarPattern.at_span(pat.span_in(self.ast, s.toks.module)))
+            }
+        };
+        let (pat, global) = match self.ast.get_expr(expr) {
+            Expr::Declare {
+                pat,
+                annotated_ty,
+            } => {
+                (pat, Global {
+                    ty: annotated_ty.clone(),
+                    val: None
+                })
+            }
+            Expr::DeclareWithVal {
+                pat,
+                annotated_ty,
+                val,
+            } => {
+                (pat, Global {
+                    ty: annotated_ty.clone(),
+                    val: Some((*val, counts))
+                })
+            }
+            _ => {
+                return Err(CompileError {
+                    err: Error::InvalidTopLevelBlockItem,
+                    span,
+                })
+            }
+        };
+        let name = name_pat(self.ast.get_expr(*pat), self)?;
+        let id = self.ast.global(global);
+        let name = self.src[name.range()].to_owned();
+        scope.definitions.insert(name, Definition::Global(id));
+        Ok(())
+    }
+
+    fn parse_block_or_expr(&mut self, scope: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
         match_or_unexpected!(
             self.toks.peek()
                 .ok_or_else(|| Error::UnexpectedEndOfFile.at(
@@ -213,60 +230,47 @@ impl<'a> Parser<'a> {
                     self.toks.module
                 ))?,
             self.toks.module,
-            TokenType::LBrace = TokenType::LBrace => self.parse_block(counts),
+            TokenType::LBrace = TokenType::LBrace => self.parse_block(scope, counts),
             TokenType::Colon = TokenType::Colon => {
                 self.toks.step_expect(TokenType::Colon)?;
-                self.parse_expr(counts)
+                self.parse_expr(scope, counts)
             }
         )
     }
 
-    fn parse_block(&mut self, counts: &mut Counts) -> ParseResult<Expr> {
+    fn parse_block(&mut self, parent: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-        self.parse_block_from_lbrace(lbrace, counts)
+        self.parse_block_from_lbrace(lbrace, parent, counts)
     }
 
-    fn parse_block_from_lbrace(&mut self, lbrace: Token, counts: &mut Counts) -> ParseResult<Expr> {
+    fn parse_block_from_lbrace(
+        &mut self,
+        lbrace: Token,
+        parent: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Expr> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
-
-        let mut definitions = dmap::new();
-        let mut impls = Vec::new();
         let mut items = Vec::new();
 
-        while self.toks.current()?.ty != TokenType::RBrace {
-            let start = self.toks.current().unwrap().start;
-            match self.parse_item(counts)? {
-                Item::Definition {
-                    name,
-                    name_span: _,
-                    value,
-                    counts,
-                } => {
-                    if let Some(_existing) = definitions.insert(name, (value, counts)) {
-                        let end = self.toks.current().unwrap().end;
-                        return Err(Error::DuplicateDefinition.at(start, end, self.toks.module));
-                    }
-                }
-                Item::Impl(impl_) => impls.push(impl_),
-                Item::Expr(item) => items.push(item),
-            }
-        }
-        let rbrace = self.toks.step_expect(TokenType::RBrace)?;
+        let mut end = u32::MAX;
+
+        let scope = self.parse_items_until(
+            |p| p.toks.step_if(TokenType::RBrace).inspect(|rbrace| end = rbrace.end).is_some(),
+            Some(parent),
+            |_, _, expr, _, _| { items.push(expr); Ok(())}
+        )?;
+
+        debug_assert_ne!(end, u32::MAX);
+
         let items = self.ast.exprs(items);
-
-        let scope = self.ast.scope(ast::Scope {
-            definitions,
-            impls,
-        });
-
         Ok(Expr::Block {
             scope,
             items,
-            span: TSpan::new(lbrace.start, rbrace.end),
+            span: TSpan::new(lbrace.start, end),
         })
     }
 
-    fn parse_item(&mut self, counts: &mut Counts) -> Result<Item, CompileError> {
+    fn parse_item(&mut self, scope: ScopeId, counts: &mut Counts) -> Result<Item, CompileError> {
         let cur = self.toks.current()?;
         Ok(match cur.ty {
             // use statement
@@ -283,7 +287,7 @@ impl<'a> Parser<'a> {
             // Trait implementation
             TokenType::Keyword(Keyword::Impl) => {
                 let impl_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Impl));
-                Item::Impl(self.parse_trait_impl(impl_tok)?)
+                Item::Impl(self.parse_trait_impl(impl_tok, scope)?)
             }
             // either a struct, constant or a variable
             TokenType::Ident => {
@@ -324,7 +328,8 @@ impl<'a> Parser<'a> {
                         };
                         */
                         let mut counts = Counts::new();
-                        let value = self.ast.expr(self.parse_expr(&mut counts)?);
+                        let value = self.parse_expr(scope, &mut counts)?;
+                        let value = self.ast.expr(value);
                         Item::Definition {
                             name: name.to_owned(),
                             name_span: ident_span,
@@ -339,7 +344,8 @@ impl<'a> Parser<'a> {
                         if self.toks.step_if(TokenType::Equals).is_some() {
                             // typed variable with initial value
                             let pat = self.ast.expr(Expr::Variable { span: ident_span, id: counts.ident() });
-                            let val = self.ast.expr(self.parse_expr(counts)?);
+                            let val = self.parse_expr(scope, counts)?;
+                            let val = self.ast.expr(val);
                             Item::Expr(Expr::DeclareWithVal {
                                 pat,
                                 annotated_ty: ty,
@@ -348,10 +354,11 @@ impl<'a> Parser<'a> {
                         } else if self.toks.step_if(TokenType::Colon).is_some() {
                             // typed constant
                             let mut counts = Counts::new();
+                            let value = self.parse_expr(scope, &mut counts)?;
                             Item::Definition {
                                 name: name.to_owned(),
                                 name_span: ident_span,
-                                value: self.ast.expr(self.parse_expr(&mut counts)?),
+                                value: self.ast.expr(value),
                                 counts,
                             }
                         } else {
@@ -367,32 +374,37 @@ impl<'a> Parser<'a> {
                     Some(TokenType::Declare) => {
                         let decl_start = self.toks.step_assert(TokenType::Declare).start;
                         let pat = self.ast.expr(Expr::Variable { span: ident_span, id: counts.ident() });
-                        let val = self.ast.expr(self.parse_expr(counts)?);
+                        let val = self.parse_expr(scope, counts)?;
 
                         Item::Expr(Expr::DeclareWithVal {
                             pat,
                             annotated_ty: UnresolvedType::Infer(decl_start),
-                            val,
+                            val: self.ast.expr(val),
                         })
                     }
                     _ => {
-                        let var = self.ast.expr(Expr::Variable { span: ident_span, id: counts.ident() });
-                        let expr = self.parse_stmt_starting_with(var, counts)?;
+                        let var = Expr::Variable { span: ident_span, id: counts.ident() };
+                        let expr = self.parse_stmt_starting_with(var, scope, counts)?;
                         Item::Expr(expr)
                     }
                 }
             }
-            _ => Item::Expr(self.parse_stmt(counts)?),
+            _ => Item::Expr(self.parse_stmt(scope, counts)?),
         })
     }
 
-    fn parse_function_def(&mut self, fn_tok: Token) -> ParseResult<Function> {
-        let mut func = self.parse_function_header(fn_tok)?;
-        func.body = self.parse_function_body(&mut func.counts)?;
+    fn parse_function_def(&mut self, fn_tok: Token, scope: ScopeId) -> ParseResult<Function> {
+        let mut func = self.parse_function_header(fn_tok, scope)?;
+        func.body = self.parse_function_body(func.scope, &mut func.counts)?;
         Ok(func)
     }
 
-    fn struct_definition(&mut self, name: &str, struct_tok: Token) -> Result<StructDefinition, Error> {
+    fn struct_definition(
+        &mut self,
+        name: String,
+        struct_tok: Token,
+        scope: ScopeId,
+    ) -> ParseResult<ast::StructDefinition> {
         debug_assert_eq!(struct_tok.ty, TokenType::Keyword(Keyword::Struct));
         let generics = self.parse_optional_generics()?;
 
@@ -400,12 +412,12 @@ impl<'a> Parser<'a> {
 
         let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
         let mut methods = dmap::new();
-        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                let method = p.parse_function_def(fn_tok)?;
-                let func_id = p.ast.add_func(method);
+                let method = p.parse_function_def(fn_tok, scope)?;
+                let func_id = p.ast.function(method);
                 let name = ident.get_val(p.src).to_owned();
                 if let Some(_existing) = methods.insert(name, func_id) {
                     return Err(CompileError::new(
@@ -422,22 +434,29 @@ impl<'a> Parser<'a> {
                 Ok(Delimit::OptionalIfNewLine)
             }
         })?;
-        Ok(StructDefinition {
-            name: name.to_owned(),
+        Ok(ast::StructDefinition {
+            name,
             generics: generics.map_or(Vec::new(), |g| g.1),
             members,
             methods,
+            span: TSpan::new(struct_tok.start, rbrace.end),
         })
     }
 
-    fn enum_definition(&mut self, name: String) -> ParseResult<ast::EnumDefinition> {
+    fn enum_definition(
+        &mut self,
+        name: String,
+        enum_tok: Token,
+        scope: ScopeId,
+    ) -> ParseResult<ast::EnumDefinition> {
+        debug_assert_eq!(enum_tok.ty, TokenType::Keyword(Keyword::Enum));
         let generics = self.parse_optional_generics()?;
 
         self.toks.step_expect(TokenType::LBrace)?;
         let mut variants = Vec::new();
         let mut methods = dmap::new();
 
-        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             match p.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => { 
@@ -457,8 +476,8 @@ impl<'a> Parser<'a> {
                     p.toks.step_assert(TokenType::DoubleColon);
 
                     let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                    let method = p.parse_function_def(fn_tok)?;
-                    let func_id = p.ast.add_func(method);
+                    let method = p.parse_function_def(fn_tok, scope)?;
+                    let func_id = p.ast.function(method);
                     let name = ident.get_val(p.src).to_owned();
                     if let Some(_existing) = methods.insert(name, func_id) {
                         return Err(CompileError::new(
@@ -481,17 +500,20 @@ impl<'a> Parser<'a> {
             generics: generics.map_or(Vec::new(), |g| g.1),
             variants,
             methods,
+            span: TSpan::new(enum_tok.start, rbrace.end),
         })
     }
     
     /// Will just return a function with the body always set to `None`
-    fn parse_function_header(&mut self, fn_tok: Token) -> ParseResult<Function> {
+    fn parse_function_header(&mut self, fn_tok: Token, scope: ScopeId) -> ParseResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
         let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
 
         let mut params = Vec::new();
         let mut varargs = false;
+
+        let function_scope = self.ast.scope(ast::Scope::empty(Some(scope)));
 
         if self.toks.step_if(TokenType::LParen).is_some() {
             self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
@@ -508,10 +530,9 @@ impl<'a> Parser<'a> {
                     varargs = true;
                 } else {
                     let name_tok = p.toks.step_expect(TokenType::Ident)?;
-                    let name = name_tok.get_val(p.src).to_owned();
-                    let (s, e) = (name_tok.start, name_tok.end);
+                    let name_span = TSpan::new(name_tok.start, name_tok.end);
                     let ty = p.parse_type()?;
-                    params.push((name, ty, s, e));
+                    params.push((name_span, ty));
                 }
                 Ok(())
             })?;
@@ -537,15 +558,24 @@ impl<'a> Parser<'a> {
             body: None,
             counts: Counts { idents: ident_count },
             span: TSpan { start, end },
+            scope: function_scope,
         })
     }
 
-    fn parse_function_body(&mut self, counts: &mut Counts) -> ParseResult<Option<Expr>> {
+    fn parse_function_body(
+        &mut self,
+        scope: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Option<ExprId>> {
         let first = self.toks.step()?;
         Ok(match_or_unexpected! {first, self.toks.module,
-            TokenType::LBrace = TokenType::LBrace => Some(self.parse_block_from_lbrace(first, counts)?),
+            TokenType::LBrace = TokenType::LBrace => {
+                let block = self.parse_block_from_lbrace(first, scope, counts)?;
+                Some(self.ast.expr(block))
+            },
             TokenType::Colon = TokenType::Colon => {
-                Some(self.parse_expr(counts)?)
+                let val = self.parse_expr(scope, counts)?;
+                Some(self.ast.expr(val))
             },
             TokenType::Keyword(Keyword::Extern) = TokenType::Keyword(Keyword::Extern) => {
                 None
@@ -553,7 +583,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_trait_def(&mut self, trait_tok: Token) -> ParseResult<TraitDefinition> {
+    fn parse_trait_def(&mut self, trait_tok: Token, scope: ScopeId) -> ParseResult<TraitDefinition> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
         self.toks.step_expect(TokenType::LBrace)?;
@@ -567,13 +597,12 @@ impl<'a> Parser<'a> {
                     let name_span = next.span();
                     self.toks.step_expect(TokenType::DoubleColon)?;
                     let fn_tok = self.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                    let mut func = self.parse_function_header(fn_tok)?;
+                    let mut func = self.parse_function_header(fn_tok, scope)?;
                     if matches!(
                         self.toks.peek().map(|t| t.ty),
                         Some(TokenType::Colon | TokenType::LBrace)
                     ) {
-                        func.body = self.parse_function_body(&mut func.counts)?
-                            .map(|body| self.ast.expr(body));
+                        func.body = self.parse_function_body(func.scope, &mut func.counts)?;
                     }
                     let previous = functions.insert(name, (name_span, func));
                     if previous.is_some() {
@@ -592,7 +621,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_trait_impl(&mut self, impl_tok: Token) -> ParseResult<TraitImpl> {
+    fn parse_trait_impl(&mut self, impl_tok: Token, scope: ScopeId) -> ParseResult<TraitImpl> {
         debug_assert_eq!(impl_tok.ty, TokenType::Keyword(Keyword::Impl));
         let impl_generics = self.parse_optional_generics()?;
         let trait_path = self.parse_path()?;
@@ -609,8 +638,8 @@ impl<'a> Parser<'a> {
             let name = name.get_val(p.src).to_owned();
             p.toks.step_expect(TokenType::DoubleColon)?;
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-            let func = p.parse_function_def(fn_tok)?;
-            let func_id = p.ast.add_func(func);
+            let func = p.parse_function_def(fn_tok, scope)?;
+            let func_id = p.ast.function(func);
             let previous = functions.insert(name, func_id);
             if previous.is_some() {
                 return Err(CompileError::new(
@@ -630,68 +659,77 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_stmt(&mut self, ident_count: &mut Counts) -> ParseResult<ExprId> {
-        let expr = self.parse_expr(ident_count)?;
-        self.stmt_postfix(expr, ident_count)
+    fn parse_stmt(&mut self, scope: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
+        let expr = self.parse_expr(scope, counts)?;
+        self.stmt_postfix(expr, scope, counts)
     }
 
-    fn parse_stmt_starting_with(&mut self, expr: ExprId, ident_count: &mut Counts) -> ParseResult<Expr> {
-        let lhs = self.parse_factor_postfix(expr, true, ident_count)?;
-        let expr = self.parse_bin_op_rhs(0, lhs, ident_count)?;
-        self.stmt_postfix(expr, ident_count)
+    fn parse_stmt_starting_with(
+        &mut self,
+        expr: Expr,
+        scope: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Expr> {
+        let lhs = self.parse_factor_postfix(expr, true, scope, counts)?;
+        let expr = self.parse_bin_op_rhs(0, lhs, scope, counts)?;
+        self.stmt_postfix(expr, scope, counts)
     }
 
-    fn stmt_postfix(&mut self, expr: ExprId, ident_count: &mut Counts) -> ParseResult<ExprId> {
+    fn stmt_postfix(&mut self, expr: Expr, scope: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
         let expr = if self.toks.step_if(TokenType::Colon).is_some() {
             let annotated_ty = self.parse_type()?;
             match self.toks.step_if(TokenType::Equals) {
-                Some(_) => Expr::DeclareWithVal {
-                    pat: expr,
-                    annotated_ty,
-                    val: self.parse_expr(ident_count)?,
-                },
+                Some(_) => {
+                    let val = self.parse_expr(scope, counts)?;
+                    Expr::DeclareWithVal {
+                        pat: self.ast.expr(expr),
+                        annotated_ty,
+                        val: self.ast.expr(val),
+                    }
+                }
                 None => Expr::Declare {
-                    pat: expr,
+                    pat: self.ast.expr(expr),
                     annotated_ty,
                 }
             }
             
         } else if let Some(declare) = self.toks.step_if(TokenType::Declare) {
+            let val = self.parse_expr(scope, counts)?;
             Expr::DeclareWithVal {
-                pat: expr,
+                pat: self.ast.expr(expr),
                 annotated_ty: UnresolvedType::Infer(declare.start),
-                val: self.parse_expr(ident_count)?
+                val: self.ast.expr(val),
             }
         } else {
             return Ok(expr);
         };
-        Ok(self.ast.expr(expr))
+        Ok(expr)
     }
 
-    fn parse_expr(&mut self, counts: &mut Counts) -> ParseResult<Expr> {
-        let lhs = self.parse_factor(true, counts)?;
-        self.parse_bin_op_rhs(0, lhs, counts)
+    fn parse_expr(&mut self, scope: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
+        let lhs = self.parse_factor(true, scope, counts)?;
+        self.parse_bin_op_rhs(0, lhs, scope, counts)
     }
 
     
 
-    fn parse_factor(&mut self, include_as: bool, counts: &mut Counts) -> ParseResult<Expr> {
+    fn parse_factor(&mut self, include_as: bool, scope: ScopeId, counts: &mut Counts) -> ParseResult<Expr> {
         let first = self.toks.step()?;
         let start = first.start;
         let expr = match_or_unexpected_value!(first,
             self.toks.module, ExpectedTokens::Expr,
             TokenType::Keyword(Keyword::Fn) => {
-                let func = self.parse_function_def(first)?;
+                let func = self.parse_function_def(first, scope)?;
                 Expr::Function { id: self.ast.function(func) }
             },
             TokenType::LBrace => {
-                let block = self.parse_block_from_lbrace(first, counts)?;
-                return Ok(self.parse_factor_postfix(block, true, counts)?);
+                let block = self.parse_block_from_lbrace(first, scope, counts)?;
+                return Ok(self.parse_factor_postfix(block, true, scope, counts)?);
             },
             TokenType::LBracket => {
                 let mut elems = Vec::new();
                 let closing = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
-                    elems.push(p.parse_expr(counts)?);
+                    elems.push(p.parse_expr(scope, counts)?);
                     Ok(())
                 })?;
                 Expr::Array(TSpan::new(start, closing.end), self.ast.exprs(elems))
@@ -700,7 +738,7 @@ impl<'a> Parser<'a> {
                 if let Some(closing) = self.toks.step_if(TokenType::RParen) {
                     Expr::Unit(TSpan::new(start, closing.end))
                 } else {
-                    let expr = self.parse_expr(counts)?;
+                    let expr = self.parse_expr(scope, counts)?;
                     let after_expr = self.toks.step()?;
                     match_or_unexpected! { after_expr, self.toks.module,
                         TokenType::RParen = TokenType::RParen
@@ -709,7 +747,7 @@ impl<'a> Parser<'a> {
                             // tuple
                             let mut elems = vec![expr];
                             let end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                                elems.push(p.parse_expr(counts)?);
+                                elems.push(p.parse_expr(scope, counts)?);
                                 Ok(())
                             })?.end;
                             Expr::Tuple(TSpan::new(start, end), self.ast.exprs(elems))
@@ -717,12 +755,26 @@ impl<'a> Parser<'a> {
                     }
                 }
             },
-            TokenType::Minus => Expr::UnOp(start, UnOp::Neg, self.ast.expr(self.parse_factor(false, counts)?)),
-            TokenType::Bang => Expr::UnOp(start, UnOp::Not, self.ast.expr(self.parse_factor(false, counts)?)),
-            TokenType::Ampersand => Expr::UnOp(start, UnOp::Ref, self.ast.expr(self.parse_factor(false, counts)?)),
+            TokenType::Minus => {
+                let val = self.parse_factor(false, scope, counts)?;
+                Expr::UnOp(start, UnOp::Neg, self.ast.expr(val))
+            },
+            TokenType::Bang => {
+                let val = self.parse_factor(false, scope, counts)?;
+                Expr::UnOp(start, UnOp::Not, self.ast.expr(val))
+            },
+            TokenType::Ampersand => {
+                let val = self.parse_factor(false, scope, counts)?;
+                Expr::UnOp(
+                    start,
+                    UnOp::Ref,
+                    self.ast.expr(val),
+                )
+            },
             TokenType::Keyword(Keyword::Ret) => {
                 if self.toks.more_on_line() {
-                    let val = self.ast.expr(self.parse_expr(counts)?);
+                    let val = self.parse_expr(scope, counts)?;
+                    let val = self.ast.expr(val);
                     Expr::Return { start, val }
                 } else {
                     Expr::ReturnUnit { start }
@@ -736,11 +788,14 @@ impl<'a> Parser<'a> {
             TokenType::Ident => Expr::Variable { span: first.span(), id: counts.ident() },
             TokenType::Underscore => Expr::Hole(first.start),
             TokenType::Keyword(Keyword::If) => {
-                let cond = self.ast.expr(self.parse_expr(counts)?);
+                let cond = self.parse_expr(scope, counts)?;
+                let cond = self.ast.expr(cond);
                 let pat_value = self.toks.step_if(TokenType::Declare).map(|_| {
-                    Ok(self.ast.expr(self.parse_expr(counts)?))
+                    let pat_value = self.parse_expr(scope, counts)?;
+                    Ok(self.ast.expr(pat_value))
                 }).transpose()?;
-                let then = self.ast.expr(self.parse_block_or_expr(counts)?);
+                let then = self.parse_block_or_expr(scope, counts)?;
+                let then = self.ast.expr(then);
 
                 let else_ = if let Some(tok) = self.toks.peek() {
                     if tok.ty == TokenType::Keyword(Keyword::Else) {
@@ -749,7 +804,8 @@ impl<'a> Parser<'a> {
                         self.toks.peek()
                             .ok_or_else(|| Error::UnexpectedEndOfFile.at(else_pos, else_pos, self.toks.module))?;
 
-                        Some(self.ast.expr(self.parse_expr(counts)?))
+                        let else_ = self.parse_expr(scope, counts)?;
+                        Some(self.ast.expr(else_))
                     } else { None }
                 } else { None };
 
@@ -761,27 +817,28 @@ impl<'a> Parser<'a> {
                 }
             },
             TokenType::Keyword(Keyword::Match) => {
-                let val = self.ast.expr(self.parse_expr(counts)?);
+                let val = self.parse_expr(scope, counts)?;
+                let val = self.ast.expr(val);
                 let lbrace = self.toks.step_expect(TokenType::LBrace)?;
 
                 let mut branches = Vec::new();
                 let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
-                    let pat = p.parse_expr(counts)?;
+                    let pat = p.parse_expr(scope, counts)?;
                     let next = p.toks.step()?;
                     let (branch, delimit) = match_or_unexpected!{next, p.toks.module,
                         TokenType::Colon = TokenType::Colon => {
-                            (p.parse_expr(counts)?, Delimit::Yes)
+                            (p.parse_expr(scope, counts)?, Delimit::Yes)
                         },
                         TokenType::LBrace = TokenType::LBrace => {
-                            (p.parse_block_from_lbrace(next, counts)?, Delimit::Optional)
+                            (p.parse_block_from_lbrace(next, scope, counts)?, Delimit::Optional)
                         }
                     };
                     branches.extend([pat, branch]);
                     Ok(delimit)
                 })?;
-                let extra_branches = self.ast.exprs(branches).idx;
                 debug_assert_eq!(branches.len() % 2, 0);
                 let branch_count = (branches.len() / 2) as u32;
+                let extra_branches = self.ast.exprs(branches).idx;
                 Expr::Match {
                     span: TSpan::new(lbrace.start, rbrace.end),
                     val,
@@ -789,7 +846,7 @@ impl<'a> Parser<'a> {
                     branch_count,
                 }
             },
-            TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, counts)?,
+            TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, scope, counts)?,
             TokenType::Keyword(Keyword::Primitive(p)) => todo!("handle primitive exprs"),
             TokenType::Keyword(Keyword::Root) => {
                 Expr::Root(start)
@@ -798,13 +855,13 @@ impl<'a> Parser<'a> {
                 let tok = self.toks.step()?;
                 match_or_unexpected! {tok, self.toks.module,
                     TokenType::Ident = TokenType::Ident => {
-                        let (args, end) = self.parse_enum_args(counts)?;
-                        let args = self.ast.add_extra(&args);
+                        let (args, end) = self.parse_enum_args(scope, counts)?;
+                        let args = self.ast.exprs(args);
                         let span = TSpan::new(start, end.unwrap_or(tok.end));
                         Expr::EnumLiteral { span, ident: tok.span(), args }
                     },
                     TokenType::LBrace = TokenType::LBrace => {
-                        self.parse_record(tok, counts)?
+                        unimplemented!("no more record syntax")
                     }
                 }
                 
@@ -820,16 +877,21 @@ impl<'a> Parser<'a> {
                         TokenType::RParen => break paren_or_comma.end,
                         _ => unreachable!()
                     }
-                    args.push(self.parse_expr(counts)?);
+                    args.push(self.parse_expr(scope, counts)?);
                 };
-                Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.add_extra(&args) }
+                Expr::Asm { span: TSpan::new(start, end), asm_str_span, args: self.ast.exprs(args) }
             }
         );
-        let expr = self.ast.add_expr(expr);
-        self.parse_factor_postfix(expr, include_as, counts)
+        self.parse_factor_postfix(expr, include_as, scope, counts)
     }
 
-    fn parse_factor_postfix(&mut self, mut expr: Expr, include_as: bool, ident_count: &mut Counts) -> ParseResult<Expr> {
+    fn parse_factor_postfix(
+        &mut self,
+        mut expr: Expr,
+        include_as: bool,
+        scope: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Expr> {
         loop {
             expr = match self.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
@@ -843,13 +905,14 @@ impl<'a> Parser<'a> {
                     let mut args = Vec::new();
                     let end = self
                         .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                            args.push(p.parse_expr(ident_count)?);
+                            args.push(p.parse_expr(scope, counts)?);
                             Ok(())
                         })?
                         .end;
+                    let called_expr = self.ast.expr(expr);
                     let args = self.ast.exprs(args);
                     let call = self.ast.call(ast::Call {
-                        called_expr: self.ast.expr(expr),
+                        called_expr,
                         args,
                         end,
                     });
@@ -863,7 +926,8 @@ impl<'a> Parser<'a> {
                     self.toks.step_assert(TokenType::LBracket);
 
                     // array index
-                    let idx = self.ast.expr(self.parse_expr(ident_count)?);
+                    let idx = self.parse_expr(scope, counts)?;
+                    let idx = self.ast.expr(idx);
 
                     let end = self.toks.step_expect(TokenType::RBracket)?.end;
 
@@ -902,17 +966,21 @@ impl<'a> Parser<'a> {
                 }
                 Some(TokenType::Keyword(Keyword::As)) if include_as => {
                     self.toks.step_assert(TokenType::Keyword(Keyword::As));
-                    let span =
-                        TSpan::new(expr.start(self.ast), self.toks.current_end_pos());
                     let target_ty = self.parse_type()?;
-                    Expr::Cast(span, target_ty, self.ast.expr(expr))
+                    Expr::As(self.ast.expr(expr), target_ty)
                 }
                 _ => break Ok(expr),
             };
         }
     }
 
-    fn parse_bin_op_rhs(&mut self, expr_prec: u8, mut lhs: Expr, ident_count: &mut Counts) -> ParseResult<Expr> {
+    fn parse_bin_op_rhs(
+        &mut self,
+        expr_prec: u8,
+        mut lhs: Expr,
+        scope: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Expr> {
         while let Some(op) = self
             .toks
             .peek()
@@ -923,7 +991,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             self.toks.step().unwrap(); // op
-            let mut rhs = self.parse_factor(true, ident_count)?;
+            let mut rhs = self.parse_factor(true, scope, counts)?;
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
@@ -933,7 +1001,7 @@ impl<'a> Parser<'a> {
                 .and_then(|t| Option::<Operator>::from(t.ty))
             {
                 if op_prec < next_op.precedence() {
-                    rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs, ident_count)?;
+                    rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs, scope, counts)?;
                 }
             }
             lhs = Expr::BinOp(op, self.ast.expr(lhs), self.ast.expr(rhs));
@@ -942,12 +1010,20 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(&mut self, while_tok: Token, ident_count: &mut Counts) -> ParseResult<Expr> {
+    fn parse_while_from_cond(
+        &mut self,
+        while_tok: Token,
+        scope: ScopeId,
+        counts: &mut Counts,
+    ) -> ParseResult<Expr> {
         debug_assert_eq!(while_tok.ty, TokenType::Keyword(Keyword::While));
-        let cond = self.ast.expr(self.parse_expr(ident_count)?);
+        let cond = self.parse_expr(scope, counts)?;
+        let cond = self.ast.expr(cond);
         if self.toks.step_if(TokenType::Declare).is_some() {
-            let val = self.ast.expr(self.parse_expr(ident_count)?);
-            let body = self.ast.expr(self.parse_block_or_expr(ident_count)?);
+            let val = self.parse_expr(scope, counts)?;
+            let val = self.ast.expr(val);
+            let body = self.parse_block_or_expr(scope, counts)?;
+            let body = self.ast.expr(body);
             Ok(Expr::WhilePat {
                 start: while_tok.start,
                 pat: cond,
@@ -955,11 +1031,11 @@ impl<'a> Parser<'a> {
                 body,
             })
         } else {
-            let body = self.ast.expr(self.parse_block_or_expr(ident_count)?);
+            let body = self.parse_block_or_expr(scope, counts)?;
             Ok(Expr::While {
                 start: while_tok.start,
                 cond,
-                body,
+                body: self.ast.expr(body),
             })
         }
     }
@@ -1074,7 +1150,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_optional_generics(&mut self) -> Result<Option<(TSpan, Vec<GenericDef>)>, CompileError> {
+    fn parse_optional_generics(&mut self) -> ParseResult<Option<(TSpan, Vec<GenericDef>)>> {
         self.toks
             .step_if(TokenType::LBracket)
             .map(|l| {
@@ -1116,12 +1192,12 @@ impl<'a> Parser<'a> {
 
     /// parses optional arguments of an enum and returns them and the end position if arguments are
     /// present.
-    fn parse_enum_args(&mut self, counts: &mut Counts) -> ParseResult<(Vec<Expr>, Option<u32>)> {
+    fn parse_enum_args(&mut self, scope: ScopeId, counts: &mut Counts) -> ParseResult<(Vec<Expr>, Option<u32>)> {
         let mut args = vec![];
         let end = self.toks.peek().is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line).then(|| {
             self.toks.step_assert(TokenType::LParen);
             self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                args.push(p.parse_expr(counts)?);
+                args.push(p.parse_expr(scope, counts)?);
                 Ok(Delimit::OptionalIfNewLine)
             }).map(|end_tok| end_tok.end)
         }).transpose()?;

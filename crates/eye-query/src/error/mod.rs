@@ -1,7 +1,8 @@
 use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines};
 use color_format::*;
-use crate::parser::{ast::{Ast, ModuleId}, token::TokenType, ExpectedTokens};
+use id::ModuleId;
+use crate::{parser::{token::TokenType, ExpectedTokens}, Compiler};
 use span::Span;
 pub type EyeResult<T> = Result<T, CompileError>;
 
@@ -59,18 +60,18 @@ impl Errors {
         &self.warnings
     }
 
-    pub fn print(&self, modules: &Ast) {
+    pub fn print(&self, compiler: &mut Compiler) {
         if self.error_count() != 0 {
             cprintln!("#r<Finished with #u;r!<{}> error{}>",
                 self.error_count(), if self.error_count() == 1 { "" } else { "s" });
             for error in &self.errors {
-                print(error, modules);
+                print(error, compiler);
             }
         } else if self.warning_count() != 0 {
             cprintln!("#r<Finished with #u;r!<{}> warning{}>",
                 self.warning_count(), if self.warning_count() == 1 { "" } else { "s" });
             for warn in &self.warnings {
-                print(warn, modules);
+                print(warn, compiler);
             }
         }
     }
@@ -372,8 +373,11 @@ impl fmt::Display for Severity {
     }
 }
 
-fn print(error: &CompileError, modules: &Ast) {
-    let (src, file) = modules.src(error.span.module);
+fn print(error: &CompileError, compiler: &mut Compiler) {
+    compiler.get_module_ast(error.span.module);
+    // ast is present because we get it above
+    let src = compiler.modules[error.span.module.idx()].ast.as_ref().unwrap().0.src();
+    let file = &compiler.modules[error.span.module.idx()].path;
 
     let s = error.span.start as usize;
     let e = error.span.end as usize;

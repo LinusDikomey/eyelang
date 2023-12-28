@@ -1,4 +1,6 @@
-use crate::{Expr, Compiler, Def, Ast, ResolvedTypeDef, parser::ast::ExprId};
+use id::ModuleId;
+
+use crate::{Expr, Compiler, Def, parser::{ast::{ExprId, ScopeId}, token::IntLiteral}};
 
 pub enum ConstValue {
     Unit,
@@ -14,25 +16,40 @@ impl ConstValue {
 }
 
 pub fn def_expr(
-    expr: ExprId,
-    ast: Ast,
-    scope: id::ScopeId,
     compiler: &mut Compiler,
+    module: ModuleId,
+    scope: ScopeId,
+    expr: ExprId,
 ) -> Def {
+    let (ast, symbols) = compiler.get_module_ast_and_symbols(module);
+    let ast = ast.clone();
     match &ast[expr] {
-        &Expr::Number(n) => Def::ConstValue(compiler.add_const_value(ConstValue::Number(n))),
-        Expr::Ident(name) => {
-            // PERF: cloning name
-            compiler.resolve_definition(scope, &name.clone()).expect("unresolved name")
+        Expr::IntLiteral(span) => {
+            let lit = IntLiteral::parse(&ast[*span]);
+            let Ok(val) = lit.val.try_into() else { todo!("handle large constants") };
+            Def::ConstValue(compiler.add_const_value(ConstValue::Number(val)))
         }
-        Expr::Return(None) => Def::ConstValue(compiler.add_const_value(ConstValue::Unit)),
-        &Expr::Return(Some(expr)) => def_expr(expr, ast, scope, compiler),
-        &Expr::Function(id) => Def::Function(id),
-        &Expr::Type(id) => Def::Type(id),
-        Expr::Block { .. } => todo!("eval expr block for definition"),
+        Expr::Variable { span, id: _ } => {
+            let name = &ast[*span];
+            compiler.resolve_in_scope(module, scope, name, span.in_mod(module))
+        }
+        Expr::ReturnUnit { .. } => Def::ConstValue(compiler.add_const_value(ConstValue::Unit)),
+        &Expr::Return { val, .. } => def_expr(compiler, module, scope, val),
+        &Expr::Function { id } => Def::Function(module, id),
+        &Expr::Type { id } => {
+            if let Some(id) = symbols.types[id.idx()] {
+                Def::Type(id)
+            } else {
+                let id = compiler.add_type_def(module, id);
+                compiler.get_module_ast_and_symbols(module).1.types[id.idx()] = Some(id);
+                Def::Type(id)
+            }
+        }
+        expr => todo!("eval expr {expr:?}")
     }
 }
 
+/*
 pub fn type_def(compiler: &mut Compiler, ty: id::TypeDefId) -> ResolvedTypeDef {
     match &compiler.type_defs[ty.idx()].ast {
         TypeDefAst::Struct { def, enclosing_scope } => {
@@ -49,3 +66,4 @@ pub fn type_def(compiler: &mut Compiler, ty: id::TypeDefId) -> ResolvedTypeDef {
         }
     }
 }
+*/

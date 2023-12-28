@@ -1,11 +1,11 @@
 [workspace]
 
 members = [
-    "crates/eyelang-old",
     "crates/eye-query",
     "crates/span",
     "crates/types",
-    "crates/id", "crates/dmap",
+    "crates/id",
+    "crates/dmap",
 ]
 default-members = ["crates/eye-query"]
 
