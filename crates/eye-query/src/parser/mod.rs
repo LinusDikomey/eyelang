@@ -169,6 +169,7 @@ impl<'a> Parser<'a> {
                 }
             };
         }
+        self.ast.fill_in_scope(scope_id, scope);
         Ok(scope_id)
     }
 

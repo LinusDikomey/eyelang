@@ -4,7 +4,7 @@ use span::{TSpan, Span, IdentPath};
 use dmap::{self, DHashMap};
 use types::{Primitive, UnresolvedType};
 
-use crate::{parser::{Counts, token::Operator}, Resolvable, Def};
+use crate::{parser::{Counts, token::Operator}, Def, compiler::Resolvable};
 
 pub mod repr;
 
@@ -132,6 +132,10 @@ impl AstBuilder {
         let id = ScopeId(self.scopes.len() as _);
         self.scopes.push(scope);
         id
+    }
+
+    pub fn fill_in_scope(&mut self, id: ScopeId, scope: Scope) {
+        self.scopes[id.idx()] = scope;
     }
 
     pub fn expr(&mut self, expr: Expr) -> ExprId {

@@ -1,6 +1,6 @@
 use id::ModuleId;
 
-use crate::{Expr, Compiler, Def, parser::{ast::{ExprId, ScopeId}, token::IntLiteral}};
+use crate::{Compiler, Def, parser::{ast::{ExprId, ScopeId, Expr}, token::IntLiteral}};
 
 pub enum ConstValue {
     Unit,

@@ -1,15 +1,15 @@
 use core::fmt;
-use std::{iter::{Peekable, Enumerate}, str::Lines};
+use std::{iter::{Peekable, Enumerate}, str::Lines, path::Path};
 use color_format::*;
 use id::ModuleId;
 use crate::{parser::{token::TokenType, ExpectedTokens}, Compiler};
-use span::Span;
+use span::{Span, TSpan};
 pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
 pub struct Errors {
-    errors: Vec<CompileError>,
-    warnings: Vec<CompileError>,
+    pub errors: Vec<CompileError>,
+    pub warnings: Vec<CompileError>,
 }
 impl Errors {
     pub fn new() -> Self {
@@ -21,6 +21,11 @@ impl Errors {
 
     pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
         self.emit_span(err, Span { start, end, module });
+    }
+
+    pub fn append(&mut self, errors: Self) {
+        self.errors.extend(errors.errors);
+        self.warnings.extend(errors.warnings);
     }
     
     #[track_caller]
@@ -58,22 +63,6 @@ impl Errors {
     #[cfg(feature = "lsp")]
     pub fn get_warnings(&self) -> &[CompileError] {
         &self.warnings
-    }
-
-    pub fn print(&self, compiler: &mut Compiler) {
-        if self.error_count() != 0 {
-            cprintln!("#r<Finished with #u;r!<{}> error{}>",
-                self.error_count(), if self.error_count() == 1 { "" } else { "s" });
-            for error in &self.errors {
-                print(error, compiler);
-            }
-        } else if self.warning_count() != 0 {
-            cprintln!("#r<Finished with #u;r!<{}> warning{}>",
-                self.warning_count(), if self.warning_count() == 1 { "" } else { "s" });
-            for warn in &self.warnings {
-                print(warn, compiler);
-            }
-        }
     }
 
     pub fn _emit_unwrap<T>(&mut self, res: Result<T, CompileError>, otherwise: T) -> T {
@@ -373,14 +362,9 @@ impl fmt::Display for Severity {
     }
 }
 
-fn print(error: &CompileError, compiler: &mut Compiler) {
-    compiler.get_module_ast(error.span.module);
-    // ast is present because we get it above
-    let src = compiler.modules[error.span.module.idx()].ast.as_ref().unwrap().0.src();
-    let file = &compiler.modules[error.span.module.idx()].path;
-
-    let s = error.span.start as usize;
-    let e = error.span.end as usize;
+pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
+    let s = span.start as usize;
+    let e = span.end as usize;
 
     // calculate line and position in line
     let until_start = if s >= src.len() { src } else { &src[..s] };
@@ -423,10 +407,10 @@ fn print(error: &CompileError, compiler: &mut Compiler) {
     };
     
 
-    cprint!("{}: ", error.err.severity());
-    match error.err.severity() {
-        Severity::Error => cprintln!("#r!<{}>", error.err.conclusion()),
-        Severity::Warn => cprintln!("#y!<{}>", error.err.conclusion()),
+    cprint!("{}: ", error.severity());
+    match error.severity() {
+        Severity::Error => cprintln!("#r!<{}>", error.conclusion()),
+        Severity::Warn => cprintln!("#y!<{}>", error.conclusion()),
     }
     cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
     let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
@@ -450,11 +434,11 @@ fn print(error: &CompileError, compiler: &mut Compiler) {
     post_if_last(&mut lines);
 
     let pre_error_offset = " ".repeat(pre.chars().count());
-    match error.err.severity() {
+    match error.severity() {
         Severity::Error => cprintln!("{}{}#r!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count())),
         Severity::Warn => cprintln!("{}{}#y!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()))
     }
-    if let Some(details) = error.err.details() {
+    if let Some(details) = error.details() {
         cprintln!("{}{}{}", p, pre_error_offset, details);
     }
 
@@ -464,7 +448,7 @@ fn print(error: &CompileError, compiler: &mut Compiler) {
         cprint!("#c<{:#4} | >{}", line, line_str);
         post_if_last(&mut lines);
 
-        match error.err.severity() {
+        match error.severity() {
             Severity::Error => cprintln!("{}#r!<{}>", p, "^".repeat(line_str.chars().count())),
             Severity::Warn => cprintln!("{}#y!<{}>", p, "^".repeat(line_str.chars().count())),
         }

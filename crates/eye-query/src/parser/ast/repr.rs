@@ -30,20 +30,30 @@ pub struct ReprPrinter<'a> {
     indent: &'a str,
     count: u32,
     ast: &'a Ast,
-    src: &'a str,
 }
 impl<'a> ReprPrinter<'a> {
-    pub fn new(indent: &'a str, ast: &'a Ast, src: &'a str) -> Self {
-        Self { indent, count: 0, ast, src }
+    pub fn new(indent: &'a str, ast: &'a Ast) -> Self {
+        Self { indent, count: 0, ast }
+    }
+
+    pub fn print_module(&self) {
+        for (name, item) in &self.ast.top_level_scope().definitions {
+            item.repr(self, name);
+            println!("\n");
+        }
+    }
+
+    pub fn src_at(&self, span: TSpan) -> &str {
+        &self.ast.src()[span.range()]
     }
 }
 
 impl Representer for ReprPrinter<'_> {
     fn src(&self, span: TSpan) -> &str {
-        &self.src[span.range()]
+        self.src_at(span)
     }
     fn whole_src(&self) -> &str {
-        self.src
+        self.ast.src()
     }
     fn ast(&self) -> &Ast { self.ast }
     fn child(&self) -> Self {
@@ -51,7 +61,6 @@ impl Representer for ReprPrinter<'_> {
             indent: self.indent,
             count: self.count + 1,
             ast: self.ast,
-            src: self.src
         }
     }
 
@@ -74,18 +83,6 @@ impl Representer for ReprPrinter<'_> {
         println!("{}{}", self.indent.repeat(self.count as usize), s.borrow());
     }
 }
-
-
-/*
-impl<C: Representer> Repr<C> for Module {
-    fn repr(&self, c: &C) {
-        for (name, def) in &c.ast()[self.definitions] {
-            def.repr(c, name);
-            c.writeln("\n");
-        }
-    }
-}
-*/
 
 impl Definition {
     fn repr<C: Representer>(&self, c: &C, name: &str) {

@@ -103,6 +103,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> TypeInfo {
         (Unknown, _) => b,
         (_, Unknown) => a,
         (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
+        (Invalid, _) | (_, Invalid) => Invalid,
         (TypeDef(id_a, generics_a), TypeDef(id_b, generics_b)) if id_a == id_b => {
             debug_assert_eq!(generics_a.count, generics_b.count);
             for (a, b) in generics_a.iter().zip(generics_b.iter()) {
@@ -110,7 +111,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> TypeInfo {
             }
             a
         }
-        _ => panic!("can't unify types"),
+        _ => panic!("can't unify types {a:?} {b:?}"),
     }
 }
 

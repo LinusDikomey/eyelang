@@ -44,6 +44,10 @@ impl Span {
         Self { start, end, module }
     }
 
+    pub fn is_missing(&self) -> bool {
+        self.start == u32::MAX && self.end == u32::MAX && self.module == ModuleId::MISSING
+    }
+
 }
 
 #[derive(Debug, Clone, Copy)]
