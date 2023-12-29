@@ -39,6 +39,22 @@ impl Ast {
         &self.src
     }
 
+    pub fn scope_ids(&self) -> impl Iterator<Item = ScopeId> {
+        (0..self.scopes.len()).map(|i| ScopeId(i as _))
+    }
+
+    pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> {
+        (0..self.functions.len()).map(|i| FunctionId(i as _))
+    }
+
+    pub fn type_ids(&self) -> impl Iterator<Item = TypeId> {
+        (0..self.types.len()).map(|i| TypeId(i as _))
+    }
+
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> {
+        (0..self.globals.len()).map(|i| GlobalId(i as _))
+    }
+
     pub fn top_level_scope_id(&self) -> ScopeId {
         self.top_level_scope
     }
@@ -54,6 +70,10 @@ impl Ast {
 
     pub fn type_count(&self) -> usize {
         self.types.len()
+    }
+
+    pub fn global_count(&self) -> usize {
+        self.globals.len()
     }
 }
 impl Index<TSpan> for Ast {
@@ -233,6 +253,21 @@ impl Scope {
             impls: Vec::new(),
         }
     }
+
+    pub fn from_generics(parent: ScopeId, src: &str, generics: &[GenericDef]) -> Self {
+        Self {
+            parent: Some(parent),
+            definitions: generics
+                .iter()
+                .enumerate()
+                .map(|(i, generic)| (
+                    src[generic.name.range()].to_owned(),
+                    Definition::Generic(i as u8)),
+                )
+                .collect(),
+            impls: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -244,6 +279,7 @@ pub enum Definition {
     },
     Path(IdentPath),
     Global(GlobalId),
+    Generic(u8),
 }
 
 #[derive(Debug)]
@@ -348,7 +384,8 @@ impl Definition {
 pub struct StructDefinition {
     pub name: String,
     pub generics: Vec<GenericDef>,
-    pub members: Vec<(String, UnresolvedType, u32, u32)>,
+    pub scope: ScopeId,
+    pub members: Vec<(TSpan, UnresolvedType)>,
     pub methods: DHashMap<String, FunctionId>,
     pub span: TSpan,
 }
@@ -380,8 +417,10 @@ pub struct TraitDefinition {
 
 #[derive(Debug)]
 pub struct Global {
+    pub scope: ScopeId,
     pub ty: UnresolvedType,
     pub val: Option<(ExprId, Counts)>,
+    pub span: TSpan,
 }
 
 #[derive(Debug)]
@@ -525,6 +564,10 @@ pub enum Expr {
         asm_str_span: TSpan,
         args: ExprExtra,
     },
+    Primitive {
+        primitive: Primitive,
+        start: u32,
+    },
 }
 impl Expr {
     pub fn is_block(&self) -> bool {
@@ -594,7 +637,10 @@ impl Expr {
             Expr::TupleIdx { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
-            Expr::Asm { span, .. } => *span
+            Expr::Asm { span, .. } => *span,
+            &Expr::Primitive { primitive, start } => {
+                TSpan::new(start, start + <&str>::from(primitive).len() as u32 - 1)
+            }
         }
     }
 

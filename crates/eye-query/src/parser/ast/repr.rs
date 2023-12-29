@@ -118,6 +118,7 @@ impl Definition {
                     c.ast()[val].repr(c);
                 }
             }
+            Self::Generic(i) => c.write_add(format!("<generic #{i}>"))
         }
     }
 }
@@ -166,9 +167,9 @@ impl StructDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("struct {\n");
         let child = c.child();
-        for (i, (name, ty, _, _)) in self.members.iter().enumerate() {
+        for (i, (name_span, ty)) in self.members.iter().enumerate() {
             child.begin_line();
-            child.write_add(name.as_str());
+            child.write_add(&c.ast()[*name_span]);
             child.space();
             ty.repr(&child);
             child.write_add(if i == (self.members.len() - 1) { "\n" } else { ",\n" });
@@ -282,7 +283,7 @@ impl<C: Representer> Repr<C> for Expr {
                     c.char(')');
                 }
             }
-            Self::Record { span: _, names, values } => {
+            Self::Record { names, .. } => {
                 c.write_add(".{ ");
                 for (i, name) in names.iter().enumerate() {
                     if i != 0 {
@@ -387,7 +388,11 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add(" {\n");
                 let extra = ExprExtra { idx: *extra_branches, count: *branch_count * 2 };
                 let match_c = c.child();
-                for [pat, branch] in ast[extra].array_chunks() {
+                let branches = &ast[extra];
+                debug_assert_eq!(branches.len() % 2, 0);
+                let mut branches = branches.iter();
+                while let Some(pat) = branches.next() {
+                    let branch = branches.next().unwrap();
                     c.begin_line();
                     pat.repr(&match_c);
                     if !matches!(branch, Expr::Block { .. }) {
@@ -489,6 +494,7 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.char(')');
             }
+            Self::Primitive { primitive, .. } => c.write_add(<&str>::from(*primitive))
         }
     }
 }

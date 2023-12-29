@@ -3,7 +3,7 @@ use crate::Primitive;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Primitive(Primitive),
-    DefId { id: id::TypeId, generics: Box<[Type]> },
+    DefId { id: id::TypeId, generics: Option<Box<[Type]>> },
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
     Tuple(Box<[Type]>),
@@ -66,10 +66,11 @@ impl Type {
             Type::Primitive(p) => Type::Primitive(*p),
             Type::DefId { id, generics: ty_generics } => Type::DefId {
                 id: *id,
-                generics: ty_generics
+                generics: ty_generics.as_ref().map(|ty_generics| ty_generics
                     .iter()
                     .map(|ty| ty.instantiate_generics(generics))
                     .collect()
+                )
             },
             Type::Pointer(inner) => Type::Pointer(Box::new(inner.instantiate_generics(generics))),
             Type::Array(b) => {

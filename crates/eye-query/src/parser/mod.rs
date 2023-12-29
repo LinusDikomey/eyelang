@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
         &mut self,
         mut end: impl FnMut(&mut Self) -> bool,
         parent: Option<ScopeId>,
-        mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, Expr, Span, Counts) -> ParseResult<()>,
+        mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, ScopeId, Expr, Span, Counts) -> ParseResult<()>,
     ) -> ParseResult<ScopeId> {
         let scope_id = self.ast.scope(ast::Scope::empty(parent));
         let mut scope = ast::Scope::empty(parent);
@@ -165,7 +165,7 @@ impl<'a> Parser<'a> {
                         end: self.toks.current_end_pos(),
                         module: self.toks.module,
                     };
-                    on_expr(self, &mut scope, r, span, counts)?;
+                    on_expr(self, &mut scope, scope_id, r, span, counts)?;
                 }
             };
         }
@@ -176,6 +176,7 @@ impl<'a> Parser<'a> {
     fn on_module_level_expr(
         &mut self,
         scope: &mut ast::Scope,
+        scope_id: ScopeId,
         expr: Expr,
         span: Span,
         counts: Counts,
@@ -193,9 +194,13 @@ impl<'a> Parser<'a> {
                 pat,
                 annotated_ty,
             } => {
+                let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
+                let end = annotated_ty.span().end;
                 (pat, Global {
+                    scope: scope_id,
                     ty: annotated_ty.clone(),
-                    val: None
+                    val: None,
+                    span: TSpan::new(start, end),
                 })
             }
             Expr::DeclareWithVal {
@@ -203,9 +208,13 @@ impl<'a> Parser<'a> {
                 annotated_ty,
                 val,
             } => {
+                let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
+                let end = self.ast.get_expr(*val).span_builder(self.ast).end;
                 (pat, Global {
+                    scope: scope_id,
                     ty: annotated_ty.clone(),
-                    val: Some((*val, counts))
+                    val: Some((*val, counts)),
+                    span: TSpan::new(start, end),
                 })
             }
             _ => {
@@ -258,7 +267,7 @@ impl<'a> Parser<'a> {
         let scope = self.parse_items_until(
             |p| p.toks.step_if(TokenType::RBrace).inspect(|rbrace| end = rbrace.end).is_some(),
             Some(parent),
-            |_, _, expr, _, _| { items.push(expr); Ok(())}
+            |_, _, _, expr, _, _| { items.push(expr); Ok(())}
         )?;
 
         debug_assert_ne!(end, u32::MAX);
@@ -409,9 +418,12 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(struct_tok.ty, TokenType::Keyword(Keyword::Struct));
         let generics = self.parse_optional_generics()?;
 
+        let scope = ast::Scope::from_generics(scope, self.src, generics.as_ref().map_or(&[], |(_, generics)| generics));
+        let scope = self.ast.scope(scope);
+
         self.toks.step_expect(TokenType::LBrace)?;
 
-        let mut members: Vec<(String, UnresolvedType, u32, u32)> = Vec::new();
+        let mut members: Vec<(TSpan, UnresolvedType)> = Vec::new();
         let mut methods = dmap::new();
         let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -428,16 +440,16 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Delimit::No)
             } else {
-                let member_name = ident.get_val(p.src);
+                let member_span = ident.span();
                 let member_type = p.parse_type()?;
-                let end = member_type.span().end;
-                members.push((member_name.to_owned(), member_type, ident.start, end));
+                members.push((member_span, member_type));
                 Ok(Delimit::OptionalIfNewLine)
             }
         })?;
         Ok(ast::StructDefinition {
             name,
             generics: generics.map_or(Vec::new(), |g| g.1),
+            scope,
             members,
             methods,
             span: TSpan::new(struct_tok.start, rbrace.end),
@@ -514,7 +526,7 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         let mut varargs = false;
 
-        let function_scope = self.ast.scope(ast::Scope::empty(Some(scope)));
+        let function_scope = self.ast.scope(ast::Scope::from_generics(scope, self.src, &generics));
 
         if self.toks.step_if(TokenType::LParen).is_some() {
             self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
@@ -723,6 +735,16 @@ impl<'a> Parser<'a> {
                 let func = self.parse_function_def(first, scope)?;
                 Expr::Function { id: self.ast.function(func) }
             },
+            TokenType::Keyword(Keyword::Struct) => {
+                let struct_def = self.struct_definition("TODO: names".to_owned(), first, scope)?;
+                let id = self.ast.type_def(ast::TypeDef::Struct(struct_def));
+                Expr::Type { id }
+            },
+            TokenType::Keyword(Keyword::Enum) => {
+                let enum_def = self.enum_definition("TODO: names".to_owned(), first, scope)?;
+                let id = self.ast.type_def(ast::TypeDef::Enum(enum_def));
+                Expr::Type { id }
+            },
             TokenType::LBrace => {
                 let block = self.parse_block_from_lbrace(first, scope, counts)?;
                 return Ok(self.parse_factor_postfix(block, true, scope, counts)?);
@@ -848,7 +870,10 @@ impl<'a> Parser<'a> {
                 }
             },
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, scope, counts)?,
-            TokenType::Keyword(Keyword::Primitive(p)) => todo!("handle primitive exprs"),
+            TokenType::Keyword(Keyword::Primitive(primitive)) => Expr::Primitive {
+                primitive,
+                start: first.start,
+            },
             TokenType::Keyword(Keyword::Root) => {
                 Expr::Root(start)
             },
@@ -1106,7 +1131,7 @@ impl<'a> Parser<'a> {
             },
             TokenType::LParen => {
                 let lparen_start = type_tok.start;
-                if let Some(rparen) = self.toks.step_if(TokenType::RParen) {
+                if let Some(_) = self.toks.step_if(TokenType::RParen) {
                     return Ok(UnresolvedType::Primitive {
                         ty: Primitive::Unit,
                         span_start: lparen_start,
