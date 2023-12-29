@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::Primitive;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -95,6 +97,47 @@ impl Type {
             ),
             Type::TraitSelf => unreachable!(),
             Type::Invalid => Type::Invalid,
+        }
+    }
+}
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::Primitive(p) => write!(f, "{}", <&str>::from(*p)),
+            Type::DefId { id, generics: Some(generics) } => {
+                write!(f, "TypeId({})[", id.idx())?;
+                for (i, generic) in generics.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{generic}")?;
+                }
+                Ok(())
+            }
+            Type::DefId { id, generics: None } => write!(f, "TypeId({})", id.idx()),
+            Type::Pointer(pointee) => write!(f, "*{pointee}"),
+            Type::Array(b) => {
+                let (elem, count) = &**b;
+                write!(f, "[{elem}; {count}]")
+            }
+            Type::Tuple(elems) => {
+                write!(f, "(")?;
+                for (i, elem) in elems.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{elem}")?;
+                }
+                if elems.len() == 1 {
+                    write!(f, ",)")
+                } else {
+                    write!(f, ")")
+                }
+            }
+            Type::Generic(i) => write!(f, "<generic #{i}>"),
+            Type::LocalEnum(_) => write!(f, "LocalEnum: TODO: write"),
+            Type::TraitSelf => write!(f, "Self"),
+            Type::Invalid => write!(f, "<invalid>"),
         }
     }
 }

@@ -2,7 +2,7 @@ use core::fmt;
 use std::{iter::{Peekable, Enumerate}, str::Lines, path::Path};
 use color_format::*;
 use id::ModuleId;
-use crate::{parser::{token::TokenType, ExpectedTokens}, Compiler};
+use crate::parser::{token::TokenType, ExpectedTokens};
 use span::{Span, TSpan};
 pub type EyeResult<T> = Result<T, CompileError>;
 

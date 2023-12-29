@@ -6,6 +6,7 @@ members = [
     "crates/types",
     "crates/id",
     "crates/dmap",
+    "crates/ir",
 ]
 default-members = ["crates/eye-query"]
 

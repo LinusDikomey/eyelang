@@ -450,14 +450,6 @@ impl Compiler {
 
             for id in ast.global_ids() {
                 self.get_checked_global(module, id);
-                /*
-                match &mut self.modules[module.idx()].ast.as_mut().unwrap().1.globals[id.idx()] {
-                    Resolvable::Resolved(_) => {}
-                    Resolvable::Unresolved => {
-                    }
-                    Resolvable::Resolving => unreachable!()
-                }
-                */
             }
         }
     }
