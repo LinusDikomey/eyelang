@@ -1,8 +1,6 @@
 use std::num::NonZeroU64;
 
-use types::Primitive;
-
-use crate::ir_types::{IrTypes, IrType};
+use crate::{ir_types::{IrTypes, IrType}, Primitive};
 
 #[derive(Clone, Copy)]
 pub struct Layout {
@@ -45,7 +43,6 @@ impl Layout {
 pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
     match ty {
         IrType::Primitive(p) => primitive_layout(p),
-        IrType::Ptr => Layout::PTR,
         IrType::Array(elem_ty, count) => Layout::array(type_layout(types[elem_ty], types), count as u64),
         IrType::Tuple(elems) => {
             let mut layout = Layout::EMPTY;
@@ -76,13 +73,13 @@ pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
 pub fn primitive_layout(ty: Primitive) -> Layout {
     use Primitive as P;
     match ty {
-        P::I8 | P::U8 | P::Bool => Layout { size: 1, align: 1.try_into().unwrap() },
+        P::I8 | P::U8 | P::U1 => Layout { size: 1, align: 1.try_into().unwrap() },
         P::I16 | P::U16 => Layout { size: 2, align: 2.try_into().unwrap() },
         P::I32 | P::U32 | P::F32 => Layout { size: 4, align: 4.try_into().unwrap() },
         P::I64 | P::U64 | P::F64 => Layout { size: 8, align: 8.try_into().unwrap() },
         P::I128 | P::U128 => Layout { size: 16, align: 16.try_into().unwrap() },
-        P::Unit | P::Never => Layout::EMPTY,
-        P::Type => Layout { size: 8, align: 8.try_into().unwrap() },
+        P::Unit => Layout::EMPTY,
+        P::Ptr => Layout::PTR, // TODO: architecture dependent pointer sizes
     }
 }
 

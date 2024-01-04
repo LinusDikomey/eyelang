@@ -1,11 +1,10 @@
 use crate::{
     Ref,
     BlockIndex,
-    builder::IrBuilder,
+    Primitive,
     ir_types::{IrType, ConstIrType, IrTypes},
     layout::{Layout, type_layout, primitive_layout}, FunctionIr, Function,
 };
-use types::Primitive;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Val {
@@ -93,8 +92,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
         } else {
             use crate::RefVal;
             match r.into_val().unwrap() {
-                RefVal::True => (Val::Int(1), IrType::Primitive(Primitive::Bool)),
-                RefVal::False => (Val::Int(0), IrType::Primitive(Primitive::Bool)),
+                RefVal::True => (Val::Int(1), IrType::Primitive(Primitive::U1)),
+                RefVal::False => (Val::Int(0), IrType::Primitive(Primitive::U1)),
                 RefVal::Unit => (Val::Unit, IrType::Primitive(Primitive::Unit)),
                 RefVal::Undef => panic!("reached undefined"),
             }
@@ -159,7 +158,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 Val::Invalid
             }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
-            super::Tag::Param => todo!("should give pointer to param"),
+            super::Tag::Param => params[inst.data.int32 as usize],
             super::Tag::Uninit => Val::Invalid,
             super::Tag::Int => Val::Int(inst.data.int),
             super::Tag::LargeInt => {
@@ -191,18 +190,21 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                         let bytes = stack.load(addr, layout.size);
                         use Primitive as P;
                         match p {
-                            P::I8 | P::U8 | P::Bool => Val::Int(u8::from_le_bytes(bytes.try_into().unwrap()) as u64),
+                            P::U1 => {
+                                debug_assert!(bytes[0] < 2);
+                                Val::Int(bytes[0] as u64)
+                            }
+                            P::I8 | P::U8 => Val::Int(u8::from_le_bytes(bytes.try_into().unwrap()) as u64),
                             P::I16 | P::U16 => Val::Int(u16::from_le_bytes(bytes.try_into().unwrap()) as u64),
                             P::I32 | P::U32 => Val::Int(u32::from_le_bytes(bytes.try_into().unwrap()) as u64),
-                            P::I64 | P::U64 | P::Type => Val::Int(u64::from_le_bytes(bytes.try_into().unwrap())),
+                            P::I64 | P::U64 => Val::Int(u64::from_le_bytes(bytes.try_into().unwrap())),
                             P::I128 | P::U128 => todo!(),
                             P::F32 => Val::F32(f32::from_le_bytes(bytes.try_into().unwrap())),
                             P::F64 => Val::F64(f64::from_le_bytes(bytes.try_into().unwrap())),
+                            P::Ptr => Val::StackPointer(StackAddr(u32::from_le_bytes(stack.load_array(addr)))),
                             P::Unit => Val::Unit,
-                            P::Never => Val::Invalid,
                         }
                     }
-                    IrType::Ptr => Val::StackPointer(StackAddr(u32::from_le_bytes(stack.load_array(addr)))),
                     _ => todo!("load complex types"),
                 }
             }

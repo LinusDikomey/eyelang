@@ -1,6 +1,6 @@
+use core::fmt;
 use std::ops::Index;
 
-use types::Primitive;
 
 #[derive(Debug)]
 pub struct IrTypes {
@@ -110,13 +110,77 @@ impl Index<TypeRef> for IrTypes {
 #[derive(Clone, Copy, Debug)]
 pub enum IrType {
     Primitive(Primitive),
-    Ptr,
     Array(TypeRef, u32),
     Tuple(TypeRefs),
     /// TypeRefs should point to tuples of arguments
     Enum(TypeRefs),
     Const(ConstIrType),
     Ref(TypeRef), // just refers to a different index
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Primitive {
+    I8, I16, I32, I64, I128,
+    U8, U16, U32, U64, U128,
+    F32, F64,
+    U1,
+    Unit,
+    Ptr,
+}
+impl fmt::Display for Primitive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Primitive as P;
+        let s = match *self {
+            P::I8 => "i8",
+            P::I16 => "i16",
+            P::I32 => "i32",
+            P::I64 => "i64",
+            P::I128 => "i128",
+            P::U8 => "u8",
+            P::U16 => "u16",
+            P::U32 => "u32",
+            P::U64 => "u64",
+            P::U128 => "u128",
+            P::F32 => "f32",
+            P::F64 => "f64",
+            P::U1 => "u1",
+            P::Unit => "unit",
+            P::Ptr => "ptr",
+        };
+        write!(f, "{}", s)
+    }
+}
+impl Primitive {
+    pub fn is_int(self) -> bool {
+        use Primitive as P;
+        matches!(
+            self,
+            | P::I8 | P::I16 | P::I32 | P::I64 | P::I128
+            | P::U8 | P::U16 | P::U32 | P::U64 | P::U128
+            | P::U1
+        )
+    }
+
+    pub fn is_unsigned_int(self) -> bool {
+        use Primitive as P;
+        matches!(
+            self,
+            | P::U8 | P::U16 | P::U32 | P::U64 | P::U128
+            | P::U1
+        )
+    }
+
+    pub fn is_signed_int(self) -> bool {
+        use Primitive as P;
+        matches!(
+            self,
+            | P::I8 | P::I16 | P::I32 | P::I64 | P::I128
+        )
+    }
+
+    pub fn is_float(self) -> bool {
+        matches!(self, Primitive::F32 | Primitive::F64)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

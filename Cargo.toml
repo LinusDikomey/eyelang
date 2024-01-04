@@ -7,6 +7,7 @@ members = [
     "crates/id",
     "crates/dmap",
     "crates/ir",
+    "crates/ir-backend-llvm",
 ]
 default-members = ["crates/eye-query"]
 

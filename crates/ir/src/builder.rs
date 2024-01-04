@@ -1,6 +1,4 @@
-use types::Primitive;
-
-use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex};
+use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex, Primitive};
 
 use super::{RefVal, FunctionId, ir_types::{TypeRef, IrType, IrTypes}};
 
@@ -184,8 +182,8 @@ impl<'a> IrBuilder<'a> {
         self.add_inst(Instruction { data, tag, ty: TypeRef::NONE, used: false });
     }
 
-    pub fn build_param(&mut self, param_idx: u32, param_ptr_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { int32: param_idx }, Tag::Param, param_ptr_ty)
+    pub fn build_param(&mut self, param_idx: u32, param_ty: impl Into<IdxOrTy>) -> Ref {
+        self.add(Data { int32: param_idx }, Tag::Param, param_ty)
     }
 
     pub fn _build_uninit(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
@@ -215,7 +213,7 @@ impl<'a> IrBuilder<'a> {
 
     pub fn build_decl(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
         let ty = self.ty(ty);
-        self.add(Data { ty }, Tag::Decl, IrType::Ptr)
+        self.add(Data { ty }, Tag::Decl, IrType::Primitive(Primitive::Ptr))
     }
 
     pub fn build_load(&mut self, var: Ref, ty: impl Into<IdxOrTy>) -> Ref {

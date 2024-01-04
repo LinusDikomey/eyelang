@@ -92,11 +92,12 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { func, info } = self;
         write!(f, "(")?;
-        write_delimited_with(f, &func.params,
-            |f, (name, param)| {
-                cwrite!(f, "#g<{}> ", name)?;
-                display_type(f, func.types[*param], &func.types, *info)
-            }, ", ")?;
+        write_delimited_with(
+            f,
+            &func.params,
+            |f, param| display_type(f, func.types[*param], &func.types, *info),
+            ", ",
+        )?;
         if func.varargs {
             if !func.params.is_empty() {
                 write!(f, ", ")?;
@@ -107,7 +108,7 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
         display_type(f, func.types[func.return_type], &func.types, *info)?;
 
         if let Some(ir) = &func.ir {
-            write!(f, "{}", ir.display(*info, &func.types))?;
+            write!(f, "\n{}", ir.display(*info, &func.types))?;
         }
         Ok(())
     }
@@ -146,7 +147,6 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::ir_types::IrType, types: 
 
     match ty {
         IrType::Primitive(p) => write!(f, "{p}"),
-        IrType::Ptr => write!(f, "ptr"),
         IrType::Array(inner, count) => {
             write!(f, "[")?;
             display_type(f, types[inner], types, info)?;

@@ -3,15 +3,17 @@ use std::fmt;
 use color_format::*;
 
 pub mod builder;
-pub mod eval;
 pub mod display;
-pub mod ir_types;
+
+mod eval;
+mod instruction;
+mod ir_types;
 mod layout;
 
-mod instruction;
+pub use eval::{eval, Val};
 pub use instruction::{Instruction, Tag, Data};
-
-use ir_types::{IrTypes, TypeRef};
+pub use ir_types::{IrTypes, IrType, TypeRef, Primitive};
+pub use layout::{Layout, type_layout, primitive_layout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionId(u64);
@@ -32,7 +34,7 @@ pub struct TypeId(u64);
 pub struct Function {
     pub name: String,
     pub types: IrTypes,
-    pub params: Vec<(String, TypeRef)>,
+    pub params: Vec<TypeRef>,
     pub varargs: bool,
     pub return_type: TypeRef,
     pub ir: Option<FunctionIr>,

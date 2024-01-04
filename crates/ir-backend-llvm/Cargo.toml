@@ -1,9 +1,10 @@
 [package]
-name = "ir"
+name = "ir-backend-llvm"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-color-format = { git = "https://github.com/LinusDikomey/color-format", version = "0.1.0" }
+ir = { version = "0.1.0", path = "../ir" }
+llvm-sys = "170.0.1"
