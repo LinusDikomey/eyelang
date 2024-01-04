@@ -6,7 +6,7 @@ use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, Pri
 fn main() {
     let module = Module {
         name: "main_module".to_owned(),
-        funcs: vec![build_mul(), build_extern_printf()],
+        funcs: vec![build_mul() , build_extern_printf()],
     };
     eprintln!("Module:\n{module}");
     let mut backend = ir_backend_llvm::Backend::new();
@@ -22,6 +22,8 @@ fn build_mul() -> Function {
     let x = builder.build_param(0, int_ty);
     let y = builder.build_param(1, int_ty);
     let res = builder.build_bin_op(BinOp::Mul, x, y, int_ty);
+    let s = builder.build_string("hello from eye ir!\n".as_bytes(), true, IrType::Primitive(Primitive::Ptr));
+    builder.build_call(ir::FunctionId::from_bytes(1u64.to_le_bytes()), [s], int_ty);
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
