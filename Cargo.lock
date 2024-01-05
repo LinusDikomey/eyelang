@@ -45,6 +45,7 @@ dependencies = [
  "color-format",
  "dmap",
  "id",
+ "ir",
  "span",
  "types",
 ]

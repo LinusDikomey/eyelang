@@ -8,19 +8,16 @@ use crate::{parser::{Counts, token::Operator}, Def, compiler::Resolvable};
 
 pub mod repr;
 
+// All of these ids are local to their ast
+
 id::id!(ScopeId);
 id::id!(ExprId);
 id::id!(CallId);
 id::id!(FunctionId);
 id::id!(TypeId);
 id::id!(GlobalId);
-
-id::id!(
-    /// Identifiers inside ASTs all get assigned unique ids.
-    /// Inner functions inside functions will have indiviual identifier scopes meaning ids can and
-    /// will repeat.
-    IdentId
-);
+id::id!(IdentId);
+id::id!(MemberAccessId);
 
 /// Ast for a single file
 #[derive(Debug)]
@@ -28,7 +25,7 @@ pub struct Ast {
     src: String,
     scopes: Vec<Scope>,
     top_level_scope: ScopeId,
-    exprs: Vec<Expr>,
+    pub exprs: Vec<Expr>,
     calls: Vec<Call>,
     functions: Vec<Function>,
     types: Vec<TypeDef>,
@@ -154,8 +151,8 @@ impl AstBuilder {
         id
     }
 
-    pub fn fill_in_scope(&mut self, id: ScopeId, scope: Scope) {
-        self.scopes[id.idx()] = scope;
+    pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
+        &mut self.scopes[id.idx()]
     }
 
     pub fn expr(&mut self, expr: Expr) -> ExprId {
@@ -231,9 +228,9 @@ impl TypeDef {
             TypeDef::Enum(e) => e.generic_count(),
         }
     }
-    pub fn span(&self) -> TSpan {
+    pub fn span(&self, scopes: &[Scope]) -> TSpan {
         match self {
-            Self::Struct(struct_def) => struct_def.span,
+            Self::Struct(struct_def) => scopes[struct_def.scope.idx()].span,
             Self::Enum(enum_def) => enum_def.span,
         }
     }
@@ -244,17 +241,28 @@ pub struct Scope {
     pub parent: Option<ScopeId>,
     pub definitions: DHashMap<String, Definition>,
     pub impls: Vec<TraitImpl>,
+    pub span: TSpan,
 }
 impl Scope {
-    pub fn empty(parent: Option<ScopeId>) -> Self {
+    pub fn missing() -> Self {
+        Self {
+            parent: None,
+            definitions: dmap::new(),
+            impls: Vec::new(),
+            span: TSpan::MISSING,
+        }
+    }
+
+    pub fn empty(parent: Option<ScopeId>, span: TSpan) -> Self {
         Self {
             parent,
             definitions: dmap::new(),
             impls: Vec::new(),
+            span,
         }
     }
 
-    pub fn from_generics(parent: ScopeId, src: &str, generics: &[GenericDef]) -> Self {
+    pub fn from_generics(parent: ScopeId, src: &str, generics: &[GenericDef], span: TSpan) -> Self {
         Self {
             parent: Some(parent),
             definitions: generics
@@ -266,6 +274,7 @@ impl Scope {
                 )
                 .collect(),
             impls: Vec::new(),
+            span,
         }
     }
 }
@@ -339,7 +348,7 @@ pub enum Item {
 pub struct TraitImpl {
     pub impl_generics: Vec<GenericDef>,
     pub trait_path: IdentPath,
-    pub trait_generics: Option<(Vec<UnresolvedType>, TSpan)>,
+    pub trait_generics: Option<(Box<[UnresolvedType]>, TSpan)>,
     pub ty: UnresolvedType,
     pub functions: DHashMap<String, FunctionId>,
     pub impl_keyword_start: u32,
@@ -350,36 +359,6 @@ impl TraitImpl {
     }
 }
 
-/*
-#[derive(Debug, Clone)]
-pub enum Definition {
-    Function(FunctionId),
-    Type(TypeId),
-    Trait(TraitId),
-    Module(ModuleId),
-    Use(IdentPath),
-    Const {
-        ty: UnresolvedType,
-        val: ExprId,
-        counts: Counts,
-    },
-    Global(GlobalId),
-}
-
-impl Definition {
-    /// Returns `true` if the definition is [`Trait`].
-    ///
-    /// [`Trait`]: Definition::Trait
-    #[must_use]
-    pub fn is_trait(&self) -> bool {
-        matches!(self, Self::Trait(..))
-    }
-}
-*/
-
-// id!(u64, 8: FunctionId TypeId TraitId GlobalId CallId ConstId MemberAccessId);
-// id!(u16, 2: VariantId);
-
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
     pub name: String,
@@ -387,7 +366,6 @@ pub struct StructDefinition {
     pub scope: ScopeId,
     pub members: Vec<(TSpan, UnresolvedType)>,
     pub methods: DHashMap<String, FunctionId>,
-    pub span: TSpan,
 }
 impl StructDefinition {
     pub fn generic_count(&self) -> u8 {
@@ -431,7 +409,6 @@ pub struct Function {
     pub return_type: UnresolvedType,
     pub body: Option<ExprId>,
     pub counts: Counts,
-    pub span: TSpan,
     pub scope: ScopeId,
 }
 
@@ -446,7 +423,6 @@ pub enum Expr {
     Block {
         scope: ScopeId,
         items: ExprExtra,
-        span: TSpan,
     },
     Declare {
         pat: ExprId,
@@ -545,7 +521,6 @@ pub enum Expr {
     MemberAccess {
         left: ExprId,
         name: TSpan,
-        // id: MemberAccessId,
     },
     Index {
         expr: ExprId,
@@ -575,11 +550,11 @@ impl Expr {
     }
 
     pub fn span(&self, ast: &Ast) -> TSpan {
-        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls)
+        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
     }
 
     pub fn span_builder(&self, ast: &AstBuilder) -> TSpan {
-        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls)
+        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
     }
 
     fn span_inner(
@@ -588,13 +563,13 @@ impl Expr {
         functions: &[Function],
         types: &[TypeDef],
         calls: &[Call],
+        scopes: &[Scope],
     ) -> TSpan {
         // shorthands for getting start and end position of an ExprId
-        let s = |r: &ExprId| exprs[r.idx()].start_inner(exprs, functions, types, calls);
-        let e = |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, calls);
+        let s = |r: &ExprId| exprs[r.idx()].start_inner(exprs, functions, types, calls, scopes);
+        let e = |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, calls, scopes);
 
         match self {
-            Expr::Block { span, .. }
             | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
             | Expr::Record { span, .. }
             | Expr::Nested(span, _) 
@@ -605,8 +580,9 @@ impl Expr {
             | Expr::Match { span, .. }
             | Expr::EnumLiteral { span, .. }
             => *span,
-            Expr::Function { id } => functions[id.idx()].span,
-            Expr::Type { id } => types[id.idx()].span(),
+            Expr::Block { scope, .. } => scopes[scope.idx()].span,
+            Expr::Function { id } => scopes[functions[id.idx()].scope.idx()].span,
+            Expr::Type { id } => types[id.idx()].span(scopes),
             Expr::Declare { pat, annotated_ty, .. } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
@@ -649,11 +625,11 @@ impl Expr {
     }
 
     pub fn start(&self, ast: &Ast) -> u32 {
-        self.start_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls)
+        self.start_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
     }
 
     pub fn end(&self, ast: &Ast) -> u32 {
-        self.end_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls)
+        self.end_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
     }
 
     pub fn start_inner(
@@ -662,9 +638,10 @@ impl Expr {
         functions: &[Function],
         types: &[TypeDef],
         calls: &[Call],
+        scopes: &[Scope],
     ) -> u32 {
         //TODO: more efficient implementation
-        self.span_inner(exprs, functions, types, calls).start
+        self.span_inner(exprs, functions, types, calls, scopes).start
     }
 
     pub fn end_inner(
@@ -673,9 +650,10 @@ impl Expr {
         functions: &[Function],
         types: &[TypeDef],
         calls: &[Call],
+        scopes: &[Scope],
     ) -> u32 {
         //TODO: more efficient implementation
-        self.span_inner(exprs, functions, types, calls).end
+        self.span_inner(exprs, functions, types, calls, scopes).end
     }
 }
 

@@ -1,17 +1,18 @@
-use std::{io, path::PathBuf, rc::Rc, collections::VecDeque, any::Any};
+use std::{io, path::PathBuf, rc::Rc, collections::VecDeque};
 
 use dmap::DHashMap;
 use id::{ProjectId, ModuleId, TypeId, ConstValueId};
 use span::{Span, IdentPath, TSpan};
-use types::{UnresolvedType, Type, Primitive};
+use types::{UnresolvedType, Type};
 
-use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, Expr, ExprId, GlobalId}, self, token::IntLiteral}, type_table::{LocalTypeId, TypeInfo, TypeTable}};
+use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}};
 
 pub struct Compiler {
     projects: Vec<Project>,
     pub modules: Vec<Module>,
     pub const_values: Vec<ConstValue>,
     pub types: Vec<ResolvableTypeDef>,
+    pub ir_functions: Vec<ir::Function>,
     pub errors: Errors,
 }
 impl Compiler {
@@ -21,6 +22,7 @@ impl Compiler {
             modules: Vec::new(),
             const_values: Vec::new(),
             types: Vec::new(),
+            ir_functions: Vec::new(),
             errors: Errors::new(),
         }
     }
@@ -89,7 +91,7 @@ impl Compiler {
     pub fn get_module_ast_and_symbols(&mut self, module_id: ModuleId) -> (&Rc<Ast>, &mut ModuleSymbols) {
         if self.modules[module_id.idx()].ast.is_some() {
             // borrowing bullshit
-            let Some((ast, symbols)) = &mut self.modules[module_id.idx()].ast else { unreachable!() };
+            let Some((ast, symbols, _)) = &mut self.modules[module_id.idx()].ast else { unreachable!() };
             (ast, symbols)
         } else {
 
@@ -111,8 +113,9 @@ impl Compiler {
             };
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
-            module.ast = Some((Rc::new(ast), checked));
-            let Some((ast, symbols)) = module.ast.as_mut() else { unreachable!() };
+            let instances = IrFunctionInstances::new(ast.function_count());
+            module.ast = Some((Rc::new(ast), checked, instances));
+            let Some((ast, symbols, _)) = module.ast.as_mut() else { unreachable!() };
             (ast, symbols)
         }
     }
@@ -127,7 +130,6 @@ impl Compiler {
     }
 
     pub fn resolve_in_scope(&mut self, module: ModuleId, scope: ScopeId, name: &str, name_span: Span) -> Def {
-        eprintln!("resolving in scope {module:?}:{scope:?} -> {name}");
         self.get_scope_def(module, scope, name).unwrap_or_else(|| {
             if let Some(parent) = self.get_module_ast(module)[scope].parent {
                 self.resolve_in_scope(module, parent, name, name_span)
@@ -198,37 +200,38 @@ impl Compiler {
             &UnresolvedType::Primitive { ty, .. } => Type::Primitive(ty),
             UnresolvedType::Unresolved(path, generics) => {
                 match self.resolve_path(module, scope, *path) {
-                    Def::Type(ty) => {
-                        match ty {
-                            Type::Invalid => Type::Invalid,
-                            Type::DefId { id, generics: existing_generics } => {
-                                let generics = match (existing_generics, generics) {
-                                    (Some(generics), None) => Some(generics),
-                                    (None, Some((generics, span))) => {
-                                        let generics = generics
-                                            .iter()
-                                            .map(|ty| self.resolve_type(ty, module, scope))
-                                            .collect();
-                                        // TODO: check correct generics count
-                                        Some(generics)
-                                    }
-                                    (None, None) => None,
-                                    (Some(_), Some((_, span))) => {
-                                        self.errors.emit_err(
-                                            Error::UnexpectedGenerics.at_span(span.in_mod(module))
-                                        );
-                                        return Type::Invalid;
-                                    }
-                                };
-                                Type::DefId { id, generics }
-                            }
-                            other => {
-                                if let Some((_, span)) = generics {
-                                    self.emit_error(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
-                                    Type::Invalid
-                                } else {
-                                    other
+                    Def::Type(ty) => match ty {
+                        Type::Invalid => Type::Invalid,
+                        Type::DefId { id, generics: existing_generics } => {
+                            let generics = match (existing_generics, generics) {
+                                (Some(generics), None) => Some(generics),
+                                (None, Some((generics, _span))) => {
+                                    let generics = generics
+                                        .iter()
+                                        .map(|ty| self.resolve_type(ty, module, scope))
+                                        .collect();
+                                    // TODO: check correct generics count
+                                    Some(generics)
                                 }
+                                (None, None) => {
+                                    eprintln!("TODO: remove generics assumption");
+                                    Some([].into())
+                                }
+                                (Some(_), Some((_, span))) => {
+                                    self.errors.emit_err(
+                                        Error::UnexpectedGenerics.at_span(span.in_mod(module))
+                                    );
+                                    return Type::Invalid;
+                                }
+                            };
+                            Type::DefId { id, generics }
+                        }
+                        other => {
+                            if let Some((_, span)) = generics {
+                                self.emit_error(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                                Type::Invalid
+                            } else {
+                                other
                             }
                         }
                     }
@@ -254,7 +257,7 @@ impl Compiler {
     }
 
     pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Signature {
-        let (ast, checked) = self.modules[module.idx()].ast.as_ref().unwrap();
+        let (ast, checked, _) = self.modules[module.idx()].ast.as_ref().unwrap();
         match &checked.function_signatures[id.idx()] {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
@@ -268,6 +271,11 @@ impl Compiler {
                 let ast = ast.clone();
                 let function = &ast[id];
                 let scope = function.scope;
+                let generics = function.generics
+                    .iter()
+                    .map(|def| ast[def.name].to_owned())
+                    .collect();
+    
                 let args = function.params
                     .clone()
                     .into_iter()
@@ -279,7 +287,9 @@ impl Compiler {
                 let return_type = self.resolve_type(&function.return_type, module, scope);
                 let signature = Signature {
                     args,
+                    varargs: function.varargs,
                     return_type,
+                    generics,
                 };
                 self.modules[module.idx()].ast.as_mut().unwrap().1.function_signatures[id.idx()]
                     .put(signature)
@@ -287,7 +297,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_checked_function(&mut self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
+    pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
         let checked = &self.modules[module.idx()].ast.as_ref().unwrap().1;
         match &checked.functions[id.idx()] {
             Resolvable::Resolved(_) => {
@@ -303,36 +313,54 @@ impl Compiler {
                 *resolving = Resolvable::Resolving;
                 let ast = self.modules[module.idx()].ast.as_ref().unwrap().0.clone();
                 let function = &ast[id];
-                let checked = if let Some(body) = function.body {
-                    self.get_signature(module, id);
-                    // signature is resolved above
-                    let Resolvable::Resolved(signature) = &self.modules[module.idx()].ast
-                        .as_ref().unwrap()
-                        .1.function_signatures[id.idx()] else { unreachable!() };
-                    let mut types = TypeTable::new();
-                    let mut vars = Vars::new();
+                self.get_signature(module, id);
+                // signature is resolved above
+                let Resolvable::Resolved(signature) = &self.modules[module.idx()].ast
+                    .as_ref().unwrap()
+                .1.function_signatures[id.idx()] else { unreachable!() };
+
+                let mut types = TypeTable::new();
+
+                // PERF: could pre-reserve in table and put in directly instead of heap allocating
+                let params: Vec<_> = signature.args
+                    .iter()
+                    .map(|(_, param)| types.info_from_resolved(param))
+                    .collect();
+
+                let param_types = types.add_multiple(params);
+                let varargs = signature.varargs;
+
+                let return_type = types.from_resolved(&signature.return_type);
+                let generic_count = signature.generics.len().try_into().unwrap();
+
+                let (body, types) = if let Some(body) = function.body {
+                    let mut hir = HIRBuilder::new();
                     let parameter_variables = signature.args
                         .iter()
-                        .map(|(name, ty)| (name.clone(), vars.add(types.from_resolved(ty))))
+                        .map(|(name, _)| name)
+                        .zip(param_types.iter())
+                        .map(|(name, ty)| (name.clone(), hir.add_var(ty)))
                         .collect();
-                    let return_ty = types.from_resolved(&signature.return_type);
                     let mut scope = LocalScope {
                         parent: None,
                         variables: parameter_variables,
                         module,
                         static_scope: function.scope,
                     };
-                    self.typecheck_expr(&ast, body, &mut scope, &mut types, &mut vars, return_ty, return_ty);
-                    // TODO: proper idents, var_types, probably should unify concepts with `Vars`
-                    let idents = Vec::new();
-                    let var_types = Vec::new();
-                    CheckedFunction { types, idents, var_types }
+                    let root = self.typecheck_expr(&ast, body, &mut scope, &mut hir, return_type, return_type);
+                    let (hir, types) = hir.finish(root);
+                    (Some(hir), types)
                 } else {
-                    CheckedFunction {
-                        types: TypeTable::new(),
-                        idents: Vec::new(),
-                        var_types: Vec::new(),
-                    }
+                    (None, types)
+                };
+
+                let checked = CheckedFunction {
+                    types,
+                    params: param_types,
+                    varargs,
+                    return_type,
+                    generic_count,
+                    body,
                 };
                 self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()]
                     .put(checked)
@@ -433,7 +461,7 @@ impl Compiler {
             }
 
             for id in ast.function_ids() {
-                self.get_checked_function(module, id);
+                self.get_hir(module, id);
             }
 
             for id in ast.type_ids() {
@@ -452,6 +480,43 @@ impl Compiler {
                 self.get_checked_global(module, id);
             }
         }
+    }
+
+    pub fn get_ir_function_id(
+        &mut self,
+        module: ModuleId,
+        function: ast::FunctionId,
+        generics: &[Type],
+    ) -> ir::FunctionId {
+        self.get_hir(module, function);
+        let (module_ast, symbols, instances) = self.modules[module.idx()]
+            .ast.as_mut().unwrap();
+        // got checked function above
+        let Resolvable::Resolved(checked) = &symbols.functions[function.idx()] else { unreachable!() };
+
+        let potential_id = ir::FunctionId(self.ir_functions.len() as _);
+        match instances.get_or_insert(function, generics, potential_id) {
+            Some(id) => id,
+            None => {
+                // FIXME: just adding a dummy function right now, stupid solution and might cause issues
+                self.ir_functions.push(ir::Function {
+                    name: String::new(),
+                    types: ir::IrTypes::new(),
+                    params: vec![],
+                    return_type: ir::TypeRef::new(0),
+                    varargs: false,
+                    ir: None,
+                });
+                let name = format!("function_{}_{}", module.idx(), function.idx());
+                let func = irgen::lower_function(module_ast.src(), name, checked, generics);
+                self.ir_functions[potential_id.0 as usize] = func;
+                potential_id
+            }
+        }
+    }
+
+    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
+        &self.ir_functions[id.0 as usize]
     }
 
     pub fn print_errors(&mut self) {
@@ -486,69 +551,6 @@ impl Compiler {
             }
         }
     }
-
-    fn typecheck_expr(
-        &mut self,
-        ast: &Ast,
-        expr: ExprId,
-        scope: &mut LocalScope,
-        types: &mut TypeTable,
-        vars: &mut Vars,
-        expected: LocalTypeId,
-        return_ty: LocalTypeId,
-    ) {
-        match &ast[expr] {
-            Expr::IntLiteral(span) => {
-                let lit = IntLiteral::parse(&ast.src()[span.range()]);
-                let info = lit.ty.map_or(
-                    TypeInfo::Integer,
-                    |int| TypeInfo::Primitive(int.into()),
-                );
-                types.specify(expected, info);
-            }
-            &Expr::Variable { span, id } => {
-                // TODO: use id to save info about resolved var
-                let name = &ast[span];
-                match scope.resolve(name, span, self) {
-                    LocalItem::Var(var) => types.unify(expected, vars.get_type(var)),
-                    LocalItem::Def(def) => match def {
-                        Def::Function(_, _) => todo!("function items"),
-                        Def::Type(_) => todo!("type type?"),
-                        Def::ConstValue(const_val) => match &self.const_values[const_val.idx()] {
-                            ConstValue::Undefined => {} // should this invalidate the type?
-                            ConstValue::Unit => types.specify(expected, TypeInfo::Primitive(Primitive::Unit)),
-                            ConstValue::Number(_) => types.specify(expected, TypeInfo::Primitive(Primitive::I32)),
-                        }
-                        Def::Module(_) => panic!("value expected but found module"),
-                        Def::Global(_, _) => todo!("globals"),
-                        Def::Invalid => types.specify(expected, TypeInfo::Invalid),
-                    }
-                    LocalItem::Invalid => types.specify(expected, TypeInfo::Invalid),
-                }
-            }
-            Expr::ReturnUnit { .. } => {
-                types.specify(return_ty, TypeInfo::Primitive(Primitive::Unit));
-            }
-            &Expr::Return { val, .. } => {
-                self.typecheck_expr(ast, val, scope, types, vars, return_ty, return_ty);
-            }
-            Expr::Function { id: _ } => todo!("function items (+ closures)"),
-            Expr::Type { id: _ } => todo!("type type?"),
-            &Expr::Block { scope: static_scope, items, span: _ } => {
-                let mut scope = LocalScope {
-                    parent: Some(scope),
-                    variables: dmap::new(),
-                    module: scope.module,
-                    static_scope,
-                };
-                for item in items {
-                    let unknown = types.add_unknown();
-                    self.typecheck_expr(ast, item, &mut scope, types, vars, unknown, return_ty);
-                }
-            }
-            expr => todo!("typecheck {expr:?}")
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -570,7 +572,7 @@ impl<T> Resolvable<T> {
 }
 
 id::id!(VarId);
-struct Vars {
+pub struct Vars {
     vars: Vec<LocalTypeId>,
 }
 impl Vars {
@@ -591,19 +593,19 @@ impl Vars {
     }
 }
 
-struct LocalScope<'p> {
-    parent: Option<&'p LocalScope<'p>>,
-    variables: DHashMap<String, VarId>,
-    module: ModuleId,
-    static_scope: ScopeId,
+pub struct LocalScope<'p> {
+    pub parent: Option<&'p LocalScope<'p>>,
+    pub variables: DHashMap<String, VarId>,
+    pub module: ModuleId,
+    pub static_scope: ScopeId,
 }
-enum LocalItem {
+pub enum LocalItem {
     Var(VarId),
     Def(Def),
     Invalid,
 }
 impl<'p> LocalScope<'p> {
-    fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
+    pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
         eprintln!("Resolving {name} in local scope");
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
@@ -651,7 +653,7 @@ pub struct Project {
 }
 pub struct Module {
     pub path: PathBuf,
-    pub ast: Option<(Rc<Ast>, ModuleSymbols)>,
+    pub ast: Option<(Rc<Ast>, ModuleSymbols, IrFunctionInstances)>,
     pub root: ModuleId,
     pub parent: Option<ModuleId>,
 }
@@ -675,7 +677,9 @@ pub struct Function {
 #[derive(Debug)]
 pub struct Signature {
     args: Vec<(String, Type)>,
+    varargs: bool,
     return_type: Type,
+    generics: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -688,7 +692,7 @@ struct ResolvedStructDef {
     fields: Vec<(String, Type)>,
 }
 
-struct ResolvableTypeDef {
+pub struct ResolvableTypeDef {
     module: ModuleId,
     id: ast::TypeId,
     resolved: Resolvable<ResolvedTypeDef>,
@@ -718,9 +722,18 @@ impl ModuleSymbols {
 
 #[derive(Debug)]
 pub struct CheckedFunction {
-    types: TypeTable,
-    idents: Vec<Ident>,
-    var_types: Vec<LocalTypeId>,
+    pub types: TypeTable,
+    pub params: LocalTypeIds,
+    pub varargs: bool,
+    pub return_type: LocalTypeId,
+    pub generic_count: u8,
+    pub body: Option<HIR>,
+}
+
+#[derive(Debug)]
+pub struct CheckedFunctionBody {
+    pub idents: Vec<Ident>,
+    pub var_types: Vec<LocalTypeId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -734,3 +747,28 @@ pub enum Ident {
     Const(ConstValueId),
 }
 
+pub struct IrFunctionInstances {
+    functions: Vec<FunctionInstances>,
+}
+impl IrFunctionInstances {
+    pub fn new(function_count: usize) -> Self {
+        Self {
+            functions: vec![FunctionInstances(dmap::new()); function_count],
+        }
+    }
+
+    pub fn get_or_insert(&mut self, id: FunctionId, generics: &[Type], potential_ir_id: ir::FunctionId) -> Option<ir::FunctionId> {
+        let instances = &mut self.functions[id.idx()].0;
+        match instances.get(generics) {
+            None => {
+                // PERF: avoid double hashing, maybe with RawEntry
+                instances.insert(generics.to_owned(), potential_ir_id);
+                None
+            }
+            Some(id) => Some(*id),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct FunctionInstances(DHashMap<Vec<Type>, ir::FunctionId>);

@@ -1,3 +1,5 @@
+use std::ops::Index;
+
 use id::{TypeId, ModuleId};
 use types::{Type, Primitive};
 
@@ -8,6 +10,20 @@ id::id!(LocalTypeId);
 #[derive(Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIdx>,
+}
+impl Index<LocalTypeId> for TypeTable {
+    type Output = TypeInfo;
+    fn index(&self, mut index: LocalTypeId) -> &Self::Output {
+        loop {
+            match &self.types[index.idx()] {
+                &TypeInfoOrIdx::Idx(new_index) => {
+                    debug_assert_ne!(new_index, index);
+                    index = new_index;
+                }
+                TypeInfoOrIdx::TypeInfo(info) => return info,
+            }
+        }
+    }
 }
 impl TypeTable {
     pub fn new() -> Self {
@@ -21,6 +37,16 @@ impl TypeTable {
         let id = LocalTypeId(self.types.len() as _);
         self.types.push(TypeInfoOrIdx::TypeInfo(info));
         id
+    }
+
+    pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> LocalTypeIds {
+        let start = self.types.len();
+        self.types.extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
+        let count = self.types.len() - start;
+        LocalTypeIds {
+            start: start as _,
+            count: count as _,
+        }
     }
 
     pub fn add_unknown(&mut self) -> LocalTypeId {
@@ -61,7 +87,7 @@ impl TypeTable {
                 }
                 TypeInfo::Tuple(element_ids)
             }
-            Type::Generic(_) => todo!("generics"),
+            &Type::Generic(i) => TypeInfo::Generic(i),
             Type::LocalEnum(_) => todo!("local enum infos"),
             Type::TraitSelf => todo!("trait self"),
         }
@@ -188,7 +214,7 @@ pub struct LocalTypeIds {
     count: u32,
 }
 impl LocalTypeIds {
-    fn iter(self) -> impl Iterator<Item = LocalTypeId> {
+    pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
         (self.start .. self.start + self.count).map(LocalTypeId)
     }
 }

@@ -6,13 +6,12 @@ use llvm_sys::{
         self, LLVMAddFunction, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca, LLVMBuildAnd,
         LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv,
         LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem, LLVMBuildFSub, LLVMBuildGlobalStringPtr,
-        LLVMBuildICmp, LLVMBuildInBoundsGEP2, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg,
-        LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv,
-        LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt,
-        LLVMConstIntOfArbitraryPrecision, LLVMConstReal, LLVMCreateBasicBlockInContext,
-        LLVMCreateBuilderInContext, LLVMFunctionType, LLVMGetParam, LLVMGetUndef,
-        LLVMInt1TypeInContext, LLVMInt32TypeInContext, LLVMPositionBuilderAtEnd,
-        LLVMPrintTypeToString, LLVMPrintValueToString, LLVMSetAlignment, LLVMVoidTypeInContext,
+        LLVMBuildICmp, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
+        LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
+        LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
+        LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
+        LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
+        LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -23,10 +22,7 @@ use crate::{llvm_bool, Error, FALSE, NONE};
 pub unsafe fn add_function(
     ctx: LLVMContextRef,
     llvm_module: LLVMModuleRef,
-    builder: LLVMBuilderRef,
     function: &ir::Function,
-    module: &ir::Module,
-    log: bool,
 ) -> Result<(LLVMValueRef, LLVMTypeRef), Error> {
     let return_ty = llvm_ty(ctx, function.types[function.return_type], &function.types)
         .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
@@ -276,16 +272,26 @@ unsafe fn build_func(
             ir::Tag::Call => {
                 let begin = data.extra_len.0 as usize;
                 let mut func_id = [0; 8];
-                func_id.copy_from_slice(&ir.extra[begin..begin+8]);
+                func_id.copy_from_slice(&ir.extra[begin..begin + 8]);
                 let func_id = u64::from_le_bytes(func_id);
                 let (llvm_func, llvm_func_ty) = llvm_funcs[func_id as usize];
 
                 let mut r_bytes = [0; 4];
-                let mut args = (0..data.extra_len.1 as usize).filter_map(|i| {
-                    r_bytes.copy_from_slice(&ir.extra[begin + 8 + 4*i..begin + 8 + 4*(i+1)]);
-                    get_ref(&instructions, ir::Ref::from_bytes(r_bytes))
-                }).collect::<Vec<_>>();
-                LLVMBuildCall2(builder, llvm_func_ty, llvm_func, args.as_mut_ptr(), args.len() as u32, NONE)
+                let mut args = (0..data.extra_len.1 as usize)
+                    .filter_map(|i| {
+                        r_bytes
+                            .copy_from_slice(&ir.extra[begin + 8 + 4 * i..begin + 8 + 4 * (i + 1)]);
+                        get_ref(&instructions, ir::Ref::from_bytes(r_bytes))
+                    })
+                    .collect::<Vec<_>>();
+                LLVMBuildCall2(
+                    builder,
+                    llvm_func_ty,
+                    llvm_func,
+                    args.as_mut_ptr(),
+                    args.len() as u32,
+                    NONE,
+                )
             }
             ir::Tag::Neg => {
                 let r = get_ref(&instructions, data.un_op).unwrap();
@@ -608,7 +614,7 @@ unsafe fn build_func(
                 */
             }
             ir::Tag::EnumValueVariantMember => {
-                if let (Some(r), enum_ty) = get_ref_and_type(&instructions, data.variant_member.0) {
+                if let (Some(_r), _enum_ty) = get_ref_and_type(&instructions, data.variant_member.0) {
                     todo!("enum value variant member");
                     // LLLVM doesn't allow bitcast between aggregate types for some reason.
                     // Instead we store the enum value in an allocated slot and load an offset
@@ -627,9 +633,9 @@ unsafe fn build_func(
                 // anywhere before.
                 // IR should probably just have different types of casts like in LLVM.
                 // (reinterpret, trunc, extend, float to int, int to float, etc.)
-                let (val, origin) = get_ref_and_type(&instructions, data.un_op);
-                let val = val.unwrap(); // casts from zero assumed to be impossible
-                let target = func.types[ty];
+                let (val, _origin) = get_ref_and_type(&instructions, data.un_op);
+                let _val = val.unwrap(); // casts from zero assumed to be impossible
+                let _target = func.types[ty];
                 todo!("cast")
                 //cast(val, origin, target, builder, ctx, module, ir, types)
             }

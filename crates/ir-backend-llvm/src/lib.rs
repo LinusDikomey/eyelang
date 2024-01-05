@@ -65,7 +65,7 @@ impl Backend {
             .funcs
             .iter()
             .map(|func| unsafe {
-                translate::add_function(self.context, llvm_module, builder, func, module, self.log)
+                translate::add_function(self.context, llvm_module, func)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -88,7 +88,7 @@ impl Backend {
         );
         let out_cstr = CString::new(out_file.as_os_str().as_encoded_bytes().to_vec())
             .map_err(|_| Error::InvalidOutFile)?;
-        unsafe { emit::emit(llvm_module, target_triple, out_cstr.as_ptr(), self.log)? };
+        unsafe { emit::emit(llvm_module, target_triple, out_cstr.as_ptr())? };
 
         Ok(())
     }

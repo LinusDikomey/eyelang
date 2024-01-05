@@ -16,7 +16,7 @@ pub use ir_types::{IrTypes, IrType, TypeRef, Primitive};
 pub use layout::{Layout, type_layout, primitive_layout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionId(u64);
+pub struct FunctionId(pub u64);
 impl FunctionId {
     pub fn to_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()

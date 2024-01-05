@@ -9,7 +9,6 @@ pub unsafe fn emit(
     module: LLVMModuleRef,
     target_triple: *const i8,
     out_file: *const i8,
-    log: bool,
 ) -> Result<(), Error> {
     let mut error = ptr::null_mut();
     let target_machine = unsafe {

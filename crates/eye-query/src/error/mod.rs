@@ -4,7 +4,6 @@ use color_format::*;
 use id::ModuleId;
 use crate::parser::{token::TokenType, ExpectedTokens};
 use span::{Span, TSpan};
-pub type EyeResult<T> = Result<T, CompileError>;
 
 #[derive(Debug)]
 pub struct Errors {

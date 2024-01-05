@@ -9,6 +9,11 @@ pub struct TSpan {
     pub end: u32
 }
 impl TSpan {
+    pub const MISSING: Self = Self {
+        start: u32::MAX,
+        end: u32::MAX,
+    };
+
     pub fn new(start: u32, end: u32) -> Self {
         debug_assert!(start <= end, "Invalid span constructed");
         Self { start, end }

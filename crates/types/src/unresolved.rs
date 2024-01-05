@@ -9,7 +9,7 @@ pub enum UnresolvedType {
         ty: Primitive,
         span_start: u32,
     },
-    Unresolved(IdentPath, Option<(Vec<UnresolvedType>, TSpan)>),
+    Unresolved(IdentPath, Option<(Box<[UnresolvedType]>, TSpan)>),
     Pointer(Box<(UnresolvedType, u32)>),
     Array(Box<(UnresolvedType, Option<u32>, TSpan)>),
     Tuple(Vec<UnresolvedType>, TSpan),

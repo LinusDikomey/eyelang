@@ -78,7 +78,7 @@ impl fmt::Display for Module {
 
 
 impl Function {
-    fn display<'a>(&'a self, info: Info<'a>) -> FunctionDisplay<'a> {
+    pub fn display<'a>(&'a self, info: Info<'a>) -> FunctionDisplay<'a> {
         FunctionDisplay { func: self, info }
     }
 }

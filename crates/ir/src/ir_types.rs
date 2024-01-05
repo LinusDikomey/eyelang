@@ -5,24 +5,12 @@ use std::ops::Index;
 #[derive(Debug)]
 pub struct IrTypes {
     types: Vec<IrType>,
-    generics: TypeRefs,
 }
 impl IrTypes {
     pub fn new() -> Self {
         Self {
             types: vec![],
-            generics: TypeRefs::EMPTY,
         }
-    }
-    pub fn new_with(types: Vec<IrType>, generics: TypeRefs) -> Self {
-        Self { types, generics }
-    }
-    pub fn instantiate_generic(&mut self, i: u8, ty: IrType) {
-        let i = self.generics.nth(i as _);
-        self.types[i.idx()] = ty;
-    }
-    pub fn generics(&self) -> TypeRefs {
-        self.generics
     }
 
     pub fn add(&mut self, ty: IrType) -> TypeRef {
