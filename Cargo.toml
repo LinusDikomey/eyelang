@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "crates/eye-query",
+    "crates/eye",
     "crates/span",
     "crates/types",
     "crates/id",
@@ -9,6 +9,6 @@ members = [
     "crates/ir",
     "crates/ir-backend-llvm",
 ]
-default-members = ["crates/eye-query"]
+default-members = ["crates/eye"]
 
 resolver = "2"
