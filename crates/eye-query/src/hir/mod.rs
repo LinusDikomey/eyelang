@@ -3,7 +3,7 @@ use std::ops::Index;
 use id::{id, ConstValueId};
 use span::TSpan;
 
-use crate::{parser::ast::ScopeId, compiler::VarId, type_table::{LocalTypeId, TypeTable}};
+use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable}};
 
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
@@ -22,6 +22,7 @@ impl HIR {
 id!(NodeId);
 impl Index<NodeId> for HIR {
     type Output = Node;
+
     fn index(&self, index: NodeId) -> &Self::Output {
         &self.nodes[index.idx()]
     }
@@ -43,6 +44,13 @@ impl Index<NodeIds> for HIR {
     }
 }
 id!(PatternId);
+impl Index<PatternId> for HIR {
+    type Output = Pattern;
+
+    fn index(&self, index: PatternId) -> &Self::Output {
+        &self.patterns[index.idx()]
+    }
+}
 #[derive(Debug)]
 pub struct PatternIds {
     index: u32,
@@ -55,11 +63,10 @@ pub enum Node {
     Block(NodeIds),
     Declare {
         pattern: PatternId,
-        ty: LocalTypeId,
     },
     DeclareWithVal {
         pattern: PatternId,
-        ty: LocalTypeId,
+        val: NodeId,
     },
     Variable(VarId),
     Const(ConstValueId),
@@ -80,9 +87,16 @@ pub enum Node {
 
 #[derive(Debug)]
 pub enum Pattern {
+    Invalid,
     Variable(VarId),
     Ignore,
     Tuple(PatternIds),
+    Int(bool, u128),
+    Range {
+        min_max: (u128, u128),
+        min_max_signs: (bool, bool),
+        inclusive: bool,
+    },
 }
 
 pub struct HIRBuilder {

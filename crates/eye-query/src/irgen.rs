@@ -1,10 +1,10 @@
-use ir::TypeRef;
+use ir::{TypeRef, RefVal};
 use ir::builder::Terminator;
 use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
 use types::Type;
 use types::Primitive;
 
-use crate::hir::Node;
+use crate::hir::{Node, PatternId, Pattern};
 use crate::{
     compiler::CheckedFunction,
     type_table::{TypeTable, TypeInfo},
@@ -38,14 +38,14 @@ pub fn lower_function(_src: &str, name: String, checked: &CheckedFunction, gener
 
         let mut noreturn = false;
 
-        let val = lower(hir, &checked.types, &mut builder, &generics, hir.root_id(), &mut noreturn);
+        let val = lower(hir, &checked.types, &mut builder, &generics, &mut vars, hir.root_id(), &mut noreturn);
         if !noreturn {  
             builder.terminate_block(Terminator::Ret(val));
         }
         builder.finish()
     });
     ir::Function {
-        name: "function_name".to_owned(), // TODO: assign proper name from context
+        name,
         types,
         params,
         return_type,
@@ -98,6 +98,7 @@ fn lower(
     types: &TypeTable,
     builder: &mut IrBuilder,
     generics: &[TypeRef],
+    vars: &mut [Ref],
     node: NodeId,
     noreturn: &mut bool,
 ) -> Ref {
@@ -106,19 +107,28 @@ fn lower(
         Node::Invalid => build_crash_point(builder),
         Node::Block(items) => {
             for item in items.iter() {
-                lower(hir, types, builder, generics, item, noreturn);
+                lower(hir, types, builder, generics, vars, item, noreturn);
                 if *noreturn {
                     return Ref::UNDEF;
                 }
             }
             Ref::UNIT
         }
-        Node::Declare { pattern, ty } => todo!(),
-        Node::DeclareWithVal { pattern, ty } => todo!(),
-        Node::Variable(_) => todo!(),
+        Node::Declare { pattern: _ } => todo!(),
+        &Node::DeclareWithVal { pattern, val } => {
+            let val = lower(hir, types, builder, generics, vars, val, noreturn);
+            if !*noreturn {
+                lower_pattern(hir, types, builder, generics, vars, pattern, val);
+            }
+            Ref::UNIT
+        }
+        Node::Variable(id) => {
+            let ty = get_type(types, builder.types, types[hir.vars[id.idx()]], generics);
+            builder.build_load(vars[id.idx()], ty)
+        }
         Node::Const(_) => todo!("const"),
         Node::Return(val) => {
-            let val = lower(hir, types, builder, generics, *val, noreturn);
+            let val = lower(hir, types, builder, generics, vars, *val, noreturn);
             if !*noreturn {
                 builder.terminate_block(Terminator::Ret(val));
                 *noreturn = true;
@@ -133,11 +143,37 @@ fn lower(
                 builder.build_large_int(*val, ty)
             }
         }
-        Node::FloatLiteral { val, ty } => todo!(),
+        Node::FloatLiteral { .. } => todo!(),
         Node::StringLiteral(_) => todo!(),
-        Node::BoolLiteral(_) => todo!(),
-        Node::Unit => todo!(),
+        Node::BoolLiteral(true) => Ref::val(RefVal::True),
+        Node::BoolLiteral(false) => Ref::val(RefVal::False),
+        Node::Unit => Ref::UNIT,
         Node::Array(_) => todo!(),
+    }
+}
+
+fn lower_pattern(
+    hir: &HIR,
+    types: &TypeTable,
+    builder: &mut IrBuilder,
+    generics: &[TypeRef],
+    vars: &mut [Ref],
+    pattern: PatternId,
+    value: Ref,
+) -> Ref {
+    match hir[pattern] {
+        Pattern::Invalid => build_crash_point(builder),
+        Pattern::Variable(id) => {
+            let ty = get_type(types, builder.types, types[hir.vars[id.idx()]], generics);
+            let var = builder.build_decl(ty);
+            vars[id.idx()] = var;
+            builder.build_store(var, value);
+            Ref::val(RefVal::True)
+        }
+        Pattern::Ignore => Ref::val(RefVal::True),
+        Pattern::Tuple(_) => todo!(),
+        Pattern::Int(_sign, _val) => todo!(),
+        Pattern::Range { min_max, min_max_signs, inclusive } => todo!(),
     }
 }
 

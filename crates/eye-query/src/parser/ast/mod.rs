@@ -4,7 +4,7 @@ use span::{TSpan, Span, IdentPath};
 use dmap::{self, DHashMap};
 use types::{Primitive, UnresolvedType};
 
-use crate::{parser::{Counts, token::Operator}, Def, compiler::Resolvable};
+use crate::parser::{Counts, token::Operator};
 
 pub mod repr;
 
@@ -289,20 +289,6 @@ pub enum Definition {
     Path(IdentPath),
     Global(GlobalId),
     Generic(u8),
-}
-
-#[derive(Debug)]
-pub struct ModuleItem {
-    ast: Ast,
-    resolved: Resolvable<Def>,
-}
-impl ModuleItem {
-    pub fn new(ast: Ast) -> Self {
-        Self {
-            ast,
-            resolved: Resolvable::Unresolved,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

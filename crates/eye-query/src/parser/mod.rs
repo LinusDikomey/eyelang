@@ -14,7 +14,7 @@ use types::{UnresolvedType, Primitive};
 use crate::{error::{CompileError, Error, Errors}, parser::reader::match_or_unexpected};
 
 use self::{
-    ast::{Expr, Item, Global, GenericDef, Function, ExprId, TraitDefinition, TraitImpl, UnOp, IdentId, Definition, ScopeId, MemberAccessId},
+    ast::{Expr, Item, Global, GenericDef, Function, ExprId, TraitDefinition, TraitImpl, UnOp, IdentId, Definition, ScopeId},
     token::{TokenType, Keyword, Operator}, reader::{Delimit, match_or_unexpected_value},
 };
 
@@ -302,12 +302,7 @@ impl<'a> Parser<'a> {
             // use statement
             TokenType::Keyword(Keyword::Use) => {
                 self.toks.step_assert(TokenType::Keyword(Keyword::Use));
-                let use_tok = self.toks.current().unwrap();
-                let use_start = use_tok.start;
-                let use_end = use_tok.end;
-
                 let path = self.parse_path()?;
-
                 Item::Use(path)
             }
             // Trait implementation

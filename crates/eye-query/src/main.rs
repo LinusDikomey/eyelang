@@ -16,19 +16,12 @@ use compiler::Def;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = compiler::Compiler::new();
+
     let project = compiler.add_project("test-project".to_owned(), "test-project.eye".into())?;
+
     let std = compiler.add_project("std".to_owned(), "std".into())?;
     compiler.add_dependency(project, std);
     compiler.check_complete_project(project);
-
-    // debug print ast
-    /*
-    let root = compiler.get_project(project).root_module;
-    let ast = compiler.get_module_ast(root);
-    println!("Main module ast:");
-    parser::ast::repr::ReprPrinter::new("  ", ast).print_module();
-    println!("end of ast");
-    */
 
     let root_module = compiler.get_project(project).root_module;
     let dump_ast = true;

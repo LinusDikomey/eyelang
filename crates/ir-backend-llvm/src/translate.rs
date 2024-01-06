@@ -230,11 +230,8 @@ unsafe fn build_func(
             }
             ir::Tag::Float => LLVMConstReal(table_ty(ty).unwrap(), data.float),
             ir::Tag::Decl => {
-                // let layout = func.types[data.ty].layout(&ir.types, |id| &module.types[id.idx()].1);
                 if let Some(ty) = table_ty(data.ty) {
                     let ptr = LLVMBuildAlloca(builder, ty, NONE);
-                    // TODO: set alignment again?
-                    //LLVMSetAlignment(ptr, layout.alignment as u32);
                     ptr
                 } else {
                     ptr::null_mut()
@@ -244,22 +241,17 @@ unsafe fn build_func(
                 let val = get_ref(&instructions, data.un_op);
                 if let Some(pointee_ty) = llvm_ty(ctx, func.types[ty], &func.types) {
                     let val = val.unwrap();
-                    //let align = layout(&ir.types, |id| &module.types[id.idx()].1).alignment;
                     let loaded = LLVMBuildLoad2(builder, pointee_ty, val, NONE);
-                    // TODO: set alignment again?
-                    // LLVMSetAlignment(loaded, align as u32);
                     loaded
                 } else {
                     ptr::null_mut()
                 }
             }
             ir::Tag::Store => {
-                let (val, val_ty) = get_ref_and_type(&instructions, data.bin_op.1);
+                let val = get_ref(&instructions, data.bin_op.1);
                 if let Some(val) = val {
                     if let Some(ptr) = get_ref(&instructions, data.bin_op.0) {
-                        let store = LLVMBuildStore(builder, val, ptr);
-                        // TODO: set alignment again?
-                        //LLVMSetAlignment(store, align);
+                        LLVMBuildStore(builder, val, ptr);
                     }
                 }
                 ptr::null_mut()
@@ -362,8 +354,6 @@ unsafe fn build_func(
                 let r = get_ref(&instructions, data.bin_op.1);
 
                 if let (Some(l), Some(r)) = (l, r) {
-                    let is_enum_ty = || matches!(ty, IrType::Enum(_));
-
                     match ty {
                         IrType::Primitive(p) if p.is_int() => {
                             let tag = if tag == ir::Tag::Eq {
@@ -381,7 +371,7 @@ unsafe fn build_func(
                             };
                             LLVMBuildFCmp(builder, tag, l, r, NONE)
                         }
-                        IrType::Enum(ty) => {
+                        IrType::Enum(_ty) => {
                             // TODO: this will break on enums containing data
                             let tag = if tag == ir::Tag::Eq {
                                 LLVMIntPredicate::LLVMIntEQ

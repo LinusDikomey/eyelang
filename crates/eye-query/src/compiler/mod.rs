@@ -5,7 +5,7 @@ use id::{ProjectId, ModuleId, TypeId, ConstValueId};
 use span::{Span, IdentPath, TSpan};
 use types::{UnresolvedType, Type};
 
-use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}};
+use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}, check};
 
 pub struct Compiler {
     projects: Vec<Project>,
@@ -347,7 +347,24 @@ impl Compiler {
                         module,
                         static_scope: function.scope,
                     };
-                    let root = self.typecheck_expr(&ast, body, &mut scope, &mut hir, return_type, return_type);
+                    let mut check_ctx = check::Ctx {
+                        compiler: self,
+                        ast: &ast,
+                        module,
+                        hir,
+                        deferred_exhaustions: Vec::new(),
+                    };
+                    let root = check::check_expr(&mut check_ctx, body, &mut scope,
+                        return_type, return_type);
+                    // TODO: finalize types?
+                    let hir = check_ctx.hir;
+                    let exhaustions = check_ctx.deferred_exhaustions;
+                    for (exhaustion, ty, pat) in exhaustions {
+                        if let Some(false) = exhaustion.is_exhausted(types[ty], &hir.types, self) {
+                            let error = Error::Inexhaustive.at_span(ast[pat].span_in(&ast, module));
+                            self.errors.emit_err(error)
+                        }
+                    }
                     let (hir, types) = hir.finish(root);
                     (Some(hir), types)
                 } else {
@@ -572,26 +589,6 @@ impl<T> Resolvable<T> {
 }
 
 id::id!(VarId);
-pub struct Vars {
-    vars: Vec<LocalTypeId>,
-}
-impl Vars {
-    pub fn new() -> Self {
-        Self {
-            vars: Vec::new(),
-        }
-    }
-
-    pub fn get_type(&self, var: VarId) -> LocalTypeId {
-        self.vars[var.idx()]
-    }
-
-    pub fn add(&mut self, ty: LocalTypeId) -> VarId {
-        let id = VarId(self.vars.len() as _);
-        self.vars.push(ty);
-        id
-    }
-}
 
 pub struct LocalScope<'p> {
     pub parent: Option<&'p LocalScope<'p>>,
@@ -668,12 +665,6 @@ impl Module {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Function {
-    signature: Resolvable<Signature>,
-    checked: Resolvable<CheckedFunction>,
-}
-
 #[derive(Debug)]
 pub struct Signature {
     args: Vec<(String, Type)>,
@@ -688,7 +679,7 @@ pub enum ResolvedTypeDef {
 }
 
 #[derive(Debug)]
-struct ResolvedStructDef {
+pub struct ResolvedStructDef {
     fields: Vec<(String, Type)>,
 }
 
