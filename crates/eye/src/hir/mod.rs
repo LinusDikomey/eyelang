@@ -1,14 +1,14 @@
 use std::ops::Index;
 
-use id::{id, ConstValueId};
+use id::{id, ConstValueId, ModuleId};
 use span::TSpan;
 
-use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable}};
+use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, parser::ast::FunctionId};
 
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
 /// nodes must be non-empty and the last node is the root node
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HIR {
     nodes: Vec<Node>,
     patterns: Vec<Pattern>,
@@ -33,6 +33,8 @@ pub struct NodeIds {
     count: u32,
 }
 impl NodeIds {
+    pub const EMPTY: Self = Self { index: 0, count: 0 };
+
     pub fn iter(self) -> impl Iterator<Item = NodeId> {
         (self.index .. self.index + self.count).map(NodeId)
     }
@@ -51,13 +53,13 @@ impl Index<PatternId> for HIR {
         &self.patterns[index.idx()]
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PatternIds {
     index: u32,
     count: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Node {
     Invalid,
     Block(NodeIds),
@@ -83,9 +85,15 @@ pub enum Node {
     BoolLiteral(bool),
     Unit,
     Array(NodeIds),
+    Call {
+        function: (ModuleId, FunctionId),
+        generics: LocalTypeIds,
+        args: NodeIds,
+        return_ty: LocalTypeId,
+    },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Pattern {
     Invalid,
     Variable(VarId),
@@ -106,11 +114,11 @@ pub struct HIRBuilder {
     vars: Vec<LocalTypeId>,
 }
 impl HIRBuilder {
-    pub fn new() -> Self {
+    pub fn new(types: TypeTable) -> Self {
         Self {
             nodes: Vec::new(),
             patterns: Vec::new(),
-            types: TypeTable::new(),
+            types,
             vars: Vec::new(),
         }
     }

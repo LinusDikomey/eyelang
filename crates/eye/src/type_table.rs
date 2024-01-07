@@ -8,7 +8,7 @@ use crate::{parser::ast, error::{Error, Errors}};
 
 id::id!(LocalTypeId);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIdx>,
 }
@@ -50,6 +50,27 @@ impl TypeTable {
         self.add(info)
     }
 
+    pub fn to_resolved(&self, info: TypeInfo) -> Type {
+        match info {
+            TypeInfo::Primitive(p) => Type::Primitive(p),
+            TypeInfo::Unknown
+            | TypeInfo::Integer
+            | TypeInfo::Float => unreachable!(),
+            TypeInfo::Pointer(pointee) => Type::Pointer(Box::new(self.to_resolved(self[pointee]))),
+            TypeInfo::TypeDef(id, generics) => Type::DefId {
+                id,
+                generics: Some(
+                    generics
+                        .iter()
+                        .map(|generic| self.to_resolved(self[generic]))
+                        .collect(),
+                ),
+            },
+            _ => todo!(),
+            TypeInfo::Invalid => Type::Invalid,
+        }
+    }
+
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> LocalTypeIds {
         let start = self.types.len();
         self.types.extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
@@ -58,6 +79,15 @@ impl TypeTable {
             start: start as _,
             count: count as _,
         }
+    }
+
+    pub fn add_multiple_unknown(&mut self, count: u32) -> LocalTypeIds {
+        let start = self.types.len() as _;
+        self.types.extend(
+            std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown))
+                .take(count as usize)
+        );
+        LocalTypeIds { start, count }
     }
 
     pub fn info_from_resolved(&mut self, ty: &Type) -> TypeInfo {

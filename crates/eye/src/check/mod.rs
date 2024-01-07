@@ -7,11 +7,11 @@ use types::{Primitive, Type};
 
 use crate::{
     Compiler,
-    parser::{ast::{Ast, ExprId, Expr, UnOp}, token::{IntLiteral, Operator}},
+    parser::{ast::{Ast, ExprId, Expr, UnOp, FunctionId}, token::{IntLiteral, Operator}},
     compiler::{LocalScope, LocalItem, Def, VarId, Signature},
     type_table::{TypeInfo, LocalTypeId},
     eval::ConstValue,
-    hir::{HIRBuilder, Node, Pattern}, error::{Error, CompileError},
+    hir::{HIRBuilder, Node, Pattern, NodeIds}, error::{Error, CompileError},
 };
 
 use self::exhaust::Exhaustion;
@@ -68,7 +68,7 @@ pub fn check_expr(
                     Node::Variable(var)
                 }
                 LocalItem::Def(def) => match def {
-                    Def::Function(_, _) => todo!("function items"),
+                    Def::Function(module, id) => function_item(ctx, module, id, expected, expr),
                     Def::Type(_) => todo!("type type?"),
                     Def::ConstValue(const_val) => {
                         match &ctx.compiler.const_values[const_val.idx()] {
@@ -117,7 +117,7 @@ pub fn check_expr(
             let val = check_expr(ctx, val, scope, return_ty, return_ty);
             Node::Return(ctx.hir.add(val))
         }
-        Expr::Function { id: _ } => todo!("function items (+ closures)"),
+        &Expr::Function { id } => function_item(ctx, ctx.module, id, expected, expr),
         Expr::Type { id: _ } => todo!("type type?"),
         &Expr::Block { scope: static_scope, items } => {
             let mut scope = LocalScope {
@@ -153,6 +153,39 @@ pub fn check_expr(
             Node::DeclareWithVal {
                 pattern: ctx.hir.add_pattern(pattern),
                 val: ctx.hir.add(val),
+            }
+        }
+        &Expr::FunctionCall(call) => {
+            let call = &ast[call];
+            let function_ty = ctx.hir.types.add_unknown();
+            let _called = check_expr(ctx, call.called_expr, scope, function_ty, return_ty);
+            match ctx.hir.types[function_ty] {
+                TypeInfo::Invalid => Node::Invalid,
+                TypeInfo::TypeDef(_, _) => todo!("struct initializers"),
+                TypeInfo::FunctionItem { module, function, generics } => {
+                    assert!(call.args.count == 0, "TODO: call args");
+                    let args = NodeIds::EMPTY; // TODO
+                    let signature = ctx.compiler.get_signature(module, function);
+                    let return_ty = ctx.hir.types.info_from_resolved(&signature.return_type);
+                    ctx.specify(expected, return_ty, |ast| ast[expr].span(ast));
+                    Node::Call {
+                        function: (module, function),
+                        generics,
+                        args,
+                        return_ty: expected,
+                    }
+                }
+                TypeInfo::MethodItem { .. } => todo!("methods"),
+                TypeInfo::Unknown => {
+                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere
+                        .at_span(ctx.span(call.called_expr)));
+                    Node::Invalid
+                }
+                _ => {
+                    ctx.compiler.errors.emit_err(Error::FunctionOrTypeExpected
+                        .at_span(ctx.span(call.called_expr)));
+                    Node::Invalid
+                }
             }
         }
         expr => todo!("typecheck {expr:?}")
@@ -263,6 +296,29 @@ pub fn check_pat(
             Pattern::Invalid
         }
     }
+}
+
+pub fn function_item(
+    ctx: &mut Ctx,
+    module: ModuleId,
+    function: FunctionId,
+    expected: LocalTypeId,
+    expr: ExprId,
+) -> Node {
+    let signature = ctx.compiler.get_signature(ctx.module, function);
+    let generics_count = signature.generics.len();
+    let generics = ctx.hir.types.add_multiple_unknown(generics_count as _);
+    ctx.specify(
+        expected,
+        TypeInfo::FunctionItem {
+            module: ctx.module,
+            function,
+            generics,
+        },
+        |ast| ast[expr].span(ast),
+    );
+    // TODO: should this stay a unit node?
+    Node::Unit
 }
 
 pub fn verify_main_signature(

@@ -16,9 +16,12 @@ mul :: fn(a Vec2, b Vec2) -> Vec2 extern
 
 my_global: usize = 3
 
+my_function :: fn -> i32: 5
+
 main_function :: fn() -> i32 {
     # my_global = 1
     x := 3
     # x += ANSWER
+    my_function()
     ret x
 }

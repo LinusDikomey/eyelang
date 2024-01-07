@@ -2,13 +2,17 @@ mod entry_point;
 
 pub use entry_point::entry_point;
 
+use id::ModuleId;
 use ir::{TypeRef, RefVal};
 use ir::builder::Terminator;
 use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
 use types::Type;
 use types::Primitive;
 
+use crate::Compiler;
 use crate::hir::{Node, PatternId, Pattern};
+use crate::parser::ast;
+use crate::type_table::LocalTypeIds;
 use crate::{
     compiler::CheckedFunction,
     type_table::{TypeTable, TypeInfo},
@@ -25,6 +29,7 @@ pub fn lower_function(
     name: String,
     checked: &CheckedFunction,
     generics: &[Type],
+    get_ir_id: impl FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
     let generics: Vec<TypeRef> = generics.iter().map(|_generic| todo!("map generics")).collect();
@@ -48,11 +53,19 @@ pub fn lower_function(
 
         let mut noreturn = false;
 
-        let val = lower(hir, &checked.types, &mut builder, &generics, &mut vars, hir.root_id(), &mut noreturn);
+        let mut ctx = Ctx {
+            hir,
+            types: &checked.types,
+            generics: &generics,
+            builder,
+            vars: &mut vars,
+            get_ir_id,
+        };
+        let val = lower(&mut ctx, hir.root_id(), &mut noreturn);
         if !noreturn {  
-            builder.terminate_block(Terminator::Ret(val));
+            ctx.builder.terminate_block(Terminator::Ret(val));
         }
-        builder.finish()
+        ctx.builder.finish()
     });
     ir::Function {
         name,
@@ -107,21 +120,33 @@ fn get_primitive_type(p: Primitive) -> ir::Primitive {
     }
 }
 
-fn lower(
-    hir: &HIR,
-    types: &TypeTable,
-    builder: &mut IrBuilder,
-    generics: &[TypeRef],
-    vars: &mut [Ref],
+struct Ctx<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> {
+    hir: &'a HIR,
+    types: &'a TypeTable,
+    generics: &'a [TypeRef],
+    builder: IrBuilder<'a>,
+    vars: &'a mut [Ref],
+    get_ir_id: F,
+}
+impl<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> Ctx<'a, F> {
+    fn get_type(&mut self, ty: TypeInfo) -> TypeRef {
+        get_type(self.types, self.builder.types, ty, self.generics)
+    }
+}
+
+fn lower<
+    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
+>(
+    ctx: &mut Ctx<F>,
     node: NodeId,
     noreturn: &mut bool,
 ) -> Ref {
     debug_assert!(!*noreturn, "lowering new expression with noreturn already active should not happen");
-    match &hir[node] {
-        Node::Invalid => build_crash_point(builder),
+    match &ctx.hir[node] {
+        Node::Invalid => build_crash_point(&mut ctx.builder),
         Node::Block(items) => {
             for item in items.iter() {
-                lower(hir, types, builder, generics, vars, item, noreturn);
+                lower(ctx, item, noreturn);
                 if *noreturn {
                     return Ref::UNDEF;
                 }
@@ -130,31 +155,31 @@ fn lower(
         }
         Node::Declare { pattern: _ } => todo!(),
         &Node::DeclareWithVal { pattern, val } => {
-            let val = lower(hir, types, builder, generics, vars, val, noreturn);
+            let val = lower(ctx, val, noreturn);
             if !*noreturn {
-                lower_pattern(hir, types, builder, generics, vars, pattern, val);
+                lower_pattern(ctx, pattern, val);
             }
             Ref::UNIT
         }
         Node::Variable(id) => {
-            let ty = get_type(types, builder.types, types[hir.vars[id.idx()]], generics);
-            builder.build_load(vars[id.idx()], ty)
+            let ty = ctx.get_type(ctx.types[ctx.hir.vars[id.idx()]]);
+            ctx.builder.build_load(ctx.vars[id.idx()], ty)
         }
         Node::Const(_) => todo!("const"),
         Node::Return(val) => {
-            let val = lower(hir, types, builder, generics, vars, *val, noreturn);
+            let val = lower(ctx, *val, noreturn);
             if !*noreturn {
-                builder.terminate_block(Terminator::Ret(val));
+                ctx.builder.terminate_block(Terminator::Ret(val));
                 *noreturn = true;
             }
             Ref::UNDEF
         }
         Node::IntLiteral { val, ty } => {
-            let ty = get_type(types, builder.types, types[*ty], generics);
+            let ty = ctx.get_type(ctx.types[*ty]);
             if let Ok(small) = (*val).try_into() {
-                builder.build_int(small, ty)
+                ctx.builder.build_int(small, ty)
             } else {
-                builder.build_large_int(*val, ty)
+                ctx.builder.build_large_int(*val, ty)
             }
         }
         Node::FloatLiteral { .. } => todo!(),
@@ -163,25 +188,40 @@ fn lower(
         Node::BoolLiteral(false) => Ref::val(RefVal::False),
         Node::Unit => Ref::UNIT,
         Node::Array(_) => todo!(),
+        &Node::Call { function, generics: call_generics, args, return_ty } => {
+            let mut arg_refs = Vec::with_capacity(args.iter().count());
+            for arg in args.iter() {
+                let arg = lower(ctx, arg, noreturn);
+                if *noreturn {
+                    return Ref::UNDEF;
+                }
+                arg_refs.push(arg);
+            }
+            let call_generics = call_generics
+                .iter()
+                .map(|generic| ctx.types.to_resolved(ctx.types[generic]))
+                .collect();
+            let func = (ctx.get_ir_id)(function.0, function.1, call_generics);
+            let return_ty = ctx.get_type(ctx.types[return_ty]);
+            ctx.builder.build_call(func, arg_refs, return_ty)
+        }
     }
 }
 
-fn lower_pattern(
-    hir: &HIR,
-    types: &TypeTable,
-    builder: &mut IrBuilder,
-    generics: &[TypeRef],
-    vars: &mut [Ref],
+fn lower_pattern<
+    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
+>(
+    ctx: &mut Ctx<F>,
     pattern: PatternId,
     value: Ref,
 ) -> Ref {
-    match hir[pattern] {
-        Pattern::Invalid => build_crash_point(builder),
+    match ctx.hir[pattern] {
+        Pattern::Invalid => build_crash_point(&mut ctx.builder),
         Pattern::Variable(id) => {
-            let ty = get_type(types, builder.types, types[hir.vars[id.idx()]], generics);
-            let var = builder.build_decl(ty);
-            vars[id.idx()] = var;
-            builder.build_store(var, value);
+            let ty = get_type(ctx.types, ctx.builder.types, ctx.types[ctx.hir.vars[id.idx()]], ctx.generics);
+            let var = ctx.builder.build_decl(ty);
+            ctx.vars[id.idx()] = var;
+            ctx.builder.build_store(var, value);
             Ref::val(RefVal::True)
         }
         Pattern::Ignore => Ref::val(RefVal::True),
