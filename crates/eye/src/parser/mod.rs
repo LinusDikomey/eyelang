@@ -543,14 +543,16 @@ impl<'a> Parser<'a> {
     fn parse_function_header(&mut self, fn_tok: Token, scope: ScopeId) -> ParseResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
-        let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
+        let mut end = fn_tok.end;
+        let generics = self.parse_optional_generics()?
+            .map_or(Vec::new(), |(span, generics)| { end = span.end; generics });
 
         let mut params = Vec::new();
         let mut varargs = false;
 
 
         if self.toks.step_if(TokenType::LParen).is_some() {
-            self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+            let rparen = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
                 if varargs {
                     let tok = p.toks.step()?;
                     // no further tokens after varargs are allowed
@@ -570,9 +572,12 @@ impl<'a> Parser<'a> {
                 }
                 Ok(())
             })?;
+            end = rparen.end;
         }
         let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
-            self.parse_type()?
+            let ty = self.parse_type()?;
+            end = ty.span().end;
+            ty
         } else {
             UnresolvedType::Primitive {
                 ty: Primitive::Unit, 
@@ -580,7 +585,6 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let end = self.toks.previous().unwrap().end;
         let ident_count = params.len() as u32;
         let span = TSpan::new(start, end);
         let function_scope = self.ast.scope(ast::Scope::from_generics(scope, self.src, &generics, span));
@@ -593,6 +597,7 @@ impl<'a> Parser<'a> {
             body: None,
             counts: Counts { idents: ident_count },
             scope: function_scope,
+            signature_span: TSpan::new(start, end),
         })
     }
 

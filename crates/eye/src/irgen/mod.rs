@@ -1,3 +1,7 @@
+mod entry_point;
+
+pub use entry_point::entry_point;
+
 use ir::{TypeRef, RefVal};
 use ir::builder::Terminator;
 use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
@@ -16,15 +20,21 @@ mod const_val;
 mod main_func;
 */
 
-pub fn lower_function(_src: &str, name: String, checked: &CheckedFunction, generics: &[Type]) -> ir::Function {
+pub fn lower_function(
+    _src: &str,
+    name: String,
+    checked: &CheckedFunction,
+    generics: &[Type],
+) -> ir::Function {
     let mut types = ir::IrTypes::new();
-    let return_type = types.add(IrType::Primitive(ir::Primitive::Unit));
     let generics: Vec<TypeRef> = generics.iter().map(|_generic| todo!("map generics")).collect();
     let params: Vec<TypeRef> = checked.params
         .iter()
         .map(|param| {
             get_type(&checked.types, &mut types, checked.types[param], &generics)
         }).collect();
+    let return_type = checked.types[checked.return_type];
+    let return_type = get_type(&checked.types, &mut types, return_type, &generics);
 
     let ir = checked.body.as_ref().map(|hir| {
         let mut builder = ir::builder::IrBuilder::new(&mut types);
@@ -56,24 +66,7 @@ pub fn lower_function(_src: &str, name: String, checked: &CheckedFunction, gener
 
 fn get_type(types: &TypeTable, ir_types: &mut IrTypes, ty: TypeInfo, generics: &[TypeRef]) -> TypeRef {
     match ty {
-        TypeInfo::Primitive(p) => ir_types.add(match p {
-            Primitive::I8 => IrType::Primitive(ir::Primitive::I8),
-            Primitive::I16 => IrType::Primitive(ir::Primitive::I16),
-            Primitive::I32 => IrType::Primitive(ir::Primitive::I32),
-            Primitive::I64 => IrType::Primitive(ir::Primitive::I64),
-            Primitive::I128 => IrType::Primitive(ir::Primitive::I128),
-            Primitive::U8 => IrType::Primitive(ir::Primitive::U8),
-            Primitive::U16 => IrType::Primitive(ir::Primitive::U16),
-            Primitive::U32 => IrType::Primitive(ir::Primitive::U32),
-            Primitive::U64 => IrType::Primitive(ir::Primitive::U64),
-            Primitive::U128 => IrType::Primitive(ir::Primitive::U128),
-            Primitive::F32 => IrType::Primitive(ir::Primitive::F32),
-            Primitive::F64 => IrType::Primitive(ir::Primitive::F64),
-            Primitive::Bool => IrType::Primitive(ir::Primitive::I8),
-            // TODO: is mapping never to unit correct?
-            Primitive::Unit | Primitive::Never => IrType::Primitive(ir::Primitive::Unit),
-            Primitive::Type => IrType::Primitive(ir::Primitive::U64), // TODO
-        }),
+        TypeInfo::Primitive(p) => ir_types.add(IrType::Primitive(get_primitive_type(p))),
         TypeInfo::Integer => ir_types.add(IrType::Primitive(ir::Primitive::I32)),
         TypeInfo::Float => ir_types.add(IrType::Primitive(ir::Primitive::F32)),
         TypeInfo::Pointer(_) => ir_types.add(IrType::Primitive(ir::Primitive::Ptr)),
@@ -81,7 +74,7 @@ fn get_type(types: &TypeTable, ir_types: &mut IrTypes, ty: TypeInfo, generics: &
             let element = get_type(types, ir_types, types[element], generics);
             ir_types.add(IrType::Array(element, count))
         }
-        TypeInfo::Enum { idx, count } => todo!(),
+        TypeInfo::Enum { .. } => todo!(),
         TypeInfo::Tuple(_) => todo!(),
         TypeInfo::Generic(id) => generics[id as usize],
         TypeInfo::Unknown
@@ -90,6 +83,27 @@ fn get_type(types: &TypeTable, ir_types: &mut IrTypes, ty: TypeInfo, generics: &
         | TypeInfo::FunctionItem { .. }
         | TypeInfo::MethodItem { .. }
         | TypeInfo::Invalid => panic!("incomplete type during lowering to ir"),
+    }
+}
+
+fn get_primitive_type(p: Primitive) -> ir::Primitive {
+    match p {
+        Primitive::I8 => ir::Primitive::I8,
+        Primitive::I16 => ir::Primitive::I16,
+        Primitive::I32 => ir::Primitive::I32,
+        Primitive::I64 => ir::Primitive::I64,
+        Primitive::I128 => ir::Primitive::I128,
+        Primitive::U8 => ir::Primitive::U8,
+        Primitive::U16 => ir::Primitive::U16,
+        Primitive::U32 => ir::Primitive::U32,
+        Primitive::U64 => ir::Primitive::U64,
+        Primitive::U128 => ir::Primitive::U128,
+        Primitive::F32 => ir::Primitive::F32,
+        Primitive::F64 => ir::Primitive::F64,
+        Primitive::Bool => ir::Primitive::I8,
+        // TODO: is mapping never to unit correct?
+        Primitive::Unit | Primitive::Never => ir::Primitive::Unit,
+        Primitive::Type => ir::Primitive::U64, // TODO
     }
 }
 

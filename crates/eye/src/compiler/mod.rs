@@ -1,18 +1,18 @@
-use std::{io, path::PathBuf, rc::Rc, collections::VecDeque};
+use std::{path::PathBuf, rc::Rc, collections::VecDeque};
 
 use dmap::DHashMap;
 use id::{ProjectId, ModuleId, TypeId, ConstValueId};
 use span::{Span, IdentPath, TSpan};
 use types::{UnresolvedType, Type};
 
-use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}, check};
+use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}, check, MainError};
 
 pub struct Compiler {
     projects: Vec<Project>,
     pub modules: Vec<Module>,
     pub const_values: Vec<ConstValue>,
     pub types: Vec<ResolvableTypeDef>,
-    pub ir_functions: Vec<ir::Function>,
+    pub ir_module: ir::Module,
     pub errors: Errors,
 }
 impl Compiler {
@@ -22,24 +22,30 @@ impl Compiler {
             modules: Vec::new(),
             const_values: Vec::new(),
             types: Vec::new(),
-            ir_functions: Vec::new(),
+            ir_module: ir::Module {
+                name: "main_module".to_owned(),
+                funcs: Vec::new(),
+            },
             errors: Errors::new(),
         }
     }
 
-    pub fn add_project(&mut self, name: String, root: PathBuf) -> io::Result<ProjectId> {
-        if !root.try_exists()? {
-            panic!("invalid project path: {}", root.display());
+    pub fn add_project(&mut self, name: String, root: PathBuf) -> Result<ProjectId, MainError> {
+        let root = root.canonicalize().unwrap_or(root);
+        if !root.try_exists().map_err(|err| MainError::CantAccessPath(err, root.clone()))? {
+            return Err(MainError::NonexistentPath(root));
         }
         let root_module_path = if root.is_file() {
             root.clone()
         } else {
             if !root.is_dir() {
+                // We canonicalized the path, this shouldn't really happen. Maybe still add an
+                // error for it.
                 panic!("project at {} is not a directory or file", root.display());
             }
             let main_path = root.join("main.eye");
-            if !main_path.try_exists()? {
-                panic!();
+            if !main_path.exists() {
+                return Err(MainError::NoMainFileInProjectDirectory);
             }
             main_path
         };
@@ -290,6 +296,7 @@ impl Compiler {
                     varargs: function.varargs,
                     return_type,
                     generics,
+                    span: function.signature_span,
                 };
                 self.modules[module.idx()].ast.as_mut().unwrap().1.function_signatures[id.idx()]
                     .put(signature)
@@ -511,12 +518,12 @@ impl Compiler {
         // got checked function above
         let Resolvable::Resolved(checked) = &symbols.functions[function.idx()] else { unreachable!() };
 
-        let potential_id = ir::FunctionId(self.ir_functions.len() as _);
+        let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
         match instances.get_or_insert(function, generics, potential_id) {
             Some(id) => id,
             None => {
                 // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-                self.ir_functions.push(ir::Function {
+                self.ir_module.funcs.push(ir::Function {
                     name: String::new(),
                     types: ir::IrTypes::new(),
                     params: vec![],
@@ -526,17 +533,52 @@ impl Compiler {
                 });
                 let name = format!("function_{}_{}", module.idx(), function.idx());
                 let func = irgen::lower_function(module_ast.src(), name, checked, generics);
-                self.ir_functions[potential_id.0 as usize] = func;
+                self.ir_module[potential_id] = func;
                 potential_id
             }
         }
     }
 
-    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
-        &self.ir_functions[id.0 as usize]
+    /// Emit project ir. If main function is provided, all functions required by main will also be
+    /// returned. For library projects, main can be set to None and all public functions will be
+    /// emitted.
+    pub fn emit_project_ir(
+        &mut self,
+        _project: ProjectId,
+        main: Option<(ModuleId, FunctionId)>,
+    ) -> Vec<ir::FunctionId> {
+        let Some(main) = main else { todo!("emitting libraries is not supported right now") };
+        let mut functions_to_emit = VecDeque::from([(main.0, main.1, vec![])]);
+        let mut finished_functions = Vec::new();
+        while let Some((module, function, generics)) = functions_to_emit.pop_front() {
+            let id = self.get_ir_function_id(module, function, &generics);
+            finished_functions.push(id);
+        }
+
+        finished_functions
     }
 
-    pub fn print_errors(&mut self) {
+    pub fn verify_main_and_add_entry_point(
+        &mut self,
+        main: (ModuleId, FunctionId),
+    ) -> Result<ir::FunctionId, Option<CompileError>> {
+        let main_ir_id = self.get_ir_function_id(main.0, main.1, &[]);
+        let main_signature = self.get_signature(main.0, main.1);
+        check::verify_main_signature(main_signature, main.0).map(|()| {
+            let main_signature = self.get_signature(main.0, main.1);
+            let entry_point = irgen::entry_point(main_ir_id, &main_signature.return_type);
+            let id = ir::FunctionId(self.ir_module.funcs.len() as _);
+            self.ir_module.funcs.push(entry_point);
+            id
+        })
+    }
+
+    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
+        &self.ir_module[id]
+    }
+
+    /// prints all errors, consuming them and returns true if any fatal errors were present
+    pub fn print_errors(&mut self) -> bool {
         use color_format::cprintln;
         let errors = std::mem::replace(&mut self.errors, Errors::new());
         let mut print = |error: &CompileError| {
@@ -559,7 +601,9 @@ impl Compiler {
             for error in &errors.errors {
                 print(error);
             }
-        } else if errors.warning_count() != 0 {
+            return true;
+        }
+        if errors.warning_count() != 0 {
             let c = errors.warning_count();
             cprintln!("#r<Finished with #u;r!<{}> warning{}>",
                 c, if c == 1 { "" } else { "s" });
@@ -567,6 +611,7 @@ impl Compiler {
                 print(warn);
             }
         }
+        false
     }
 }
 
@@ -639,6 +684,24 @@ impl Def {
             Self::Global(module, id) => print!("Global({}, {})", module.idx(), id.idx()),
         }
     }
+
+    pub fn get_span(&self, compiler: &mut Compiler) -> Option<Span> {
+        match self {
+            Self::Invalid => None,
+            &Self::Function(module, id) => {
+                let ast = compiler.get_module_ast(module);
+                Some(ast[ast[id].scope].span.in_mod(module))
+            }
+            Self::Type(_ty) => todo!("spans of types"),
+            Self::ConstValue(_id) => todo!("spans of const values"),
+            // maybe better to show reference to module
+            &Self::Module(id) => Some(TSpan::MISSING.in_mod(id)),
+            &Self::Global(module, id) => {
+                let ast = compiler.get_module_ast(module);
+                Some(ast[id].span.in_mod(module))
+            }
+        }
+    }
 }
 
 
@@ -667,10 +730,11 @@ impl Module {
 
 #[derive(Debug)]
 pub struct Signature {
-    args: Vec<(String, Type)>,
-    varargs: bool,
-    return_type: Type,
-    generics: Vec<String>,
+    pub args: Vec<(String, Type)>,
+    pub varargs: bool,
+    pub return_type: Type,
+    pub generics: Vec<String>,
+    pub span: TSpan,
 }
 
 #[derive(Debug)]

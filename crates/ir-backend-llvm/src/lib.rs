@@ -1,6 +1,6 @@
 use std::{
     ffi::{CStr, CString, NulError},
-    path::Path,
+    path::Path, ptr,
 };
 
 use llvm::{
@@ -55,6 +55,7 @@ impl Backend {
     pub fn emit_module(
         &self,
         module: &ir::Module,
+        print_ir: bool,
         target: Option<&CStr>,
         out_file: &Path,
     ) -> Result<(), Error> {
@@ -80,6 +81,19 @@ impl Backend {
                     self.log,
                 )?
             };
+        }
+
+        if print_ir {
+            eprintln!("\n ---------- LLVM IR BEGIN ----------\n");
+            unsafe { core::LLVMDumpModule(llvm_module) };
+            eprintln!("\n ---------- LLVM IR END ------------\n");
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let mut msg = ptr::null_mut();
+            let action = llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction;
+            unsafe { llvm::analysis::LLVMVerifyModule(llvm_module, action, &mut msg) };
         }
 
         let target_triple = target.map_or_else(

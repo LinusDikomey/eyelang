@@ -11,7 +11,7 @@ fn main() {
     eprintln!("Module:\n{module}");
     let mut backend = ir_backend_llvm::Backend::new();
     backend.enable_logging();
-    backend.emit_module(&module, None, std::path::Path::new("out.o")).expect("Backend failed");
+    backend.emit_module(&module, true, None, std::path::Path::new("out.o")).expect("Backend failed");
 }
 
 fn build_mul() -> Function {

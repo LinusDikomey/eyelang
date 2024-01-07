@@ -396,6 +396,7 @@ pub struct Function {
     pub body: Option<ExprId>,
     pub counts: Counts,
     pub scope: ScopeId,
+    pub signature_span: TSpan,
 }
 
 #[derive(Clone, Debug)]

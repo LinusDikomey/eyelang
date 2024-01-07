@@ -1,5 +1,5 @@
 #![feature(variant_count)]
-use std::fmt;
+use std::{fmt, ops::{Index, IndexMut}};
 use color_format::*;
 
 pub mod builder;
@@ -51,6 +51,18 @@ pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
     //pub globals: Vec<(String, Type, Option<ConstVal>)>,
+}
+impl Index<FunctionId> for Module {
+    type Output = Function;
+
+    fn index(&self, index: FunctionId) -> &Self::Output {
+        &self.funcs[index.0 as usize]
+    }
+}
+impl IndexMut<FunctionId> for Module {
+    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
+        &mut self.funcs[index.0 as usize]
+    }
 }
 
 const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;

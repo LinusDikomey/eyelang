@@ -1,9 +1,12 @@
 [package]
-name = "eye-query"
+name = "eye"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["llvm-backend"]
+llvm-backend = ["ir-backend-llvm"]
+lsp = []
 
 [dependencies]
 dmap = { path = "../dmap" }
@@ -12,4 +15,7 @@ types = { path = "../types" }
 id = { path = "../id" }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
 ir = { version = "0.1.0", path = "../ir" }
+clap = { version = "4.4.13", features = ["derive"] }
 
+# backends
+ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }

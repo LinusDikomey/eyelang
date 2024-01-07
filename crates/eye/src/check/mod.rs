@@ -3,15 +3,15 @@ mod exhaust;
 use dmap::DHashMap;
 use id::ModuleId;
 use span::TSpan;
-use types::Primitive;
+use types::{Primitive, Type};
 
 use crate::{
     Compiler,
     parser::{ast::{Ast, ExprId, Expr, UnOp}, token::{IntLiteral, Operator}},
-    compiler::{LocalScope, LocalItem, Def, VarId},
+    compiler::{LocalScope, LocalItem, Def, VarId, Signature},
     type_table::{TypeInfo, LocalTypeId},
     eval::ConstValue,
-    hir::{HIRBuilder, Node, Pattern}, error::Error,
+    hir::{HIRBuilder, Node, Pattern}, error::{Error, CompileError},
 };
 
 use self::exhaust::Exhaustion;
@@ -262,5 +262,25 @@ pub fn check_pat(
             );
             Pattern::Invalid
         }
+    }
+}
+
+pub fn verify_main_signature(
+    signature: &Signature,
+    main_module: ModuleId,
+) -> Result<(), Option<CompileError>> {
+    if signature.args.len() != 0 || signature.varargs {
+        return Err(Some(Error::MainArgs.at_span(signature.span.in_mod(main_module))));
+    }
+    if !signature.generics.is_empty() {
+        return Err(Some(Error::MainGenerics.at_span(signature.span.in_mod(main_module))));
+    }
+    match &signature.return_type {
+        Type::Invalid => return Err(None),
+        Type::Primitive(p) if p.is_int() | matches!(p, Primitive::Unit) => Ok(()),
+        ty => return Err(Some(
+            Error::InvalidMainReturnType(ty.to_string())
+                .at_span(signature.span.in_mod(main_module))
+        )),
     }
 }

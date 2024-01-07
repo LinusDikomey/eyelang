@@ -226,7 +226,7 @@ impl TypeTable {
         }
     }
 
-    fn type_to_string(&mut self, ty: TypeInfo, s: &mut String) {
+    pub fn type_to_string(&mut self, ty: TypeInfo, s: &mut String) {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
