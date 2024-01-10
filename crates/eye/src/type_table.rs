@@ -66,8 +66,8 @@ impl TypeTable {
                         .collect(),
                 ),
             },
-            _ => todo!(),
             TypeInfo::Invalid => Type::Invalid,
+            _ => todo!(),
         }
     }
 
@@ -256,7 +256,7 @@ impl TypeTable {
         }
     }
 
-    pub fn type_to_string(&mut self, ty: TypeInfo, s: &mut String) {
+    pub fn type_to_string(&self, ty: TypeInfo, s: &mut String) {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
@@ -297,15 +297,22 @@ impl TypeTable {
                     s.push(')');
                 }
             }
-            TypeInfo::FunctionItem { module, function, generics } => {
+            TypeInfo::FunctionItem { .. } => {
                 s.push_str("<function item>");
             }
-            TypeInfo::MethodItem { module, function, generics, this_ty } => {
+            TypeInfo::MethodItem { .. } => {
                 s.push_str("<method item>");
             }
-            TypeInfo::Generic(i) => s.push_str("<generic #{i}>"),
+            TypeInfo::Generic(i) => write!(s, "<generic #{i}>").unwrap(),
             TypeInfo::Invalid => s.push_str("<invalid>"),
         }
+    }
+
+    pub fn type_infos_mut(&mut self) -> impl Iterator<Item = &mut TypeInfo> {
+        self.types.iter_mut().filter_map(|ty| match ty {
+            TypeInfoOrIdx::TypeInfo(info) => Some(info),
+            TypeInfoOrIdx::Idx(_) => None,
+        })
     }
 }
 

@@ -21,7 +21,7 @@ mod parser;
 /// data structure for type inference
 mod type_table;
 
-use std::{path::{Path, PathBuf}, process::ExitCode};
+use std::path::{Path, PathBuf};
 
 use args::Backend;
 pub use compiler::Compiler;

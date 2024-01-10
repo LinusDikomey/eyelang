@@ -86,7 +86,7 @@ impl Exhaustion {
                     _ => return None
                 }
             }
-            Exhaustion::Enum(exhausted_variants) => {
+            Exhaustion::Enum(_) => {
                 todo!("check enums")
                 /*
                 match ty {

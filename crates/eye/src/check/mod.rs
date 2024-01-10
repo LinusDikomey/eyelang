@@ -1,3 +1,4 @@
+mod cast;
 mod exhaust;
 
 use dmap::DHashMap;
@@ -9,9 +10,9 @@ use crate::{
     Compiler,
     parser::{ast::{Ast, ExprId, Expr, UnOp, FunctionId}, token::{IntLiteral, Operator}},
     compiler::{LocalScope, LocalItem, Def, VarId, Signature},
-    type_table::{TypeInfo, LocalTypeId},
+    type_table::{TypeInfo, LocalTypeId, TypeTable},
     eval::ConstValue,
-    hir::{HIRBuilder, Node, Pattern, NodeIds}, error::{Error, CompileError},
+    hir::{HIRBuilder, Node, Pattern, NodeIds, HIR, CastId, Cast, CastType}, error::{Error, CompileError},
 };
 
 use self::exhaust::Exhaustion;
@@ -21,7 +22,10 @@ pub struct Ctx<'a> {
     pub ast: &'a Ast,
     pub module: ModuleId,
     pub hir: HIRBuilder,
+    /// Exhaustion value, type, pattern expr
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
+    /// from, to, cast_expr
+    pub deferred_casts: Vec<(LocalTypeId, LocalTypeId, ExprId, CastId)>,
 }
 impl<'a> Ctx<'a> {
     fn span(&self, expr: ExprId) -> span::Span {
@@ -38,6 +42,31 @@ impl<'a> Ctx<'a> {
 
     fn invalidate(&mut self, ty: LocalTypeId) {
         self.hir.types.invalidate(ty);
+    }
+
+    pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {
+        // TODO: finalize types?
+        let (mut hir, types) = self.hir.finish(root);
+        for (exhaustion, ty, pat) in self.deferred_exhaustions {
+            if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
+                let error = Error::Inexhaustive.at_span(self.ast[pat].span_in(&self.ast, self.module));
+                self.compiler.errors.emit_err(error)
+            }
+        }
+        for (from_ty, to_ty, cast_expr, cast_id) in self.deferred_casts {
+            let res = cast::check(from_ty, to_ty, &types,
+                || self.ast[cast_expr].span_in(self.ast, self.module));
+            match res {
+                Result::Ok(cast_ty) => hir[cast_id].cast_ty = cast_ty,
+                Result::Err(Some(err)) => {
+                    // cast_ty of this cast should be set to invalid by default, we are just
+                    // leaving it that way
+                    self.compiler.errors.emit_err(err);
+                }
+                Result::Err(None) => {}
+            }
+        }
+        (hir, types)
     }
 }
 
@@ -91,7 +120,7 @@ pub fn check_expr(
                         Node::Const(const_val)
                     }
                     Def::Module(_) => {
-                        ctx.compiler.emit_error(
+                        ctx.compiler.errors.emit_err(
                             Error::ExpectedValue.at_span(span.in_mod(ctx.module)),
                         );
                         ctx.invalidate(expected);
@@ -188,6 +217,24 @@ pub fn check_expr(
                 }
             }
         }
+        Expr::As(val, new_ty) => {
+            let from_ty = ctx.hir.types.add_unknown();
+            let val = check_expr(ctx, *val, scope, from_ty, return_ty);
+            let val = ctx.hir.add(val);
+            let new_type_info = ctx.hir.types.info_from_unresolved(
+                new_ty,
+                ctx.compiler,
+                ctx.module,
+                scope.static_scope,
+            );
+            ctx.specify(expected, new_type_info, |_| new_ty.span());
+            let cast_id = ctx.hir.add_cast(Cast {
+                val,
+                cast_ty: CastType::Invalid, // will be filled in in deferred check
+            });
+            ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
+            Node::Cast(cast_id)
+        }
         expr => todo!("typecheck {expr:?}")
     }
 }
@@ -257,7 +304,7 @@ pub fn check_pat(
                 let inclusive = op == Operator::Range;
                 Pattern::Range { min_max: (l.0, r.0), min_max_signs: (l.1, r.1), inclusive }
             } else {
-                ctx.compiler.emit_error(
+                ctx.compiler.errors.emit_err(
                     Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
                 );
                 Pattern::Invalid
@@ -290,7 +337,7 @@ pub fn check_pat(
         }
         */
         _ => {
-            ctx.compiler.emit_error(
+            ctx.compiler.errors.emit_err(
                 Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
             );
             Pattern::Invalid
@@ -300,7 +347,7 @@ pub fn check_pat(
 
 pub fn function_item(
     ctx: &mut Ctx,
-    module: ModuleId,
+    _module: ModuleId,
     function: FunctionId,
     expected: LocalTypeId,
     expr: ExprId,

@@ -126,10 +126,6 @@ impl Compiler {
         }
     }
 
-    pub fn emit_error(&mut self, error: CompileError) {
-        self.errors.emit_err(error)
-    }
-
     pub fn resolve_in_module(&mut self, module: ModuleId, name: &str, name_span: Span) -> Def {
         let scope = self.get_module_ast(module).top_level_scope_id();
         self.resolve_in_scope(module, scope, name, name_span)
@@ -234,7 +230,7 @@ impl Compiler {
                         }
                         other => {
                             if let Some((_, span)) = generics {
-                                self.emit_error(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                                self.errors.emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
                                 Type::Invalid
                             } else {
                                 other
@@ -243,7 +239,7 @@ impl Compiler {
                     }
                     Def::Invalid => Type::Invalid,
                     _ => {
-                        self.emit_error(Error::TypeExpected.at_span(ty.span().in_mod(module)));
+                        self.errors.emit_err(Error::TypeExpected.at_span(ty.span().in_mod(module)));
                         Type::Invalid
                     }
                 }
@@ -360,19 +356,11 @@ impl Compiler {
                         module,
                         hir,
                         deferred_exhaustions: Vec::new(),
+                        deferred_casts: Vec::new(),
                     };
                     let root = check::check_expr(&mut check_ctx, body, &mut scope,
                         return_type, return_type);
-                    // TODO: finalize types?
-                    let hir = check_ctx.hir;
-                    let exhaustions = check_ctx.deferred_exhaustions;
-                    for (exhaustion, ty, pat) in exhaustions {
-                        if let Some(false) = exhaustion.is_exhausted(hir.types[ty], &hir.types, self) {
-                            let error = Error::Inexhaustive.at_span(ast[pat].span_in(&ast, module));
-                            self.errors.emit_err(error)
-                        }
-                    }
-                    let (hir, types) = hir.finish(root);
+                    let (hir, types) = check_ctx.finish(root);
                     (Some(hir), types)
                 } else {
                     (None, types)
@@ -512,8 +500,9 @@ impl Compiler {
         function: ast::FunctionId,
         generics: Vec<Type>,
     ) -> ir::FunctionId {
-        let (_, symbols, instances) = self.modules[module.idx()]
-            .ast.as_mut().unwrap();
+        self.get_module_ast(module);
+        let instances = &mut self.modules[module.idx()]
+            .ast.as_mut().unwrap().2;
 
         let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
         match instances.get_or_insert(function, &generics, potential_id) {
@@ -544,19 +533,18 @@ impl Compiler {
 
                         let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
 
-                        // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-                        self.ir_module.funcs.push(ir::Function {
-                            name: String::new(),
-                            types: ir::IrTypes::new(),
-                            params: vec![],
-                            return_type: ir::TypeRef::new(0),
-                            varargs: false,
-                            ir: None,
-                        });
-
                         match instances.get_or_insert(id, &generics, potential_id) {
                             Some(id) => id,
                             None => {
+                                // FIXME: just adding a dummy function right now, stupid solution and might cause issues
+                                self.ir_module.funcs.push(ir::Function {
+                                    name: String::new(),
+                                    types: ir::IrTypes::new(),
+                                    params: vec![],
+                                    return_type: ir::TypeRef::new(0),
+                                    varargs: false,
+                                    ir: None,
+                                });
                                 to_generate.push((potential_id, module, id, generics));
                                 potential_id
                             }
@@ -694,7 +682,7 @@ impl<'p> LocalScope<'p> {
         } else if let Some(static_parent) = compiler.get_module_ast(self.module)[self.static_scope].parent {
             LocalItem::Def(compiler.resolve_in_scope(self.module, static_parent, name, name_span.in_mod(self.module)))
         } else {
-            compiler.emit_error(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
+            compiler.errors.emit_err(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
             LocalItem::Invalid
         }
     }
@@ -819,23 +807,6 @@ pub struct CheckedFunction {
     pub return_type: LocalTypeId,
     pub generic_count: u8,
     pub body: Option<HIR>,
-}
-
-#[derive(Debug)]
-pub struct CheckedFunctionBody {
-    pub idents: Vec<Ident>,
-    pub var_types: Vec<LocalTypeId>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Ident {
-    Invalid,
-    Var(VarId),
-    Global(GlobalId),
-    Type(LocalTypeId),
-    Function(ModuleId, ast::FunctionId),
-    Module(ModuleId),
-    Const(ConstValueId),
 }
 
 pub struct IrFunctionInstances {

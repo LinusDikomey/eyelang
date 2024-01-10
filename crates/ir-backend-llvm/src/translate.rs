@@ -11,7 +11,7 @@ use llvm_sys::{
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
         LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMVoidTypeInContext,
+        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildIntToPtr, LLVMBuildFPTrunc,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -619,14 +619,18 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::Cast => {
-                // cast just panics here right now when the cast is invalid because cast checks aren't implemented
-                // anywhere before.
                 // IR should probably just have different types of casts like in LLVM.
                 // (reinterpret, trunc, extend, float to int, int to float, etc.)
                 let (val, _origin) = get_ref_and_type(&instructions, data.un_op);
-                let _val = val.unwrap(); // casts from zero assumed to be impossible
-                let _target = func.types[ty];
-                todo!("cast")
+                let val = val.unwrap(); // casts from zero assumed to be impossible
+                let target = func.types[ty];
+                let target_ty = llvm_ty(ctx, target, &func.types).unwrap();
+                let signed = if let IrType::Primitive(p) = target {
+                    p.is_signed_int()
+                } else {
+                    false
+                };
+                LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
                 //cast(val, origin, target, builder, ctx, module, ir, types)
             }
             ir::Tag::Goto => {

@@ -1,4 +1,3 @@
-use id::ModuleId;
 use ir::{FunctionId, builder::{IrBuilder, Terminator}, IrTypes, IrType};
 use types::{Type, Primitive};
 

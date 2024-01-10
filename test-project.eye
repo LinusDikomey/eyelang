@@ -18,10 +18,10 @@ my_global: usize = 3
 
 my_function :: fn -> i32: 5
 
-main_function :: fn() -> i32 {
+main_function :: fn() -> usize {
     # my_global = 1
     x := 3
     # x += ANSWER
     my_function()
-    ret x
+    ret my_function() as _
 }

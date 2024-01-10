@@ -176,6 +176,10 @@ pub enum Error {
     },
     NotAllFunctionsImplemented { unimplemented: Vec<String>, },
     TraitSignatureMismatch,
+    InvalidCast {
+        from: String,
+        to: String,
+    },
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -254,6 +258,7 @@ impl Error {
             Error::NotATraitMember { .. } => "not a member of the implemented trait",
             Error::NotAllFunctionsImplemented { .. } => "not all functions of the trait are implemented",
             Error::TraitSignatureMismatch => "signature doesn't match the function's signature in the trait definition",
+            Error::InvalidCast { .. } => "this cast is not valid",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -329,6 +334,9 @@ impl Error {
                     }
                     s
                 }
+            }
+            Error::InvalidCast { from, to } => {
+                cformat!("cannot cast from a value of type #m<{from}> to #m<{to}>")
             }
             _ => return None
         })

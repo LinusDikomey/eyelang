@@ -196,7 +196,7 @@ impl AstBuilder {
         &self.exprs[expr.idx()]
     }
 
-    pub fn finish_with_top_level_scope(mut self, src: String, top_level_scope: ScopeId) -> Ast {
+    pub fn finish_with_top_level_scope(self, src: String, top_level_scope: ScopeId) -> Ast {
         Ast {
             src,
             scopes: self.scopes,
@@ -292,10 +292,6 @@ pub enum Definition {
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(transparent)]
-pub struct DeclId(u32);
-
-#[derive(Debug, Clone, Copy)]
 pub struct ExprExtra { pub idx: u32, pub count: u32 }
 impl Iterator for ExprExtra {
     type Item = ExprId;
@@ -309,13 +305,6 @@ impl Iterator for ExprExtra {
         })
     }
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct ExprExtraSpans(u32, u32);
-
-#[derive(Debug, Clone, Copy)]
-pub struct Defs(u32);
-
 
 #[derive(Debug, Clone)]
 pub enum Item {

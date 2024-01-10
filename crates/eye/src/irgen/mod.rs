@@ -9,10 +9,8 @@ use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
 use types::Type;
 use types::Primitive;
 
-use crate::Compiler;
-use crate::hir::{Node, PatternId, Pattern};
+use crate::hir::{Node, PatternId, Pattern, CastType};
 use crate::parser::ast;
-use crate::type_table::LocalTypeIds;
 use crate::{
     compiler::CheckedFunction,
     type_table::{TypeTable, TypeInfo},
@@ -205,6 +203,22 @@ fn lower<
             let return_ty = ctx.get_type(ctx.types[return_ty]);
             ctx.builder.build_call(func, arg_refs, return_ty)
         }
+        &Node::Cast(id) => {
+            let cast = &ctx.hir[id];
+            let val = lower(ctx, cast.val, noreturn);
+            if *noreturn {
+                return Ref::UNDEF;
+            }
+            // TODO: separate into multiple more specific cast instructions in ir
+            match &cast.cast_ty {
+                CastType::Invalid => build_crash_point(&mut ctx.builder),
+                &CastType::Int { from: _, to } => {
+                    let to_ty = IrType::Primitive(get_primitive_type(to.into()));
+                    ctx.builder.build_cast(val, to_ty)
+                }
+                ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
+            }
+        }
     }
 }
 
@@ -227,7 +241,7 @@ fn lower_pattern<
         Pattern::Ignore => Ref::val(RefVal::True),
         Pattern::Tuple(_) => todo!(),
         Pattern::Int(_sign, _val) => todo!(),
-        Pattern::Range { min_max, min_max_signs, inclusive } => todo!(),
+        Pattern::Range { .. } => todo!(),
     }
 }
 
