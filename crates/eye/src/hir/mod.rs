@@ -4,7 +4,7 @@ use id::{id, ConstValueId, ModuleId};
 use span::TSpan;
 use types::{Primitive, IntType, FloatType};
 
-use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::FunctionId};
+use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId}};
 
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -13,6 +13,7 @@ use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, 
 #[derive(Debug, Clone)]
 pub struct HIR {
     nodes: Vec<Node>,
+    lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
     casts: Vec<Cast>,
@@ -59,6 +60,13 @@ impl Index<NodeIds> for HIR {
     type Output = [Node];
     fn index(&self, index: NodeIds) -> &Self::Output {
         &self.nodes[index.index as usize .. index.index as usize + index.count as usize]
+    }
+}
+id!(LValueId);
+impl Index<LValueId> for HIR {
+    type Output = LValue;
+    fn index(&self, index: LValueId) -> &Self::Output {
+        &self.lvalues[index.idx()]
     }
 }
 id!(PatternId);
@@ -108,6 +116,18 @@ pub enum Node {
         return_ty: LocalTypeId,
     },
     Cast(CastId),
+    Or(NodeId, NodeId),
+    And(NodeId, NodeId),
+    Equals(NodeId, NodeId),
+    NotEquals(NodeId, NodeId),
+    Assign(LValueId, NodeId),
+}
+
+#[derive(Debug, Clone)]
+pub enum LValue {
+    Invalid,
+    Variable(VarId),
+    Global(ModuleId, GlobalId),
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +164,7 @@ pub enum CastType {
 
 pub struct HIRBuilder {
     nodes: Vec<Node>,
+    lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub types: TypeTable,
     vars: Vec<LocalTypeId>,
@@ -153,6 +174,7 @@ impl HIRBuilder {
     pub fn new(types: TypeTable) -> Self {
         Self {
             nodes: Vec::new(),
+            lvalues: Vec::new(),
             patterns: Vec::new(),
             types,
             vars: Vec::new(),
@@ -173,6 +195,7 @@ impl HIRBuilder {
         }
         (HIR {
             nodes: self.nodes,
+            lvalues: self.lvalues,
             patterns: self.patterns,
             vars: self.vars,
             casts: self.casts,
@@ -193,6 +216,12 @@ impl HIRBuilder {
             index: start as _,
             count: count as _,
         }
+    }
+
+    pub fn add_lvalue(&mut self, lvalue: LValue) -> LValueId {
+        let id = LValueId(self.lvalues.len() as _);
+        self.lvalues.push(lvalue);
+        id
     }
 
     pub fn add_pattern(&mut self, pattern: Pattern) -> PatternId {

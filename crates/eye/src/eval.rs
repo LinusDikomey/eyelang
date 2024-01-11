@@ -33,7 +33,7 @@ pub fn def_expr(
             let Ok(val) = lit.val.try_into() else { todo!("handle large constants") };
             Def::ConstValue(compiler.add_const_value(ConstValue::Number(val)))
         }
-        Expr::Variable { span, id: _ } => {
+        Expr::Ident { span } => {
             let name = &ast[*span];
             compiler.resolve_in_scope(module, scope, name, span.in_mod(module))
         }

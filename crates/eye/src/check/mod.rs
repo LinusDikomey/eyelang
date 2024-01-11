@@ -8,11 +8,11 @@ use types::{Primitive, Type};
 
 use crate::{
     Compiler,
-    parser::{ast::{Ast, ExprId, Expr, UnOp, FunctionId}, token::{IntLiteral, Operator}},
+    parser::{ast::{Ast, ExprId, Expr, UnOp, FunctionId}, token::{IntLiteral, Operator, AssignType}},
     compiler::{LocalScope, LocalItem, Def, VarId, Signature},
     type_table::{TypeInfo, LocalTypeId, TypeTable},
     eval::ConstValue,
-    hir::{HIRBuilder, Node, Pattern, NodeIds, HIR, CastId, Cast, CastType}, error::{Error, CompileError},
+    hir::{HIRBuilder, Node, Pattern, NodeIds, HIR, CastId, Cast, CastType, LValue}, error::{Error, CompileError},
 };
 
 use self::exhaust::Exhaustion;
@@ -32,12 +32,17 @@ impl<'a> Ctx<'a> {
         self.ast[expr].span_in(self.ast, self.module)
     }
 
-    fn specify(&mut self, ty: LocalTypeId, info: TypeInfo, span: impl FnOnce(&Ast) -> TSpan) {
-        self.hir.types.specify(ty, info, &mut self.compiler.errors, || span(self.ast).in_mod(self.module))
+    fn specify(&mut self, ty: LocalTypeId, info: impl Into<TypeInfo>, span: impl FnOnce(&Ast) -> TSpan) {
+        self.hir.types.specify(
+            ty,
+            info.into(),
+            &mut self.compiler.errors,
+            || span(self.ast).in_mod(self.module),
+        )
     }
 
-    fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce() -> TSpan) {
-        self.hir.types.unify(a, b, &mut self.compiler.errors, || span().in_mod(self.module))
+    fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
+        self.hir.types.unify(a, b, &mut self.compiler.errors, || span(self.ast).in_mod(self.module))
     }
 
     fn invalidate(&mut self, ty: LocalTypeId) {
@@ -88,12 +93,12 @@ pub fn check_expr(
             ctx.specify(expected, info, |_| *span);
             Node::IntLiteral { val: lit.val, ty: expected }
         }
-        &Expr::Variable { span, id: _ } => {
+        &Expr::Ident { span } => {
             let name = &ast[span];
             match scope.resolve(name, span, ctx.compiler) {
                 LocalItem::Var(var) => {
                     let ty = ctx.hir.get_var(var);
-                    ctx.unify(expected, ty, || span);
+                    ctx.unify(expected, ty, |_| span);
                     Node::Variable(var)
                 }
                 LocalItem::Def(def) => match def {
@@ -184,6 +189,50 @@ pub fn check_expr(
                 val: ctx.hir.add(val),
             }
         }
+        &Expr::BinOp(op, l, r) => {
+            match op {
+                Operator::Add
+                | Operator::Sub
+                | Operator::Mul
+                | Operator::Div
+                | Operator::Mod => {
+                    todo!("arith ops")
+                }
+                Operator::Assignment(AssignType::Assign) => {
+                    ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
+                    let (lval, ty) = check_lval(ctx, l, scope);
+                    let val = check_expr(ctx, r, scope, ty, return_ty);
+                    Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val))
+                }
+                Operator::Assignment(_ty) => todo!("assignment-op type checking"),
+                Operator::Or | Operator::And => {
+                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
+                    let l = check_expr(ctx, l, scope, expected, return_ty);
+                    let r = check_expr(ctx, r, scope, expected, return_ty);
+                    let l = ctx.hir.add(l);
+                    let r = ctx.hir.add(r);
+                    if op == Operator::Or {
+                        Node::Or(l, r)
+                    } else {
+                        Node::And(l, r)
+                    }
+                }
+                Operator::Equals | Operator::NotEquals => {
+                    let compared = ctx.hir.types.add_unknown();
+                    let l = check_expr(ctx, l, scope, compared, return_ty);
+                    let r = check_expr(ctx, r, scope, compared, return_ty);
+                    let l = ctx.hir.add(l);
+                    let r = ctx.hir.add(r);
+                    if op == Operator::Equals {
+                        Node::Equals(l, r)
+                    } else {
+                        Node::NotEquals(l, r)
+                    }
+                }
+                Operator::LT | Operator::GT | Operator::LE | Operator::GE => todo!(),
+                Operator::Range | Operator::RangeExclusive => todo!("range types not implemented yet"),
+            }
+        }
         &Expr::FunctionCall(call) => {
             let call = &ast[call];
             let function_ty = ctx.hir.types.add_unknown();
@@ -239,6 +288,48 @@ pub fn check_expr(
     }
 }
 
+pub fn check_lval(
+    ctx: &mut Ctx,
+    expr: ExprId,
+    scope: &mut LocalScope,
+) -> (LValue, LocalTypeId) {
+    match &ctx.ast[expr] {
+        &Expr::Ident { span } => {
+            match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
+                LocalItem::Invalid | LocalItem::Def(Def::Invalid) => (
+                    LValue::Invalid,
+                    ctx.hir.types.add(TypeInfo::Invalid),
+                ),
+                LocalItem::Var(id) => {
+                    let var_ty = ctx.hir.get_var(id);
+                    (LValue::Variable(id), var_ty)
+                }
+                LocalItem::Def(Def::Global(module, id)) => {
+                    let global_ty = &ctx.compiler.get_checked_global(module, id).0;
+                    let ty = ctx.hir.types.from_resolved(global_ty);
+                    (LValue::Global(module, id), ty)
+                }
+                LocalItem::Def(_) => {
+                    ctx.compiler.errors.emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
+                    (
+                        LValue::Invalid,
+                        ctx.hir.types.add(TypeInfo::Invalid),
+                    )
+                }
+            }
+        }
+        Expr::UnOp(_, UnOp::Deref, _) => todo!("assign to derefs"),
+        Expr::MemberAccess { .. } => todo!("struct member assignment"),
+        _ => {
+            ctx.compiler.errors.emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
+            (
+                LValue::Invalid,
+                ctx.hir.types.add(TypeInfo::Invalid),
+            )
+        }
+    }
+}
+
 pub fn check_pat(
     ctx: &mut Ctx,
     variables: &mut DHashMap<String, VarId>,
@@ -247,7 +338,7 @@ pub fn check_pat(
     expected: LocalTypeId,
 ) -> Pattern {
     match &ctx.ast[pat] {
-        Expr::Variable { span, .. } => {
+        Expr::Ident { span, .. } => {
             let var = ctx.hir.add_var(expected);
             let name = ctx.ast.src()[span.range()].to_owned();
             variables.insert(name, var);

@@ -4,12 +4,12 @@ pub use entry_point::entry_point;
 
 use id::ModuleId;
 use ir::{TypeRef, RefVal};
-use ir::builder::Terminator;
+use ir::builder::{Terminator, BinOp};
 use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
 use types::Type;
 use types::Primitive;
 
-use crate::hir::{Node, PatternId, Pattern, CastType};
+use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
 use crate::parser::ast;
 use crate::{
     compiler::CheckedFunction,
@@ -219,6 +219,42 @@ fn lower<
                 ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
             }
         }
+        node @ (
+            &Node::Or(l, r)
+            | &Node::And(l, r)
+            | &Node::Equals(l, r)
+            | &Node::NotEquals(l, r)
+        ) => {
+            let l = lower(ctx, l, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let r = lower(ctx, r, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let op = match node {
+                Node::Or(_, _) => BinOp::Or,
+                Node::And(_, _) => BinOp::And,
+                Node::Equals(_, _) => BinOp::Eq,
+                Node::NotEquals(_, _) => BinOp::NE,
+                _ => unreachable!(),
+            };
+            ctx.builder.build_bin_op(op, l, r, IrType::Primitive(ir::Primitive::U1))
+        }
+        &Node::Assign(lval, val) => {
+            let lval = lower_lval(ctx, lval);
+            let val = lower(ctx, val, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            ctx.builder.build_store(lval, val);
+            Ref::UNIT
+        }
+    }
+}
+
+fn lower_lval<
+    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
+>(ctx: &mut Ctx<F>, lval: LValueId) -> Ref {
+    match ctx.hir[lval] {
+        LValue::Invalid => build_crash_point(&mut ctx.builder),
+        LValue::Variable(id) => ctx.vars[id.idx()],
+        LValue::Global(_, _) => todo!("handle ir for globals"),
     }
 }
 

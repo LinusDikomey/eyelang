@@ -329,6 +329,8 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
         (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
         (Invalid, _) | (_, Invalid) => Invalid,
+        (Integer, Integer) => Integer,
+        (Float, Float) => Float,
         (Primitive(t), Integer) | (Integer, Primitive(t)) if t.is_int() => Primitive(t),
         (Primitive(t), Float) | (Float, Primitive(t)) if t.is_float() => Primitive(t),
         (TypeDef(id_a, generics_a), TypeDef(id_b, generics_b)) if id_a == id_b => {
@@ -451,4 +453,9 @@ pub enum TypeInfo {
     },
     Generic(u8),
     Invalid,
+}
+impl From<Primitive> for TypeInfo {
+    fn from(value: Primitive) -> Self {
+        TypeInfo::Primitive(value)
+    }
 }

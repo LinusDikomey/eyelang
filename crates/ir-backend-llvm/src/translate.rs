@@ -11,7 +11,7 @@ use llvm_sys::{
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
         LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildIntToPtr, LLVMBuildFPTrunc,
+        LLVMVoidTypeInContext, LLVMBuildIntCast2,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,

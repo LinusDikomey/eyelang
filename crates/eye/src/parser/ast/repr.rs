@@ -97,7 +97,7 @@ impl Definition {
                 c.write_add(" as ");
                 c.write_add(name);
             }
-            Self::Expr { value, ty, counts: _ } => {
+            Self::Expr { value, ty } => {
                 if let UnresolvedType::Infer(_) = ty {
                     c.write_add(" :: ");
                 } else {
@@ -113,7 +113,7 @@ impl Definition {
                 c.write_add(name);
                 c.write_add(": ");
                 global.ty.repr(c);
-                if let Some((val, _)) = global.val {
+                if let Some(val) = global.val {
                     c.write_add(" = ");
                     c.ast()[val].repr(c);
                 }
@@ -305,7 +305,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char(')');
             }
             Self::Unit(_) => c.write_add("()"),
-            Self::Variable { span, .. } => c.write_add(c.src(*span)),
+            Self::Ident { span, .. } => c.write_add(c.src(*span)),
             Self::Hole(_) => c.char('_'),
             Self::Array(_, elems) => {
                 let mut elems = ast[*elems].iter();

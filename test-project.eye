@@ -21,6 +21,7 @@ my_function :: fn -> i32: 5
 main_function :: fn() -> usize {
     # my_global = 1
     x := 3
+    x = 4
     # x += ANSWER
     my_function()
     ret my_function() as _

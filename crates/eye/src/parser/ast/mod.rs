@@ -4,7 +4,7 @@ use span::{TSpan, Span, IdentPath};
 use dmap::{self, DHashMap};
 use types::{Primitive, UnresolvedType};
 
-use crate::parser::{Counts, token::Operator};
+use crate::parser::token::Operator;
 
 pub mod repr;
 
@@ -284,7 +284,6 @@ pub enum Definition {
     Expr {
         value: ExprId,
         ty: UnresolvedType,
-        counts: Counts,
     },
     Path(IdentPath),
     Global(GlobalId),
@@ -312,7 +311,6 @@ pub enum Item {
         name: String,
         name_span: TSpan,
         value: ExprId,
-        counts: Counts,
     },
     Use(IdentPath),
     Impl(TraitImpl),
@@ -372,7 +370,7 @@ pub struct TraitDefinition {
 pub struct Global {
     pub scope: ScopeId,
     pub ty: UnresolvedType,
-    pub val: Option<(ExprId, Counts)>,
+    pub val: Option<ExprId>,
     pub span: TSpan,
 }
 
@@ -383,7 +381,6 @@ pub struct Function {
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprId>,
-    pub counts: Counts,
     pub scope: ScopeId,
     pub signature_span: TSpan,
 }
@@ -442,9 +439,8 @@ pub enum Expr {
     },
     Nested(TSpan, ExprId),
     Unit(TSpan),
-    Variable { // TODO: rename to ident
+    Ident {
         span: TSpan,
-        id: IdentId,
     },
     Hole(u32), // underscore: _
     Array(TSpan, ExprExtra),
@@ -550,7 +546,7 @@ impl Expr {
             | Expr::Record { span, .. }
             | Expr::Nested(span, _) 
             | Expr::Unit(span)
-            | Expr::Variable { span, .. }
+            | Expr::Ident { span, .. }
             | Expr::Array(span, _)
             | Expr::Tuple(span, _)
             | Expr::Match { span, .. }

@@ -146,7 +146,7 @@ impl Compiler {
         let ast = self.get_module_ast(module).clone();
         let Some(def) = ast[scope].definitions.get(name) else { return None };
         let def = match def {
-            ast::Definition::Expr { value, ty, counts: _ } => {
+            ast::Definition::Expr { value, ty } => {
                 assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: respect type");
                 let value = *value;
                 // TODO: cache results
@@ -431,7 +431,7 @@ impl Compiler {
                 symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
                 let ty = self.resolve_type(&global.ty, module, global.scope);
-                let val = if let Some((val, _counts)) = global.val {
+                let val = if let Some(val) = global.val {
                     match eval::def_expr(self, module, global.scope, &ast, val) {
                         // probably should just store id instead of cloning the value
                         Def::ConstValue(id) => self.const_values[id.idx()].clone(),
@@ -462,7 +462,7 @@ impl Compiler {
                             // TODO: cache results
                             self.resolve_path(module, scope, path);
                         }
-                        ast::Definition::Expr { value, ty, counts: _ } => {
+                        ast::Definition::Expr { value, ty } => {
                             assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: def type annotations");
                             // TODO: cache results
                             eval::def_expr(self, module, scope, &ast, *value);
