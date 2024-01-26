@@ -1,13 +1,13 @@
 mod entry_point;
+mod types;
 
 pub use entry_point::entry_point;
 
 use id::ModuleId;
-use ir::{TypeRef, RefVal};
+use ir::{TypeRef, RefVal, TypeRefs};
 use ir::builder::{Terminator, BinOp};
 use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
-use types::Type;
-use types::Primitive;
+use ::types::Type;
 
 use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
 use crate::parser::ast;
@@ -17,11 +17,6 @@ use crate::{
     hir::{NodeId, HIR},
 };
 
-/*
-mod const_val;
-mod main_func;
-*/
-
 pub fn lower_function(
     _src: &str,
     name: String,
@@ -30,20 +25,16 @@ pub fn lower_function(
     get_ir_id: impl FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
-    let generics: Vec<TypeRef> = generics.iter().map(|_generic| todo!("map generics")).collect();
-    let params: Vec<TypeRef> = checked.params
-        .iter()
-        .map(|param| {
-            get_type(&checked.types, &mut types, checked.types[param], &generics)
-        }).collect();
+    let generics = types::get_multiple(&mut types, generics);
+    let params = types::get_multiple_infos(&checked.types, &mut types, checked.params, generics);
     let return_type = checked.types[checked.return_type];
-    let return_type = get_type(&checked.types, &mut types, return_type, &generics);
+    let return_type = types::get_from_info(&checked.types, &mut types, return_type, generics);
 
     let ir = checked.body.as_ref().map(|hir| {
         let mut builder = ir::builder::IrBuilder::new(&mut types);
         let mut vars = vec![Ref::UNDEF; hir.vars.len()];
 
-        for (i, ty) in params.iter().copied().enumerate() {
+        for (i, ty) in params.iter().enumerate() {
             vars[i] = builder.build_decl(ty);
             let param_val = builder.build_param(i as u32, ty);
             builder.build_store(vars[i], param_val);
@@ -54,7 +45,7 @@ pub fn lower_function(
         let mut ctx = Ctx {
             hir,
             types: &checked.types,
-            generics: &generics,
+            generics,
             builder,
             vars: &mut vars,
             get_ir_id,
@@ -75,60 +66,17 @@ pub fn lower_function(
     }
 }
 
-fn get_type(types: &TypeTable, ir_types: &mut IrTypes, ty: TypeInfo, generics: &[TypeRef]) -> TypeRef {
-    match ty {
-        TypeInfo::Primitive(p) => ir_types.add(IrType::Primitive(get_primitive_type(p))),
-        TypeInfo::Integer => ir_types.add(IrType::Primitive(ir::Primitive::I32)),
-        TypeInfo::Float => ir_types.add(IrType::Primitive(ir::Primitive::F32)),
-        TypeInfo::Pointer(_) => ir_types.add(IrType::Primitive(ir::Primitive::Ptr)),
-        TypeInfo::Array { element, count: Some(count) } => {
-            let element = get_type(types, ir_types, types[element], generics);
-            ir_types.add(IrType::Array(element, count))
-        }
-        TypeInfo::Enum { .. } => todo!(),
-        TypeInfo::Tuple(_) => todo!(),
-        TypeInfo::Generic(id) => generics[id as usize],
-        TypeInfo::Unknown
-        | TypeInfo::Array { element: _, count: None }
-        | TypeInfo::TypeDef(_, _)
-        | TypeInfo::FunctionItem { .. }
-        | TypeInfo::MethodItem { .. }
-        | TypeInfo::Invalid => panic!("incomplete type during lowering to ir"),
-    }
-}
-
-fn get_primitive_type(p: Primitive) -> ir::Primitive {
-    match p {
-        Primitive::I8 => ir::Primitive::I8,
-        Primitive::I16 => ir::Primitive::I16,
-        Primitive::I32 => ir::Primitive::I32,
-        Primitive::I64 => ir::Primitive::I64,
-        Primitive::I128 => ir::Primitive::I128,
-        Primitive::U8 => ir::Primitive::U8,
-        Primitive::U16 => ir::Primitive::U16,
-        Primitive::U32 => ir::Primitive::U32,
-        Primitive::U64 => ir::Primitive::U64,
-        Primitive::U128 => ir::Primitive::U128,
-        Primitive::F32 => ir::Primitive::F32,
-        Primitive::F64 => ir::Primitive::F64,
-        Primitive::Bool => ir::Primitive::I8,
-        // TODO: is mapping never to unit correct?
-        Primitive::Unit | Primitive::Never => ir::Primitive::Unit,
-        Primitive::Type => ir::Primitive::U64, // TODO
-    }
-}
-
 struct Ctx<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> {
     hir: &'a HIR,
     types: &'a TypeTable,
-    generics: &'a [TypeRef],
+    generics: TypeRefs,
     builder: IrBuilder<'a>,
     vars: &'a mut [Ref],
     get_ir_id: F,
 }
 impl<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> Ctx<'a, F> {
-    fn get_type(&mut self, ty: TypeInfo) -> TypeRef {
-        get_type(self.types, self.builder.types, ty, self.generics)
+    fn get_type(&mut self, ty: TypeInfo) -> IrType {
+        types::get_from_info(self.types, self.builder.types, ty, self.generics)
     }
 }
 
@@ -213,7 +161,7 @@ fn lower<
             match &cast.cast_ty {
                 CastType::Invalid => build_crash_point(&mut ctx.builder),
                 &CastType::Int { from: _, to } => {
-                    let to_ty = IrType::Primitive(get_primitive_type(to.into()));
+                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
                     ctx.builder.build_cast(val, to_ty)
                 }
                 ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
@@ -245,6 +193,22 @@ fn lower<
             ctx.builder.build_store(lval, val);
             Ref::UNIT
         }
+        &Node::Tuple { elems, elem_types } => {
+            debug_assert_eq!(elems.count, elem_types.count);
+            let tuple_ty = types::get_from_info(ctx.types, ctx.builder.types, TypeInfo::Tuple(elem_types), ctx.generics);
+            let IrType::Tuple(elem_types) = tuple_ty else { unreachable!() };
+            let var = ctx.builder.build_decl(tuple_ty);
+            for ((elem, ty), i) in elems.iter().zip(elem_types.iter()).zip(0..) {
+                let elem_ptr = ctx.builder.build_member_int(var, i, ty);
+                let val = lower(ctx, elem, noreturn);
+                if *noreturn {
+                    return Ref::UNDEF;
+                }
+                ctx.builder.build_store(elem_ptr, val);
+            }
+            // maybe do this differently, could do it like llvm: insertvalue
+            ctx.builder.build_load(var, tuple_ty)
+        }
     }
 }
 
@@ -268,7 +232,8 @@ fn lower_pattern<
     match ctx.hir[pattern] {
         Pattern::Invalid => build_crash_point(&mut ctx.builder),
         Pattern::Variable(id) => {
-            let ty = get_type(ctx.types, ctx.builder.types, ctx.types[ctx.hir.vars[id.idx()]], ctx.generics);
+            let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
+            let ty = types::get_from_info(ctx.types, ctx.builder.types, var_ty, ctx.generics);
             let var = ctx.builder.build_decl(ty);
             ctx.vars[id.idx()] = var;
             ctx.builder.build_store(var, value);

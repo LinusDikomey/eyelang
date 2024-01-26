@@ -102,6 +102,10 @@ pub fn check_expr(
                     Node::Variable(var)
                 }
                 LocalItem::Def(def) => match def {
+                    Def::Invalid => {
+                        ctx.specify(expected, TypeInfo::Invalid, |_| span);
+                        Node::Invalid
+                    }
                     Def::Function(module, id) => function_item(ctx, module, id, expected, expr),
                     Def::Type(_) => todo!("type type?"),
                     Def::ConstValue(const_val) => {
@@ -132,10 +136,6 @@ pub fn check_expr(
                         Node::Invalid
                     }
                     Def::Global(_, _) => todo!("globals"),
-                    Def::Invalid => {
-                        ctx.specify(expected, TypeInfo::Invalid, |_| span);
-                        Node::Invalid
-                    }
                 }
                 LocalItem::Invalid => {
                     ctx.specify(expected, TypeInfo::Invalid, |_| span);
@@ -241,11 +241,42 @@ pub fn check_expr(
                 TypeInfo::Invalid => Node::Invalid,
                 TypeInfo::TypeDef(_, _) => todo!("struct initializers"),
                 TypeInfo::FunctionItem { module, function, generics } => {
-                    assert!(call.args.count == 0, "TODO: call args");
-                    let args = NodeIds::EMPTY; // TODO
                     let signature = ctx.compiler.get_signature(module, function);
-                    let return_ty = ctx.hir.types.info_from_resolved(&signature.return_type);
-                    ctx.specify(expected, return_ty, |ast| ast[expr].span(ast));
+                    if (signature.varargs && call.args.count() < signature.args.len())
+                        || call.args.count() != signature.args.len()
+                    {
+                        let expected = signature.args.len() as _;
+                        let varargs = signature.varargs;
+                        let span = ctx.span(expr);
+                        ctx.compiler.errors.emit_err(Error::InvalidArgCount {
+                            expected,
+                            varargs, 
+                            found: call.args.count,
+                        }.at_span(span));
+                        return Node::Invalid;
+                    }
+
+                    
+                    let arg_types: Vec<_> = signature.args
+                        .iter()
+                        .map(|(_, arg)| ctx.hir.types.from_generic_resolved(arg, generics))
+                        .collect();
+                    let arg_types = ctx.hir.types.add_multiple_info_or_idx(arg_types);
+
+                    let func_return_ty = ctx.hir.types.from_generic_resolved(
+                        &signature.return_type,
+                        generics,
+                    );
+                    let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
+                    ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
+
+
+                    let args = ctx.hir.add_nodes((0..call.args.count).map(|_| Node::Invalid));
+                    for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
+                        let node = check_expr(ctx, arg, scope, ty, return_ty);
+                        ctx.hir.modify_node(node_id, node);
+                    }
+
                     Node::Call {
                         function: (module, function),
                         generics,
@@ -284,6 +315,18 @@ pub fn check_expr(
             ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
             Node::Cast(cast_id)
         }
+        Expr::Tuple(span, values) => {
+            // PERF: special case the specify for tuples, reusing elem types could be worth it if
+            // a tuple type info was already present.
+            let elem_types = ctx.hir.types.add_multiple_unknown(values.count);
+            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
+            let elems = ctx.hir.add_invalid_nodes(values.count);
+            for ((value, ty), node_id) in values.into_iter().zip(elem_types.iter()).zip(elems.iter()) {
+                let node = check_expr(ctx, value, scope, ty, return_ty);
+                ctx.hir.modify_node(node_id, node);
+            }
+            Node::Tuple { elems, elem_types }
+        }
         expr => todo!("typecheck {expr:?}")
     }
 }
@@ -306,7 +349,8 @@ pub fn check_lval(
                 }
                 LocalItem::Def(Def::Global(module, id)) => {
                     let global_ty = &ctx.compiler.get_checked_global(module, id).0;
-                    let ty = ctx.hir.types.from_resolved(global_ty);
+                    let ty = ctx.hir.types.info_from_resolved(global_ty);
+                    let ty = ctx.hir.types.add(ty);
                     (LValue::Global(module, id), ty)
                 }
                 LocalItem::Def(_) => {

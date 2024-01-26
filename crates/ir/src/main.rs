@@ -1,7 +1,7 @@
 //! Example for using the ir crate. A function is constructed manually and evaluated.
 //! It is also debug printed.
 
-use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, display::Info, Primitive};
+use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, display::Info, Primitive, TypeRefs};
 
 fn main() {
     let mut types = IrTypes::new();
@@ -34,9 +34,9 @@ fn main() {
     let function = Function {
         name: "my_function".to_owned(),
         types,
-        params: vec![],
+        params: TypeRefs::EMPTY,
         varargs: false,
-        return_type: int_ty,
+        return_type: IrType::Primitive(Primitive::I32),
         ir: Some(ir),
     };
 
@@ -56,21 +56,21 @@ fn main() {
 
 fn build_mul() -> Function {
     let mut types = IrTypes::new();
-    let int_ty = types.add(IrType::Primitive(Primitive::I32));
+    let params = types.add_multiple([IrType::Primitive(Primitive::I32); 2]);
     let mut builder = IrBuilder::new(&mut types);
 
-    let x = builder.build_param(0, int_ty);
-    let y = builder.build_param(1, int_ty);
-    let res = builder.build_bin_op(BinOp::Mul, x, y, int_ty);
+    let x = builder.build_param(0, params.nth(0));
+    let y = builder.build_param(1, params.nth(1));
+    let res = builder.build_bin_op(BinOp::Mul, x, y, params.nth(0));
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
     Function {
         name: "mul".to_owned(),
         types,
-        params: vec![int_ty, int_ty],
+        params,
         varargs: false,
-        return_type: int_ty,
+        return_type: IrType::Primitive(Primitive::I32),
         ir: Some(ir),
     }
 }

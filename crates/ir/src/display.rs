@@ -94,8 +94,8 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
         write!(f, "(")?;
         write_delimited_with(
             f,
-            &func.params,
-            |f, param| display_type(f, func.types[*param], &func.types, *info),
+            func.params.iter(),
+            |f, param| display_type(f, func.types[param], &func.types, *info),
             ", ",
         )?;
         if func.varargs {
@@ -105,7 +105,7 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
             write!(f, "...")?;
         }
         cwrite!(f, ") -#> ")?;
-        display_type(f, func.types[func.return_type], &func.types, *info)?;
+        display_type(f, func.return_type, &func.types, *info)?;
 
         if let Some(ir) = &func.ir {
             write!(f, "\n{}", ir.display(*info, &func.types))?;

@@ -27,26 +27,27 @@ fn build_mul() -> Function {
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
+    let params = types.add_multiple([types[int_ty], types[int_ty]]);
+    let return_type = types[int_ty];
     Function {
         name: "mul".to_owned(),
         types,
-        params: vec![int_ty, int_ty],
+        params,
         varargs: false,
-        return_type: int_ty,
+        return_type,
         ir: Some(ir),
     }
 }
 
 fn build_extern_printf() -> Function {
     let mut types = IrTypes::new();
-    let ptr_ty = types.add(IrType::Primitive(Primitive::Ptr));
-    let int_ty = types.add(IrType::Primitive(Primitive::I32));
+    let params = types.add_multiple([IrType::Primitive(Primitive::Ptr)]);
     Function {
         name: "printf".to_owned(),
         types,
-        params: vec![ptr_ty],
+        params,
         varargs: true,
-        return_type: int_ty,
+        return_type: IrType::Primitive(Primitive::I32),
         ir: None,
     }
 }

@@ -12,7 +12,7 @@ mod layout;
 
 pub use eval::{eval, Val};
 pub use instruction::{Instruction, Tag, Data};
-pub use ir_types::{IrTypes, IrType, TypeRef, Primitive};
+pub use ir_types::{IrTypes, IrType, TypeRef, TypeRefs, Primitive};
 pub use layout::{Layout, type_layout, primitive_layout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -34,9 +34,9 @@ pub struct TypeId(u64);
 pub struct Function {
     pub name: String,
     pub types: IrTypes,
-    pub params: Vec<TypeRef>,
+    pub params: TypeRefs,
     pub varargs: bool,
-    pub return_type: TypeRef,
+    pub return_type: IrType,
     pub ir: Option<FunctionIr>,
 }
 

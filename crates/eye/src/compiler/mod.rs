@@ -156,7 +156,7 @@ impl Compiler {
                 self.resolve_path(module, scope, path)
             }
             ast::Definition::Global(id) => Def::Global(module, *id),
-            &ast::Definition::Generic(_) => todo!("generic defs"),
+            &ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
         };
         Some(def)
     }
@@ -254,6 +254,13 @@ impl Compiler {
                 let Some(size) = *size else { panic!("inferred array size is not allowed here") };
                 Type::Array(Box::new((elem_ty, size)))
             }
+            UnresolvedType::Tuple(elems, _) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| self.resolve_type(elem, module, scope))
+                    .collect();
+                Type::Tuple(elems)
+            }
             _ => todo!("resolve type {ty:?}"),
         }
     }
@@ -333,7 +340,8 @@ impl Compiler {
                 let param_types = types.add_multiple(params);
                 let varargs = signature.varargs;
 
-                let return_type = types.from_resolved(&signature.return_type);
+                let return_type = types.info_from_resolved(&signature.return_type);
+                let return_type = types.add(return_type);
                 let generic_count = signature.generics.len().try_into().unwrap();
 
                 let (body, types) = if let Some(body) = function.body {
@@ -512,8 +520,8 @@ impl Compiler {
                 self.ir_module.funcs.push(ir::Function {
                     name: String::new(),
                     types: ir::IrTypes::new(),
-                    params: vec![],
-                    return_type: ir::TypeRef::new(0),
+                    params: ir::TypeRefs::EMPTY,
+                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
                     varargs: false,
                     ir: None,
                 });
@@ -540,8 +548,8 @@ impl Compiler {
                                 self.ir_module.funcs.push(ir::Function {
                                     name: String::new(),
                                     types: ir::IrTypes::new(),
-                                    params: vec![],
-                                    return_type: ir::TypeRef::new(0),
+                                    params: ir::TypeRefs::EMPTY,
+                                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
                                     varargs: false,
                                     ir: None,
                                 });

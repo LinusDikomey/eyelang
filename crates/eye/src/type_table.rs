@@ -39,15 +39,17 @@ impl TypeTable {
         id
     }
 
+    pub fn add_info_or_idx(&mut self, info_or_idx: TypeInfoOrIdx) -> LocalTypeId {
+        match info_or_idx {
+            TypeInfoOrIdx::Idx(idx) => idx,
+            TypeInfoOrIdx::TypeInfo(info) => self.add(info),
+        }
+    }
+
     pub fn add_unknown(&mut self) -> LocalTypeId {
         let id = LocalTypeId(self.types.len() as _);
         self.types.push(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown));
         id
-    }
-
-    pub fn from_resolved(&mut self, ty: &Type) -> LocalTypeId {
-        let info = self.info_from_resolved(ty);
-        self.add(info)
     }
 
     pub fn to_resolved(&self, info: TypeInfo) -> Type {
@@ -74,6 +76,16 @@ impl TypeTable {
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> LocalTypeIds {
         let start = self.types.len();
         self.types.extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
+        let count = self.types.len() - start;
+        LocalTypeIds {
+            start: start as _,
+            count: count as _,
+        }
+    }
+
+    pub fn add_multiple_info_or_idx(&mut self, infos: impl IntoIterator<Item = TypeInfoOrIdx>) -> LocalTypeIds {
+        let start = self.types.len();
+        self.types.extend(infos.into_iter());
         let count = self.types.len() - start;
         LocalTypeIds {
             start: start as _,
@@ -108,21 +120,70 @@ impl TypeTable {
                     todo!("handle omitted generics or throw error?");
                 }
             }
-            Type::Pointer(inner) => TypeInfo::Pointer(self.from_resolved(inner)),
+            Type::Pointer(pointee) => {
+                let pointee = self.info_from_resolved(pointee);
+                TypeInfo::Pointer(self.add(pointee))
+            }
             Type::Array(b) => {
                 let (elem_ty, count) = &**b;
-                let element = self.from_resolved(elem_ty);
+                let element = self.info_from_resolved(elem_ty);
+                let element = self.add(element);
                 TypeInfo::Array { element, count: Some(*count) }
             }
             Type::Tuple(elements) => {
-                let start = self.types.len() as u32;
-                let element_ids = LocalTypeIds { start, count: elements.len() as _ };
+                let element_ids = self.add_multiple_unknown(elements.len() as _);
                 for (element, id) in elements.iter().zip(element_ids.iter()) {
-                    self.types[id.idx()] = TypeInfoOrIdx::TypeInfo(self.info_from_resolved(element));
+                    let info = self.info_from_resolved(element);
+                    self.types[id.idx()] = TypeInfoOrIdx::TypeInfo(info);
                 }
                 TypeInfo::Tuple(element_ids)
             }
             &Type::Generic(i) => TypeInfo::Generic(i),
+            Type::LocalEnum(_) => todo!("local enum infos"),
+            Type::TraitSelf => todo!("trait self"),
+        }
+    }
+
+    pub fn from_generic_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+        match ty {
+            Type::Invalid => TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid),
+            &Type::Primitive(p) => TypeInfoOrIdx::TypeInfo(TypeInfo::Primitive(p)),
+            Type::DefId { id, generics: inner_generics } => {
+                let start = self.types.len() as u32;
+                if let Some(inner_generics) = inner_generics {
+                    let count = inner_generics.len();
+                    self.types.extend(std::iter::once(TypeInfoOrIdx::Idx(LocalTypeId(0))).take(count));
+                    let generics_ids = LocalTypeIds { start, count: count as u32 };
+                    for (resolved, id) in inner_generics.iter().zip(generics_ids.iter()) {
+                        self.types[id.idx()] = self.from_generic_resolved(resolved, generics);
+                    }
+                    TypeInfoOrIdx::TypeInfo(TypeInfo::TypeDef(*id, generics_ids))
+                } else {
+                    todo!("handle omitted generics or throw error?");
+                }
+            }
+            Type::Pointer(pointee) => {
+                let pointee = self.from_generic_resolved(pointee, generics);
+                let pointee = self.add_info_or_idx(pointee);
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(pointee))
+            }
+            Type::Array(b) => {
+                let (elem_ty, count) = &**b;
+                let element = self.from_generic_resolved(elem_ty, generics);
+                let element = self.add_info_or_idx(element);
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Array { element, count: Some(*count) })
+            }
+            Type::Tuple(elements) => {
+                let element_ids = self.add_multiple_unknown(elements.len() as _);
+                for (element, id) in elements.iter().zip(element_ids.iter()) {
+                    self.types[id.idx()] = self.from_generic_resolved(element, generics);
+                }
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Tuple(element_ids))
+            }
+            &Type::Generic(i) => {
+                assert!((i as u32) < generics.count);
+                TypeInfoOrIdx::Idx(LocalTypeId(generics.start + i as u32))
+            }
             Type::LocalEnum(_) => todo!("local enum infos"),
             Type::TraitSelf => todo!("trait self"),
         }
@@ -308,6 +369,13 @@ impl TypeTable {
         }
     }
 
+    pub fn get_info_or_idx(&self, info_or_idx: TypeInfoOrIdx) -> TypeInfo {
+        match info_or_idx {
+            TypeInfoOrIdx::TypeInfo(info) => info,
+            TypeInfoOrIdx::Idx(idx) => self[idx],
+        }
+    }
+
     pub fn type_infos_mut(&mut self) -> impl Iterator<Item = &mut TypeInfo> {
         self.types.iter_mut().filter_map(|ty| match ty {
             TypeInfoOrIdx::TypeInfo(info) => Some(info),
@@ -317,7 +385,7 @@ impl TypeTable {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum TypeInfoOrIdx {
+pub enum TypeInfoOrIdx {
     TypeInfo(TypeInfo),
     Idx(LocalTypeId),
 }
@@ -418,6 +486,8 @@ pub struct LocalTypeIds {
     pub count: u32,
 }
 impl LocalTypeIds {
+    pub const EMPTY: Self = Self { start: 0, count: 0 };
+
     pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
         (self.start .. self.start + self.count).map(LocalTypeId)
     }

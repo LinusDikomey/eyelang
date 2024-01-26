@@ -1,4 +1,4 @@
-use ir::{FunctionId, builder::{IrBuilder, Terminator}, IrTypes, IrType};
+use ir::{FunctionId, builder::{IrBuilder, Terminator}, IrTypes, IrType, TypeRefs};
 use types::{Type, Primitive};
 
 /// Create function wrapping and calling main to handle exit codes properly.
@@ -11,7 +11,7 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
 
     let main_return = match main_return_ty {
         Type::Primitive(Primitive::Unit) => IrType::Primitive(ir::Primitive::Unit),
-        &Type::Primitive(p) if p.is_int() => IrType::Primitive(super::get_primitive_type(p)),
+        &Type::Primitive(p) if p.is_int() => IrType::Primitive(super::types::get_primitive(p)),
         _ => unreachable!()
     };
 
@@ -31,9 +31,9 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
     ir::Function {
         name: "main".to_owned(),
         types,
-        params: vec![],
+        params: TypeRefs::EMPTY,
         varargs: false,
-        return_type: i32_ty,
+        return_type: IrType::Primitive(ir::Primitive::I32),
         ir: Some(ir)
     }
 }

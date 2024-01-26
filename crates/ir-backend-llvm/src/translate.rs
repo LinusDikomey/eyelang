@@ -24,12 +24,11 @@ pub unsafe fn add_function(
     llvm_module: LLVMModuleRef,
     function: &ir::Function,
 ) -> Result<(LLVMValueRef, LLVMTypeRef), Error> {
-    let return_ty = llvm_ty(ctx, function.types[function.return_type], &function.types)
+    let return_ty = llvm_ty(ctx, function.return_type, &function.types)
         .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
     let mut params: Vec<_> = function
         .params
         .iter()
-        .copied()
         .filter_map(|ty| llvm_ty(ctx, function.types[ty], &function.types))
         .collect();
     let llvm_func_ty = LLVMFunctionType(
@@ -197,7 +196,7 @@ unsafe fn build_func(
             ir::Tag::Ret => {
                 let value = data.un_op;
                 if value == ir::Ref::UNDEF {
-                    if let Some(ty) = table_ty(func.return_type) {
+                    if let Some(ty) = llvm_ty(ctx, func.return_type, &func.types) {
                         let val = LLVMGetUndef(ty);
                         LLVMBuildRet(builder, val)
                     } else {
@@ -213,7 +212,7 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::Param => {
-                if let Some(_) = table_ty(func.params[data.int32 as usize]) {
+                if let Some(_) = table_ty(func.params.nth(data.int32)) {
                     LLVMGetParam(llvm_func, data.int32)
                 } else {
                     ptr::null_mut()

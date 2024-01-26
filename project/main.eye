@@ -18,7 +18,10 @@ my_global: usize = 3
 
 my_function :: fn -> i32: 5
 
+f :: fn -> file.IntType: 5
+
 main_function :: fn() -> usize {
+    x := f()
     # my_global = 1
     x := 3
     x = 4

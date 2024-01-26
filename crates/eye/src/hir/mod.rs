@@ -46,8 +46,8 @@ impl IndexMut<CastId> for HIR {
 }
 #[derive(Debug, Clone, Copy)]
 pub struct NodeIds {
-    index: u32,
-    count: u32,
+    pub index: u32,
+    pub count: u32,
 }
 impl NodeIds {
     pub const EMPTY: Self = Self { index: 0, count: 0 };
@@ -121,6 +121,11 @@ pub enum Node {
     Equals(NodeId, NodeId),
     NotEquals(NodeId, NodeId),
     Assign(LValueId, NodeId),
+    Tuple {
+        // PERF(size): length has to match anyways, could only store it once
+        elems: NodeIds,
+        elem_types: LocalTypeIds,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -189,7 +194,7 @@ impl HIRBuilder {
                 TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
                 TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
                 TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
-                TypeInfo::Array { element, count: count @ None } => *count = Some(0),
+                TypeInfo::Array { element: _, count: count @ None } => *count = Some(0),
                 _ => {}
             }
         }
@@ -222,6 +227,19 @@ impl HIRBuilder {
         let id = LValueId(self.lvalues.len() as _);
         self.lvalues.push(lvalue);
         id
+    }
+
+    pub fn add_invalid_nodes(&mut self, count: u32) -> NodeIds {
+        let start = self.nodes.len();
+        self.nodes.extend((0..count).map(|_| Node::Invalid));
+        NodeIds {
+            index: start as _,
+            count,
+        }
+    }
+
+    pub fn modify_node(&mut self, node_id: NodeId, node: Node) {
+        self.nodes[node_id.0 as usize] = node;
     }
 
     pub fn add_pattern(&mut self, pattern: Pattern) -> PatternId {

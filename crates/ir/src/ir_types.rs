@@ -199,6 +199,10 @@ pub struct TypeRefs { pub idx: u32, pub count: u32 }
 impl TypeRefs {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
 
+    pub fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
     pub fn from_single(r: TypeRef) -> Self {
         Self { idx: r.0, count: 1 }
     }
