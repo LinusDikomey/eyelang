@@ -1,4 +1,4 @@
-use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex, Primitive};
+use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex, Primitive, TypeRefs};
 
 use super::{RefVal, FunctionId, ir_types::{TypeRef, IrType, IrTypes}};
 
@@ -297,34 +297,16 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { bin_op: (l, r) }, tag, ty)
     }
 
-    pub fn build_member(&mut self, var: Ref, member_idx: Ref, ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { bin_op: (var, member_idx) }, Tag::Member, ty)
-    }
-    pub fn build_member_int(&mut self, var: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
-        let u32_ty = self.types.add(IrType::Primitive(Primitive::U32));
-        let idx = self.build_int(idx as u64, u32_ty);
-        self.build_member(var, idx, ty)
-    }
-
-    pub fn build_enum_tag(&mut self, enum_ptr: Ref, tag_ptr_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { un_op: enum_ptr }, Tag::EnumTag, tag_ptr_ty)
-    }
-    pub fn build_enum_value_tag(&mut self, enum_val: Ref, tag_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { un_op: enum_val }, Tag::EnumValueTag, tag_ty)
+    pub fn build_member_ptr(&mut self, var: Ref, idx: u32, elem_types: TypeRefs) -> Ref {
+        debug_assert!(idx < elem_types.count, "member ptr is out of bounds");
+        let extra = self.extra.len() as u32;
+        self.extra.extend(elem_types.to_bytes());
+        self.extra.extend(idx.to_le_bytes());
+        self.add(Data { ref_int: (var, extra) }, Tag::MemberPtr, IrType::Primitive(Primitive::Ptr))
     }
 
-    pub fn build_enum_variant_member(&mut self, var: Ref, variant: u16, arg: u16, ty: impl Into<IdxOrTy>)
-    -> Ref {
-        self.add(Data { variant_member: (var, variant, arg) }, Tag::EnumVariantMember, ty)
-    }
-
-    pub fn build_enum_value_variant_member(&mut self, var: Ref, variant: u16, arg: u16, ty: impl Into<IdxOrTy>)
-    -> Ref {
-        self.add(Data { variant_member: (var, variant, arg) }, Tag::EnumValueVariantMember, ty)
-    }
-
-    pub fn build_value(&mut self, val: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { ref_int: (val, idx) }, Tag::Value, ty)
+    pub fn build_member_value(&mut self, val: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
+        self.add(Data { ref_int: (val, idx) }, Tag::MemberValue, ty)
     }
 
     pub fn build_cast(&mut self, val: Ref, target_ty: impl Into<IdxOrTy>) -> Ref {

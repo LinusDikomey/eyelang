@@ -287,7 +287,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             super::Tag::GT => cmp_op!(> , inst),
             super::Tag::LE => cmp_op!(<=, inst),
             super::Tag::GE => cmp_op!(>=, inst),
-            super::Tag::Member => {
+            super::Tag::MemberPtr => {
                 todo!("should give pointer to member")
                 /*
                 let ConstVal::Int(_, member) = get_ref(&values, inst.data.bin_op.1)
@@ -305,7 +305,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 continue;
                 */
             }
-            super::Tag::Value => todo!(),
+            super::Tag::MemberValue => todo!(),
             super::Tag::Cast => todo!(),
             super::Tag::Goto => {
                 let target = ir.blocks[inst.data.int32 as usize];
@@ -359,10 +359,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 }
                 val.expect("Invalid phi node: didn't go through any of the blocks")
             }
-            super::Tag::Asm => todo!(),
-            super::Tag::EnumTag | super::Tag::EnumValueTag
-            | super::Tag::EnumVariantMember | super::Tag::EnumValueVariantMember 
-            => todo!("eval enums"),
+            super::Tag::Asm => todo!(), // TODO: error handling
         };
         values[pos as usize] = value;
         pos += 1;

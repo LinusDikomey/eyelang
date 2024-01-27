@@ -82,7 +82,6 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LL
             ))
         }
         IrType::Ref(r) => llvm_ty(ctx, types[r], types),
-        IrType::Enum(_) => todo!(),
         IrType::Const(_) => panic!("const type in llvm backend found"),
     }
 }
@@ -370,15 +369,6 @@ unsafe fn build_func(
                             };
                             LLVMBuildFCmp(builder, tag, l, r, NONE)
                         }
-                        IrType::Enum(_ty) => {
-                            // TODO: this will break on enums containing data
-                            let tag = if tag == ir::Tag::Eq {
-                                LLVMIntPredicate::LLVMIntEQ
-                            } else {
-                                LLVMIntPredicate::LLVMIntNE
-                            };
-                            LLVMBuildICmp(builder, tag, l, r, NONE)
-                        }
                         _ => panic!("invalid type for eq/ne"),
                     }
                 } else {
@@ -453,7 +443,7 @@ unsafe fn build_func(
                     _ => panic!("invalid type for le"),
                 }
             }
-            ir::Tag::Member => {
+            ir::Tag::MemberPtr => {
                 todo!("figure out member again")
                 /*
                 let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
@@ -508,7 +498,7 @@ unsafe fn build_func(
                 }
                 */
             }
-            ir::Tag::Value => {
+            ir::Tag::MemberValue => {
                 todo!("figure out value again")
                 /*
                 if let (Some(r), r_ty) = get_ref_and_type(&instructions,  data.ref_int.0) {
@@ -550,72 +540,6 @@ unsafe fn build_func(
                     ptr::null_mut()
                 }
                 */
-            }
-            ir::Tag::EnumTag => {
-                todo!("EnumTag")
-                /*
-                if let (Some(r), ty) = get_ref_and_type(&instructions, data.un_op) {
-                    let IrType::Ptr(pointee) = ty else { panic!("invalid ir") };
-                    let offset = tag_offset(ir.types[pointee], ir, ctx, module, types);
-                    if let Some(offset) = offset {
-                        let pointee_ty = llvm_ty(ctx, ir.types[pointee] &ir.types, types);
-                        let i32_ty = LLVMInt32TypeInContext(ctx);
-                        let zero = LLVMConstInt(i32_ty, offset as u64, FALSE);
-                        let mut elems = [zero; 2];
-                        LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
-                    } else {
-                        // transparent tag
-                        r
-                    }
-                } else {
-                    ptr::null_mut()
-                }
-                */
-            }
-            ir::Tag::EnumValueTag => {
-                todo!("EnumValueTag")
-                /*
-                if let (Some(r), ty) = get_ref_and_type(&instructions, data.un_op) {
-                    match tag_offset(ty, ir, ctx, module, types) {
-                        Some(offset) => LLVMBuildExtractValue(builder, r, offset, NONE),
-                        None => r,
-                    }
-                } else {
-                    ptr::null_mut()
-                }
-                */
-            }
-            ir::Tag::EnumVariantMember => {
-                todo!("reimplement EnumVariantMember")
-                /*
-                if let (Some(r), ty) = get_ref_and_type(&instructions, data.variant_member.0) {
-                    let IrType::Ptr(pointee) = ty else { panic!("non-pointer found for EnumVariantMember") };
-                    let pointee = ir.types[pointee];
-                    let offset = variant_offset(pointee, ir,
-                        data.variant_member.1, data.variant_member.2, ctx, module, types);
-                    let pointee_ty = llvm_ty(ctx, pointee, &ir.types);
-                    let i32_ty = LLVMInt32TypeInContext(ctx);
-                    let mut elems = [LLVMConstInt(i32_ty, 0, FALSE), LLVMConstInt(i32_ty, offset as _, FALSE)];
-                    LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
-                } else {
-                    ptr::null_mut()
-                }
-                */
-            }
-            ir::Tag::EnumValueVariantMember => {
-                if let (Some(_r), _enum_ty) = get_ref_and_type(&instructions, data.variant_member.0) {
-                    todo!("enum value variant member");
-                    // LLLVM doesn't allow bitcast between aggregate types for some reason.
-                    // Instead we store the enum value in an allocated slot and load an offset
-                    // pointer. Let's hope llvm can optimize this shit.
-                    /*
-                    let offset = variant_offset(enum_ty, ir,
-                        data.variant_member.1, data.variant_member.2, ctx, module, types);
-                    extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, enum_ty, offset, ir.types[ty])
-                    */
-                } else {
-                    ptr::null_mut()
-                }
             }
             ir::Tag::Cast => {
                 // IR should probably just have different types of casts like in LLVM.

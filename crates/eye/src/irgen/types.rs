@@ -1,5 +1,5 @@
 use id::TypeId;
-use ir::{IrType, IrTypes, TypeRefs, TypeRef};
+use ir::{IrType, IrTypes, TypeRefs};
 use types::Type;
 
 use crate::type_table::{TypeTable, TypeInfo, LocalTypeIds};

@@ -4,9 +4,9 @@ mod types;
 pub use entry_point::entry_point;
 
 use id::ModuleId;
-use ir::{TypeRef, RefVal, TypeRefs};
+use ir::{RefVal, TypeRefs};
 use ir::builder::{Terminator, BinOp};
-use ir::{IrType, Ref, builder::IrBuilder, IrTypes};
+use ir::{IrType, Ref, builder::IrBuilder};
 use ::types::Type;
 
 use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
@@ -198,8 +198,8 @@ fn lower<
             let tuple_ty = types::get_from_info(ctx.types, ctx.builder.types, TypeInfo::Tuple(elem_types), ctx.generics);
             let IrType::Tuple(elem_types) = tuple_ty else { unreachable!() };
             let var = ctx.builder.build_decl(tuple_ty);
-            for ((elem, ty), i) in elems.iter().zip(elem_types.iter()).zip(0..) {
-                let elem_ptr = ctx.builder.build_member_int(var, i, ty);
+            for (elem, i) in elems.iter().zip(0..) {
+                let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
                 let val = lower(ctx, elem, noreturn);
                 if *noreturn {
                     return Ref::UNDEF;

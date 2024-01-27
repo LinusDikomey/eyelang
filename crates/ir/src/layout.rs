@@ -51,20 +51,6 @@ pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
             }
             layout
         }
-        IrType::Enum(variants) => {
-            let tag_layout = layout_from_variant_count(variants.len());
-            let mut layout = tag_layout;
-
-            for variant in variants.iter() {
-                let IrType::Tuple(args) = types[variant] else { panic!("invalid IrType found") };
-                let mut variant_layout = tag_layout;
-                for arg in args.iter() {
-                    variant_layout.accumulate(type_layout(types[arg], types));
-                }
-                layout.accumulate_variant(variant_layout);
-            }
-            layout
-        }
         IrType::Const(_) => todo!("const IrType layout"),
         IrType::Ref(r) => type_layout(types[r], types),
     }
@@ -81,16 +67,4 @@ pub fn primitive_layout(ty: Primitive) -> Layout {
         P::Unit => Layout::EMPTY,
         P::Ptr => Layout::PTR, // TODO: architecture dependent pointer sizes
     }
-}
-
-fn layout_from_variant_count(count: usize) -> Layout {
-    if count == 0 { return Layout::EMPTY }
-    let bytes = match ((count - 1).ilog2() as u64 + 1).div_ceil(8) {
-        1 => 1,
-        2 => 2,
-        3 | 4 => 4,
-        5..=8 => 8,
-        _ => unreachable!()
-    };
-    Layout { size: bytes, align: bytes.try_into().unwrap() }
 }

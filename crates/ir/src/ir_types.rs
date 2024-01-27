@@ -100,8 +100,6 @@ pub enum IrType {
     Primitive(Primitive),
     Array(TypeRef, u32),
     Tuple(TypeRefs),
-    /// TypeRefs should point to tuples of arguments
-    Enum(TypeRefs),
     Const(ConstIrType),
     Ref(TypeRef), // just refers to a different index
 }
@@ -210,11 +208,28 @@ impl TypeRefs {
     pub fn iter(self) -> impl Iterator<Item = TypeRef> {
         (self.idx .. self.idx + self.count).map(TypeRef)
     }
+
     pub fn len(self) -> usize {
         self.count as usize
     }
+
     pub fn nth(self, idx: u32) -> TypeRef {
         debug_assert!(idx < self.count);
         TypeRef(self.idx + idx)
+    }
+
+    pub fn to_bytes(self) -> [u8; 8] {
+        let a = self.idx.to_le_bytes();
+        let b = self.count.to_le_bytes();
+        [a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]]
+    }
+
+    pub fn from_bytes(bytes: [u8; 8]) -> Self {
+        let mut a = [0; 4];
+        a.copy_from_slice(&bytes[0..4]);
+        let idx = u32::from_le_bytes(a);
+        a.copy_from_slice(&bytes[4..8]);
+        let count = u32::from_le_bytes(a);
+        Self { idx, count }
     }
 }

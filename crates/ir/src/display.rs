@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, FunctionId};
+use crate::{ir_types::ConstIrType, FunctionId, TypeRefs};
 
 use super::{
     Function,
@@ -146,34 +146,20 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::ir_types::IrType, types: 
     use super::ir_types::IrType;
 
     match ty {
-        IrType::Primitive(p) => write!(f, "{p}"),
+        IrType::Primitive(p) => cwrite!(f, "#m<{p}>"),
         IrType::Array(inner, count) => {
-            write!(f, "[")?;
+            cwrite!(f, "#m<[>")?;
             display_type(f, types[inner], types, info)?;
-            write!(f, "; {count}]")
+            cwrite!(f, "; #m<{count}>]")
         }
         IrType::Tuple(elems) => {
-            write!(f, "(")?;
+            cwrite!(f, "#m<(>")?;
             write_delimited_with(f, elems.iter(), |f, ty| display_type(f, types[ty], types, info), ", ")?;
-            write!(f, ")")
+            cwrite!(f, "#m<)>")
         }
-        IrType::Enum(variants) => {
-            write!(f, "enum {{")?;
-            write_delimited_with(f, variants.iter().enumerate(), |f, (i, variant)| {
-                write!(f, "{i}")?;
-                let IrType::Tuple(args) = types[variant] else { panic!("invalid IrTypes") };
-                if args.len() > 0 {
-                    write!(f, "(")?;
-                    write_delimited_with(f, args.iter(), |f, arg| display_type(f, types[arg], types, info), ", ")?;
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }, ", ")?;
-            write!(f, "}}")
-        }
-        IrType::Const(ConstIrType::Int) => write!(f, "int"),
-        IrType::Const(ConstIrType::Float) => write!(f, "enum"),
-        IrType::Const(ConstIrType::Enum) => write!(f, "float"),
+        IrType::Const(ConstIrType::Int) => write!(f, "#m<int>"),
+        IrType::Const(ConstIrType::Float) => write!(f, "#m<enum>"),
+        IrType::Const(ConstIrType::Enum) => write!(f, "#m<float>"),
         IrType::Ref(r) => display_type(f, types[r], types, info)
     }
 }
@@ -191,6 +177,16 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
         DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int),
         DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
         DataVariant::Block => cwrite!(f, "{}", inst.data.block),
+        DataVariant::MemberPtr => {
+            let (ptr, extra_start) = inst.data.ref_int;
+            let i = extra_start as usize;
+            let elem_refs = TypeRefs::from_bytes(extra[i..i+8].try_into().unwrap());
+            let elem_idx = u32::from_le_bytes(extra[i+8..i+12].try_into().unwrap());
+            write_ref(f, ptr)?;
+            cwrite!(f, " #g<as> #m<*(>")?;
+            write_delimited_with(f, elem_refs.iter(), |f, elem| display_type(f, types[elem], types, info), ", ")?;
+            cwrite!(f, "#m<)>, #y<{elem_idx}>")
+        }
         DataVariant::LargeInt => {
             let bytes = &extra[
                 inst.data.extra as usize
@@ -259,7 +255,7 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             bytes.copy_from_slice(&extra[i+4..i+8]);
             let b = u32::from_le_bytes(bytes);
             write_ref(f, inst.data.ref_int.0)?;
-            cwrite!(f, ", #b!<b{}> #m<or> #b!<b{}>", a, b)
+            cwrite!(f, ", #b!<b{}> #g<or> #b!<b{}>", a, b)
         }
         DataVariant::RefInt => {
             write_ref(f, inst.data.ref_int.0)?;
@@ -277,10 +273,6 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
                 write_ref(f, Ref::from_bytes(arg_bytes))?;
             }
             Ok(())
-        }
-        DataVariant::VariantMember => {
-            write_ref(f, inst.data.variant_member.0)?;
-            write!(f, " {:?} arg {}", inst.data.variant_member.1, inst.data.variant_member.2)
         }
         DataVariant::None => Ok(())
     }}

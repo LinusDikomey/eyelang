@@ -12,7 +12,7 @@ use crate::{
     compiler::{LocalScope, LocalItem, Def, VarId, Signature},
     type_table::{TypeInfo, LocalTypeId, TypeTable},
     eval::ConstValue,
-    hir::{HIRBuilder, Node, Pattern, NodeIds, HIR, CastId, Cast, CastType, LValue}, error::{Error, CompileError},
+    hir::{HIRBuilder, Node, Pattern, HIR, CastId, Cast, CastType, LValue}, error::{Error, CompileError},
 };
 
 use self::exhaust::Exhaustion;
