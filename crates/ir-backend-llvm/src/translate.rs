@@ -506,20 +506,60 @@ unsafe fn build_func(
                 }
                 */
             }
-            ir::Tag::Cast => {
-                // IR should probably just have different types of casts like in LLVM.
-                // (reinterpret, trunc, extend, float to int, int to float, etc.)
-                let (val, _origin) = get_ref_and_type(&instructions, data.un_op);
-                let val = val.unwrap(); // casts from zero assumed to be impossible
-                let target = func.types[ty];
-                let target_ty = llvm_ty(ctx, target, &func.types).unwrap();
-                let signed = if let IrType::Primitive(p) = target {
-                    p.is_signed_int()
-                } else {
-                    false
-                };
+            ir::Tag::CastInt => {
+                let val = get_ref(&instructions, data.un_op);
+                // there are no zero-sized integers so unwraps are fine
+                let val = val.unwrap();
+                let to_ty = func.types[ty];
+                let IrType::Primitive(p) = to_ty else { panic!("invalid CastInt") };
+                let signed = p.is_signed_int();
+                let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
                 LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
-                //cast(val, origin, target, builder, ctx, module, ir, types)
+            }
+            ir::Tag::CastFloat => {
+                let (val, from_ty) = get_ref_and_type(&instructions, data.un_op);
+                // there are no zero-sized floats so unwraps are fine
+                let val = val.unwrap();
+                let to_ty = func.types[ty];
+                let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                match (from_ty, to_ty) {
+                    (IrType::Primitive(Primitive::F32), IrType::Primitive(Primitive::F64)) => {
+                        core::LLVMBuildFPExt(builder, val, target_ty, NONE)
+                    }
+                    (IrType::Primitive(Primitive::F64), IrType::Primitive(Primitive::F32)) => {
+                        core::LLVMBuildFPTrunc(builder, val, target_ty, NONE)
+                    }
+                    _ => panic!("invalid types for CastFloat"),
+                }
+            }
+            ir::Tag::CastIntToFloat => {
+                let (val, from_ty) = get_ref_and_type(&instructions, data.un_op);
+                // there are no zero-sized ints/floats so unwraps are fine
+                let val = val.unwrap();
+                let IrType::Primitive(p) = from_ty else {
+                    panic!("invalid type for CastIntToFloat")
+                };
+                let to_ty = func.types[ty];
+                let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                if p.is_unsigned_int() {
+                    core::LLVMBuildUIToFP(builder, val, target_ty, NONE)
+                } else {
+                    core::LLVMBuildSIToFP(builder, val, target_ty, NONE)
+                }
+            }
+            ir::Tag::CastFloatToInt => {
+                // there are no zero-sized ints/floats so unwraps are fine
+                let val = get_ref(&instructions, data.un_op).unwrap();
+                let to_ty = func.types[ty];
+                let IrType::Primitive(to_p) = to_ty else {
+                    panic!("invalid type for CastFloatToInt")
+                };
+                let target_ty = llvm_ty(ctx, func.types[ty], &func.types).unwrap();
+                if to_p.is_unsigned_int() {
+                    core::LLVMBuildFPToUI(builder, val, target_ty, NONE)
+                } else {
+                    core::LLVMBuildFPToSI(builder, val, target_ty, NONE)
+                }
             }
             ir::Tag::Goto => {
                 let block_inst = ir.inst[ir.blocks[data.int32 as usize] as usize];

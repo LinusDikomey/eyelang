@@ -175,15 +175,28 @@ fn lower(
             }
             Ref::UNDEF
         }
-        Node::IntLiteral { val, ty } => {
-            let ty = ctx.get_type(ctx.types[*ty]);
-            if let Ok(small) = (*val).try_into() {
+        &Node::IntLiteral { val, ty } => {
+            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+                build_crash_point(&mut ctx.builder);
+                return Ref::UNDEF
+            };
+            debug_assert!(p.is_int());
+            let ty = IrType::Primitive(types::get_primitive(p));
+            if let Ok(small) = val.try_into() {
                 ctx.builder.build_int(small, ty)
             } else {
-                ctx.builder.build_large_int(*val, ty)
+                ctx.builder.build_large_int(val, ty)
             }
         }
-        Node::FloatLiteral { .. } => todo!(),
+        &Node::FloatLiteral { val, ty } => {
+            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+                build_crash_point(&mut ctx.builder);
+                return Ref::UNDEF
+            };
+            debug_assert!(p.is_float());
+            let ty = IrType::Primitive(types::get_primitive(p));
+            ctx.builder.build_float(val, ty)
+        }
         Node::StringLiteral(_) => todo!(),
         Node::BoolLiteral(true) => Ref::val(RefVal::True),
         Node::BoolLiteral(false) => Ref::val(RefVal::False),
@@ -215,9 +228,22 @@ fn lower(
             // TODO: separate into multiple more specific cast instructions in ir
             match &cast.cast_ty {
                 CastType::Invalid => build_crash_point(&mut ctx.builder),
+                CastType::Noop => val,
                 &CastType::Int { from: _, to } => {
                     let to_ty = IrType::Primitive(types::get_primitive(to.into()));
-                    ctx.builder.build_cast(val, to_ty)
+                    ctx.builder.build_cast_int(val, to_ty)
+                }
+                &CastType::Float { from: _, to } => {
+                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    ctx.builder.build_cast_float(val, to_ty)
+                }
+                &CastType::FloatToInt { from: _, to } => {
+                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    ctx.builder.build_cast_float_to_int(val, to_ty)
+                }
+                &CastType::IntToFloat { from: _, to } => {
+                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    ctx.builder.build_cast_int_to_float(val, to_ty)
                 }
                 ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
             }

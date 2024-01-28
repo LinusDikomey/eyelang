@@ -180,6 +180,7 @@ pub enum Error {
         from: String,
         to: String,
     },
+    TrivialCast,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -259,6 +260,7 @@ impl Error {
             Error::NotAllFunctionsImplemented { .. } => "not all functions of the trait are implemented",
             Error::TraitSignatureMismatch => "signature doesn't match the function's signature in the trait definition",
             Error::InvalidCast { .. } => "this cast is not valid",
+            Error::TrivialCast => "this cast is trivial",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -338,6 +340,9 @@ impl Error {
             Error::InvalidCast { from, to } => {
                 cformat!("cannot cast from a value of type #m<{from}> to #m<{to}>")
             }
+            Error::TrivialCast => {
+                cformat!("#c<hint>: remove this cast")
+            }
             _ => return None
         })
     }
@@ -345,6 +350,7 @@ impl Error {
         match self {
             Self::UnusedExpressionValue
             | Self::CantMutateHole
+            | Self::TrivialCast
                 => Severity::Warn,
             _ => Severity::Error
         }

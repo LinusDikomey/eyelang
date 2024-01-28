@@ -22,7 +22,7 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
     let exit_code = match main_return {
         ir::IrType::Primitive(ir::Primitive::I32) => main_val,
         ir::IrType::Primitive(ir::Primitive::Unit) => builder.build_int(0, i32_ty),
-        _ => builder.build_cast(main_val, i32_ty),
+        _ => builder.build_cast_int(main_val, IrType::Primitive(ir::Primitive::I32)),
     };
     builder.terminate_block(Terminator::Ret(exit_code));
     

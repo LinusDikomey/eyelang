@@ -134,7 +134,6 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
         display_data(inst, f, extra, self.types, *info)?;
         if inst.ty.is_present() {
             match inst.tag {
-                Tag::Cast => cwrite!(f, "#m!< as >")?,
                 _ => cwrite!(f, " :: ")?
             };
             display_type(f, types[inst.ty], types, self.info)?;

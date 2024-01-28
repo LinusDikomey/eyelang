@@ -164,6 +164,7 @@ pub struct Cast {
 #[derive(Debug, Clone)]
 pub enum CastType {
     Invalid,
+    Noop,
     Int { from: IntType, to: IntType },
     Float { from: FloatType, to: FloatType },
     IntToFloat { from: IntType, to: FloatType },

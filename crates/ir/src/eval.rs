@@ -306,7 +306,57 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 */
             }
             super::Tag::MemberValue => todo!(),
-            super::Tag::Cast => todo!(),
+            super::Tag::CastInt => {
+                let (v, from_ty) = get_ref_and_ty(&values, inst.data.un_op);
+                debug_assert!(matches!(from_ty, IrType::Primitive(ty) if ty.is_int()));
+                debug_assert!(matches!(types[inst.ty], IrType::Primitive(ty) if ty.is_int()));
+                // integers values are always represented the same right now
+                v
+            }
+            super::Tag::CastFloat => {
+                let v = get_ref(&values, inst.data.un_op);
+                let to_ty = types[inst.ty];
+                match (v, to_ty) {
+                    (Val::F32(v), IrType::Primitive(Primitive::F32)) => Val::F32(v),
+                    (Val::F32(v), IrType::Primitive(Primitive::F64)) => Val::F64(v as f64),
+                    (Val::F64(v), IrType::Primitive(Primitive::F32)) => Val::F32(v as f32),
+                    (Val::F64(v), IrType::Primitive(Primitive::F64)) => Val::F64(v),
+                    _ => panic!("invalid types for float cast"),
+                }
+            }
+            super::Tag::CastIntToFloat => {
+                let Val::Int(v) = get_ref(&values, inst.data.un_op) else {
+                    panic!("invalid type for CastIntToFloat");
+                };
+                let to_ty = types[inst.ty];
+                match to_ty {
+                    IrType::Primitive(Primitive::F32) => Val::F32(v as f32),
+                    IrType::Primitive(Primitive::F64) => Val::F64(v as f64),
+                    _ => panic!("invalid target type for CastIntToFloat"),
+                }
+            }
+            super::Tag::CastFloatToInt => {
+                let v = match get_ref(&values, inst.data.un_op) {
+                    Val::F32(v) => v as f64, // casting f32 to f64 first should never be an issue
+                    Val::F64(v) => v,
+                    _ => panic!("invalid type for CastFloatToInt"),
+                };
+                let to_ty = types[inst.ty];
+                match to_ty {
+                    IrType::Primitive(Primitive::U8) => Val::Int(v as u8 as u64),
+                    IrType::Primitive(Primitive::U16) => Val::Int(v as u16 as u64),
+                    IrType::Primitive(Primitive::U32) => Val::Int(v as u16 as u64),
+                    IrType::Primitive(Primitive::U64) => Val::Int(v as u64),
+                    IrType::Primitive(Primitive::I8) => Val::Int(v as i8 as u64),
+                    IrType::Primitive(Primitive::I16) => Val::Int(v as i16 as u64),
+                    IrType::Primitive(Primitive::I32) => Val::Int(v as i16 as u64),
+                    IrType::Primitive(Primitive::I64) => Val::Int(v as i64 as u64),
+                    IrType::Primitive(Primitive::U128 | Primitive::I128) => {
+                        todo!("evaluate 128 bit int values")
+                    }
+                    _ => panic!("invalid target type for CastIntToFloat"),
+                }
+            }
             super::Tag::Goto => {
                 let target = ir.blocks[inst.data.int32 as usize];
                 if target <= pos {

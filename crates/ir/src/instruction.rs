@@ -87,7 +87,10 @@ pub enum Tag {
     LE,
     GE,
 
-    Cast,
+    CastInt,
+    CastFloat,
+    CastIntToFloat,
+    CastFloatToInt,
 
     Asm,
 }
@@ -97,7 +100,9 @@ impl Tag {
         match self {
             Tag::BlockBegin | Tag::Param => V::Int32,
             Tag::Uninit => V::None,
-            Tag::Ret | Tag::Load | Tag::Neg | Tag::Not | Tag::Cast => V::UnOp,
+            Tag::Ret | Tag::Load | Tag::Neg | Tag::Not
+            | Tag::CastInt | Tag::CastFloat
+            | Tag::CastIntToFloat | Tag::CastFloatToInt => V::UnOp,
             Tag::Int => V::Int,
             Tag::LargeInt => V::LargeInt,
             Tag::Float => V::Float,

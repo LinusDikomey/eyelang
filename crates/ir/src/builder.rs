@@ -309,8 +309,24 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { ref_int: (val, idx) }, Tag::MemberValue, ty)
     }
 
-    pub fn build_cast(&mut self, val: Ref, target_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { un_op: val }, Tag::Cast, target_ty)
+    pub fn build_cast_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
+        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_int()));
+        self.add(Data { un_op: val }, Tag::CastInt, target_ty)
+    }
+
+    pub fn build_cast_float(&mut self, val: Ref, target_ty: IrType) -> Ref {
+        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_float()));
+        self.add(Data { un_op: val }, Tag::CastFloat, target_ty)
+    }
+
+    pub fn build_cast_int_to_float(&mut self, val: Ref, target_ty: IrType) -> Ref {
+        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_float()));
+        self.add(Data { un_op: val }, Tag::CastIntToFloat, target_ty)
+    }
+
+    pub fn build_cast_float_to_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
+        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_int()));
+        self.add(Data { un_op: val }, Tag::CastFloatToInt, target_ty)
     }
 
     pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: impl Into<IdxOrTy>)

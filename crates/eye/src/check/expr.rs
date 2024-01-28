@@ -2,9 +2,9 @@ use id::ModuleId;
 use span::TSpan;
 use types::Primitive;
 
-use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast}, token::{IntLiteral, Operator, AssignType}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
+use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast}, token::{IntLiteral, Operator, AssignType, FloatLiteral}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
 
-use super::{Ctx, exhaust::Exhaustion, check_pat, check_lval};
+use super::{Ctx, exhaust::Exhaustion, lval, pattern};
 
 
 pub fn check(
@@ -16,14 +16,20 @@ pub fn check(
 ) -> Node {
     let ast = ctx.ast;
     match &ast[expr] {
-        Expr::IntLiteral(span) => {
+        &Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ast.src()[span.range()]);
             let info = lit.ty.map_or(
                 TypeInfo::Integer,
                 |int| TypeInfo::Primitive(int.into()),
             );
-            ctx.specify(expected, info, |_| *span);
+            ctx.specify(expected, info, |_| span);
             Node::IntLiteral { val: lit.val, ty: expected }
+        }
+        &Expr::FloatLiteral(span) => {
+            let lit = FloatLiteral::parse(&ast.src()[span.range()]);
+            let info = lit.ty.map_or(TypeInfo::Float, |float| TypeInfo::Primitive(float.into()));
+            ctx.specify(expected, info, |_| span);
+            Node::FloatLiteral { val: lit.val, ty: expected }
         }
         &Expr::Ident { span } => check_ident(ctx, scope, expected, span),
         Expr::ReturnUnit { .. } => {
@@ -63,7 +69,7 @@ pub fn check(
             );
             let ty = ctx.hir.types.add(ty);
             let val = check(ctx, *val, scope, ty, return_ty);
-            let pattern = check_pat(ctx, &mut scope.variables, &mut exhaustion, *pat, ty);
+            let pattern = pattern::check(ctx, &mut scope.variables, &mut exhaustion, *pat, ty);
             if !exhaustion.is_trivially_exhausted() {
                 ctx.deferred_exhaustions.push((exhaustion, ty, *pat));
             }
@@ -94,7 +100,7 @@ pub fn check(
                 }
                 Operator::Assignment(AssignType::Assign) => {
                     ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
-                    let (lval, ty) = check_lval(ctx, l, scope);
+                    let (lval, ty) = lval::check(ctx, l, scope);
                     let val = check(ctx, r, scope, ty, return_ty);
                     Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val))
                 }
