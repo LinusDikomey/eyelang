@@ -114,7 +114,7 @@ impl<'a> Parser<'a> {
     fn parse_items_until(
         &mut self,
         start: u32,
-        mut parent: Option<ScopeId>,
+        parent: Option<ScopeId>,
         mut end: impl FnMut(&mut Self) -> bool,
         mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, ScopeId, Expr, Span) -> ParseResult<()>,
     ) -> ParseResult<ScopeId> {

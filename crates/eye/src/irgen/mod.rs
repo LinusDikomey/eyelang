@@ -222,24 +222,43 @@ fn lower(
                 ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
             }
         }
-        node @ (
-            &Node::Or(l, r)
-            | &Node::And(l, r)
-            | &Node::Equals(l, r)
-            | &Node::NotEquals(l, r)
-        ) => {
+        &Node::Comparison(l, r, cmp) => {
             let l = lower(ctx, l, noreturn);
             if *noreturn { return Ref::UNDEF }
             let r = lower(ctx, r, noreturn);
             if *noreturn { return Ref::UNDEF }
-            let op = match node {
-                Node::Or(_, _) => BinOp::Or,
-                Node::And(_, _) => BinOp::And,
-                Node::Equals(_, _) => BinOp::Eq,
-                Node::NotEquals(_, _) => BinOp::NE,
-                _ => unreachable!(),
+            use crate::hir::Comparison;
+            let op = match cmp {
+                Comparison::Eq => BinOp::Eq,
+                Comparison::NE => BinOp::NE,
+                Comparison::LT => BinOp::LT,
+                Comparison::GT => BinOp::GT,
+                Comparison::LE => BinOp::LE,
+                Comparison::GE => BinOp::GE,
+                Comparison::And => BinOp::And,
+                Comparison::Or => BinOp::Or,
             };
             ctx.builder.build_bin_op(op, l, r, IrType::Primitive(ir::Primitive::U1))
+        }
+        &Node::Arithmetic(l, r, op, ty) => {
+            let l = lower(ctx, l, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let r = lower(ctx, r, noreturn);
+            if *noreturn { return Ref::UNDEF }
+
+            use crate::hir::Arithmetic;
+            let op = match op {
+                Arithmetic::Add => BinOp::Add,
+                Arithmetic::Sub => BinOp::Sub,
+                Arithmetic::Mul => BinOp::Mul,
+                Arithmetic::Div => BinOp::Div,
+                Arithmetic::Mod => BinOp::Mod,
+            };
+            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+                panic!("Invalid type {:?} for arithmetic op. Will be handled properly with traits", ctx.types[ty]);
+            };
+            assert!(p.is_int() || p.is_float(), "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits");
+            ctx.builder.build_bin_op(op, l, r, IrType::Primitive(types::get_primitive(p)))
         }
         &Node::Assign(lval, val) => {
             let lval = lower_lval(ctx, lval);

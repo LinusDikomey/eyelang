@@ -119,10 +119,8 @@ pub enum Node {
         return_ty: LocalTypeId,
     },
     Cast(CastId),
-    Or(NodeId, NodeId),
-    And(NodeId, NodeId),
-    Equals(NodeId, NodeId),
-    NotEquals(NodeId, NodeId),
+    Comparison(NodeId, NodeId, Comparison),
+    Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
     Assign(LValueId, NodeId),
     Tuple {
         // PERF(size): length has to match anyways, could only store it once
@@ -173,6 +171,27 @@ pub enum CastType {
     IntToPtr { from: IntType },
     PtrToInt { to: IntType },
     EnumToInt { from: LocalTypeId, to: IntType },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Comparison {
+    Eq,
+    NE,
+    LT,
+    GT,
+    LE,
+    GE,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Arithmetic {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 pub struct HIRBuilder {

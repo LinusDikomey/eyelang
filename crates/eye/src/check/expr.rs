@@ -2,7 +2,7 @@ use id::ModuleId;
 use span::TSpan;
 use types::Primitive;
 
-use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast}, token::{IntLiteral, Operator, AssignType}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self}, error::Error, eval::ConstValue};
+use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast}, token::{IntLiteral, Operator, AssignType}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
 
 use super::{Ctx, exhaust::Exhaustion, check_pat, check_lval};
 
@@ -79,7 +79,18 @@ pub fn check(
                 | Operator::Mul
                 | Operator::Div
                 | Operator::Mod => {
-                    todo!("arith ops")
+                    // TODO: this will be have to bound/handled by traits
+                    let l = check(ctx, l, scope, expected, return_ty);
+                    let r = check(ctx, r, scope, expected, return_ty);
+                    let op = match op {
+                        Operator::Add => hir::Arithmetic::Add,
+                        Operator::Sub => hir::Arithmetic::Sub,
+                        Operator::Mul => hir::Arithmetic::Mul,
+                        Operator::Div => hir::Arithmetic::Div,
+                        Operator::Mod => hir::Arithmetic::Mod,
+                        _ => unreachable!(),
+                    };
+                    Node::Arithmetic(ctx.hir.add(l), ctx.hir.add(r), op, expected)
                 }
                 Operator::Assignment(AssignType::Assign) => {
                     ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
@@ -94,11 +105,12 @@ pub fn check(
                     let r = check(ctx, r, scope, expected, return_ty);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
-                    if op == Operator::Or {
-                        Node::Or(l, r)
+                    let cmp = if op == Operator::Or {
+                        Comparison::Or
                     } else {
-                        Node::And(l, r)
-                    }
+                        Comparison::And
+                    };
+                    Node::Comparison(l, r, cmp)
                 }
                 Operator::Equals | Operator::NotEquals => {
                     let compared = ctx.hir.types.add_unknown();
@@ -106,13 +118,29 @@ pub fn check(
                     let r = check(ctx, r, scope, compared, return_ty);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
-                    if op == Operator::Equals {
-                        Node::Equals(l, r)
+                    let cmp = if op == Operator::Equals {
+                        Comparison::Eq
                     } else {
-                        Node::NotEquals(l, r)
-                    }
+                        Comparison::NE
+                    };
+                    Node::Comparison(l, r, cmp)
                 }
-                Operator::LT | Operator::GT | Operator::LE | Operator::GE => todo!(),
+                Operator::LT | Operator::GT | Operator::LE | Operator::GE => {
+                    // FIXME: this will have to be bound by type like Ord
+                    let compared = ctx.hir.types.add_unknown();
+                    let l = check(ctx, l, scope, compared, return_ty);
+                    let r = check(ctx, r, scope, compared, return_ty);
+                    let l = ctx.hir.add(l);
+                    let r = ctx.hir.add(r);
+                    let cmp = match op {
+                        Operator::LT => Comparison::LT,
+                        Operator::GT => Comparison::GT,
+                        Operator::LE => Comparison::LE,
+                        Operator::GE => Comparison::GE,
+                        _ => unreachable!(),
+                    };
+                    Node::Comparison(l, r, cmp)
+                }
                 Operator::Range | Operator::RangeExclusive => todo!("range types not implemented yet"),
             }
         }
