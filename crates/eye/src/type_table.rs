@@ -266,6 +266,7 @@ impl TypeTable {
     }
 
     fn try_unify(&mut self, mut a: LocalTypeId, mut b: LocalTypeId) -> bool {
+        let original_b = b;
         let a_ty = loop {
             match self.types[a.idx()] {
                 TypeInfoOrIdx::Idx(idx) => a = idx,
@@ -278,7 +279,12 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(ty) => break ty,
             }
         };
-        a == b || unify(a_ty, b_ty, self).is_some()
+        a == b || unify(a_ty, b_ty, self)
+            .inspect(|_| {
+                self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
+                self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
+            })
+            .is_some()
     }
 
     pub fn specify(
@@ -490,6 +496,10 @@ impl LocalTypeIds {
 
     pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
         (self.start .. self.start + self.count).map(LocalTypeId)
+    }
+
+    pub fn nth(self, i: u32) -> Option<LocalTypeId> {
+        (i < self.count).then_some(LocalTypeId(self.start + i))
     }
 }
 

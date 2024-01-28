@@ -9,7 +9,11 @@ use ir::builder::{Terminator, BinOp};
 use ir::{IrType, Ref, builder::IrBuilder};
 use ::types::Type;
 
+use crate::Compiler;
+use crate::compiler::FunctionToGenerate;
+use crate::eval::ConstValue;
 use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
+use crate::irgen::types::get_primitive;
 use crate::parser::ast;
 use crate::{
     compiler::CheckedFunction,
@@ -18,11 +22,12 @@ use crate::{
 };
 
 pub fn lower_function(
+    compiler: &mut Compiler,
+    to_generate: &mut Vec<FunctionToGenerate>,
     _src: &str,
     name: String,
     checked: &CheckedFunction,
     generics: &[Type],
-    get_ir_id: impl FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
     let generics = types::get_multiple(&mut types, generics);
@@ -43,12 +48,13 @@ pub fn lower_function(
         let mut noreturn = false;
 
         let mut ctx = Ctx {
+            compiler,
+            to_generate,
             hir,
             types: &checked.types,
             generics,
             builder,
             vars: &mut vars,
-            get_ir_id,
         };
         let val = lower(&mut ctx, hir.root_id(), &mut noreturn);
         if !noreturn {  
@@ -66,24 +72,54 @@ pub fn lower_function(
     }
 }
 
-struct Ctx<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> {
+struct Ctx<'a> {
+    compiler: &'a mut Compiler,
+    to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a HIR,
     types: &'a TypeTable,
     generics: TypeRefs,
     builder: IrBuilder<'a>,
     vars: &'a mut [Ref],
-    get_ir_id: F,
 }
-impl<'a, F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId> Ctx<'a, F> {
+impl<'a> Ctx<'a> {
+
+    fn get_ir_id(&mut self, module: ModuleId, id: ast::FunctionId, generics: Vec<Type>) -> ir::FunctionId {
+        self.compiler.get_hir(module, id);
+        let instances = &mut self.compiler.modules[module.idx()]
+            .ast.as_mut().unwrap().2;
+
+        let potential_id = ir::FunctionId(self.compiler.ir_module.funcs.len() as _);
+
+        match instances.get_or_insert(id, &generics, potential_id) {
+            Some(id) => id,
+            None => {
+                // FIXME: just adding a dummy function right now, stupid solution and might cause issues
+                self.compiler.ir_module.funcs.push(ir::Function {
+                    name: String::new(),
+                    types: ir::IrTypes::new(),
+                    params: ir::TypeRefs::EMPTY,
+                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
+                    varargs: false,
+                    ir: None,
+                });
+                self.to_generate.push(FunctionToGenerate {
+                    ir_id: potential_id,
+                    module,
+                    ast_function_id: id,
+                    generics,
+                });
+                potential_id
+            }
+        }
+    }
+
     fn get_type(&mut self, ty: TypeInfo) -> IrType {
         types::get_from_info(self.types, self.builder.types, ty, self.generics)
     }
 }
 
-fn lower<
-    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
->(
-    ctx: &mut Ctx<F>,
+fn lower(
+    ctx: &mut Ctx,
     node: NodeId,
     noreturn: &mut bool,
 ) -> Ref {
@@ -111,7 +147,26 @@ fn lower<
             let ty = ctx.get_type(ctx.types[ctx.hir.vars[id.idx()]]);
             ctx.builder.build_load(ctx.vars[id.idx()], ty)
         }
-        Node::Const(_) => todo!("const"),
+        &Node::Const { id, ty } => {
+            let const_val = &ctx.compiler.const_values[id.idx()];
+            match const_val {
+                ConstValue::Unit => Ref::UNIT,
+                &ConstValue::Number(num) => {
+                    let ty = ctx.types[ty];
+                    match ty {
+                        TypeInfo::Primitive(p) => {
+                            debug_assert!(p.is_int());
+                            ctx.builder.build_int(num, IrType::Primitive(get_primitive(p)))
+                        }
+                        TypeInfo::Invalid => {
+                            build_crash_point(&mut ctx.builder)
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                ConstValue::Undefined => build_crash_point(&mut ctx.builder),
+            }
+        }
         Node::Return(val) => {
             let val = lower(ctx, *val, noreturn);
             if !*noreturn {
@@ -147,7 +202,7 @@ fn lower<
                 .iter()
                 .map(|generic| ctx.types.to_resolved(ctx.types[generic]))
                 .collect();
-            let func = (ctx.get_ir_id)(function.0, function.1, call_generics);
+            let func = ctx.get_ir_id(function.0, function.1, call_generics);
             let return_ty = ctx.get_type(ctx.types[return_ty]);
             ctx.builder.build_call(func, arg_refs, return_ty)
         }
@@ -209,12 +264,18 @@ fn lower<
             // maybe do this differently, could do it like llvm: insertvalue
             ctx.builder.build_load(var, tuple_ty)
         }
+        &Node::TupleIdx { tuple_value, index, elem_ty } => {
+            let tuple = lower(ctx, tuple_value, noreturn);
+            if *noreturn {
+                return Ref::UNDEF;
+            }
+            let elem_ty = ctx.get_type(ctx.types[elem_ty]);
+            ctx.builder.build_member_value(tuple, index, elem_ty)
+        }
     }
 }
 
-fn lower_lval<
-    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
->(ctx: &mut Ctx<F>, lval: LValueId) -> Ref {
+fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Ref {
     match ctx.hir[lval] {
         LValue::Invalid => build_crash_point(&mut ctx.builder),
         LValue::Variable(id) => ctx.vars[id.idx()],
@@ -222,10 +283,8 @@ fn lower_lval<
     }
 }
 
-fn lower_pattern<
-    F: FnMut(ModuleId, ast::FunctionId, Vec<Type>) -> ir::FunctionId,
->(
-    ctx: &mut Ctx<F>,
+fn lower_pattern(
+    ctx: &mut Ctx,
     pattern: PatternId,
     value: Ref,
 ) -> Ref {

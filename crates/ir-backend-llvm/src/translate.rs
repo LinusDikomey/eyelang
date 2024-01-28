@@ -1,6 +1,6 @@
 use std::{ffi::CString, io::Write, ptr};
 
-use ir::{IrType, IrTypes, Primitive};
+use ir::{IrType, IrTypes, Primitive, TypeRefs};
 use llvm_sys::{
     core::{
         self, LLVMAddFunction, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca, LLVMBuildAnd,
@@ -11,7 +11,7 @@ use llvm_sys::{
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
         LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMVoidTypeInContext, LLVMBuildIntCast2,
+        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildInBoundsGEP2, LLVMInt8TypeInContext, LLVMInt32TypeInContext, LLVMBuildExtractValue,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -444,62 +444,27 @@ unsafe fn build_func(
                 }
             }
             ir::Tag::MemberPtr => {
-                todo!("figure out member again")
-                /*
-                let (r, origin_ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                if let Some(r) = r {
-                    debug_assert!(matches!(origin_ty, IrType::Primitive(Primitive::Ptr)));
+                let (ptr, extra_idx) = data.ref_int;
+                let i = extra_idx as usize;
+                let elem_types = TypeRefs::from_bytes(ir.extra[i..i+8].try_into().unwrap());
+                let elem_idx = u32::from_le_bytes(ir.extra[i+8..i+12].try_into().unwrap());
 
-                    let (idx, idx_ty) = match ir.types[pointee] {
-                        IrType::Id(id, generics) => {
-                            let inst = ir.inst[data.bin_op.1.into_ref().unwrap() as usize];
-                            assert_eq!(inst.tag, Tag::Int);
-                            let member = inst.data.int;
+                let offset = ir::offset_in_tuple(elem_types, elem_idx, &func.types);
 
-                            let generics: Vec<_> = generics.iter()
-                                .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
-                                .collect();
-                            let (_, OffsetsRef::Struct(offsets)) = get_id_ty(id, &generics, ctx, module, types)
-                                else { panic!("Tried to get member of non-struct") };
-
-                            let ty = LLVMInt32TypeInContext(ctx);
-                            (LLVMConstInt(ty, offsets[member as usize] as u64, FALSE), ty)
-                        }
-                        IrType::Tuple(members) => {
-                            let inst = ir.inst[data.bin_op.1.into_ref().unwrap() as usize];
-                            assert_eq!(inst.tag, Tag::Int);
-                            let member = inst.data.int as u32;
-
-                            // calculate layout of all members before the one is accessed
-                            // to find out the offset of the indexed element
-                            let mut layout = Layout::EMPTY;
-                            for i in 0..member {
-                                layout.accumulate(
-                                    ir.types[members.nth(i as _)]
-                                        .layout(&ir.types, |id| &module.types[id.idx()].1)
-                                );
-                            }
-                            let ty = LLVMInt32TypeInContext(ctx);
-                            let offset = Layout::align(layout.size, ir.types[members.nth(member)]
-                                .layout(&ir.types, |id| &module.types[id.idx()].1).alignment);
-                            (LLVMConstInt(ty, offset, FALSE), ty)
-                        }
-                        _ => {
-                            let (idx, idx_ty) = get_ref_and_type(&instructions, data.bin_op.1);
-                            (idx.unwrap(), llvm_ty(ctx, idx_ty, &func.types))
-                        }
-                    };
-
-                    let mut elems = [LLVMConstInt(idx_ty, 0, FALSE), idx];
-                    let pointee_ty = table_ty(pointee);
-                    LLVMBuildInBoundsGEP2(builder, pointee_ty, r, elems.as_mut_ptr(), elems.len() as _, NONE)
+                let i8_ty = LLVMInt8TypeInContext(ctx);
+                // it's a pointer, we can always unwrap
+                let llvm_ptr = get_ref(&instructions, ptr).unwrap();
+                let mut offset = LLVMConstInt(LLVMInt32TypeInContext(ctx), offset, FALSE);
+                LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
+            }
+            ir::Tag::MemberValue => {
+                let (ptr, idx) = data.ref_int;
+                if let Some(val) = get_ref(&instructions, ptr) {
+                    // extract_value_from_byte_array(ctx, builder, &func.types, val, elem_types, idx)
+                    LLVMBuildExtractValue(builder, val, idx, NONE)
                 } else {
                     ptr::null_mut()
                 }
-                */
-            }
-            ir::Tag::MemberValue => {
-                todo!("figure out value again")
                 /*
                 if let (Some(r), r_ty) = get_ref_and_type(&instructions,  data.ref_int.0) {
                     match r_ty {
@@ -635,3 +600,51 @@ unsafe fn build_func(
 fn val_str(val: LLVMValueRef) -> CString {
     unsafe { CString::from_raw(LLVMPrintValueToString(val)) }
 }
+
+
+/*
+unsafe fn extract_value_from_byte_array(
+    ctx: LLVMContextRef,
+    builder: LLVMBuilderRef,
+    ir_types: &IrTypes,
+    r: LLVMValueRef,
+    elem_types: TypeRefs,
+    index: u32,
+) -> LLVMValueRef {
+    let elem_ty = elem_types.nth(index);
+    let Some(llvm_elem_ty) = llvm_ty(ctx, ir_types[elem_ty], ir_types) else {
+        return ptr::null_mut();
+    };
+    let mut layout = Layout::EMPTY;
+    for elem_ty in elem_types.iter().take(index as usize) {
+        let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
+        layout.accumulate(elem_layout);
+    }
+    let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
+    layout.align_for(elem_layout.align);
+    let offset = layout.align;
+    layout.accumulate(elem_layout);
+    // accumulate rest of element types
+    for elem_ty in elem_types.iter().skip(index as usize + 1) {
+        let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
+        layout.accumulate(elem_layout);
+    }
+
+    let i8_ty = LLVMInt8TypeInContext(ctx);
+    let before = LLVMArrayType2(i8_ty, offset.get());
+    let after_bytes = layout.size - offset.get() - elem_layout.size;
+    let ty = if after_bytes != 0 {
+        let after = LLVMArrayType2(i8_ty, after_bytes);
+        let mut ty = [before, llvm_elem_ty, after];
+        LLVMStructTypeInContext(ctx, ty.as_mut_ptr(), ty.len() as _, FALSE)
+    } else {
+        let mut ty = [before, llvm_elem_ty];
+        LLVMStructTypeInContext(ctx, ty.as_mut_ptr(), ty.len() as _, FALSE)
+    };
+
+    let cast_val = LLVMBuildBitCast(builder, r, ty, NONE);
+    LLVMSetAlignment(cast_val, layout.align.get() as _);
+
+    LLVMBuildExtractValue(builder, cast_val, 1, NONE)
+}
+*/

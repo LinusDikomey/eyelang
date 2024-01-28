@@ -95,7 +95,10 @@ pub enum Node {
         val: NodeId,
     },
     Variable(VarId),
-    Const(ConstValueId),
+    Const {
+        id: ConstValueId,
+        ty: LocalTypeId,
+    },
     Return(NodeId),
     IntLiteral {
         val: u128,
@@ -125,6 +128,11 @@ pub enum Node {
         // PERF(size): length has to match anyways, could only store it once
         elems: NodeIds,
         elem_types: LocalTypeIds,
+    },
+    TupleIdx {
+        tuple_value: NodeId,
+        index: u32,
+        elem_ty: LocalTypeId,
     },
 }
 

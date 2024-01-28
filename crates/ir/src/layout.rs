@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::{ir_types::{IrTypes, IrType}, Primitive};
+use crate::{ir_types::{IrTypes, IrType}, Primitive, TypeRefs};
 
 #[derive(Clone, Copy)]
 pub struct Layout {
@@ -23,13 +23,18 @@ impl Layout {
         self.size.div_ceil(self.align.get()) * self.align.get()
     }
 
+    pub fn align_for(&mut self, align: NonZeroU64) {
+        self.align = self.align.max(align);
+        self.size = self.size.div_ceil(align.get()) * align.get();
+    }
+
     pub fn accumulate(&mut self, other: Self) {
-        self.align = self.align.max(other.align); // TODO: max is not sufficient
+        self.align = self.align.max(other.align);
         self.size = self.size.div_ceil(other.align.get()) * other.align.get() + other.size;
     }
 
     pub fn accumulate_variant(&mut self, variant: Layout) {
-        self.align = self.align.max(variant.align) // TODO: max is not sufficient
+        self.align = self.align.max(variant.align)
     }
 
     pub fn array(element: Self, size: u64) -> Self {
@@ -67,4 +72,15 @@ pub fn primitive_layout(ty: Primitive) -> Layout {
         P::Unit => Layout::EMPTY,
         P::Ptr => Layout::PTR, // TODO: architecture dependent pointer sizes
     }
+}
+
+pub fn offset_in_tuple(elem_types: TypeRefs, elem_idx: u32, types: &IrTypes) -> u64 {
+    let mut layout = Layout::EMPTY;
+    for ty in elem_types.iter().take(elem_idx as usize) {
+        layout.accumulate(type_layout(types[ty], types));
+    }
+    let elem_ty = elem_types.nth(elem_idx);
+    let elem_layout = type_layout(types[elem_ty], types);
+    layout.align_for(elem_layout.align);
+    layout.size
 }

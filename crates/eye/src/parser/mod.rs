@@ -554,7 +554,6 @@ impl<'a> Parser<'a> {
             }
         };
 
-        let ident_count = params.len() as u32;
         let span = TSpan::new(start, end);
         let function_scope = self.ast.scope(ast::Scope::from_generics(scope, self.src, &generics, span));
 

@@ -348,7 +348,7 @@ impl Compiler {
                     let mut hir = HIRBuilder::new(types);
                     let parameter_variables = signature.args
                         .iter()
-                        .map(|(name, _)| name)
+                        .map(|(name, _ty)| name)
                         .zip(param_types.iter())
                         .map(|(name, ty)| (name.clone(), hir.add_var(ty)))
                         .collect();
@@ -366,7 +366,7 @@ impl Compiler {
                         deferred_exhaustions: Vec::new(),
                         deferred_casts: Vec::new(),
                     };
-                    let root = check::check_expr(&mut check_ctx, body, &mut scope,
+                    let root = check::expr::check(&mut check_ctx, body, &mut scope,
                         return_type, return_type);
                     let (hir, types) = check_ctx.finish(root);
                     (Some(hir), types)
@@ -525,43 +525,27 @@ impl Compiler {
                     varargs: false,
                     ir: None,
                 });
-                let mut to_generate = vec![(potential_id, module, function, generics)];
-                while let Some((id, module, function, generics)) = to_generate.pop() {
-                    let ast = self.get_module_ast(module).clone();
-                    self.get_hir(module, function);
+                let mut to_generate = vec![FunctionToGenerate {
+                    ir_id: potential_id,
+                    module,
+                    ast_function_id: function,
+                    generics,
+                }];
+                while let Some(f) = to_generate.pop() {
+                    let ast = self.get_module_ast(f.module).clone();
+                    self.get_hir(f.module, f.ast_function_id);
                     // got checked function above
-                    let symbols = &self.modules[module.idx()].ast.as_mut().unwrap().1;
-                    let Resolvable::Resolved(checked) = &symbols.functions[function.idx()] else { unreachable!() };
+                    let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().1;
+                    let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()] else {
+                        unreachable!()
+                    };
                     // PERF: put CheckedFunction behind Rc
                     let checked = checked.clone();
-                    let get_ir_id = |module, id, generics: Vec<_>| {
-                        self.get_hir(module, id);
-                        let instances = &mut self.modules[module.idx()]
-                            .ast.as_mut().unwrap().2;
-
-                        let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
-
-                        match instances.get_or_insert(id, &generics, potential_id) {
-                            Some(id) => id,
-                            None => {
-                                // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-                                self.ir_module.funcs.push(ir::Function {
-                                    name: String::new(),
-                                    types: ir::IrTypes::new(),
-                                    params: ir::TypeRefs::EMPTY,
-                                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
-                                    varargs: false,
-                                    ir: None,
-                                });
-                                to_generate.push((potential_id, module, id, generics));
-                                potential_id
-                            }
-                        }
-                    };
+                    // TODO: proper function name
                     let name = format!("function_{}_{}", module.idx(), function.idx());
 
-                    let func = irgen::lower_function(ast.src(), name, &checked, &generics, get_ir_id);
-                    self.ir_module[id] = func;
+                    let func = irgen::lower_function(self, &mut to_generate, ast.src(), name, &checked, &f.generics);
+                    self.ir_module[f.ir_id] = func;
                 }
                 potential_id
             }
@@ -680,7 +664,6 @@ pub enum LocalItem {
 }
 impl<'p> LocalScope<'p> {
     pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
-        eprintln!("Resolving {name} in local scope");
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
         } else if let Some(def) = compiler.get_scope_def(self.module, self.static_scope, name) {
@@ -838,6 +821,13 @@ impl IrFunctionInstances {
             Some(id) => Some(*id),
         }
     }
+}
+
+pub struct FunctionToGenerate {
+    pub ir_id: ir::FunctionId,
+    pub module: ModuleId,
+    pub ast_function_id: ast::FunctionId,
+    pub generics: Vec<Type>,
 }
 
 #[derive(Clone)]
