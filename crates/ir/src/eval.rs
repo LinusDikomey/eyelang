@@ -1,9 +1,8 @@
 use crate::{
     Ref,
     BlockIndex,
-    Primitive,
     ir_types::{IrType, ConstIrType, IrTypes},
-    layout::{Layout, type_layout, primitive_layout}, FunctionIr, Function,
+    layout::{Layout, type_layout}, FunctionIr, Function,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -52,7 +51,7 @@ impl StackMem {
         self.mem[addr.0 as usize .. addr.0 as usize + value.len()].copy_from_slice(value);
     }
 
-    pub fn load_array<const N: usize>(&mut self, addr: StackAddr) -> [u8; N] {
+    pub fn load_n<const N: usize>(&mut self, addr: StackAddr) -> [u8; N] {
         let mut arr = [0; N];
         arr.copy_from_slice(&self.mem[addr.0 as usize .. addr.0 as usize + N]);
         arr
@@ -92,9 +91,9 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
         } else {
             use crate::RefVal;
             match r.into_val().unwrap() {
-                RefVal::True => (Val::Int(1), IrType::Primitive(Primitive::U1)),
-                RefVal::False => (Val::Int(0), IrType::Primitive(Primitive::U1)),
-                RefVal::Unit => (Val::Unit, IrType::Primitive(Primitive::Unit)),
+                RefVal::True => (Val::Int(1), IrType::U1),
+                RefVal::False => (Val::Int(0), IrType::U1),
+                RefVal::Unit => (Val::Unit, IrType::U1),
                 RefVal::Undef => panic!("reached undefined"),
             }
         }
@@ -111,7 +110,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             let r = get_ref(&values, $inst.data.bin_op.1);
 
             match types[$inst.ty] {
-                IrType::Primitive(p) if p.is_int() => {
+                t if t.is_int() => {
                     let Val::Int(l_val) = l else { panic!() };
                     let Val::Int(r_val) = r else { panic!() };
                     Val::Int(l_val $op r_val)
@@ -121,12 +120,12 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                     let Val::Int(r_val) = r else { panic!() };
                     Val::Int(l_val $op r_val)
                 }
-                IrType::Primitive(Primitive::F32) => {
+                IrType::F32 => {
                     let Val::F32(l_val) = l else { panic!() };
                     let Val::F32(r_val) = r else { panic!() };
                     Val::F32(l_val $op r_val)
                 }
-                IrType::Primitive(Primitive::F64) | IrType::Const(ConstIrType::Float) => {
+                IrType::F64 | IrType::Const(ConstIrType::Float) => {
                     let Val::F64(l_val) = l else { panic!() };
                     let Val::F64(r_val) = r else { panic!() };
                     Val::F64(l_val $op r_val)
@@ -171,8 +170,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 todo!("support large ints")
             }
             super::Tag::Float => match types[inst.ty] {
-                IrType::Primitive(Primitive::F32) => Val::F32(inst.data.float as f32),
-                IrType::Primitive(Primitive::F64) => Val::F64(inst.data.float),
+                IrType::F32 => Val::F32(inst.data.float as f32),
+                IrType::F64 => Val::F64(inst.data.float),
                 _ => panic!("invalid type"),
             },
             super::Tag::Decl => {
@@ -184,27 +183,24 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             super::Tag::Load => {
                 let Val::StackPointer(addr) = values[inst.data.un_op.into_ref().unwrap() as usize]
                     else { panic!() };
+
+
+                use IrType as P;
                 match types[inst.ty] {
-                    IrType::Primitive(p) => {
-                        let layout = primitive_layout(p);
-                        let bytes = stack.load(addr, layout.size);
-                        use Primitive as P;
-                        match p {
-                            P::U1 => {
-                                debug_assert!(bytes[0] < 2);
-                                Val::Int(bytes[0] as u64)
-                            }
-                            P::I8 | P::U8 => Val::Int(u8::from_le_bytes(bytes.try_into().unwrap()) as u64),
-                            P::I16 | P::U16 => Val::Int(u16::from_le_bytes(bytes.try_into().unwrap()) as u64),
-                            P::I32 | P::U32 => Val::Int(u32::from_le_bytes(bytes.try_into().unwrap()) as u64),
-                            P::I64 | P::U64 => Val::Int(u64::from_le_bytes(bytes.try_into().unwrap())),
-                            P::I128 | P::U128 => todo!(),
-                            P::F32 => Val::F32(f32::from_le_bytes(bytes.try_into().unwrap())),
-                            P::F64 => Val::F64(f64::from_le_bytes(bytes.try_into().unwrap())),
-                            P::Ptr => Val::StackPointer(StackAddr(u32::from_le_bytes(stack.load_array(addr)))),
-                            P::Unit => Val::Unit,
-                        }
+                    P::U1 => {
+                        let [v] = stack.load_n(addr);
+                        debug_assert!(v < 2);
+                        Val::Int(v as u64)
                     }
+                    P::I8 | P::U8 => Val::Int(u8::from_le_bytes(stack.load_n(addr)) as u64),
+                    P::I16 | P::U16 => Val::Int(u16::from_le_bytes(stack.load_n(addr)) as u64),
+                    P::I32 | P::U32 => Val::Int(u32::from_le_bytes(stack.load_n(addr)) as u64),
+                    P::I64 | P::U64 => Val::Int(u64::from_le_bytes(stack.load_n(addr))),
+                    P::I128 | P::U128 => todo!(),
+                    P::F32 => Val::F32(f32::from_le_bytes(stack.load_n(addr))),
+                    P::F64 => Val::F64(f64::from_le_bytes(stack.load_n(addr))),
+                    P::Ptr => Val::StackPointer(StackAddr(u32::from_le_bytes(stack.load_n(addr)))),
+                    P::Unit => Val::Unit,
                     _ => todo!("load complex types"),
                 }
             }
@@ -215,10 +211,10 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 match val {
                     Val::Unit | Val::Invalid => {}
                     Val::Int(i) => match ty {
-                        IrType::Primitive(Primitive::I8 | Primitive::U8) => stack.store(addr, &(i as u8).to_le_bytes()),
-                        IrType::Primitive(Primitive::I16 | Primitive::U16) => stack.store(addr, &(i as u16).to_le_bytes()),
-                        IrType::Primitive(Primitive::I32 | Primitive::U32) => stack.store(addr, &(i as u32).to_le_bytes()),
-                        IrType::Primitive(Primitive::I64 | Primitive::U64) => stack.store(addr, &(i as u64).to_le_bytes()),
+                        IrType::I8 | IrType::U8 => stack.store(addr, &(i as u8).to_le_bytes()),
+                        IrType::I16 | IrType::U16 => stack.store(addr, &(i as u16).to_le_bytes()),
+                        IrType::I32 | IrType::U32 => stack.store(addr, &(i as u32).to_le_bytes()),
+                        IrType::I64 | IrType::U64 => stack.store(addr, &(i as u64).to_le_bytes()),
                         _ => panic!(),
                     }
                     Val::F32(v) => stack.store(addr, &v.to_le_bytes()),
@@ -308,8 +304,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             super::Tag::MemberValue => todo!(),
             super::Tag::CastInt => {
                 let (v, from_ty) = get_ref_and_ty(&values, inst.data.un_op);
-                debug_assert!(matches!(from_ty, IrType::Primitive(ty) if ty.is_int()));
-                debug_assert!(matches!(types[inst.ty], IrType::Primitive(ty) if ty.is_int()));
+                debug_assert!(from_ty.is_int());
+                debug_assert!(types[inst.ty].is_int());
                 // integers values are always represented the same right now
                 v
             }
@@ -317,10 +313,10 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 let v = get_ref(&values, inst.data.un_op);
                 let to_ty = types[inst.ty];
                 match (v, to_ty) {
-                    (Val::F32(v), IrType::Primitive(Primitive::F32)) => Val::F32(v),
-                    (Val::F32(v), IrType::Primitive(Primitive::F64)) => Val::F64(v as f64),
-                    (Val::F64(v), IrType::Primitive(Primitive::F32)) => Val::F32(v as f32),
-                    (Val::F64(v), IrType::Primitive(Primitive::F64)) => Val::F64(v),
+                    (Val::F32(v), IrType::F32) => Val::F32(v),
+                    (Val::F32(v), IrType::F64) => Val::F64(v as f64),
+                    (Val::F64(v), IrType::F32) => Val::F32(v as f32),
+                    (Val::F64(v), IrType::F64) => Val::F64(v),
                     _ => panic!("invalid types for float cast"),
                 }
             }
@@ -330,8 +326,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 };
                 let to_ty = types[inst.ty];
                 match to_ty {
-                    IrType::Primitive(Primitive::F32) => Val::F32(v as f32),
-                    IrType::Primitive(Primitive::F64) => Val::F64(v as f64),
+                    IrType::F32 => Val::F32(v as f32),
+                    IrType::F64 => Val::F64(v as f64),
                     _ => panic!("invalid target type for CastIntToFloat"),
                 }
             }
@@ -343,15 +339,15 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 };
                 let to_ty = types[inst.ty];
                 match to_ty {
-                    IrType::Primitive(Primitive::U8) => Val::Int(v as u8 as u64),
-                    IrType::Primitive(Primitive::U16) => Val::Int(v as u16 as u64),
-                    IrType::Primitive(Primitive::U32) => Val::Int(v as u16 as u64),
-                    IrType::Primitive(Primitive::U64) => Val::Int(v as u64),
-                    IrType::Primitive(Primitive::I8) => Val::Int(v as i8 as u64),
-                    IrType::Primitive(Primitive::I16) => Val::Int(v as i16 as u64),
-                    IrType::Primitive(Primitive::I32) => Val::Int(v as i16 as u64),
-                    IrType::Primitive(Primitive::I64) => Val::Int(v as i64 as u64),
-                    IrType::Primitive(Primitive::U128 | Primitive::I128) => {
+                    IrType::U8 => Val::Int(v as u8 as u64),
+                    IrType::U16 => Val::Int(v as u16 as u64),
+                    IrType::U32 => Val::Int(v as u16 as u64),
+                    IrType::U64 => Val::Int(v as u64),
+                    IrType::I8 => Val::Int(v as i8 as u64),
+                    IrType::I16 => Val::Int(v as i16 as u64),
+                    IrType::I32 => Val::Int(v as i16 as u64),
+                    IrType::I64 => Val::Int(v as i64 as u64),
+                    IrType::U128 | IrType::I128 => {
                         todo!("evaluate 128 bit int values")
                     }
                     _ => panic!("invalid target type for CastIntToFloat"),

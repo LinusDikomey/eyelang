@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::{ir_types::{IrTypes, IrType}, Primitive, TypeRefs};
+use crate::{ir_types::{IrTypes, IrType}, TypeRefs};
 
 #[derive(Clone, Copy)]
 pub struct Layout {
@@ -46,8 +46,15 @@ impl Layout {
 }
 
 pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
+    use IrType as T;
     match ty {
-        IrType::Primitive(p) => primitive_layout(p),
+        T::I8 | T::U8 | T::U1 => Layout { size: 1, align: 1.try_into().unwrap() },
+        T::I16 | T::U16 => Layout { size: 2, align: 2.try_into().unwrap() },
+        T::I32 | T::U32 | T::F32 => Layout { size: 4, align: 4.try_into().unwrap() },
+        T::I64 | T::U64 | T::F64 => Layout { size: 8, align: 8.try_into().unwrap() },
+        T::I128 | T::U128 => Layout { size: 16, align: 16.try_into().unwrap() },
+        T::Unit => Layout::EMPTY,
+        T::Ptr => Layout::PTR, // TODO: architecture dependent pointer sizes
         IrType::Array(elem_ty, count) => Layout::array(type_layout(types[elem_ty], types), count as u64),
         IrType::Tuple(elems) => {
             let mut layout = Layout::EMPTY;
@@ -57,20 +64,6 @@ pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
             layout
         }
         IrType::Const(_) => todo!("const IrType layout"),
-        IrType::Ref(r) => type_layout(types[r], types),
-    }
-}
-
-pub fn primitive_layout(ty: Primitive) -> Layout {
-    use Primitive as P;
-    match ty {
-        P::I8 | P::U8 | P::U1 => Layout { size: 1, align: 1.try_into().unwrap() },
-        P::I16 | P::U16 => Layout { size: 2, align: 2.try_into().unwrap() },
-        P::I32 | P::U32 | P::F32 => Layout { size: 4, align: 4.try_into().unwrap() },
-        P::I64 | P::U64 | P::F64 => Layout { size: 8, align: 8.try_into().unwrap() },
-        P::I128 | P::U128 => Layout { size: 16, align: 16.try_into().unwrap() },
-        P::Unit => Layout::EMPTY,
-        P::Ptr => Layout::PTR, // TODO: architecture dependent pointer sizes
     }
 }
 

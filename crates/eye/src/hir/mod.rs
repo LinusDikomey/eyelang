@@ -147,7 +147,8 @@ pub enum Pattern {
     Variable(VarId),
     Ignore,
     Tuple(PatternIds),
-    Int(bool, u128),
+    Int(bool, u128, LocalTypeId),
+    Bool(bool),
     Range {
         min_max: (u128, u128),
         min_max_signs: (bool, bool),

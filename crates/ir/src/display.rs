@@ -144,23 +144,39 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
 fn display_type(f: &mut fmt::Formatter<'_>, ty: super::ir_types::IrType, types: &IrTypes, info: Info) -> fmt::Result {
     use super::ir_types::IrType;
 
-    match ty {
-        IrType::Primitive(p) => cwrite!(f, "#m<{p}>"),
+    let name = match ty {
+        IrType::I8 => "i8",
+        IrType::I16 => "i16",
+        IrType::I32 => "i32",
+        IrType::I64 => "i64",
+        IrType::I128 => "i128",
+        IrType::U8 => "u8",
+        IrType::U16 => "u16",
+        IrType::U32 => "u32",
+        IrType::U64 => "u64",
+        IrType::U128 => "u128",
+        IrType::F32 => "f32",
+        IrType::F64 => "f64",
+        IrType::U1 => "u1",
+        IrType::Unit => "unit",
+        IrType::Ptr => "ptr",
         IrType::Array(inner, count) => {
             cwrite!(f, "#m<[>")?;
             display_type(f, types[inner], types, info)?;
-            cwrite!(f, "; #m<{count}>]")
+            cwrite!(f, "; #m<{count}>]")?;
+            return Ok(());
         }
         IrType::Tuple(elems) => {
             cwrite!(f, "#m<(>")?;
             write_delimited_with(f, elems.iter(), |f, ty| display_type(f, types[ty], types, info), ", ")?;
-            cwrite!(f, "#m<)>")
+            cwrite!(f, "#m<)>")?;
+            return Ok(());
         }
-        IrType::Const(ConstIrType::Int) => write!(f, "#m<int>"),
-        IrType::Const(ConstIrType::Float) => write!(f, "#m<enum>"),
-        IrType::Const(ConstIrType::Enum) => write!(f, "#m<float>"),
-        IrType::Ref(r) => display_type(f, types[r], types, info)
-    }
+        IrType::Const(ConstIrType::Int) => "{const: int}",
+        IrType::Const(ConstIrType::Float) => "{const: float}",
+        IrType::Const(ConstIrType::Enum) => "{const: enum}",
+    };
+    cwrite!(f, "#m<{name}>")
 }
 
 fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], types: &IrTypes, info: Info)

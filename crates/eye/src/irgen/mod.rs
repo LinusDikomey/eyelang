@@ -57,7 +57,7 @@ pub fn lower_function(
             vars: &mut vars,
         };
         let val = lower(&mut ctx, hir.root_id(), &mut noreturn);
-        if !noreturn {  
+        if !noreturn {
             ctx.builder.terminate_block(Terminator::Ret(val));
         }
         ctx.builder.finish()
@@ -98,7 +98,7 @@ impl<'a> Ctx<'a> {
                     name: String::new(),
                     types: ir::IrTypes::new(),
                     params: ir::TypeRefs::EMPTY,
-                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
+                    return_type: ir::IrType::Unit,
                     varargs: false,
                     ir: None,
                 });
@@ -156,7 +156,7 @@ fn lower(
                     match ty {
                         TypeInfo::Primitive(p) => {
                             debug_assert!(p.is_int());
-                            ctx.builder.build_int(num, IrType::Primitive(get_primitive(p)))
+                            ctx.builder.build_int(num, get_primitive(p))
                         }
                         TypeInfo::Invalid => {
                             build_crash_point(&mut ctx.builder)
@@ -181,7 +181,7 @@ fn lower(
                 return Ref::UNDEF
             };
             debug_assert!(p.is_int());
-            let ty = IrType::Primitive(types::get_primitive(p));
+            let ty = types::get_primitive(p);
             if let Ok(small) = val.try_into() {
                 ctx.builder.build_int(small, ty)
             } else {
@@ -194,7 +194,7 @@ fn lower(
                 return Ref::UNDEF
             };
             debug_assert!(p.is_float());
-            let ty = IrType::Primitive(types::get_primitive(p));
+            let ty = types::get_primitive(p);
             ctx.builder.build_float(val, ty)
         }
         Node::StringLiteral(_) => todo!(),
@@ -230,19 +230,19 @@ fn lower(
                 CastType::Invalid => build_crash_point(&mut ctx.builder),
                 CastType::Noop => val,
                 &CastType::Int { from: _, to } => {
-                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    let to_ty = types::get_primitive(to.into());
                     ctx.builder.build_cast_int(val, to_ty)
                 }
                 &CastType::Float { from: _, to } => {
-                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    let to_ty = types::get_primitive(to.into());
                     ctx.builder.build_cast_float(val, to_ty)
                 }
                 &CastType::FloatToInt { from: _, to } => {
-                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    let to_ty = types::get_primitive(to.into());
                     ctx.builder.build_cast_float_to_int(val, to_ty)
                 }
                 &CastType::IntToFloat { from: _, to } => {
-                    let to_ty = IrType::Primitive(types::get_primitive(to.into()));
+                    let to_ty = types::get_primitive(to.into());
                     ctx.builder.build_cast_int_to_float(val, to_ty)
                 }
                 ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
@@ -264,7 +264,7 @@ fn lower(
                 Comparison::And => BinOp::And,
                 Comparison::Or => BinOp::Or,
             };
-            ctx.builder.build_bin_op(op, l, r, IrType::Primitive(ir::Primitive::U1))
+            ctx.builder.build_bin_op(op, l, r, IrType::U1)
         }
         &Node::Arithmetic(l, r, op, ty) => {
             let l = lower(ctx, l, noreturn);
@@ -284,7 +284,7 @@ fn lower(
                 panic!("Invalid type {:?} for arithmetic op. Will be handled properly with traits", ctx.types[ty]);
             };
             assert!(p.is_int() || p.is_float(), "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits");
-            ctx.builder.build_bin_op(op, l, r, IrType::Primitive(types::get_primitive(p)))
+            ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
         }
         &Node::Assign(lval, val) => {
             let lval = lower_lval(ctx, lval);
@@ -345,7 +345,22 @@ fn lower_pattern(
         }
         Pattern::Ignore => Ref::val(RefVal::True),
         Pattern::Tuple(_) => todo!(),
-        Pattern::Int(_sign, _val) => todo!(),
+        Pattern::Int(sign, val, ty) => {
+            let TypeInfo::Primitive(p) = ctx.types[ty] else { panic!("integer type expected") };
+            let ty = types::get_primitive(p);
+            debug_assert!(p.is_int());
+            let mut pattern_value = if let Ok(small) = val.try_into() {
+                ctx.builder.build_int(small, ty)
+            } else {
+                ctx.builder.build_large_int(val, ty)
+            };
+            if sign {
+                pattern_value = ctx.builder.build_neg(pattern_value, ty);
+            }
+            ctx.builder.build_bin_op(BinOp::Eq, value, pattern_value, ty)
+        }
+        Pattern::Bool(true) => value,
+        Pattern::Bool(false) => ctx.builder.build_not(value, ir::IrType::U1),
         Pattern::Range { .. } => todo!(),
     }
 }

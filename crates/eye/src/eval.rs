@@ -53,7 +53,15 @@ pub fn def_expr(
             Def::Type(Type::DefId { id, generics: None })
         }
         &Expr::Primitive { primitive, .. } => Def::Type(Type::Primitive(primitive)),
-        expr => todo!("eval expr {expr:?}")
+        expr => {
+            /*
+            let mut ir_types = ir::IrTypes::new();
+            let mut ir = ir::builder::IrBuilder::new(&mut ir_types);
+            let mut to_generate = Vec::new();
+            crate::irgen::lower_function(compiler, &mut to_generate, src, name, checked, generics)
+            */
+            todo!("generate and evaluate ir for {expr:?}")
+        }
     }
 }
 

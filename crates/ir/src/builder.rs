@@ -1,4 +1,4 @@
-use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex, Primitive, TypeRefs};
+use crate::{Instruction, Data, Tag, Ref, FunctionIr, BlockIndex, TypeRefs};
 
 use super::{RefVal, FunctionId, ir_types::{TypeRef, IrType, IrTypes}};
 
@@ -213,7 +213,7 @@ impl<'a> IrBuilder<'a> {
 
     pub fn build_decl(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
         let ty = self.ty(ty);
-        self.add(Data { ty }, Tag::Decl, IrType::Primitive(Primitive::Ptr))
+        self.add(Data { ty }, Tag::Decl, IrType::Ptr)
     }
 
     pub fn build_load(&mut self, var: Ref, ty: impl Into<IdxOrTy>) -> Ref {
@@ -302,7 +302,7 @@ impl<'a> IrBuilder<'a> {
         let extra = self.extra.len() as u32;
         self.extra.extend(elem_types.to_bytes());
         self.extra.extend(idx.to_le_bytes());
-        self.add(Data { ref_int: (var, extra) }, Tag::MemberPtr, IrType::Primitive(Primitive::Ptr))
+        self.add(Data { ref_int: (var, extra) }, Tag::MemberPtr, IrType::Ptr)
     }
 
     pub fn build_member_value(&mut self, val: Ref, idx: u32, ty: impl Into<IdxOrTy>) -> Ref {
@@ -310,22 +310,22 @@ impl<'a> IrBuilder<'a> {
     }
 
     pub fn build_cast_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
-        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_int()));
+        debug_assert!(target_ty.is_int());
         self.add(Data { un_op: val }, Tag::CastInt, target_ty)
     }
 
     pub fn build_cast_float(&mut self, val: Ref, target_ty: IrType) -> Ref {
-        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_float()));
+        debug_assert!(target_ty.is_float());
         self.add(Data { un_op: val }, Tag::CastFloat, target_ty)
     }
 
     pub fn build_cast_int_to_float(&mut self, val: Ref, target_ty: IrType) -> Ref {
-        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_float()));
+        debug_assert!(target_ty.is_float());
         self.add(Data { un_op: val }, Tag::CastIntToFloat, target_ty)
     }
 
     pub fn build_cast_float_to_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
-        debug_assert!(matches!(target_ty, IrType::Primitive(p) if p.is_int()));
+        debug_assert!(target_ty.is_int());
         self.add(Data { un_op: val }, Tag::CastFloatToInt, target_ty)
     }
 

@@ -1,4 +1,5 @@
 use dmap::DHashMap;
+use types::Primitive;
 
 use crate::{compiler::VarId, parser::{ast::{ExprId, Expr, UnOp}, token::{Operator, IntLiteral}}, type_table::{LocalTypeId, TypeInfo}, hir::Pattern, check::exhaust, error::Error};
 
@@ -13,6 +14,37 @@ pub fn check(
     expected: LocalTypeId,
 ) -> Pattern {
     match &ctx.ast[pat] {
+        Expr::IntLiteral(span) => {
+            let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
+            let ty = lit.ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+            ctx.specify(expected, ty, |ast| ast[pat].span(ast));
+            exhaustion.exhaust_int(exhaust::SignedInt(lit.val, false));
+            Pattern::Int(false, lit.val, expected)
+        }
+        Expr::FloatLiteral(_) => todo!("float patterns"),
+        &Expr::UnOp(_, UnOp::Neg, inner) => {
+            match ctx.ast[inner] {
+                Expr::IntLiteral(span) => {
+                    let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
+                    let ty = lit.ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+                    // TODO: constrain negation with traits when they are available
+                    ctx.specify(expected, ty, |ast| ast[pat].span(ast));
+                    exhaustion.exhaust_int(exhaust::SignedInt(lit.val, true));
+                    Pattern::Int(true, lit.val, expected)
+                }
+                Expr::FloatLiteral(_) => todo!("negative float patterns"),
+                _ => {
+                    ctx.compiler.errors.emit_err(
+                        Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
+                    );
+                    Pattern::Invalid
+                }
+            }
+        }
+        &Expr::BoolLiteral { start: _, val } => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[pat].span(ast));
+            Pattern::Bool(val)
+        }
         Expr::Ident { span, .. } => {
             let var = ctx.hir.add_var(expected);
             let name = ctx.ast.src()[span.range()].to_owned();

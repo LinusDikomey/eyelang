@@ -88,84 +88,57 @@ impl Index<TypeRef> for IrTypes {
     type Output = IrType;
 
     fn index(&self, index: TypeRef) -> &Self::Output {
-        match &self.types[index.0 as usize] {
-            IrType::Ref(r) => &self[*r],
-            other => other
-        }
+        &self.types[index.0 as usize]
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum IrType {
-    Primitive(Primitive),
-    Array(TypeRef, u32),
-    Tuple(TypeRefs),
-    Const(ConstIrType),
-    Ref(TypeRef), // just refers to a different index
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Primitive {
+    // ---------- scalar types ----------
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
     F32, F64,
     U1,
     Unit,
     Ptr,
+
+    // ---------- aggregate types ----------
+    Array(TypeRef, u32),
+    Tuple(TypeRefs),
+
+    /// constant type, used only during const evaluation (might get removed)
+    Const(ConstIrType),
 }
-impl fmt::Display for Primitive {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Primitive as P;
-        let s = match *self {
-            P::I8 => "i8",
-            P::I16 => "i16",
-            P::I32 => "i32",
-            P::I64 => "i64",
-            P::I128 => "i128",
-            P::U8 => "u8",
-            P::U16 => "u16",
-            P::U32 => "u32",
-            P::U64 => "u64",
-            P::U128 => "u128",
-            P::F32 => "f32",
-            P::F64 => "f64",
-            P::U1 => "u1",
-            P::Unit => "unit",
-            P::Ptr => "ptr",
-        };
-        write!(f, "{}", s)
-    }
-}
-impl Primitive {
+impl IrType {
     pub fn is_int(self) -> bool {
-        use Primitive as P;
+        use IrType as T;
         matches!(
             self,
-            | P::I8 | P::I16 | P::I32 | P::I64 | P::I128
-            | P::U8 | P::U16 | P::U32 | P::U64 | P::U128
-            | P::U1
+            | T::I8 | T::I16 | T::I32 | T::I64 | T::I128
+            | T::U8 | T::U16 | T::U32 | T::U64 | T::U128
+            | T::U1
         )
     }
 
     pub fn is_unsigned_int(self) -> bool {
-        use Primitive as P;
+        use IrType as T;
         matches!(
             self,
-            | P::U8 | P::U16 | P::U32 | P::U64 | P::U128
-            | P::U1
+            | T::U8 | T::U16 | T::U32 | T::U64 | T::U128
+            | T::U1
         )
     }
 
     pub fn is_signed_int(self) -> bool {
-        use Primitive as P;
+        use IrType as T;
         matches!(
             self,
-            | P::I8 | P::I16 | P::I32 | P::I64 | P::I128
+            | T::I8 | T::I16 | T::I32 | T::I64 | T::I128
         )
     }
 
     pub fn is_float(self) -> bool {
-        matches!(self, Primitive::F32 | Primitive::F64)
+        matches!(self, IrType::F32 | IrType::F64)
     }
 }
 

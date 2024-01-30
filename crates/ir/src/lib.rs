@@ -12,8 +12,8 @@ mod layout;
 
 pub use eval::{eval, Val};
 pub use instruction::{Instruction, Tag, Data};
-pub use ir_types::{IrTypes, IrType, TypeRef, TypeRefs, Primitive};
-pub use layout::{Layout, type_layout, primitive_layout, offset_in_tuple};
+pub use ir_types::{IrTypes, IrType, TypeRef, TypeRefs};
+pub use layout::{Layout, type_layout, offset_in_tuple};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u64);

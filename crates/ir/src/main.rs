@@ -1,7 +1,7 @@
 //! Example for using the ir crate. A function is constructed manually and evaluated.
 //! It is also debug printed.
 
-use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, display::Info, Primitive, TypeRefs};
+use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, display::Info, TypeRefs};
 
 fn main() {
     let mut types = IrTypes::new();
@@ -10,7 +10,7 @@ fn main() {
     let loop_body = builder.create_block();
     let end = builder.create_block();
 
-    let int_ty = builder.types.add(IrType::Primitive(Primitive::I32));
+    let int_ty = builder.types.add(IrType::I32);
 
     let variable = builder.build_decl(int_ty);
 
@@ -24,7 +24,7 @@ fn main() {
     let loaded = builder.build_load(variable, int_ty);
     let new_value = builder.build_bin_op(BinOp::Sub, loaded, one, int_ty);
     builder.build_store(variable, new_value);
-    let is_zero = builder.build_bin_op(BinOp::Eq, new_value, zero, IrType::Primitive(Primitive::U1));
+    let is_zero = builder.build_bin_op(BinOp::Eq, new_value, zero, IrType::U1);
     builder.terminate_block(Terminator::Branch { cond: is_zero, on_true: end, on_false: loop_body });
 
     builder.begin_block(end);
@@ -36,7 +36,7 @@ fn main() {
         types,
         params: TypeRefs::EMPTY,
         varargs: false,
-        return_type: IrType::Primitive(Primitive::I32),
+        return_type: IrType::I32,
         ir: Some(ir),
     };
 
@@ -56,7 +56,7 @@ fn main() {
 
 fn build_mul() -> Function {
     let mut types = IrTypes::new();
-    let params = types.add_multiple([IrType::Primitive(Primitive::I32); 2]);
+    let params = types.add_multiple([IrType::I32; 2]);
     let mut builder = IrBuilder::new(&mut types);
 
     let x = builder.build_param(0, params.nth(0));
@@ -70,7 +70,7 @@ fn build_mul() -> Function {
         types,
         params,
         varargs: false,
-        return_type: IrType::Primitive(Primitive::I32),
+        return_type: IrType::I32,
         ir: Some(ir),
     }
 }

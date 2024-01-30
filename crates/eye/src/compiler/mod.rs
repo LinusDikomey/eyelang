@@ -521,7 +521,7 @@ impl Compiler {
                     name: String::new(),
                     types: ir::IrTypes::new(),
                     params: ir::TypeRefs::EMPTY,
-                    return_type: ir::IrType::Primitive(ir::Primitive::Unit),
+                    return_type: ir::IrType::Unit,
                     varargs: false,
                     ir: None,
                 });

@@ -1,6 +1,6 @@
 use std::{ffi::CString, io::Write, ptr};
 
-use ir::{IrType, IrTypes, Primitive, TypeRefs};
+use ir::{IrType, IrTypes, TypeRefs};
 use llvm_sys::{
     core::{
         self, LLVMAddFunction, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca, LLVMBuildAnd,
@@ -60,13 +60,23 @@ pub unsafe fn function(
 
 /// Converts an ir type to it's corresponding llvm type. Returns `None` if the type was zero-sized
 unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LLVMTypeRef> {
+    use IrType as T;
     match ty {
-        IrType::Primitive(p) => llvm_primitive_ty(ctx, p),
-        IrType::Array(elem, size) => Some(core::LLVMArrayType2(
+        T::I8 | T::U8 => Some(core::LLVMInt8TypeInContext(ctx)),
+        T::I16 | T::U16 => Some(core::LLVMInt16TypeInContext(ctx)),
+        T::I32 | T::U32 => Some(core::LLVMInt32TypeInContext(ctx)),
+        T::I64 | T::U64 => Some(core::LLVMInt64TypeInContext(ctx)),
+        T::I128 | T::U128 => Some(core::LLVMInt128TypeInContext(ctx)),
+        T::F32 => Some(core::LLVMFloatTypeInContext(ctx)),
+        T::F64 => Some(core::LLVMDoubleTypeInContext(ctx)),
+        T::U1 => Some(core::LLVMInt1TypeInContext(ctx)),
+        T::Unit => None,
+        T::Ptr => Some(core::LLVMPointerTypeInContext(ctx, 0)),
+        T::Array(elem, size) => Some(core::LLVMArrayType2(
             llvm_ty(ctx, types[elem], types)?,
             size as u64,
         )),
-        IrType::Tuple(elems) => {
+        T::Tuple(elems) => {
             if elems.count == 0 {
                 return None;
             }
@@ -81,25 +91,8 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LL
                 FALSE,
             ))
         }
-        IrType::Ref(r) => llvm_ty(ctx, types[r], types),
-        IrType::Const(_) => panic!("const type in llvm backend found"),
+        T::Const(_) => panic!("const type in llvm backend found"),
     }
-}
-
-unsafe fn llvm_primitive_ty(ctx: LLVMContextRef, ty: Primitive) -> Option<LLVMTypeRef> {
-    use Primitive as P;
-    Some(match ty {
-        P::I8 | P::U8 => core::LLVMInt8TypeInContext(ctx),
-        P::I16 | P::U16 => core::LLVMInt16TypeInContext(ctx),
-        P::I32 | P::U32 => core::LLVMInt32TypeInContext(ctx),
-        P::I64 | P::U64 => core::LLVMInt64TypeInContext(ctx),
-        P::I128 | P::U128 => core::LLVMInt128TypeInContext(ctx),
-        Primitive::F32 => core::LLVMFloatTypeInContext(ctx),
-        Primitive::F64 => core::LLVMDoubleTypeInContext(ctx),
-        Primitive::U1 => core::LLVMInt1TypeInContext(ctx),
-        Primitive::Unit => return None,
-        Primitive::Ptr => core::LLVMPointerTypeInContext(ctx, 0),
-    })
 }
 
 unsafe fn build_func(
@@ -130,9 +123,9 @@ unsafe fn build_func(
                 match val {
                     ir::RefVal::True | ir::RefVal::False => (
                         Some(LLVMConstInt(i1, (val == ir::RefVal::True) as _, FALSE)),
-                        IrType::Primitive(Primitive::U1),
+                        IrType::U1,
                     ),
-                    ir::RefVal::Unit => (None, IrType::Primitive(Primitive::Unit)),
+                    ir::RefVal::Unit => (None, IrType::Unit),
                     ir::RefVal::Undef => panic!(
                         "Tried to use an undefined IR value. This is an internal compiler error."
                     ),
@@ -286,8 +279,8 @@ unsafe fn build_func(
             ir::Tag::Neg => {
                 let r = get_ref(&instructions, data.un_op).unwrap();
                 match func.types[ty] {
-                    IrType::Primitive(p) if p.is_int() => LLVMBuildNeg(builder, r, NONE),
-                    IrType::Primitive(p) if p.is_float() => LLVMBuildFNeg(builder, r, NONE),
+                    t if t.is_int() => LLVMBuildNeg(builder, r, NONE),
+                    t if t.is_float() => LLVMBuildFNeg(builder, r, NONE),
                     _ => panic!("invalid type for neg"),
                 }
             }
@@ -308,38 +301,38 @@ unsafe fn build_func(
 
                 match tag {
                     ir::Tag::Add => match func.types[ty] {
-                        IrType::Primitive(p) if p.is_int() => LLVMBuildAdd(builder, l, r, NONE),
-                        IrType::Primitive(p) if p.is_float() => LLVMBuildFAdd(builder, l, r, NONE),
+                        t if t.is_int() => LLVMBuildAdd(builder, l, r, NONE),
+                        t if t.is_float() => LLVMBuildFAdd(builder, l, r, NONE),
                         _ => panic!("invalid type for add"),
                     },
                     ir::Tag::Sub => match func.types[ty] {
-                        IrType::Primitive(p) if p.is_int() => LLVMBuildSub(builder, l, r, NONE),
-                        IrType::Primitive(p) if p.is_float() => LLVMBuildFSub(builder, l, r, NONE),
+                        t if t.is_int() => LLVMBuildSub(builder, l, r, NONE),
+                        t if t.is_float() => LLVMBuildFSub(builder, l, r, NONE),
                         _ => panic!("invalid type for sub"),
                     },
                     ir::Tag::Mul => match func.types[ty] {
-                        IrType::Primitive(p) if p.is_int() => LLVMBuildMul(builder, l, r, NONE),
-                        IrType::Primitive(p) if p.is_float() => LLVMBuildFMul(builder, l, r, NONE),
+                        t if t.is_int() => LLVMBuildMul(builder, l, r, NONE),
+                        t if t.is_float() => LLVMBuildFMul(builder, l, r, NONE),
                         _ => panic!("invalid type for mul"),
                     },
                     ir::Tag::Div => match func.types[ty] {
-                        IrType::Primitive(p) if p.is_unsigned_int() => {
+                        t if t.is_unsigned_int() => {
                             LLVMBuildUDiv(builder, l, r, NONE)
                         }
-                        IrType::Primitive(p) if p.is_signed_int() => {
+                        t if t.is_signed_int() => {
                             LLVMBuildSDiv(builder, l, r, NONE)
                         }
-                        IrType::Primitive(p) if p.is_float() => LLVMBuildFDiv(builder, l, r, NONE),
+                        t if t.is_float() => LLVMBuildFDiv(builder, l, r, NONE),
                         _ => panic!("invalid type for div"),
                     },
                     ir::Tag::Mod => match func.types[ty] {
-                        IrType::Primitive(p) if p.is_unsigned_int() => {
+                        t if t.is_unsigned_int() => {
                             LLVMBuildURem(builder, l, r, NONE)
                         }
-                        IrType::Primitive(p) if p.is_signed_int() => {
+                        t if t.is_signed_int() => {
                             LLVMBuildSRem(builder, l, r, NONE)
                         }
-                        IrType::Primitive(p) if p.is_float() => LLVMBuildFRem(builder, l, r, NONE),
+                        t if t.is_float() => LLVMBuildFRem(builder, l, r, NONE),
                         _ => panic!("invalid type for mod"),
                     },
                     ir::Tag::Or => LLVMBuildOr(builder, l, r, NONE),
@@ -353,7 +346,7 @@ unsafe fn build_func(
 
                 if let (Some(l), Some(r)) = (l, r) {
                     match ty {
-                        IrType::Primitive(p) if p.is_int() => {
+                        t if t.is_int() => {
                             let tag = if tag == ir::Tag::Eq {
                                 LLVMIntPredicate::LLVMIntEQ
                             } else {
@@ -361,7 +354,7 @@ unsafe fn build_func(
                             };
                             LLVMBuildICmp(builder, tag, l, r, NONE)
                         }
-                        IrType::Primitive(p) if p.is_float() => {
+                        t if t.is_float() => {
                             let tag = if tag == ir::Tag::Eq {
                                 LLVMRealPredicate::LLVMRealUEQ
                             } else {
@@ -380,13 +373,13 @@ unsafe fn build_func(
                 let l = l.unwrap();
                 let r = get_ref(&instructions, data.bin_op.1).unwrap();
                 match ty {
-                    IrType::Primitive(p) if p.is_unsigned_int() => {
+                    t if t.is_unsigned_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULT, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_signed_int() => {
+                    t if t.is_signed_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSLT, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_float() => {
+                    t if t.is_float() => {
                         LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLT, l, r, NONE)
                     }
                     _ => panic!("invalid type for lt"),
@@ -397,13 +390,13 @@ unsafe fn build_func(
                 let l = l.unwrap();
                 let r = get_ref(&instructions, data.bin_op.1).unwrap();
                 match ty {
-                    IrType::Primitive(p) if p.is_unsigned_int() => {
+                    t if t.is_unsigned_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGT, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_signed_int() => {
+                    t if t.is_signed_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSGT, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_float() => {
+                    t if t.is_float() => {
                         LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGT, l, r, NONE)
                     }
                     _ => panic!("invalid type for gt"),
@@ -414,13 +407,13 @@ unsafe fn build_func(
                 let l = l.unwrap();
                 let r = get_ref(&instructions, data.bin_op.1).unwrap();
                 match ty {
-                    IrType::Primitive(p) if p.is_unsigned_int() => {
+                    t if t.is_unsigned_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULE, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_signed_int() => {
+                    t if t.is_signed_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSLE, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_float() => {
+                    t if t.is_float() => {
                         LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLE, l, r, NONE)
                     }
                     _ => panic!("invalid type for le"),
@@ -431,13 +424,13 @@ unsafe fn build_func(
                 let l = l.unwrap();
                 let r = get_ref(&instructions, data.bin_op.1).unwrap();
                 match ty {
-                    IrType::Primitive(p) if p.is_unsigned_int() => {
+                    t if t.is_unsigned_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGE, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_signed_int() => {
+                    t if t.is_signed_int() => {
                         LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSGE, l, r, NONE)
                     }
-                    IrType::Primitive(p) if p.is_float() => {
+                    t if t.is_float() => {
                         LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGE, l, r, NONE)
                     }
                     _ => panic!("invalid type for le"),
@@ -511,8 +504,7 @@ unsafe fn build_func(
                 // there are no zero-sized integers so unwraps are fine
                 let val = val.unwrap();
                 let to_ty = func.types[ty];
-                let IrType::Primitive(p) = to_ty else { panic!("invalid CastInt") };
-                let signed = p.is_signed_int();
+                let signed = to_ty.is_signed_int();
                 let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
                 LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
             }
@@ -523,10 +515,10 @@ unsafe fn build_func(
                 let to_ty = func.types[ty];
                 let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
                 match (from_ty, to_ty) {
-                    (IrType::Primitive(Primitive::F32), IrType::Primitive(Primitive::F64)) => {
+                    (IrType::F32, IrType::F64) => {
                         core::LLVMBuildFPExt(builder, val, target_ty, NONE)
                     }
-                    (IrType::Primitive(Primitive::F64), IrType::Primitive(Primitive::F32)) => {
+                    (IrType::F64, IrType::F32) => {
                         core::LLVMBuildFPTrunc(builder, val, target_ty, NONE)
                     }
                     _ => panic!("invalid types for CastFloat"),
@@ -536,12 +528,9 @@ unsafe fn build_func(
                 let (val, from_ty) = get_ref_and_type(&instructions, data.un_op);
                 // there are no zero-sized ints/floats so unwraps are fine
                 let val = val.unwrap();
-                let IrType::Primitive(p) = from_ty else {
-                    panic!("invalid type for CastIntToFloat")
-                };
                 let to_ty = func.types[ty];
                 let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
-                if p.is_unsigned_int() {
+                if from_ty.is_unsigned_int() {
                     core::LLVMBuildUIToFP(builder, val, target_ty, NONE)
                 } else {
                     core::LLVMBuildSIToFP(builder, val, target_ty, NONE)
@@ -551,11 +540,8 @@ unsafe fn build_func(
                 // there are no zero-sized ints/floats so unwraps are fine
                 let val = get_ref(&instructions, data.un_op).unwrap();
                 let to_ty = func.types[ty];
-                let IrType::Primitive(to_p) = to_ty else {
-                    panic!("invalid type for CastFloatToInt")
-                };
                 let target_ty = llvm_ty(ctx, func.types[ty], &func.types).unwrap();
-                if to_p.is_unsigned_int() {
+                if to_ty.is_unsigned_int() {
                     core::LLVMBuildFPToUI(builder, val, target_ty, NONE)
                 } else {
                     core::LLVMBuildFPToSI(builder, val, target_ty, NONE)
