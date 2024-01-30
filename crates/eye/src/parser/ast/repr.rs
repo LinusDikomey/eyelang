@@ -283,22 +283,6 @@ impl<C: Representer> Repr<C> for Expr {
                     c.char(')');
                 }
             }
-            Self::Record { names, .. } => {
-                c.write_add(".{ ");
-                for (i, name) in names.iter().enumerate() {
-                    if i != 0 {
-                        c.write_add(", ");
-                    }
-                    c.write_add(c.src(*name));
-                    c.space();
-                    // TODO: records will be thrown out, clean this up
-                    /*
-                    let value = ast.extra[*values as usize + i];
-                    ast[value].repr(c);
-                    */
-                }
-                c.write_add(" }")
-            }
             Self::Nested(_, inner) => {
                 c.char('(');
                 ast[*inner].repr(c);

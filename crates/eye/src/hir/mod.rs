@@ -4,7 +4,7 @@ use id::{id, ConstValueId, ModuleId};
 use span::TSpan;
 use types::{Primitive, IntType, FloatType};
 
-use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId}};
+use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId, self}};
 
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -86,20 +86,10 @@ pub struct PatternIds {
 #[derive(Debug, Clone)]
 pub enum Node {
     Invalid,
+
     Block(NodeIds),
-    Declare {
-        pattern: PatternId,
-    },
-    DeclareWithVal {
-        pattern: PatternId,
-        val: NodeId,
-    },
-    Variable(VarId),
-    Const {
-        id: ConstValueId,
-        ty: LocalTypeId,
-    },
-    Return(NodeId),
+
+    Unit,
     IntLiteral {
         val: u128,
         ty: LocalTypeId,
@@ -108,29 +98,54 @@ pub enum Node {
         val: f64,
         ty: LocalTypeId,
     },
-    StringLiteral(TSpan),
     BoolLiteral(bool),
-    Unit,
+    StringLiteral(TSpan),
     Array(NodeIds),
-    Call {
-        function: (ModuleId, FunctionId),
-        generics: LocalTypeIds,
-        args: NodeIds,
-        return_ty: LocalTypeId,
-    },
-    Cast(CastId),
-    Comparison(NodeId, NodeId, Comparison),
-    Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
-    Assign(LValueId, NodeId),
     Tuple {
         // PERF(size): length has to match anyways, could only store it once
         elems: NodeIds,
         elem_types: LocalTypeIds,
     },
+
+    Declare {
+        pattern: PatternId,
+    },
+    DeclareWithVal {
+        pattern: PatternId,
+        val: NodeId,
+    },
+    Variable(VarId),
+    Assign(LValueId, NodeId),
+
+    Const {
+        id: ConstValueId,
+        ty: LocalTypeId,
+    },
+
+    Negate(NodeId, LocalTypeId),
+    Not(NodeId),
+    AddressOf(NodeId),
+    Deref { value: NodeId, deref_ty: LocalTypeId },
+
+    Cast(CastId),
+    Comparison(NodeId, NodeId, Comparison),
+    Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
+
     TupleIdx {
         tuple_value: NodeId,
         index: u32,
         elem_ty: LocalTypeId,
+    },
+
+    Return(NodeId),
+    IfElse { cond: NodeId, then: NodeId, else_: NodeId },
+    Match { value: NodeId, branch_index: u32, pattern_index: u32, branch_count: u32 },
+    While { cond: NodeId, body: NodeId },
+    Call {
+        function: (ModuleId, FunctionId),
+        generics: LocalTypeIds,
+        args: NodeIds,
+        return_ty: LocalTypeId,
     },
 }
 

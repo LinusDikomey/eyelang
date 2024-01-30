@@ -397,6 +397,41 @@ pub enum Expr {
         scope: ScopeId,
         items: ExprExtra,
     },
+    Nested(TSpan, ExprId),
+
+    // ---------- value literals ----------
+    Unit(TSpan),
+    IntLiteral(TSpan),
+    FloatLiteral(TSpan),
+    BoolLiteral {
+        start: u32,
+        val: bool,
+    },
+    StringLiteral(TSpan),
+    Array(TSpan, ExprExtra),
+    Tuple(TSpan, ExprExtra),
+    EnumLiteral {
+        span: TSpan,
+        ident: TSpan,
+        args: ExprExtra,
+    },
+
+    // ---------- definition literals ----------
+    Function {
+        id: FunctionId,
+    },
+    Primitive {
+        primitive: Primitive,
+        start: u32,
+    },
+    Type {
+        id: TypeId,
+    },
+
+    // ---------- variables and names ----------
+    Ident {
+        span: TSpan,
+    },
     Declare {
         pat: ExprId,
         annotated_ty: UnresolvedType,
@@ -406,45 +441,42 @@ pub enum Expr {
         annotated_ty: UnresolvedType,
         val: ExprId,
     },
-    Function {
-        id: FunctionId,
+    /// underscore: _ for ignoring values
+    Hole(u32),
+
+
+    // ---------- operations ----------
+    UnOp(u32, UnOp, ExprId),
+    BinOp(Operator, ExprId, ExprId),
+    As(ExprId, UnresolvedType),
+    Root(u32),
+
+    // ---------- members and paths ----------
+    MemberAccess {
+        left: ExprId,
+        name: TSpan,
     },
-    Type {
-        id: TypeId,
+    Index {
+        expr: ExprId,
+        idx: ExprId,
+        end: u32,
+    },
+    TupleIdx {
+        expr: ExprId,
+        idx: u32,
+        end: u32,
+    },
+
+    // ---------- return ----------
+    ReturnUnit {
+        start: u32,
     },
     Return {
         start: u32,
         val: ExprId,
     },
-    ReturnUnit {
-        start: u32,
-    },
-    IntLiteral(TSpan),
-    FloatLiteral(TSpan),
-    StringLiteral(TSpan),
-    BoolLiteral {
-        start: u32,
-        val: bool,
-    },
-    EnumLiteral {
-        span: TSpan,
-        ident: TSpan,
-        args: ExprExtra,
-    },
-    Record {
-        span: TSpan,
-        names: Vec<TSpan>,
-        /// multiple values: expr extra (count of names)
-        values: u32,
-    },
-    Nested(TSpan, ExprId),
-    Unit(TSpan),
-    Ident {
-        span: TSpan,
-    },
-    Hole(u32), // underscore: _
-    Array(TSpan, ExprExtra),
-    Tuple(TSpan, ExprExtra),
+
+    // ---------- control flow ----------
     If {
         start: u32,
         cond: ExprId,
@@ -488,32 +520,12 @@ pub enum Expr {
         body: ExprId,
     },
     FunctionCall(CallId),
-    UnOp(u32, UnOp, ExprId),
-    BinOp(Operator, ExprId, ExprId),
-    MemberAccess {
-        left: ExprId,
-        name: TSpan,
-    },
-    Index {
-        expr: ExprId,
-        idx: ExprId,
-        end: u32,
-    },
-    TupleIdx {
-        expr: ExprId,
-        idx: u32,
-        end: u32,
-    },
-    As(ExprId, UnresolvedType),
-    Root(u32),
+
+    // ---------- other ----------
     Asm {
         span: TSpan,
         asm_str_span: TSpan,
         args: ExprExtra,
-    },
-    Primitive {
-        primitive: Primitive,
-        start: u32,
     },
 }
 impl Expr {
@@ -543,7 +555,6 @@ impl Expr {
 
         match self {
             | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
-            | Expr::Record { span, .. }
             | Expr::Nested(span, _) 
             | Expr::Unit(span)
             | Expr::Ident { span, .. }

@@ -14,6 +14,7 @@ pub fn check(
     expected: LocalTypeId,
 ) -> Pattern {
     match &ctx.ast[pat] {
+        &Expr::Nested(_, inner) => check(ctx, variables, exhaustion, inner, expected),
         Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
             let ty = lit.ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
@@ -43,6 +44,7 @@ pub fn check(
         }
         &Expr::BoolLiteral { start: _, val } => {
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[pat].span(ast));
+            exhaustion.exhaust_bool(val);
             Pattern::Bool(val)
         }
         Expr::Ident { span, .. } => {

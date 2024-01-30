@@ -126,6 +126,7 @@ fn lower(
     debug_assert!(!*noreturn, "lowering new expression with noreturn already active should not happen");
     match &ctx.hir[node] {
         Node::Invalid => build_crash_point(&mut ctx.builder),
+
         Node::Block(items) => {
             for item in items.iter() {
                 lower(ctx, item, noreturn);
@@ -135,46 +136,8 @@ fn lower(
             }
             Ref::UNIT
         }
-        Node::Declare { pattern: _ } => todo!(),
-        &Node::DeclareWithVal { pattern, val } => {
-            let val = lower(ctx, val, noreturn);
-            if !*noreturn {
-                lower_pattern(ctx, pattern, val);
-            }
-            Ref::UNIT
-        }
-        Node::Variable(id) => {
-            let ty = ctx.get_type(ctx.types[ctx.hir.vars[id.idx()]]);
-            ctx.builder.build_load(ctx.vars[id.idx()], ty)
-        }
-        &Node::Const { id, ty } => {
-            let const_val = &ctx.compiler.const_values[id.idx()];
-            match const_val {
-                ConstValue::Unit => Ref::UNIT,
-                &ConstValue::Number(num) => {
-                    let ty = ctx.types[ty];
-                    match ty {
-                        TypeInfo::Primitive(p) => {
-                            debug_assert!(p.is_int());
-                            ctx.builder.build_int(num, get_primitive(p))
-                        }
-                        TypeInfo::Invalid => {
-                            build_crash_point(&mut ctx.builder)
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                ConstValue::Undefined => build_crash_point(&mut ctx.builder),
-            }
-        }
-        Node::Return(val) => {
-            let val = lower(ctx, *val, noreturn);
-            if !*noreturn {
-                ctx.builder.terminate_block(Terminator::Ret(val));
-                *noreturn = true;
-            }
-            Ref::UNDEF
-        }
+
+        Node::Unit => Ref::UNIT,
         &Node::IntLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 build_crash_point(&mut ctx.builder);
@@ -197,28 +160,87 @@ fn lower(
             let ty = types::get_primitive(p);
             ctx.builder.build_float(val, ty)
         }
-        Node::StringLiteral(_) => todo!(),
         Node::BoolLiteral(true) => Ref::val(RefVal::True),
         Node::BoolLiteral(false) => Ref::val(RefVal::False),
-        Node::Unit => Ref::UNIT,
+        Node::StringLiteral(_) => todo!(),
         Node::Array(_) => todo!(),
-        &Node::Call { function, generics: call_generics, args, return_ty } => {
-            let mut arg_refs = Vec::with_capacity(args.iter().count());
-            for arg in args.iter() {
-                let arg = lower(ctx, arg, noreturn);
+        &Node::Tuple { elems, elem_types } => {
+            debug_assert_eq!(elems.count, elem_types.count);
+            let tuple_ty = types::get_from_info(ctx.types, ctx.builder.types, TypeInfo::Tuple(elem_types), ctx.generics);
+            let IrType::Tuple(elem_types) = tuple_ty else { unreachable!() };
+            let var = ctx.builder.build_decl(tuple_ty);
+            for (elem, i) in elems.iter().zip(0..) {
+                let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
+                let val = lower(ctx, elem, noreturn);
                 if *noreturn {
                     return Ref::UNDEF;
                 }
-                arg_refs.push(arg);
+                ctx.builder.build_store(elem_ptr, val);
             }
-            let call_generics = call_generics
-                .iter()
-                .map(|generic| ctx.types.to_resolved(ctx.types[generic]))
-                .collect();
-            let func = ctx.get_ir_id(function.0, function.1, call_generics);
-            let return_ty = ctx.get_type(ctx.types[return_ty]);
-            ctx.builder.build_call(func, arg_refs, return_ty)
+            // maybe do this differently, could do it like llvm: insertvalue
+            ctx.builder.build_load(var, tuple_ty)
         }
+
+        Node::Declare { pattern: _ } => todo!(),
+        &Node::DeclareWithVal { pattern, val } => {
+            let val = lower(ctx, val, noreturn);
+            if !*noreturn {
+                lower_pattern(ctx, pattern, val);
+            }
+            Ref::UNIT
+        }
+        Node::Variable(id) => {
+            let ty = ctx.get_type(ctx.types[ctx.hir.vars[id.idx()]]);
+            ctx.builder.build_load(ctx.vars[id.idx()], ty)
+        }
+        &Node::Assign(lval, val) => {
+            let lval = lower_lval(ctx, lval);
+            let val = lower(ctx, val, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            ctx.builder.build_store(lval, val);
+            Ref::UNIT
+        }
+
+        &Node::Const { id, ty } => {
+            let const_val = &ctx.compiler.const_values[id.idx()];
+            match const_val {
+                ConstValue::Unit => Ref::UNIT,
+                &ConstValue::Number(num) => {
+                    let ty = ctx.types[ty];
+                    match ty {
+                        TypeInfo::Primitive(p) => {
+                            debug_assert!(p.is_int());
+                            ctx.builder.build_int(num, get_primitive(p))
+                        }
+                        TypeInfo::Invalid => {
+                            build_crash_point(&mut ctx.builder)
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                ConstValue::Undefined => build_crash_point(&mut ctx.builder),
+            }
+        }
+
+        &Node::Negate(value, ty) => {
+            let value = lower(ctx, value, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let ty = ctx.get_type(ctx.types[ty]);
+            ctx.builder.build_neg(value, ty)
+        }
+        &Node::Not(value) => {
+            let value = lower(ctx, value, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            ctx.builder.build_neg(value, IrType::U1)
+        }
+        Node::AddressOf(_) => todo!(),
+        &Node::Deref { value, deref_ty } => {
+            let value = lower(ctx, value, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let ty = ctx.get_type(ctx.types[deref_ty]);
+            ctx.builder.build_load(value, ty)
+        }
+
         &Node::Cast(id) => {
             let cast = &ctx.hir[id];
             let val = lower(ctx, cast.val, noreturn);
@@ -286,29 +308,7 @@ fn lower(
             assert!(p.is_int() || p.is_float(), "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits");
             ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
         }
-        &Node::Assign(lval, val) => {
-            let lval = lower_lval(ctx, lval);
-            let val = lower(ctx, val, noreturn);
-            if *noreturn { return Ref::UNDEF }
-            ctx.builder.build_store(lval, val);
-            Ref::UNIT
-        }
-        &Node::Tuple { elems, elem_types } => {
-            debug_assert_eq!(elems.count, elem_types.count);
-            let tuple_ty = types::get_from_info(ctx.types, ctx.builder.types, TypeInfo::Tuple(elem_types), ctx.generics);
-            let IrType::Tuple(elem_types) = tuple_ty else { unreachable!() };
-            let var = ctx.builder.build_decl(tuple_ty);
-            for (elem, i) in elems.iter().zip(0..) {
-                let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
-                let val = lower(ctx, elem, noreturn);
-                if *noreturn {
-                    return Ref::UNDEF;
-                }
-                ctx.builder.build_store(elem_ptr, val);
-            }
-            // maybe do this differently, could do it like llvm: insertvalue
-            ctx.builder.build_load(var, tuple_ty)
-        }
+
         &Node::TupleIdx { tuple_value, index, elem_ty } => {
             let tuple = lower(ctx, tuple_value, noreturn);
             if *noreturn {
@@ -316,6 +316,35 @@ fn lower(
             }
             let elem_ty = ctx.get_type(ctx.types[elem_ty]);
             ctx.builder.build_member_value(tuple, index, elem_ty)
+        }
+
+        Node::Return(val) => {
+            let val = lower(ctx, *val, noreturn);
+            if !*noreturn {
+                ctx.builder.terminate_block(Terminator::Ret(val));
+                *noreturn = true;
+            }
+            Ref::UNDEF
+        }
+        Node::IfElse { cond, then, else_ } => todo!(),
+        Node::Match { value, branch_index, pattern_index, branch_count } => todo!(),
+        Node::While { cond, body } => todo!(),
+        &Node::Call { function, generics: call_generics, args, return_ty } => {
+            let mut arg_refs = Vec::with_capacity(args.iter().count());
+            for arg in args.iter() {
+                let arg = lower(ctx, arg, noreturn);
+                if *noreturn {
+                    return Ref::UNDEF;
+                }
+                arg_refs.push(arg);
+            }
+            let call_generics = call_generics
+                .iter()
+                .map(|generic| ctx.types.to_resolved(ctx.types[generic]))
+                .collect();
+            let func = ctx.get_ir_id(function.0, function.1, call_generics);
+            let return_ty = ctx.get_type(ctx.types[return_ty]);
+            ctx.builder.build_call(func, arg_refs, return_ty)
         }
     }
 }

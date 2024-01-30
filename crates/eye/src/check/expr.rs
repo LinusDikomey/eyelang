@@ -2,7 +2,7 @@ use id::ModuleId;
 use span::TSpan;
 use types::Primitive;
 
-use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast}, token::{IntLiteral, Operator, AssignType, FloatLiteral}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
+use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast, UnOp}, token::{IntLiteral, Operator, AssignType, FloatLiteral}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
 
 use super::{Ctx, exhaust::Exhaustion, lval, pattern};
 
@@ -16,32 +16,6 @@ pub fn check(
 ) -> Node {
     let ast = ctx.ast;
     match &ast[expr] {
-        &Expr::IntLiteral(span) => {
-            let lit = IntLiteral::parse(&ast.src()[span.range()]);
-            let info = lit.ty.map_or(
-                TypeInfo::Integer,
-                |int| TypeInfo::Primitive(int.into()),
-            );
-            ctx.specify(expected, info, |_| span);
-            Node::IntLiteral { val: lit.val, ty: expected }
-        }
-        &Expr::FloatLiteral(span) => {
-            let lit = FloatLiteral::parse(&ast.src()[span.range()]);
-            let info = lit.ty.map_or(TypeInfo::Float, |float| TypeInfo::Primitive(float.into()));
-            ctx.specify(expected, info, |_| span);
-            Node::FloatLiteral { val: lit.val, ty: expected }
-        }
-        &Expr::Ident { span } => check_ident(ctx, scope, expected, span),
-        Expr::ReturnUnit { .. } => {
-            ctx.specify(return_ty, TypeInfo::Primitive(Primitive::Unit), |ast| ast[expr].span(ast));
-            Node::Return(ctx.hir.add(Node::Unit))
-        }
-        &Expr::Return { val, .. } => {
-            let val = check(ctx, val, scope, return_ty, return_ty);
-            Node::Return(ctx.hir.add(val))
-        }
-        &Expr::Function { id } => function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast)),
-        Expr::Type { id: _ } => todo!("type type?"),
         &Expr::Block { scope: static_scope, items } => {
             let mut scope = LocalScope {
                 parent: Some(scope),
@@ -59,6 +33,53 @@ pub fn check(
                 .collect::<Vec<_>>();
             Node::Block(ctx.hir.add_nodes(items))
         }
+        &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty),
+
+        &Expr::Unit(span) => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
+            Node::Unit
+        }
+        &Expr::IntLiteral(span) => {
+            let lit = IntLiteral::parse(&ast.src()[span.range()]);
+            let info = lit.ty.map_or(
+                TypeInfo::Integer,
+                |int| TypeInfo::Primitive(int.into()),
+            );
+            ctx.specify(expected, info, |_| span);
+            Node::IntLiteral { val: lit.val, ty: expected }
+        }
+        &Expr::FloatLiteral(span) => {
+            let lit = FloatLiteral::parse(&ast.src()[span.range()]);
+            let info = lit.ty.map_or(TypeInfo::Float, |float| TypeInfo::Primitive(float.into()));
+            ctx.specify(expected, info, |_| span);
+            Node::FloatLiteral { val: lit.val, ty: expected }
+        }
+        &Expr::BoolLiteral { start: _, val } => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[expr].span(ast));
+            Node::BoolLiteral(val)
+        }
+        Expr::StringLiteral(_) => todo!("string literals"),
+        Expr::Array(_, _) => todo!("check array literals"),
+        Expr::Tuple(span, values) => {
+            // PERF: special case the specify for tuples, reusing elem types could be worth it if
+            // a tuple type info was already present.
+            let elem_types = ctx.hir.types.add_multiple_unknown(values.count);
+            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
+            let elems = ctx.hir.add_invalid_nodes(values.count);
+            for ((value, ty), node_id) in values.into_iter().zip(elem_types.iter()).zip(elems.iter()) {
+                let node = check(ctx, value, scope, ty, return_ty);
+                ctx.hir.modify_node(node_id, node);
+            }
+            Node::Tuple { elems, elem_types }
+        }
+        Expr::EnumLiteral { .. } => todo!("check enum literals"),
+
+        &Expr::Function { id } => function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast)),
+        Expr::Primitive { .. } => todo!("primitive type literals"),
+        Expr::Type { id: _ } => todo!("check type literals as values"),
+
+        &Expr::Ident { span } => check_ident(ctx, scope, expected, span),
+        Expr::Declare { .. } => todo!("check variable declarations without values"),
         Expr::DeclareWithVal { pat, annotated_ty, val } => {
             let mut exhaustion = Exhaustion::None;
             let ty = ctx.hir.types.info_from_unresolved(
@@ -76,6 +97,43 @@ pub fn check(
             Node::DeclareWithVal {
                 pattern: ctx.hir.add_pattern(pattern),
                 val: ctx.hir.add(val),
+            }
+        }
+        Expr::Hole(_) => {
+            ctx.invalidate(expected);
+            ctx.compiler.errors.emit_err(Error::HoleLHSOnly.at_span(ctx.span(expr)));
+            Node::Invalid
+
+        }
+
+        &Expr::UnOp(_, op, value) => {
+            match op {
+                UnOp::Neg => {
+                    // TODO(trait): this should constrain the value with a trait
+                    let value = check(ctx, value, scope, expected, return_ty);
+                    Node::Negate(ctx.hir.add(value), expected)
+                }
+                UnOp::Not => {
+                    ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[expr].span(ast));
+                    let value = check(ctx, value, scope, expected, return_ty);
+                    Node::Not(ctx.hir.add(value))
+                }
+                UnOp::Ref => {
+                    // PERF: could check if the expected type is already a pointer and avoid extra
+                    // unknown TypeInfo
+                    let pointee = ctx.hir.types.add(TypeInfo::Unknown);
+                    ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| ast[expr].span(ast));
+                    let value = check(ctx, value, scope, pointee, return_ty);
+                    Node::AddressOf(ctx.hir.add(value))
+                }
+                UnOp::Deref => {
+                    let ptr_ty = ctx.hir.types.add(TypeInfo::Pointer(expected));
+                    let value = check(ctx, value, scope, ptr_ty, return_ty);
+                    Node::Deref {
+                        value: ctx.hir.add(value),
+                        deref_ty: expected,
+                    }
+                }
             }
         }
         &Expr::BinOp(op, l, r) => {
@@ -150,6 +208,66 @@ pub fn check(
                 Operator::Range | Operator::RangeExclusive => todo!("range types not implemented yet"),
             }
         }
+        Expr::As(val, new_ty) => {
+            let from_ty = ctx.hir.types.add_unknown();
+            let val = check(ctx, *val, scope, from_ty, return_ty);
+            let val = ctx.hir.add(val);
+            let new_type_info = ctx.hir.types.info_from_unresolved(
+                new_ty,
+                ctx.compiler,
+                ctx.module,
+                scope.static_scope,
+            );
+            ctx.specify(expected, new_type_info, |_| new_ty.span());
+            let cast_id = ctx.hir.add_cast(hir::Cast {
+                val,
+                cast_ty: hir::CastType::Invalid, // will be filled in in deferred check
+            });
+            ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
+            Node::Cast(cast_id)
+        }
+        Expr::Root(_) => todo!("path roots"),
+
+        Expr::MemberAccess { .. } => todo!("struct member indexing"),
+        Expr::Index { .. } => todo!("check array indexing"),
+        &Expr::TupleIdx { expr, idx, .. } => {
+            let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
+            let tuple_value = check(ctx, expr, scope, tuple_ty, return_ty);
+            let elem_types = match ctx.hir.types[tuple_ty] {
+                TypeInfo::Tuple(ids) => ids,
+                _ => {
+                    // TODO: could add TupleCountMode and stuff again to unify with tuple with
+                    // Size::AtLeast. Not doing that for now since it is very rare.
+                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(expr)));
+                    return Node::Invalid;
+                }
+            };
+            if let Some(elem_ty) = elem_types.nth(idx) {
+                ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
+                Node::TupleIdx { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_ty }
+            } else {
+                ctx.compiler.errors.emit_err(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
+                Node::Invalid
+            }
+        }
+
+        Expr::ReturnUnit { .. } => {
+            ctx.specify(return_ty, TypeInfo::Primitive(Primitive::Unit), |ast| ast[expr].span(ast));
+            Node::Return(ctx.hir.add(Node::Unit))
+        }
+        &Expr::Return { val, .. } => {
+            let val = check(ctx, val, scope, return_ty, return_ty);
+            Node::Return(ctx.hir.add(val))
+        }
+
+        Expr::If { start, cond, then } => todo!(),
+        Expr::IfElse { start, cond, then, else_ } => todo!(),
+        Expr::IfPat { start, pat, value, then } => todo!(),
+        Expr::IfPatElse { start, pat, value, then, else_ } => todo!(),
+        Expr::Match { span, val, extra_branches, branch_count } => todo!(),
+        Expr::While { start, cond, body } => todo!(),
+        Expr::WhilePat { start, pat, val, body } => todo!(),
+
         &Expr::FunctionCall(call) => {
             let call = &ast[call];
             let function_ty = ctx.hir.types.add_unknown();
@@ -214,58 +332,8 @@ pub fn check(
                 }
             }
         }
-        Expr::As(val, new_ty) => {
-            let from_ty = ctx.hir.types.add_unknown();
-            let val = check(ctx, *val, scope, from_ty, return_ty);
-            let val = ctx.hir.add(val);
-            let new_type_info = ctx.hir.types.info_from_unresolved(
-                new_ty,
-                ctx.compiler,
-                ctx.module,
-                scope.static_scope,
-            );
-            ctx.specify(expected, new_type_info, |_| new_ty.span());
-            let cast_id = ctx.hir.add_cast(hir::Cast {
-                val,
-                cast_ty: hir::CastType::Invalid, // will be filled in in deferred check
-            });
-            ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
-            Node::Cast(cast_id)
-        }
-        Expr::Tuple(span, values) => {
-            // PERF: special case the specify for tuples, reusing elem types could be worth it if
-            // a tuple type info was already present.
-            let elem_types = ctx.hir.types.add_multiple_unknown(values.count);
-            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
-            let elems = ctx.hir.add_invalid_nodes(values.count);
-            for ((value, ty), node_id) in values.into_iter().zip(elem_types.iter()).zip(elems.iter()) {
-                let node = check(ctx, value, scope, ty, return_ty);
-                ctx.hir.modify_node(node_id, node);
-            }
-            Node::Tuple { elems, elem_types }
-        }
-        &Expr::TupleIdx { expr, idx, .. } => {
-            let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
-            let tuple_value = check(ctx, expr, scope, tuple_ty, return_ty);
-            let elem_types = match ctx.hir.types[tuple_ty] {
-                TypeInfo::Tuple(ids) => ids,
-                _ => {
-                    // TODO: could add TupleCountMode and stuff again to unify with tuple with
-                    // Size::AtLeast. Not doing that for now since it is very rare.
-                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(expr)));
-                    return Node::Invalid;
-                }
-            };
-            if let Some(elem_ty) = elem_types.nth(idx) {
-                ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
-                Node::TupleIdx { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_ty }
-            } else {
-                ctx.compiler.errors.emit_err(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
-                Node::Invalid
-            }
 
-        }
-        expr => todo!("typecheck {expr:?}")
+        Expr::Asm { .. } => todo!("implement inline assembly properly"),
     }
 }
 
