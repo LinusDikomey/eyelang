@@ -76,6 +76,8 @@ fn main() -> Result<(), MainError> {
     let project = compiler.add_project(name.to_owned(), path.to_path_buf())?;
     let root_module = compiler.get_project(project).root_module;
 
+    println!("Compiling {} ...", name);
+
     // add standard library
     let std = compiler.add_project("std".to_owned(), "std".into())?;
     compiler.add_dependency(project, std);
@@ -153,6 +155,7 @@ fn main() -> Result<(), MainError> {
                 return Err(MainError::LinkingFailed(err));
             }
             if args.cmd == args::Cmd::Run {
+                println!("Running {}...", name);
                 // make sure to clean up compiler resources before running
                 drop(compiler);
                 let exit_code = std::process::Command::new(exe_file)

@@ -43,10 +43,6 @@ impl StackMem {
         StackAddr(addr as _)
     }
 
-    pub fn load(&mut self, addr: StackAddr, size: u64) -> &[u8] {
-        &self.mem[addr.0 as usize .. addr.0 as usize + size as usize]
-    }
-
     pub fn store(&mut self, addr: StackAddr, value: &[u8]) {
         self.mem[addr.0 as usize .. addr.0 as usize + value.len()].copy_from_slice(value);
     }

@@ -6,7 +6,7 @@ from sys import stdout
 
 cargo_test = ['cargo', 'test']
 build = ['cargo', 'build']
-eye_path = './target/debug/eyelang'
+eye_path = './target/debug/eye'
 run_cmd = [eye_path, 'run']
 tmp_file = 'tmp_test.eye'
 
