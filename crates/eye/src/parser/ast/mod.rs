@@ -208,6 +208,10 @@ impl AstBuilder {
             globals: self.globals,
         }
     }
+
+    pub(super) fn assign_function_name(&mut self, id: FunctionId, associated_name: TSpan) {
+        self.functions[id.idx()].associated_name = associated_name;
+    }
 }
 
 #[derive(Debug)]
@@ -383,6 +387,7 @@ pub struct Function {
     pub body: Option<ExprId>,
     pub scope: ScopeId,
     pub signature_span: TSpan,
+    pub associated_name: TSpan,
 }
 
 #[derive(Clone, Debug)]

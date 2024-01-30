@@ -3,12 +3,17 @@ use std::num::NonZeroU32;
 use id::ModuleId;
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TSpan {
     pub start: u32,
     pub end: u32
 }
 impl TSpan {
+    pub const EMPTY: Self = Self {
+        start: 0,
+        end: 0,
+    };
+
     pub const MISSING: Self = Self {
         start: u32::MAX,
         end: u32::MAX,

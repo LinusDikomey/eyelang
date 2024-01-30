@@ -127,6 +127,10 @@ impl<'a> Parser<'a> {
 
             match self.parse_item(scope_id)? {
                 Item::Definition { name, name_span, value } => {
+                    if let &Expr::Function { id } = self.ast.get_expr(value) {
+                        // this is a bit hacky but fine for now
+                        self.ast.assign_function_name(id, name_span);
+                    }
                     let prev = scope.definitions.insert(name, Definition::Expr {
                         value,
                         ty: UnresolvedType::Infer(0),
@@ -383,8 +387,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_def(&mut self, fn_tok: Token, scope: ScopeId) -> ParseResult<Function> {
-        let mut func = self.parse_function_header(fn_tok, scope)?;
+    fn parse_function_def(&mut self, fn_tok: Token, scope: ScopeId, associated_name: TSpan) -> ParseResult<Function> {
+        let mut func = self.parse_function_header(fn_tok, scope, associated_name)?;
         if let Some(body) = self.parse_function_body(func.scope)? {
             self.attach_func_body(&mut func, body)
         }
@@ -420,7 +424,7 @@ impl<'a> Parser<'a> {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                let method = p.parse_function_def(fn_tok, scope)?;
+                let method = p.parse_function_def(fn_tok, scope, ident.span())?;
                 let func_id = p.ast.function(method);
                 let name = ident.get_val(p.src).to_owned();
                 if let Some(_existing) = methods.insert(name, func_id) {
@@ -480,7 +484,7 @@ impl<'a> Parser<'a> {
                     p.toks.step_assert(TokenType::DoubleColon);
 
                     let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                    let method = p.parse_function_def(fn_tok, scope)?;
+                    let method = p.parse_function_def(fn_tok, scope, ident.span())?;
                     let func_id = p.ast.function(method);
                     let name = ident.get_val(p.src).to_owned();
                     if let Some(_existing) = methods.insert(name, func_id) {
@@ -509,7 +513,7 @@ impl<'a> Parser<'a> {
     }
     
     /// Will just return a function with the body always set to `None`
-    fn parse_function_header(&mut self, fn_tok: Token, scope: ScopeId) -> ParseResult<Function> {
+    fn parse_function_header(&mut self, fn_tok: Token, scope: ScopeId, associated_name: TSpan) -> ParseResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
         let mut end = fn_tok.end;
@@ -565,6 +569,7 @@ impl<'a> Parser<'a> {
             body: None,
             scope: function_scope,
             signature_span: TSpan::new(start, end),
+            associated_name,
         })
     }
 
@@ -602,7 +607,7 @@ impl<'a> Parser<'a> {
                     let name_span = next.span();
                     self.toks.step_expect(TokenType::DoubleColon)?;
                     let fn_tok = self.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-                    let mut func = self.parse_function_header(fn_tok, scope)?;
+                    let mut func = self.parse_function_header(fn_tok, scope, name_span)?;
                     if matches!(
                         self.toks.peek().map(|t| t.ty),
                         Some(TokenType::Colon | TokenType::LBrace)
@@ -645,7 +650,7 @@ impl<'a> Parser<'a> {
             let name = name.get_val(p.src).to_owned();
             p.toks.step_expect(TokenType::DoubleColon)?;
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
-            let func = p.parse_function_def(fn_tok, scope)?;
+            let func = p.parse_function_def(fn_tok, scope, name_span)?;
             let func_id = p.ast.function(func);
             let previous = functions.insert(name, func_id);
             if previous.is_some() {
@@ -725,7 +730,7 @@ impl<'a> Parser<'a> {
         let expr = match_or_unexpected_value!(first,
             self.toks.module, ExpectedTokens::Expr,
             TokenType::Keyword(Keyword::Fn) => {
-                let func = self.parse_function_def(first, scope)?;
+                let func = self.parse_function_def(first, scope, TSpan::EMPTY)?;
                 Expr::Function { id: self.ast.function(func) }
             },
             TokenType::Keyword(Keyword::Struct) => {

@@ -541,8 +541,13 @@ impl Compiler {
                     };
                     // PERF: put CheckedFunction behind Rc
                     let checked = checked.clone();
-                    // TODO: proper function name
-                    let name = format!("function_{}_{}", module.idx(), function.idx());
+                    // TODO: generics in function name
+                    let associated_name = ast[f.ast_function_id].associated_name;
+                    let name = if associated_name != TSpan::EMPTY {
+                        ast.src()[associated_name.range()].to_owned()
+                    } else {
+                        format!("function_{}_{}", f.module.idx(), f.ast_function_id.idx())
+                    };
 
                     let func = irgen::lower_function(self, &mut to_generate, ast.src(), name, &checked, &f.generics);
                     self.ir_module[f.ir_id] = func;
