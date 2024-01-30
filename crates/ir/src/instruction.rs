@@ -87,10 +87,15 @@ pub enum Tag {
     LE,
     GE,
 
+    // casts
     CastInt,
     CastFloat,
     CastIntToFloat,
     CastFloatToInt,
+
+    // convert pointers from/to integer
+    IntToPtr,
+    PtrToInt,
 
     Asm,
 }
@@ -102,7 +107,8 @@ impl Tag {
             Tag::Uninit => V::None,
             Tag::Ret | Tag::Load | Tag::Neg | Tag::Not
             | Tag::CastInt | Tag::CastFloat
-            | Tag::CastIntToFloat | Tag::CastFloatToInt => V::UnOp,
+            | Tag::CastIntToFloat | Tag::CastFloatToInt
+            | Tag::IntToPtr | Tag::PtrToInt => V::UnOp,
             Tag::Int => V::Int,
             Tag::LargeInt => V::LargeInt,
             Tag::Float => V::Float,

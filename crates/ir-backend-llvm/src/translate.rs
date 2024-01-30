@@ -11,7 +11,8 @@ use llvm_sys::{
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
         LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildInBoundsGEP2, LLVMInt8TypeInContext, LLVMInt32TypeInContext, LLVMBuildExtractValue,
+        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildInBoundsGEP2, LLVMInt8TypeInContext,
+        LLVMInt32TypeInContext, LLVMBuildExtractValue, LLVMPointerTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -587,6 +588,17 @@ unsafe fn build_func(
                 } else {
                     ptr::null_mut()
                 }
+            }
+            ir::Tag::IntToPtr => {
+                // no zero-sized integers so unwrapping is fine
+                let val = get_ref(&instructions, data.un_op).unwrap();
+                core::LLVMBuildIntToPtr(builder, val, LLVMPointerTypeInContext(ctx, 0), NONE)
+            }
+            ir::Tag::PtrToInt => {
+                // no zero-sized integers so unwrapping is fine
+                let val = get_ref(&instructions, data.un_op).unwrap();
+                let ty = llvm_ty(ctx, func.types[ty], &func.types).unwrap();
+                core::LLVMBuildPtrToInt(builder, val, ty, NONE)
             }
             ir::Tag::Asm => {
                 let ir::Data {

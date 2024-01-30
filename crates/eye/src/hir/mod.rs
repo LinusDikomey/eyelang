@@ -4,7 +4,7 @@ use id::{id, ConstValueId, ModuleId};
 use span::TSpan;
 use types::{Primitive, IntType, FloatType};
 
-use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId, self}};
+use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId}};
 
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -83,9 +83,13 @@ pub struct PatternIds {
     count: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Node {
     Invalid,
+
+    /// used for places where patterns lead to conditional code.
+    /// Checks the pattern against the value.
+    CheckPattern(PatternId, NodeId),
 
     Block(NodeIds),
 
@@ -138,7 +142,7 @@ pub enum Node {
     },
 
     Return(NodeId),
-    IfElse { cond: NodeId, then: NodeId, else_: NodeId },
+    IfElse { cond: NodeId, then: NodeId, else_: NodeId, resulting_ty: LocalTypeId },
     Match { value: NodeId, branch_index: u32, pattern_index: u32, branch_count: u32 },
     While { cond: NodeId, body: NodeId },
     Call {

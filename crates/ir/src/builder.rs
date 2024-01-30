@@ -329,6 +329,15 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { un_op: val }, Tag::CastFloatToInt, target_ty)
     }
 
+    pub fn build_int_to_ptr(&mut self, val: Ref) -> Ref {
+        self.add(Data { un_op: val }, Tag::IntToPtr, IrType::Ptr)
+    }
+
+    pub fn build_ptr_to_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
+        debug_assert!(target_ty.is_int());
+        self.add(Data { un_op: val }, Tag::PtrToInt, target_ty)
+    }
+
     pub fn build_phi(&mut self, branches: impl IntoIterator<Item = (BlockIndex, Ref)>, expected: impl Into<IdxOrTy>)
     -> Ref {
         let extra = self.extra.len() as u32;

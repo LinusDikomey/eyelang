@@ -127,6 +127,12 @@ fn lower(
     match &ctx.hir[node] {
         Node::Invalid => build_crash_point(&mut ctx.builder),
 
+        &Node::CheckPattern(pat, value) => {
+            let value = lower(ctx, value, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            lower_pattern(ctx, pat, value)
+        }
+
         Node::Block(items) => {
             for item in items.iter() {
                 lower(ctx, item, noreturn);
@@ -233,7 +239,7 @@ fn lower(
             if *noreturn { return Ref::UNDEF }
             ctx.builder.build_neg(value, IrType::U1)
         }
-        Node::AddressOf(_) => todo!(),
+        Node::AddressOf(_) => todo!("implement addressof"),
         &Node::Deref { value, deref_ty } => {
             let value = lower(ctx, value, noreturn);
             if *noreturn { return Ref::UNDEF }
@@ -267,7 +273,11 @@ fn lower(
                     let to_ty = types::get_primitive(to.into());
                     ctx.builder.build_cast_int_to_float(val, to_ty)
                 }
-                ty => todo!("lower cast of type {ty:?}"), // TODO: ir needs more specific casts
+                CastType::IntToPtr { from: _ } => ctx.builder.build_int_to_ptr(val),
+                &CastType::PtrToInt { to } => {
+                    ctx.builder.build_ptr_to_int(val, types::get_primitive(to.into()))
+                }
+                CastType::EnumToInt { .. } => todo!("cast enums to integers, might be removed"),
             }
         }
         &Node::Comparison(l, r, cmp) => {
@@ -318,17 +328,84 @@ fn lower(
             ctx.builder.build_member_value(tuple, index, elem_ty)
         }
 
-        Node::Return(val) => {
-            let val = lower(ctx, *val, noreturn);
+        &Node::Return(val) => {
+            let val = lower(ctx, val, noreturn);
             if !*noreturn {
                 ctx.builder.terminate_block(Terminator::Ret(val));
                 *noreturn = true;
             }
             Ref::UNDEF
         }
-        Node::IfElse { cond, then, else_ } => todo!(),
-        Node::Match { value, branch_index, pattern_index, branch_count } => todo!(),
-        Node::While { cond, body } => todo!(),
+        &Node::IfElse { cond, then, else_, resulting_ty } => {
+            let cond = lower(ctx, cond, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let then_block = ctx.builder.create_block();
+            let else_block = ctx.builder.create_block();
+            // after_block is a closure that creates the block lazily and returns it
+            let mut after_block = {
+                let mut after_block = None;
+                move |ctx: &mut Ctx| after_block.unwrap_or_else(|| {
+                    let block = ctx.builder.create_block();
+                    after_block = Some(block);
+                    block
+                })
+            };
+            ctx.builder.terminate_block(Terminator::Branch { cond, on_true: then_block, on_false: else_block });
+            let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<(ir::BlockIndex, Ref)> {
+                let mut noreturn = false;
+                let val = lower(ctx, value, &mut noreturn);
+                (!noreturn).then(|| {
+                    let block = ctx.builder.current_block();
+                    let after_block = after_block(ctx);
+                    ctx.builder.terminate_block(Terminator::Goto(after_block));
+                    (block, val)
+                })
+            };
+            ctx.builder.begin_block(then_block);
+            let then_val = check_branch(ctx, then);
+            ctx.builder.begin_block(else_block);
+            let else_val = check_branch(ctx, else_);
+            match (then_val, else_val) {
+                (Some(t), Some(f)) => {
+                    let after_block = after_block(ctx);
+                    ctx.builder.begin_block(after_block);
+                    let ty = ctx.get_type(ctx.types[resulting_ty]);
+                    ctx.builder.build_phi([t, f], ty)
+                }
+                (Some((_, val)), None) | (None, Some((_, val))) => {
+                    let after_block = after_block(ctx);
+                    ctx.builder.begin_block(after_block);
+                    val
+                }
+                (None, None) => {
+                    *noreturn = true;
+                    Ref::UNDEF
+                }
+            }
+        }
+        Node::Match { .. } => todo!("lower match"),
+        &Node::While { cond, body } => {
+            let cond_block = ctx.builder.create_block();
+            ctx.builder.terminate_block(Terminator::Goto(cond_block));
+            ctx.builder.begin_block(cond_block);
+            let cond = lower(ctx, cond, noreturn);
+            if *noreturn { return Ref::UNDEF }
+            let body_block = ctx.builder.create_block();
+            let after_block = ctx.builder.create_block();
+            ctx.builder.terminate_block(Terminator::Branch {
+                cond,
+                on_true: body_block,
+                on_false: after_block,
+            });
+            ctx.builder.begin_block(body_block);
+            let mut body_noreturn = false;
+            lower(ctx, body, &mut body_noreturn);
+            if !body_noreturn {
+                ctx.builder.terminate_block(Terminator::Goto(cond_block));
+            }
+            ctx.builder.begin_block(after_block);
+            Ref::UNIT
+        }
         &Node::Call { function, generics: call_generics, args, return_ty } => {
             let mut arg_refs = Vec::with_capacity(args.iter().count());
             for arg in args.iter() {

@@ -21,7 +21,7 @@ pub fn check(
                 parent: Some(scope),
                 variables: dmap::new(),
                 module: scope.module,
-                static_scope,
+                static_scope: Some(static_scope),
             };
             // PERF: should preallocate in nodes list and put them in directly
             let items = items
@@ -86,7 +86,7 @@ pub fn check(
                 &annotated_ty,
                 ctx.compiler,
                 ctx.module,
-                scope.static_scope,
+                scope.get_innermost_static_scope(),
             );
             let ty = ctx.hir.types.add(ty);
             let val = check(ctx, *val, scope, ty, return_ty);
@@ -216,7 +216,7 @@ pub fn check(
                 new_ty,
                 ctx.compiler,
                 ctx.module,
-                scope.static_scope,
+                scope.get_innermost_static_scope(),
             );
             ctx.specify(expected, new_type_info, |_| new_ty.span());
             let cast_id = ctx.hir.add_cast(hir::Cast {
@@ -260,13 +260,111 @@ pub fn check(
             Node::Return(ctx.hir.add(val))
         }
 
-        Expr::If { start, cond, then } => todo!(),
-        Expr::IfElse { start, cond, then, else_ } => todo!(),
-        Expr::IfPat { start, pat, value, then } => todo!(),
-        Expr::IfPatElse { start, pat, value, then, else_ } => todo!(),
-        Expr::Match { span, val, extra_branches, branch_count } => todo!(),
-        Expr::While { start, cond, body } => todo!(),
-        Expr::WhilePat { start, pat, val, body } => todo!(),
+        // FIXME: some code duplication going on with the 4 different If variants
+        &Expr::If { start: _, cond, then } => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| ast[expr].span(ast));
+            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let cond = check(ctx, cond, scope, bool_ty, return_ty);
+            let then = check(ctx, then, scope, expected, return_ty);
+            Node::IfElse {
+                cond: ctx.hir.add(cond),
+                then: ctx.hir.add(then),
+                else_: ctx.hir.add(Node::Unit),
+                resulting_ty: expected,
+            }
+        }
+        &Expr::IfElse { start: _, cond, then, else_ } => {
+            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let cond = check(ctx, cond, scope, bool_ty, return_ty);
+            let then = check(ctx, then, scope, expected, return_ty);
+            let else_ = check(ctx, else_, scope, expected, return_ty);
+            Node::IfElse {
+                cond: ctx.hir.add(cond),
+                then: ctx.hir.add(then),
+                else_: ctx.hir.add(else_),
+                resulting_ty: expected,
+            }
+        }
+        &Expr::IfPat { start: _, pat, value, then } => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| ast[expr].span(ast));
+            let pattern_ty = ctx.hir.types.add_unknown();
+            let value = check(ctx, value, scope, pattern_ty, return_ty);
+            let mut body_scope = LocalScope {
+                module: scope.module,
+                parent: Some(scope),
+                static_scope: None,
+                variables: dmap::new(),
+            };
+            let mut exhaustion = Exhaustion::None;
+            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, expected);
+            if exhaustion.is_trivially_exhausted() {
+                // TODO: Error::ConditionIsAlwaysTrue
+                // maybe even defer this exhaustion to check for this warning in non-trivial case
+            }
+            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(value));
+            let then = check(ctx, then, &mut body_scope, expected, return_ty);
+            Node::IfElse {
+                cond: ctx.hir.add(cond),
+                then: ctx.hir.add(then),
+                else_: ctx.hir.add(Node::Unit),
+                resulting_ty: expected,
+            }
+        }
+        &Expr::IfPatElse { start: _, pat, value, then, else_ } => {
+            let pattern_ty = ctx.hir.types.add_unknown();
+            let value = check(ctx, value, scope, pattern_ty, return_ty);
+            let mut body_scope = LocalScope {
+                module: scope.module,
+                parent: Some(scope),
+                static_scope: None,
+                variables: dmap::new(),
+            };
+            let mut exhaustion = Exhaustion::None;
+            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, expected);
+            if exhaustion.is_trivially_exhausted() {
+                // TODO: Error::ConditionIsAlwaysTrue
+                // maybe even defer this exhaustion to check for this warning in non-trivial case
+            }
+            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(value));
+            let then = check(ctx, then, &mut body_scope, expected, return_ty);
+            let else_ = check(ctx, else_, &mut body_scope, expected, return_ty);
+            Node::IfElse {
+                cond: ctx.hir.add(cond),
+                then: ctx.hir.add(then),
+                else_: ctx.hir.add(else_),
+                resulting_ty: expected,
+            }
+        }
+        Expr::Match { .. } => todo!(),
+        &Expr::While { start: _, cond, body } => {
+            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let cond = check(ctx, cond, scope, bool_ty, return_ty);
+            let body_ty = ctx.hir.types.add_unknown();
+            let body = check(ctx, body, scope, body_ty, return_ty);
+            Node::While {
+                cond: ctx.hir.add(cond),
+                body: ctx.hir.add(body)
+            }
+        }
+        &Expr::WhilePat { start: _, pat, val, body } => {
+            let value_ty = ctx.hir.types.add_unknown();
+            let val = check(ctx, val, scope, value_ty, return_ty);
+            let mut body_scope = LocalScope {
+                parent: Some(scope),
+                module: scope.module,
+                variables: dmap::new(),
+                static_scope: None,
+            };
+            let mut exhaustion = Exhaustion::None;
+            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, value_ty);
+            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(val));
+            let body_ty = ctx.hir.types.add_unknown();
+            let body = check(ctx, body, &mut body_scope, body_ty, return_ty);
+            Node::While {
+                cond: ctx.hir.add(cond),
+                body: ctx.hir.add(body),
+            }
+        }
 
         &Expr::FunctionCall(call) => {
             let call = &ast[call];

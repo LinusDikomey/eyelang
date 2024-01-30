@@ -401,6 +401,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 }
                 val.expect("Invalid phi node: didn't go through any of the blocks")
             }
+            super::Tag::IntToPtr => todo!("IntToPtr semantics, might have to be disallowed at compile time"),
+            super::Tag::PtrToInt => todo!("PtrToInt semantics, might have to be disallowed at compile time"),
             super::Tag::Asm => todo!(), // TODO: error handling
         };
         values[pos as usize] = value;

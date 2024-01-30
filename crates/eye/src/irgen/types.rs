@@ -39,7 +39,7 @@ pub fn get_multiple(ir_types: &mut IrTypes, types: &[Type]) -> ir::TypeRefs {
     refs
 }
 
-pub fn get_def(def: TypeId, generics: TypeRefs) -> IrType {
+pub fn get_def(_def: TypeId, _generics: TypeRefs) -> IrType {
     todo!()
 }
 

@@ -356,7 +356,7 @@ impl Compiler {
                         parent: None,
                         variables: parameter_variables,
                         module,
-                        static_scope: function.scope,
+                        static_scope: Some(function.scope),
                     };
                     let mut check_ctx = check::Ctx {
                         compiler: self,
@@ -655,7 +655,8 @@ pub struct LocalScope<'p> {
     pub parent: Option<&'p LocalScope<'p>>,
     pub variables: DHashMap<String, VarId>,
     pub module: ModuleId,
-    pub static_scope: ScopeId,
+    /// should only be none if this scope has a parent
+    pub static_scope: Option<ScopeId>,
 }
 pub enum LocalItem {
     Var(VarId),
@@ -666,15 +667,27 @@ impl<'p> LocalScope<'p> {
     pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
-        } else if let Some(def) = compiler.get_scope_def(self.module, self.static_scope, name) {
+        } else if let Some(def) = self.static_scope.and_then(|static_scope| compiler.get_scope_def(self.module, static_scope, name)) {
             LocalItem::Def(def)
         } else if let Some(parent) = self.parent {
             parent.resolve(name, name_span, compiler)
-        } else if let Some(static_parent) = compiler.get_module_ast(self.module)[self.static_scope].parent {
+        } else if let Some(static_parent) = self.static_scope.and_then(|static_scope| compiler.get_module_ast(self.module)[static_scope].parent) {
             LocalItem::Def(compiler.resolve_in_scope(self.module, static_parent, name, name_span.in_mod(self.module)))
         } else {
             compiler.errors.emit_err(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
             LocalItem::Invalid
+        }
+    }
+
+    pub fn get_innermost_static_scope(&self) -> ScopeId {
+        let mut current_local = self;
+        loop {
+            if let Some(static_scope) = self.static_scope {
+                return static_scope;
+            }
+            // a local scope has to have a parent scope if it doesn't have a static scope
+            // associated with it
+            current_local = current_local.parent.unwrap();
         }
     }
 }
