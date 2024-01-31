@@ -543,11 +543,27 @@ impl Compiler {
                     let checked = checked.clone();
                     // TODO: generics in function name
                     let associated_name = ast[f.ast_function_id].associated_name;
-                    let name = if associated_name != TSpan::EMPTY {
+                    let mut name = if associated_name != TSpan::EMPTY {
                         ast.src()[associated_name.range()].to_owned()
                     } else {
                         format!("function_{}_{}", f.module.idx(), f.ast_function_id.idx())
                     };
+                    if !f.generics.is_empty() {
+                        // 2 characters per type because of commas and brackets is the minimum
+                        name.reserve(1 + 2 * f.generics.len());
+                        name.push('[');
+                        let mut first = true;
+                        for ty in &f.generics {
+                            if first {
+                                first = false;
+                            } else {
+                                name.push(',');
+                            }
+                            use std::fmt::Write;
+                            write!(name, "{ty}").unwrap();
+                        }
+                        name.push(']');
+                    }
 
                     let func = irgen::lower_function(self, &mut to_generate, ast.src(), name, &checked, &f.generics);
                     self.ir_module[f.ir_id] = func;

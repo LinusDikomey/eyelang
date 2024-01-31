@@ -102,6 +102,14 @@ impl TypeTable {
         LocalTypeIds { start, count }
     }
 
+    pub fn replace(&mut self, id: LocalTypeId, info_or_idx: TypeInfoOrIdx) {
+        debug_assert!(
+            !matches!(info_or_idx, TypeInfoOrIdx::Idx(idx) if idx == id),
+            "created recursive reference",
+        );
+        self.types[id.idx()] = info_or_idx;
+    }
+
     pub fn info_from_resolved(&mut self, ty: &Type) -> TypeInfo {
         match ty {
             Type::Invalid => TypeInfo::Invalid,

@@ -128,7 +128,7 @@ pub enum Node {
 
     Negate(NodeId, LocalTypeId),
     Not(NodeId),
-    AddressOf(NodeId),
+    AddressOf { inner: NodeId, value_ty: LocalTypeId },
     Deref { value: NodeId, deref_ty: LocalTypeId },
 
     Cast(CastId),

@@ -15,6 +15,7 @@ use crate::eval::ConstValue;
 use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
+use crate::type_table::LocalTypeId;
 use crate::{
     compiler::CheckedFunction,
     type_table::{TypeTable, TypeInfo},
@@ -123,22 +124,43 @@ fn lower(
     node: NodeId,
     noreturn: &mut bool,
 ) -> Ref {
+    match lower_expr(ctx, node, noreturn) {
+        ValueOrPlace::Value(r) => r,
+        ValueOrPlace::Place { ptr, value_ty } => {
+            if *noreturn { return Ref::UNDEF }
+            let ty = ctx.get_type(ctx.types[value_ty]);
+            ctx.builder.build_load(ptr, ty)
+        }
+    }
+}
+
+enum ValueOrPlace {
+    Value(Ref),
+    Place {
+        ptr: Ref,
+        value_ty: LocalTypeId,
+    },
+}
+
+fn lower_expr(
+    ctx: &mut Ctx,
+    node: NodeId,
+    noreturn: &mut bool,
+) -> ValueOrPlace {
     debug_assert!(!*noreturn, "lowering new expression with noreturn already active should not happen");
-    match &ctx.hir[node] {
+    let value = match &ctx.hir[node] {
         Node::Invalid => build_crash_point(&mut ctx.builder),
 
         &Node::CheckPattern(pat, value) => {
             let value = lower(ctx, value, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             lower_pattern(ctx, pat, value)
         }
 
         Node::Block(items) => {
             for item in items.iter() {
                 lower(ctx, item, noreturn);
-                if *noreturn {
-                    return Ref::UNDEF;
-                }
+                if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             }
             Ref::UNIT
         }
@@ -147,7 +169,7 @@ fn lower(
         &Node::IntLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 build_crash_point(&mut ctx.builder);
-                return Ref::UNDEF
+                return ValueOrPlace::Value(Ref::UNDEF);
             };
             debug_assert!(p.is_int());
             let ty = types::get_primitive(p);
@@ -160,7 +182,7 @@ fn lower(
         &Node::FloatLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 build_crash_point(&mut ctx.builder);
-                return Ref::UNDEF
+                return ValueOrPlace::Value(Ref::UNDEF);
             };
             debug_assert!(p.is_float());
             let ty = types::get_primitive(p);
@@ -179,7 +201,7 @@ fn lower(
                 let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
                 let val = lower(ctx, elem, noreturn);
                 if *noreturn {
-                    return Ref::UNDEF;
+                    return ValueOrPlace::Value(Ref::UNDEF);
                 }
                 ctx.builder.build_store(elem_ptr, val);
             }
@@ -187,7 +209,7 @@ fn lower(
             ctx.builder.build_load(var, tuple_ty)
         }
 
-        Node::Declare { pattern: _ } => todo!(),
+        Node::Declare { pattern: _ } => todo!("lower declarations without values"),
         &Node::DeclareWithVal { pattern, val } => {
             let val = lower(ctx, val, noreturn);
             if !*noreturn {
@@ -195,14 +217,14 @@ fn lower(
             }
             Ref::UNIT
         }
-        Node::Variable(id) => {
-            let ty = ctx.get_type(ctx.types[ctx.hir.vars[id.idx()]]);
-            ctx.builder.build_load(ctx.vars[id.idx()], ty)
-        }
+        Node::Variable(id) => return ValueOrPlace::Place {
+            ptr: ctx.vars[id.idx()],
+            value_ty: ctx.hir.vars[id.idx()],
+        },
         &Node::Assign(lval, val) => {
             let lval = lower_lval(ctx, lval);
             let val = lower(ctx, val, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             ctx.builder.build_store(lval, val);
             Ref::UNIT
         }
@@ -230,19 +252,31 @@ fn lower(
 
         &Node::Negate(value, ty) => {
             let value = lower(ctx, value, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let ty = ctx.get_type(ctx.types[ty]);
             ctx.builder.build_neg(value, ty)
         }
         &Node::Not(value) => {
             let value = lower(ctx, value, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             ctx.builder.build_neg(value, IrType::U1)
         }
-        Node::AddressOf(_) => todo!("implement addressof"),
+        &Node::AddressOf { inner, value_ty } => {
+            let value = lower_expr(ctx, inner, noreturn);
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) };
+            match value {
+                ValueOrPlace::Value(v) => {
+                    let ty = ctx.get_type(ctx.types[value_ty]);
+                    let ptr = ctx.builder.build_decl(ty);
+                    ctx.builder.build_store(ptr, v);
+                    ptr
+                }
+                ValueOrPlace::Place { ptr, value_ty: _ } => ptr,
+            }
+        }
         &Node::Deref { value, deref_ty } => {
             let value = lower(ctx, value, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let ty = ctx.get_type(ctx.types[deref_ty]);
             ctx.builder.build_load(value, ty)
         }
@@ -250,9 +284,7 @@ fn lower(
         &Node::Cast(id) => {
             let cast = &ctx.hir[id];
             let val = lower(ctx, cast.val, noreturn);
-            if *noreturn {
-                return Ref::UNDEF;
-            }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             // TODO: separate into multiple more specific cast instructions in ir
             match &cast.cast_ty {
                 CastType::Invalid => build_crash_point(&mut ctx.builder),
@@ -282,9 +314,9 @@ fn lower(
         }
         &Node::Comparison(l, r, cmp) => {
             let l = lower(ctx, l, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let r = lower(ctx, r, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             use crate::hir::Comparison;
             let op = match cmp {
                 Comparison::Eq => BinOp::Eq,
@@ -300,9 +332,9 @@ fn lower(
         }
         &Node::Arithmetic(l, r, op, ty) => {
             let l = lower(ctx, l, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let r = lower(ctx, r, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
 
             use crate::hir::Arithmetic;
             let op = match op {
@@ -321,9 +353,7 @@ fn lower(
 
         &Node::TupleIdx { tuple_value, index, elem_ty } => {
             let tuple = lower(ctx, tuple_value, noreturn);
-            if *noreturn {
-                return Ref::UNDEF;
-            }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let elem_ty = ctx.get_type(ctx.types[elem_ty]);
             ctx.builder.build_member_value(tuple, index, elem_ty)
         }
@@ -338,7 +368,7 @@ fn lower(
         }
         &Node::IfElse { cond, then, else_, resulting_ty } => {
             let cond = lower(ctx, cond, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let then_block = ctx.builder.create_block();
             let else_block = ctx.builder.create_block();
             // after_block is a closure that creates the block lazily and returns it
@@ -389,7 +419,7 @@ fn lower(
             ctx.builder.terminate_block(Terminator::Goto(cond_block));
             ctx.builder.begin_block(cond_block);
             let cond = lower(ctx, cond, noreturn);
-            if *noreturn { return Ref::UNDEF }
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let body_block = ctx.builder.create_block();
             let after_block = ctx.builder.create_block();
             ctx.builder.terminate_block(Terminator::Branch {
@@ -410,9 +440,7 @@ fn lower(
             let mut arg_refs = Vec::with_capacity(args.iter().count());
             for arg in args.iter() {
                 let arg = lower(ctx, arg, noreturn);
-                if *noreturn {
-                    return Ref::UNDEF;
-                }
+                if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
                 arg_refs.push(arg);
             }
             let call_generics = call_generics
@@ -423,7 +451,8 @@ fn lower(
             let return_ty = ctx.get_type(ctx.types[return_ty]);
             ctx.builder.build_call(func, arg_refs, return_ty)
         }
-    }
+    };
+    ValueOrPlace::Value(value)
 }
 
 fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Ref {

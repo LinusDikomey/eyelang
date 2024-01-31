@@ -285,7 +285,7 @@ impl Error {
             }
             &Error::InvalidArgCount { expected, varargs, found } => {
                 cformat!("expected #g<{}{}> argument{} but #r<{}> were found",
-                    if varargs { "at least" } else { "" },
+                    if varargs { "at least " } else { "" },
                     expected,
                     if expected == 1 { "" } else { "s" },
                     found

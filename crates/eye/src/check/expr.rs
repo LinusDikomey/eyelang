@@ -124,7 +124,10 @@ pub fn check(
                     let pointee = ctx.hir.types.add(TypeInfo::Unknown);
                     ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| ast[expr].span(ast));
                     let value = check(ctx, value, scope, pointee, return_ty);
-                    Node::AddressOf(ctx.hir.add(value))
+                    Node::AddressOf {
+                        inner: ctx.hir.add(value),
+                        value_ty: pointee,
+                    }
                 }
                 UnOp::Deref => {
                     let ptr_ty = ctx.hir.types.add(TypeInfo::Pointer(expected));
@@ -375,9 +378,13 @@ pub fn check(
                 TypeInfo::TypeDef(_, _) => todo!("struct initializers"),
                 TypeInfo::FunctionItem { module, function, generics } => {
                     let signature = ctx.compiler.get_signature(module, function);
-                    if (signature.varargs && call.args.count() < signature.args.len())
-                        || call.args.count() != signature.args.len()
-                    {
+
+                    let invalid_arg_count = if signature.varargs {
+                        call.args.count() < signature.args.len()
+                    } else {
+                        call.args.count() != signature.args.len()
+                    };
+                    if invalid_arg_count {
                         let expected = signature.args.len() as _;
                         let varargs = signature.varargs;
                         let span = ctx.span(expr);
@@ -390,11 +397,13 @@ pub fn check(
                     }
 
                     
-                    let arg_types: Vec<_> = signature.args
-                        .iter()
-                        .map(|(_, arg)| ctx.hir.types.from_generic_resolved(arg, generics))
-                        .collect();
-                    let arg_types = ctx.hir.types.add_multiple_info_or_idx(arg_types);
+                    let arg_types = ctx.hir.types.add_multiple_unknown(call.args.count);
+                    // iterating over the signature, all extra arguments in case of vararg
+                    // arguments will stay unknown which is intended
+                    for (i, (_, arg)) in signature.args.iter().enumerate() {
+                        let ty = ctx.hir.types.from_generic_resolved(arg, generics);
+                        ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
+                    }
 
                     let func_return_ty = ctx.hir.types.from_generic_resolved(
                         &signature.return_type,
