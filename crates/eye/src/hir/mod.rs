@@ -103,13 +103,16 @@ pub enum Node {
         ty: LocalTypeId,
     },
     BoolLiteral(bool),
-    StringLiteral(TSpan),
-    Array(NodeIds),
-    Tuple {
+    ArrayLiteral {
+        elems: NodeIds,
+        array_ty: LocalTypeId,
+    },
+    TupleLiteral {
         // PERF(size): length has to match anyways, could only store it once
         elems: NodeIds,
         elem_types: LocalTypeIds,
     },
+    StringLiteral(TSpan),
 
     Declare {
         pattern: PatternId,
@@ -135,9 +138,14 @@ pub enum Node {
     Comparison(NodeId, NodeId, Comparison),
     Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
 
-    TupleIdx {
+    TupleIndex {
         tuple_value: NodeId,
         index: u32,
+        elem_ty: LocalTypeId,
+    },
+    ArrayIndex {
+        array: NodeId,
+        index: NodeId,
         elem_ty: LocalTypeId,
     },
 

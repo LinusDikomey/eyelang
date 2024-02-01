@@ -309,6 +309,13 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { ref_int: (val, idx) }, Tag::MemberValue, ty)
     }
 
+    pub fn build_array_index(&mut self, array_var: Ref, idx: Ref, elem_type: TypeRef) -> Ref {
+        let extra = self.extra.len() as u32;
+        self.extra.extend(elem_type.to_bytes());
+        self.extra.extend(idx.to_bytes());
+        self.add(Data { ref_int: (array_var, extra) }, Tag::ArrayIndex, IrType::Ptr)
+    }
+
     pub fn build_cast_int(&mut self, val: Ref, target_ty: IrType) -> Ref {
         debug_assert!(target_ty.is_int());
         self.add(Data { un_op: val }, Tag::CastInt, target_ty)

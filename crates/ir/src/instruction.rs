@@ -37,9 +37,6 @@ pub enum Tag {
     /// uninitialized value, undefined when used
     Uninit,
 
-    /// extract an element value out of a tuple
-    MemberValue,
-
     /// integer with up to 64 bits in size
     Int,
     /// integer larger than 64 bits, currently always 128 bits
@@ -56,6 +53,10 @@ pub enum Tag {
     Store,
     /// get a member ptr of a ptr to a tuple
     MemberPtr,
+    /// extract an element value out of a tuple
+    MemberValue,
+    /// Get a pointer to an array element. Element type has to be provided along with an index.
+    ArrayIndex,
 
     // FIXME: strings should be normal constants
     /// string constant
@@ -116,6 +117,7 @@ impl Tag {
             Tag::Decl => V::TypeTableIdx,
             Tag::Call => V::Call,
             Tag::MemberPtr => V::MemberPtr,
+            Tag::ArrayIndex => V::ArrayIndex,
             Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
             | Tag::Or | Tag::And    
             | Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE => V::BinOp,
@@ -181,6 +183,7 @@ pub enum DataVariant {
     TypeTableIdx,
     Block,
     MemberPtr,
+    ArrayIndex,
     Branch,
     String,
     Call,

@@ -500,6 +500,17 @@ unsafe fn build_func(
                 }
                 */
             }
+            ir::Tag::ArrayIndex => {
+                let (array_ptr, extra_idx) = data.ref_int;
+                let i = extra_idx as usize;
+                let elem_ty = ir::TypeRef::from_bytes(ir.extra[i..i+4].try_into().unwrap());
+                let index_ref = ir::Ref::from_bytes(ir.extra[i+4..i+8].try_into().unwrap());
+
+                let ptr = get_ref(&instructions, array_ptr).unwrap();
+                let ty = llvm_ty(ctx, func.types[elem_ty], &func.types).unwrap();
+                let mut indices = [get_ref(&instructions, index_ref).unwrap()];
+                LLVMBuildInBoundsGEP2(builder, ty, ptr, indices.as_mut_ptr(), indices.len() as _, NONE)
+            }
             ir::Tag::CastInt => {
                 let val = get_ref(&instructions, data.un_op);
                 // there are no zero-sized integers so unwraps are fine

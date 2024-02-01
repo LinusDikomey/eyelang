@@ -190,9 +190,27 @@ fn lower_expr(
         }
         Node::BoolLiteral(true) => Ref::val(RefVal::True),
         Node::BoolLiteral(false) => Ref::val(RefVal::False),
-        Node::StringLiteral(_) => todo!(),
-        Node::Array(_) => todo!(),
-        &Node::Tuple { elems, elem_types } => {
+        &Node::ArrayLiteral { elems, array_ty } => {
+            let TypeInfo::Array { element, count: _ } = ctx.types[array_ty] else {
+                panic!("non-array literal type");
+            };
+            let elem_ir_ty = ctx.get_type(ctx.types[element]);
+            let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
+            let array_ir_ty = ctx.builder.types.add(IrType::Array(elem_ir_ty, elems.count));
+            let array_var = ctx.builder.build_decl(array_ir_ty);
+            for (elem, i) in elems.iter().zip(0..) {
+                let val = lower(ctx, elem, noreturn);
+                if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
+                let index = ctx.builder.build_int(i, IrType::U64);
+                let member_ptr = ctx.builder.build_array_index(array_var, index, elem_ir_ty);
+                ctx.builder.build_store(member_ptr, val);
+            }
+            return ValueOrPlace::Place {
+                ptr: array_var,
+                value_ty: array_ty,
+            }
+        }
+        &Node::TupleLiteral { elems, elem_types } => {
             debug_assert_eq!(elems.count, elem_types.count);
             let tuple_ty = types::get_from_info(ctx.types, ctx.builder.types, TypeInfo::Tuple(elem_types), ctx.generics);
             let IrType::Tuple(elem_types) = tuple_ty else { unreachable!() };
@@ -208,6 +226,7 @@ fn lower_expr(
             // maybe do this differently, could do it like llvm: insertvalue
             ctx.builder.build_load(var, tuple_ty)
         }
+        Node::StringLiteral(_) => todo!(),
 
         Node::Declare { pattern: _ } => todo!("lower declarations without values"),
         &Node::DeclareWithVal { pattern, val } => {
@@ -351,11 +370,26 @@ fn lower_expr(
             ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
         }
 
-        &Node::TupleIdx { tuple_value, index, elem_ty } => {
+        &Node::TupleIndex { tuple_value, index, elem_ty } => {
             let tuple = lower(ctx, tuple_value, noreturn);
             if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let elem_ty = ctx.get_type(ctx.types[elem_ty]);
             ctx.builder.build_member_value(tuple, index, elem_ty)
+        }
+        &Node::ArrayIndex { array, index, elem_ty } => {
+            let array = match lower_expr(ctx, array, noreturn) {
+                ValueOrPlace::Value(_) => todo!("array indexing without place"),
+                ValueOrPlace::Place { ptr, .. } => ptr,
+            };
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
+            let index = lower(ctx, index, noreturn);
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
+            let elem_ir_ty = ctx.get_type(ctx.types[elem_ty]);
+            let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
+            return ValueOrPlace::Place {
+                ptr: ctx.builder.build_array_index(array, index, elem_ir_ty),
+                value_ty: elem_ty,
+            }
         }
 
         &Node::Return(val) => {

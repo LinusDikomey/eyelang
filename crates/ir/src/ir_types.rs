@@ -162,6 +162,12 @@ impl TypeRef {
     pub fn idx(self) -> usize {
         self.0 as usize
     }
+    pub fn to_bytes(self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+    pub fn from_bytes(bytes: [u8; 4]) -> Self {
+        Self(u32::from_le_bytes(bytes))
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

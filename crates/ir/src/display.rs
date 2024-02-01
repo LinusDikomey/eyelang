@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, FunctionId, TypeRefs};
+use crate::{ir_types::ConstIrType, FunctionId, TypeRefs, TypeRef};
 
 use super::{
     Function,
@@ -163,7 +163,7 @@ fn display_type(f: &mut fmt::Formatter<'_>, ty: super::ir_types::IrType, types: 
         IrType::Array(inner, count) => {
             cwrite!(f, "#m<[>")?;
             display_type(f, types[inner], types, info)?;
-            cwrite!(f, "; #m<{count}>]")?;
+            cwrite!(f, "#m<; {count}]>")?;
             return Ok(());
         }
         IrType::Tuple(elems) => {
@@ -201,6 +201,17 @@ fn display_data(inst: &Instruction, f: &mut fmt::Formatter<'_>, extra: &[u8], ty
             cwrite!(f, " #g<as> #m<*(>")?;
             write_delimited_with(f, elem_refs.iter(), |f, elem| display_type(f, types[elem], types, info), ", ")?;
             cwrite!(f, "#m<)>, #y<{elem_idx}>")
+        }
+        DataVariant::ArrayIndex => {
+            let (array_ptr, extra_start) = inst.data.ref_int;
+            let i = extra_start as usize;
+            let elem_ty = TypeRef::from_bytes(extra[i..i+4].try_into().unwrap());
+            let index_ref = Ref::from_bytes(extra[i+4..i+8].try_into().unwrap());
+            write_ref(f, array_ptr)?;
+            cwrite!(f, " #g<as> #m<*[>")?;
+            display_type(f, types[elem_ty], types, info)?;
+            cwrite!(f, "#m<]>, ")?;
+            write_ref(f, index_ref)
         }
         DataVariant::LargeInt => {
             let bytes = &extra[

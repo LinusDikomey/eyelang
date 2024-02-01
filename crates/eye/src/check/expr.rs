@@ -59,10 +59,26 @@ pub fn check(
             Node::BoolLiteral(val)
         }
         Expr::StringLiteral(_) => todo!("string literals"),
-        Expr::Array(_, _) => todo!("check array literals"),
+        &Expr::Array(span, elems) => {
+            // PERF: reuse existing Array TypeInfo @TypeInfoReuse
+            let elem_ty = ctx.hir.types.add_unknown();
+            ctx.specify(expected, TypeInfo::Array {
+                element: elem_ty,
+                count: Some(elems.count),
+            }, |_| span);
+            let nodes = ctx.hir.add_invalid_nodes(elems.count);
+            for (node, elem) in nodes.iter().zip(elems) {
+                let elem_node = check(ctx, elem, scope, elem_ty, return_ty);
+                ctx.hir.modify_node(node, elem_node);
+            }
+            Node::ArrayLiteral {
+                elems: nodes,
+                array_ty: expected,
+            }
+        }
         Expr::Tuple(span, values) => {
             // PERF: special case the specify for tuples, reusing elem types could be worth it if
-            // a tuple type info was already present.
+            // a tuple type info was already present. @TypeInfoReuse
             let elem_types = ctx.hir.types.add_multiple_unknown(values.count);
             ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
             let elems = ctx.hir.add_invalid_nodes(values.count);
@@ -70,7 +86,7 @@ pub fn check(
                 let node = check(ctx, value, scope, ty, return_ty);
                 ctx.hir.modify_node(node_id, node);
             }
-            Node::Tuple { elems, elem_types }
+            Node::TupleLiteral { elems, elem_types }
         }
         Expr::EnumLiteral { .. } => todo!("check enum literals"),
 
@@ -120,7 +136,7 @@ pub fn check(
                 }
                 UnOp::Ref => {
                     // PERF: could check if the expected type is already a pointer and avoid extra
-                    // unknown TypeInfo
+                    // unknown TypeInfo @TypeInfoReuse
                     let pointee = ctx.hir.types.add(TypeInfo::Unknown);
                     ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| ast[expr].span(ast));
                     let value = check(ctx, value, scope, pointee, return_ty);
@@ -232,7 +248,17 @@ pub fn check(
         Expr::Root(_) => todo!("path roots"),
 
         Expr::MemberAccess { .. } => todo!("struct member indexing"),
-        Expr::Index { .. } => todo!("check array indexing"),
+        &Expr::Index { expr, idx, end: _ } => {
+            let array_ty = ctx.hir.types.add(TypeInfo::Array { element: expected, count: None });
+            let array = check(ctx, expr, scope, array_ty, return_ty);
+            let index_ty = ctx.hir.types.add(TypeInfo::Integer);
+            let index = check(ctx, idx, scope, index_ty, return_ty);
+            Node::ArrayIndex {
+                array: ctx.hir.add(array),
+                index: ctx.hir.add(index),
+                elem_ty: expected,
+            }
+        }
         &Expr::TupleIdx { expr, idx, .. } => {
             let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
             let tuple_value = check(ctx, expr, scope, tuple_ty, return_ty);
@@ -247,7 +273,7 @@ pub fn check(
             };
             if let Some(elem_ty) = elem_types.nth(idx) {
                 ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
-                Node::TupleIdx { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_ty }
+                Node::TupleIndex { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_ty }
             } else {
                 ctx.compiler.errors.emit_err(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
                 Node::Invalid

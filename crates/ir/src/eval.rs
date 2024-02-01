@@ -298,6 +298,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 */
             }
             super::Tag::MemberValue => todo!(),
+            super::Tag::ArrayIndex => todo!(),
             super::Tag::CastInt => {
                 let (v, from_ty) = get_ref_and_ty(&values, inst.data.un_op);
                 debug_assert!(from_ty.is_int());
