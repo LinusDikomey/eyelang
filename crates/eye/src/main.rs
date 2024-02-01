@@ -118,7 +118,7 @@ fn main() -> Result<(), MainError> {
         }
         Ok((main_module, main_id))
     }).transpose()?;
-    if compiler.print_errors() {
+    if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
     }
     if args.ir {

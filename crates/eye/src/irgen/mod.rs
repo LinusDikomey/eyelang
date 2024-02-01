@@ -149,12 +149,12 @@ fn lower_expr(
 ) -> ValueOrPlace {
     debug_assert!(!*noreturn, "lowering new expression with noreturn already active should not happen");
     let value = match &ctx.hir[node] {
-        Node::Invalid => build_crash_point(&mut ctx.builder),
+        Node::Invalid => build_crash_point(ctx, noreturn),
 
         &Node::CheckPattern(pat, value) => {
             let value = lower(ctx, value, noreturn);
             if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
-            lower_pattern(ctx, pat, value)
+            lower_pattern(ctx, pat, value, noreturn)
         }
 
         Node::Block(items) => {
@@ -168,7 +168,7 @@ fn lower_expr(
         Node::Unit => Ref::UNIT,
         &Node::IntLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
-                build_crash_point(&mut ctx.builder);
+                build_crash_point(ctx, noreturn);
                 return ValueOrPlace::Value(Ref::UNDEF);
             };
             debug_assert!(p.is_int());
@@ -181,7 +181,7 @@ fn lower_expr(
         }
         &Node::FloatLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
-                build_crash_point(&mut ctx.builder);
+                build_crash_point(ctx, noreturn);
                 return ValueOrPlace::Value(Ref::UNDEF);
             };
             debug_assert!(p.is_float());
@@ -232,7 +232,7 @@ fn lower_expr(
         &Node::DeclareWithVal { pattern, val } => {
             let val = lower(ctx, val, noreturn);
             if !*noreturn {
-                lower_pattern(ctx, pattern, val);
+                lower_pattern(ctx, pattern, val, noreturn);
             }
             Ref::UNIT
         }
@@ -241,7 +241,8 @@ fn lower_expr(
             value_ty: ctx.hir.vars[id.idx()],
         },
         &Node::Assign(lval, val) => {
-            let lval = lower_lval(ctx, lval);
+            let lval = lower_lval(ctx, lval, noreturn);
+            if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             let val = lower(ctx, val, noreturn);
             if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             ctx.builder.build_store(lval, val);
@@ -260,12 +261,12 @@ fn lower_expr(
                             ctx.builder.build_int(num, get_primitive(p))
                         }
                         TypeInfo::Invalid => {
-                            build_crash_point(&mut ctx.builder)
+                            build_crash_point(ctx, noreturn)
                         }
                         _ => unreachable!(),
                     }
                 }
-                ConstValue::Undefined => build_crash_point(&mut ctx.builder),
+                ConstValue::Undefined => build_crash_point(ctx, noreturn),
             }
         }
 
@@ -306,7 +307,7 @@ fn lower_expr(
             if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
             // TODO: separate into multiple more specific cast instructions in ir
             match &cast.cast_ty {
-                CastType::Invalid => build_crash_point(&mut ctx.builder),
+                CastType::Invalid => build_crash_point(ctx, noreturn),
                 CastType::Noop => val,
                 &CastType::Int { from: _, to } => {
                     let to_ty = types::get_primitive(to.into());
@@ -489,9 +490,9 @@ fn lower_expr(
     ValueOrPlace::Value(value)
 }
 
-fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Ref {
+fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
     match ctx.hir[lval] {
-        LValue::Invalid => build_crash_point(&mut ctx.builder),
+        LValue::Invalid => build_crash_point(ctx, noreturn),
         LValue::Variable(id) => ctx.vars[id.idx()],
         LValue::Global(_, _) => todo!("handle ir for globals"),
     }
@@ -501,9 +502,10 @@ fn lower_pattern(
     ctx: &mut Ctx,
     pattern: PatternId,
     value: Ref,
+    noreturn: &mut bool
 ) -> Ref {
     match ctx.hir[pattern] {
-        Pattern::Invalid => build_crash_point(&mut ctx.builder),
+        Pattern::Invalid => build_crash_point(ctx, noreturn),
         Pattern::Variable(id) => {
             let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
             let ty = types::get_from_info(ctx.types, ctx.builder.types, var_ty, ctx.generics);
@@ -534,8 +536,15 @@ fn lower_pattern(
     }
 }
 
-fn build_crash_point(_builder: &mut IrBuilder) -> Ref {
+fn build_crash_point(ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
     // TODO: build proper crash point
+    // let msg = "program reached a compile error at runtime";
+    // let msg = ctx.builder.build_string(msg.as_bytes(), true, IrType::Ptr);
+    let block = ctx.builder.create_block();
+    ctx.builder.terminate_block(Terminator::Goto(block));
+    ctx.builder.begin_block(block);
+    ctx.builder.terminate_block(Terminator::Goto(block));
+    *noreturn = true;
     Ref::UNDEF
 }
 

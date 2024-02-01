@@ -751,7 +751,7 @@ impl<'a> Parser<'a> {
                 let mut elems = Vec::new();
                 let closing = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
                     elems.push(p.parse_expr(scope)?);
-                    Ok(())
+                    Ok(Delimit::OptionalIfNewLine)
                 })?;
                 Expr::Array(TSpan::new(start, closing.end), self.ast.exprs(elems))
             },

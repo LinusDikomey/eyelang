@@ -124,4 +124,10 @@ pub struct Args {
 
     #[clap(short, long, value_enum, default_value_t=Backend::default())]
     pub backend: Backend,
+
+    /// This will still try to build and run the program even if errors are present. Most errors
+    /// will lead to a runtime crash when the corresponding code is encountered. No correctness is
+    /// guaranteed.
+    #[clap(long)]
+    pub run_with_errors: bool,
 }

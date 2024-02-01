@@ -70,7 +70,7 @@ pub fn get_from_info(types: &TypeTable, ir_types: &mut IrTypes, ty: TypeInfo, ge
         | TypeInfo::TypeDef(_, _)
         | TypeInfo::FunctionItem { .. }
         | TypeInfo::MethodItem { .. }
-        | TypeInfo::Invalid => panic!("incomplete type during lowering to ir"),
+        | TypeInfo::Invalid => panic!("incomplete type during lowering to ir: {ty:?}"),
     }
 }
 
