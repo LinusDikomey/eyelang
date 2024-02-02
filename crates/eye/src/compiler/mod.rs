@@ -5,7 +5,7 @@ use id::{ProjectId, ModuleId, TypeId, ConstValueId};
 use span::{Span, IdentPath, TSpan};
 use types::{UnresolvedType, Type};
 
-use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds}, irgen, hir::{HIRBuilder, HIR}, check, MainError};
+use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfoOrIdx}, irgen, hir::{HIRBuilder, HIR}, check, MainError};
 
 pub struct Compiler {
     projects: Vec<Project>,
@@ -265,7 +265,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Signature {
+    pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<Signature> {
         let (ast, checked, _) = self.modules[module.idx()].ast.as_ref().unwrap();
         match &checked.function_signatures[id.idx()] {
             Resolvable::Resolved(_) => {
@@ -302,7 +302,7 @@ impl Compiler {
                     span: function.signature_span,
                 };
                 self.modules[module.idx()].ast.as_mut().unwrap().1.function_signatures[id.idx()]
-                    .put(signature)
+                    .put(Rc::new(signature))
             }
         }
     }
@@ -327,22 +327,23 @@ impl Compiler {
                 // signature is resolved above
                 let Resolvable::Resolved(signature) = &self.modules[module.idx()].ast
                     .as_ref().unwrap()
-                .1.function_signatures[id.idx()] else { unreachable!() };
+                    .1.function_signatures[id.idx()] else { unreachable!() };
+
+                let signature = Rc::clone(signature);
 
                 let mut types = TypeTable::new();
 
-                // PERF: could pre-reserve in table and put in directly instead of heap allocating
-                let params: Vec<_> = signature.args
-                    .iter()
-                    .map(|(_, param)| types.info_from_resolved(param))
-                    .collect();
+                let param_types = types.add_multiple_unknown(signature.args.len() as u32);
+                for ((_, param), r) in signature.args.iter().zip(param_types.iter()) {
+                    let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(self, param));
+                    types.replace(r, i);
+                }
 
-                let param_types = types.add_multiple(params);
-                let varargs = signature.varargs;
-
-                let return_type = types.info_from_resolved(&signature.return_type);
+                let return_type = types.generic_info_from_resolved(self, &signature.return_type);
                 let return_type = types.add(return_type);
+
                 let generic_count = signature.generics.len().try_into().unwrap();
+                let varargs = signature.varargs;
 
                 let (body, types) = if let Some(body) = function.body {
                     let mut hir = HIRBuilder::new(types);
@@ -388,7 +389,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &ResolvedTypeDef {
+    pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &ResolvedType {
         match &self.types[ty.idx()].resolved {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
@@ -400,8 +401,9 @@ impl Compiler {
                 let resolved_ty = &self.types[ty.idx()];
                 let module = resolved_ty.module;
                 let ast_id = resolved_ty.id;
-                let ast = self.get_module_ast(module).clone();
+                let ast = Rc::clone(self.get_module_ast(module));
                 let def = &ast[ast_id];
+                let generic_count = def.generic_count();
                 let resolved = match def {
                     ast::TypeDef::Struct(struct_def) => {
                         let fields = struct_def.members
@@ -411,7 +413,10 @@ impl Compiler {
                                 self.resolve_type(ty, module, struct_def.scope)
                             ))
                             .collect();
-                        ResolvedTypeDef::Struct(ResolvedStructDef { fields })
+                        ResolvedType {
+                            generic_count,
+                            def: ResolvedTypeDef::Struct(ResolvedStructDef { fields })
+                        }
                     }
                     ast::TypeDef::Enum(_) => todo!(),
                 };
@@ -548,6 +553,10 @@ impl Compiler {
                     } else {
                         format!("function_{}_{}", f.module.idx(), f.ast_function_id.idx())
                     };
+                    if name == "main" {
+                        name.clear();
+                        name.push_str("eyemain");
+                    }
                     if !f.generics.is_empty() {
                         // 2 characters per type because of commas and brackets is the minimum
                         name.reserve(1 + 2 * f.generics.len());
@@ -787,24 +796,30 @@ pub struct Signature {
 }
 
 #[derive(Debug)]
+pub struct ResolvedType {
+    pub generic_count: u8,
+    pub def: ResolvedTypeDef,
+}
+
+#[derive(Debug)]
 pub enum ResolvedTypeDef {
     Struct(ResolvedStructDef),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedStructDef {
-    fields: Vec<(String, Type)>,
+    pub fields: Vec<(String, Type)>,
 }
 
 pub struct ResolvableTypeDef {
     module: ModuleId,
     id: ast::TypeId,
-    resolved: Resolvable<ResolvedTypeDef>,
+    resolved: Resolvable<ResolvedType>,
 }
 
 #[derive(Debug)]
 pub struct ModuleSymbols {
-    pub function_signatures: Vec<Resolvable<Signature>>,
+    pub function_signatures: Vec<Resolvable<Rc<Signature>>>,
     pub functions: Vec<Resolvable<CheckedFunction>>,
     pub types: Vec<Option<TypeId>>,
     pub globals: Vec<Resolvable<(Type, ConstValue)>>,

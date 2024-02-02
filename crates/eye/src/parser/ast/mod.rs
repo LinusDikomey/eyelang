@@ -467,7 +467,7 @@ pub enum Expr {
         end: u32,
     },
     TupleIdx {
-        expr: ExprId,
+        left: ExprId,
         idx: u32,
         end: u32,
     },
@@ -587,7 +587,7 @@ impl Expr {
             | Expr::WhilePat { start, body, .. }
             => TSpan::new(*start, e(body)),
             Expr::FunctionCall(call_id) => {
-                let Call { called_expr, args: _, end } = &calls[call_id.idx()];
+                let Call { called_expr, end, .. } = &calls[call_id.idx()];
                 TSpan::new(s(called_expr), *end)
             }
             Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
@@ -598,7 +598,7 @@ impl Expr {
             Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
-            Expr::TupleIdx { expr, idx: _, end } => TSpan::new(s(expr), *end),
+            Expr::TupleIdx { left: expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
             Expr::Asm { span, .. } => *span,
@@ -648,6 +648,7 @@ impl Expr {
 #[derive(Debug)]
 pub struct Call {
     pub called_expr: ExprId,
+    pub open_paren_start: u32,
     pub args: ExprExtra,
     pub end: u32,
 }

@@ -45,9 +45,9 @@ pub fn def_expr(
             let id = if let Some(id) = symbols.types[id.idx()] {
                 id
             } else {
-                let id = compiler.add_type_def(module, id);
-                compiler.get_module_ast_and_symbols(module).1.types[id.idx()] = Some(id);
-                id
+                let assigned_id = compiler.add_type_def(module, id);
+                compiler.get_module_ast_and_symbols(module).1.types[id.idx()] = Some(assigned_id);
+                assigned_id
             };
             // TODO: check/pass generics somehow
             Def::Type(Type::DefId { id, generics: None })

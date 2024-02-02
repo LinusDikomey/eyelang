@@ -458,7 +458,7 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*expr].repr(c);
                 c.char(']');
             }
-            Self::TupleIdx { expr, idx, end: _ } => {
+            Self::TupleIdx { left: expr, idx, end: _ } => {
                 ast[*expr].repr(c);
                 c.char('.');
                 c.write_add(idx.to_string());

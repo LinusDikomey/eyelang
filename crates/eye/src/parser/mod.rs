@@ -922,7 +922,7 @@ impl<'a> Parser<'a> {
                         // LParen is on new line, ignore
                         break Ok(expr);
                     }
-                    self.toks.step_assert(TokenType::LParen);
+                    let open_paren_start = self.toks.step_assert(TokenType::LParen).start;
 
                     // function call
                     let mut args = Vec::new();
@@ -936,6 +936,7 @@ impl<'a> Parser<'a> {
                     let args = self.ast.exprs(args);
                     let call = self.ast.call(ast::Call {
                         called_expr,
+                        open_paren_start,
                         args,
                         end,
                     });
@@ -968,7 +969,7 @@ impl<'a> Parser<'a> {
                         },
                         TokenType::IntLiteral = TokenType::IntLiteral => {
                             let idx = self.src[tok.span().range()].parse().unwrap();
-                            Expr::TupleIdx { expr: self.ast.expr(expr), idx, end: tok.end }
+                            Expr::TupleIdx { left: self.ast.expr(expr), idx, end: tok.end }
                         },
                         TokenType::LBrace = TokenType::LBrace => {
                             if dot.new_line {

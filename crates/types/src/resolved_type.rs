@@ -81,8 +81,8 @@ impl Type {
             }
             Type::Tuple(types) => Type::Tuple(
                 types
-                    .iter()
-                    .map(|ty| ty.instantiate_generics(generics))
+                .iter()
+                .map(|ty| ty.instantiate_generics(generics))
                     .collect()
             ),
             Type::Generic(idx) => generics[*idx as usize].clone(),

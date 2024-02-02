@@ -94,11 +94,11 @@ impl Index<TypeRef> for IrTypes {
 #[derive(Clone, Copy, Debug)]
 pub enum IrType {
     // ---------- scalar types ----------
+    Unit,
     I8, I16, I32, I64, I128,
     U8, U16, U32, U64, U128,
     F32, F64,
     U1,
-    Unit,
     Ptr,
 
     // ---------- aggregate types ----------

@@ -1,4 +1,4 @@
-use crate::{hir::LValue, type_table::{LocalTypeId, TypeInfo}, parser::ast::{Expr, ExprId, UnOp}, compiler::{LocalScope, LocalItem, Def}, error::Error};
+use crate::{hir::LValue, type_table::{LocalTypeId, TypeInfo, LocalTypeIds}, parser::ast::{Expr, ExprId, UnOp}, compiler::{LocalScope, LocalItem, Def}, error::Error};
 
 use super::Ctx;
 
@@ -20,9 +20,10 @@ pub fn check(
                     (LValue::Variable(id), var_ty)
                 }
                 LocalItem::Def(Def::Global(module, id)) => {
-                    let global_ty = &ctx.compiler.get_checked_global(module, id).0;
-                    let ty = ctx.hir.types.info_from_resolved(global_ty);
-                    let ty = ctx.hir.types.add(ty);
+                    // PERF: cloning type
+                    let global_ty = ctx.compiler.get_checked_global(module, id).0.clone();
+                    let ty = ctx.type_from_resolved(&global_ty, LocalTypeIds::EMPTY);
+                    let ty = ctx.hir.types.add_info_or_idx(ty);
                     (LValue::Global(module, id), ty)
                 }
                 LocalItem::Def(_) => {

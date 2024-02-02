@@ -12,7 +12,7 @@ use crate::{
     Compiler,
     parser::ast::{Ast, ExprId},
     compiler::Signature,
-    type_table::{TypeInfo, LocalTypeId, TypeTable},
+    type_table::{TypeInfo, LocalTypeId, TypeTable, LocalTypeIds, TypeInfoOrIdx},
     hir::{HIRBuilder, Node, HIR, CastId}, error::{Error, CompileError},
 };
 
@@ -48,6 +48,10 @@ impl<'a> Ctx<'a> {
 
     fn invalidate(&mut self, ty: LocalTypeId) {
         self.hir.types.invalidate(ty);
+    }
+
+    fn type_from_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+        self.hir.types.from_generic_resolved(self.compiler, ty, generics)
     }
 
     pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {

@@ -1,8 +1,20 @@
+use std::rc::Rc;
+
 use id::ModuleId;
 use span::TSpan;
 use types::Primitive;
 
-use crate::{parser::{ast::{ExprId, Expr, FunctionId, Ast, UnOp}, token::{IntLiteral, Operator, AssignType, FloatLiteral}}, compiler::{LocalScope, LocalItem, Def}, type_table::{LocalTypeId, TypeInfo}, hir::{Node, self, Comparison}, error::Error, eval::ConstValue};
+use crate::{
+    parser::{
+        ast::{ExprId, Expr, FunctionId, Ast, UnOp, Call},
+        token::{IntLiteral, Operator, AssignType, FloatLiteral},
+    },
+    compiler::{LocalScope, LocalItem, Def, ResolvedTypeDef, ResolvedStructDef},
+    type_table::{LocalTypeId, TypeInfo, LocalTypeIds},
+    hir::{Node, self, Comparison},
+    error::Error,
+    eval::ConstValue,
+};
 
 use super::{Ctx, exhaust::Exhaustion, lval, pattern};
 
@@ -91,8 +103,21 @@ pub fn check(
         Expr::EnumLiteral { .. } => todo!("check enum literals"),
 
         &Expr::Function { id } => function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast)),
-        Expr::Primitive { .. } => todo!("primitive type literals"),
-        Expr::Type { id: _ } => todo!("check type literals as values"),
+        &Expr::Primitive { primitive, .. } => {
+            // PERF @TypeInfoReuse
+            let ty = ctx.hir.types.add(TypeInfo::Primitive(primitive));
+            ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| ast[expr].span(ast));
+            Node::Invalid
+        }
+        &Expr::Type { id } => {
+            let resolved_id = ctx.compiler.add_type_def(ctx.module, id);
+            ctx.compiler.get_module_ast_and_symbols(ctx.module).1.types[id.idx()] = Some(resolved_id);
+            let ty = ctx.compiler.get_resolved_type_def(resolved_id);
+            let generics = ctx.hir.types.add_multiple_unknown(ty.generic_count.into());
+            let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));
+            ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| ast[expr].span(ast));
+            Node::Invalid
+        }
 
         &Expr::Ident { span } => check_ident(ctx, scope, expected, span),
         Expr::Declare { .. } => todo!("check variable declarations without values"),
@@ -245,9 +270,62 @@ pub fn check(
             ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
             Node::Cast(cast_id)
         }
-        Expr::Root(_) => todo!("path roots"),
+        &Expr::Root(_) => todo!("path roots"),
 
-        Expr::MemberAccess { .. } => todo!("struct member indexing"),
+        &Expr::MemberAccess { left, name: name_span } => {
+            let left_ty = ctx.hir.types.add_unknown();
+            let left_node = check(ctx, left, scope, left_ty, return_ty);
+            let name = &ctx.ast.src()[name_span.range()];
+            match ctx.hir.types[left_ty] {
+                TypeInfo::TypeItem { ty: _ } => todo!("size/align/stride exprs here, also enums/assoc functions"),
+                TypeInfo::TypeDef(id, generics) => {
+                    let resolved = ctx.compiler.get_resolved_type_def(id);
+                    match &resolved.def {
+                        ResolvedTypeDef::Struct(def) => {
+                            let def = def.clone(); // PERF: cloning def
+                            let indexed_field = def.fields
+                                .iter()
+                                .zip(0..)
+                                .find_map(|((field_name, ty), index)| {
+                                    (field_name == name).then_some((index, ty))
+                                });
+                            if let Some((index, field_ty)) = indexed_field {
+                                let field_ty = ctx.type_from_resolved(field_ty, generics);
+                                match field_ty {
+                                    crate::type_table::TypeInfoOrIdx::TypeInfo(info) => {
+                                        ctx.specify(expected, info, |ast| ast[expr].span(ast));
+                                    }
+                                    crate::type_table::TypeInfoOrIdx::Idx(ty) => {
+                                        ctx.unify(expected, ty, |ast| ast[expr].span(ast));
+                                    }
+                                }
+                                Node::TupleIndex {
+                                    tuple_value: ctx.hir.add(left_node),
+                                    index,
+                                    elem_ty: expected,
+                                }
+                            } else {
+                                ctx.compiler.errors.emit_err(
+                                    Error::NonexistantMember.at_span(name_span.in_mod(ctx.module))
+                                );
+                                Node::Invalid
+                            }
+                        }
+                    }
+                }
+                TypeInfo::Unknown => {
+                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                    Node::Invalid
+                }
+                TypeInfo::Invalid => {
+                    Node::Invalid
+                }
+                _ => {
+                    ctx.compiler.errors.emit_err(Error::NonexistantMember.at_span(ctx.span(left)));
+                    Node::Invalid
+                }
+            }
+        }
         &Expr::Index { expr, idx, end: _ } => {
             let array_ty = ctx.hir.types.add(TypeInfo::Array { element: expected, count: None });
             let array = check(ctx, expr, scope, array_ty, return_ty);
@@ -259,9 +337,9 @@ pub fn check(
                 elem_ty: expected,
             }
         }
-        &Expr::TupleIdx { expr, idx, .. } => {
+        &Expr::TupleIdx { left, idx, .. } => {
             let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
-            let tuple_value = check(ctx, expr, scope, tuple_ty, return_ty);
+            let tuple_value = check(ctx, left, scope, tuple_ty, return_ty);
             let elem_types = match ctx.hir.types[tuple_ty] {
                 TypeInfo::Tuple(ids) => ids,
                 _ => {
@@ -325,7 +403,7 @@ pub fn check(
                 variables: dmap::new(),
             };
             let mut exhaustion = Exhaustion::None;
-            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, expected);
+            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, pattern_ty);
             if exhaustion.is_trivially_exhausted() {
                 // TODO: Error::ConditionIsAlwaysTrue
                 // maybe even defer this exhaustion to check for this warning in non-trivial case
@@ -349,7 +427,7 @@ pub fn check(
                 variables: dmap::new(),
             };
             let mut exhaustion = Exhaustion::None;
-            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, expected);
+            let pat = pattern::check(ctx, &mut body_scope.variables, &mut exhaustion, pat, pattern_ty);
             if exhaustion.is_trivially_exhausted() {
                 // TODO: Error::ConditionIsAlwaysTrue
                 // maybe even defer this exhaustion to check for this warning in non-trivial case
@@ -401,9 +479,36 @@ pub fn check(
             let _called = check(ctx, call.called_expr, scope, function_ty, return_ty);
             match ctx.hir.types[function_ty] {
                 TypeInfo::Invalid => Node::Invalid,
-                TypeInfo::TypeDef(_, _) => todo!("struct initializers"),
+                TypeInfo::TypeItem { ty: item_ty } => {
+                    match ctx.hir.types[item_ty] {
+                        TypeInfo::TypeDef(id, generics) => {
+                            let resolved = ctx.compiler.get_resolved_type_def(id);
+                            debug_assert_eq!(generics.count, resolved.generic_count.into());
+                            match &resolved.def {
+                                ResolvedTypeDef::Struct(struct_def) => {
+                                    // PERF: cloning struct def
+                                    let struct_def = struct_def.clone();
+                                    ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
+                                    check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
+                                }
+                                _ => {
+                                    ctx.compiler.errors.emit_err(
+                                        Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
+                                    );
+                                    Node::Invalid
+                                }
+                            }
+                        }
+                        _ => {
+                            ctx.compiler.errors.emit_err(
+                                Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
+                            );
+                            Node::Invalid
+                        }
+                    }
+                }
                 TypeInfo::FunctionItem { module, function, generics } => {
-                    let signature = ctx.compiler.get_signature(module, function);
+                    let signature = Rc::clone(ctx.compiler.get_signature(module, function));
 
                     let invalid_arg_count = if signature.varargs {
                         call.args.count() < signature.args.len()
@@ -427,11 +532,11 @@ pub fn check(
                     // iterating over the signature, all extra arguments in case of vararg
                     // arguments will stay unknown which is intended
                     for (i, (_, arg)) in signature.args.iter().enumerate() {
-                        let ty = ctx.hir.types.from_generic_resolved(arg, generics);
+                        let ty = ctx.type_from_resolved(arg, generics);
                         ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
                     }
 
-                    let func_return_ty = ctx.hir.types.from_generic_resolved(
+                    let func_return_ty = ctx.type_from_resolved(
                         &signature.return_type,
                         generics,
                     );
@@ -489,7 +594,12 @@ fn check_ident(
                 Node::Invalid
             }
             Def::Function(module, id) => function_item(ctx, module, id, expected, |_| span),
-            Def::Type(_) => todo!("type type?"),
+            Def::Type(ty) => {
+                let ty = ctx.type_from_resolved(&ty, LocalTypeIds::EMPTY);
+                let ty = ctx.hir.types.add_info_or_idx(ty);
+                ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+                Node::Invalid
+            }
             Def::ConstValue(const_val) => {
                 match &ctx.compiler.const_values[const_val.idx()] {
                     ConstValue::Undefined => todo!("should this invalidate the type?"),
@@ -549,3 +659,28 @@ fn function_item(
     Node::Unit
 }
 
+fn check_struct_def(
+    ctx: &mut Ctx,
+    struct_def: &ResolvedStructDef,
+    generics: LocalTypeIds,
+    call: &Call,
+    scope: &mut LocalScope,
+    return_ty: LocalTypeId,
+) -> Node {
+    if struct_def.fields.len() != call.args.count() {
+        ctx.compiler.errors.emit_err(Error::InvalidArgCount {
+            expected: struct_def.fields.len() as u32,
+            varargs: false,
+            found: call.args.count,
+        }.at_span(TSpan::new(call.open_paren_start, call.end).in_mod(ctx.module)));
+    }
+    let elem_nodes = ctx.hir.add_invalid_nodes(call.args.count);
+    let elem_types = ctx.hir.types.add_multiple_unknown(call.args.count);
+    for ((arg, (node_id, type_id)), (_field_name, field_ty)) in call.args.into_iter().zip(elem_nodes.iter().zip(elem_types.iter())).zip(&struct_def.fields) {
+        let info_or_idx = ctx.type_from_resolved(field_ty, generics);
+        ctx.hir.types.replace(type_id, info_or_idx);
+        let node = check(ctx, arg, scope, type_id, return_ty);
+        ctx.hir.modify_node(node_id, node);
+    }
+    Node::TupleLiteral { elems: elem_nodes, elem_types }
+}
