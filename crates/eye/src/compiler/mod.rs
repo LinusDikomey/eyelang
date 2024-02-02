@@ -35,24 +35,9 @@ impl Compiler {
         if !root.try_exists().map_err(|err| MainError::CantAccessPath(err, root.clone()))? {
             return Err(MainError::NonexistentPath(root));
         }
-        let root_module_path = if root.is_file() {
-            root.clone()
-        } else {
-            if !root.is_dir() {
-                // We canonicalized the path, this shouldn't really happen. Maybe still add an
-                // error for it.
-                panic!("project at {} is not a directory or file", root.display());
-            }
-            let main_path = root.join("main.eye");
-            if !main_path.exists() {
-                return Err(MainError::NoMainFileInProjectDirectory);
-            }
-            main_path
-        };
-        let root_module_id = ModuleId(self.modules.len() as _);
-        self.modules.push(Module::at_path(root_module_path, root_module_id, None));
-
         let project_id = ProjectId(self.projects.len() as _);
+        let root_module_id = ModuleId(self.modules.len() as _);
+        self.modules.push(Module::at_path(root.clone(), project_id, root_module_id, None));
         self.projects.push(Project {
             name,
             root,
@@ -100,23 +85,97 @@ impl Compiler {
             let Some((ast, symbols, _)) = &mut self.modules[module_id.idx()].ast else { unreachable!() };
             (ast, symbols)
         } else {
-
             let module = &mut self.modules[module_id.idx()];
-            let source = match std::fs::read_to_string(&module.path) {
+            // add dependencies to each module first
+            let mut definitions: DHashMap<String, ast::Definition> = self
+                .projects[module.project.idx()]
+                .dependencies
+                .iter()
+                .map(|dependency| {
+                    let dependency = &self.projects[dependency.idx()];
+                    (dependency.name.clone(), ast::Definition::Module(dependency.root_module))
+                })
+                .collect();
+            let contents = if module.path.is_file() {
+                eprintln!("parsing file: {}", module.path.display());
+                std::fs::read_to_string(&module.path)
+            } else {
+                if !module.path.is_dir() {
+                    // We canonicalized the path, this shouldn't really happen. Maybe still add an
+                    // error for it.
+                    panic!("project at {} is not a directory or file", module.path.display());
+                }
+                let is_root = module_id == module.root;
+                let file = if is_root {
+                    module.path.join("main.eye")
+                } else {
+                    module.path.join("mod.eye")
+                };
+                if !(file.exists() && file.is_file()) {
+                    panic!("File {} doesn't exist", file.display());
+                    // return Err(MainError::NoMainFileInProjectDirectory);
+                };
+                let root = module.root;
+                let project = module.project;
+                // gather child modules, insert them into the definitions and create Modules for them
+                let dir_read = self.modules[module_id.idx()]
+                    .path
+                    .read_dir()
+                    .expect("couldn't read module directory");
+                for entry in dir_read {
+                    let entry = entry.expect("failed to read module directory entry");
+                    let ty = entry
+                        .file_type()
+                        .expect("failed to access file type of module directory entry");
+                    let path = entry.path();
+                    if ty.is_file() {
+                        if path.extension().is_some_and(|ext| ext == "eye") {
+                            let name = path
+                                .with_extension("")
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .expect("file doesn't have a valid name")
+                                .to_owned();
+                            if !matches!(name.as_str(), "main" | "mod") {
+                                let id = ModuleId(self.modules.len() as _);
+                                self.modules.push(Module::at_path(path, project, root, Some(module_id)));
+                                definitions.insert(name, ast::Definition::Module(id));
+                            }
+                        }
+                    } else if ty.is_dir() {
+                        let path = entry.path();
+                        if path.join("mod.eye").exists() {
+                            let name = path.file_name()
+                                .and_then(|name| name.to_str())
+                                .expect("directory doesn't have a valid name")
+                                .to_owned();
+                            let id = ModuleId(self.modules.len() as _);
+                            self.modules.push(Module::at_path(path, project, root, Some(module_id)));
+                            definitions.insert(name, ast::Definition::Module(id));
+                        }
+                    }
+                }
+                eprintln!("parsing file: {}", file.display());
+                std::fs::read_to_string(file)
+            };
+            let source = match contents {
                 Ok(source) => source,
                 Err(err) => panic!(
                     "compiler failed to open the file {}: {:?}",
-                    module.path.display(),
+                    self.modules[module_id.idx()].path.display(),
                     err,
                 ),
             };
 
             // TODO: handle errors, don't just create them here and ignore them
             let mut errors = Errors::new();
-            let ast = parser::parse(source, &mut errors, module_id);
-            let Some(ast) = ast else {
-                todo!("handle parsing errors properly: {errors:?}");
-            };
+            let ast = parser::parse(source, &mut errors, module_id, definitions);
+            let ast = ast.unwrap_or_else(|| {
+                todo!("keep compiling after parsing errors {}: {errors:?}",
+                    self.modules[module_id.idx()].path.display()
+                );
+            });
+            self.errors.append(errors);
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
             let instances = IrFunctionInstances::new(ast.function_count());
@@ -156,6 +215,7 @@ impl Compiler {
                 self.resolve_path(module, scope, path)
             }
             ast::Definition::Global(id) => Def::Global(module, *id),
+            &ast::Definition::Module(id) => Def::Module(id),
             &ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
         };
         Some(def)
@@ -480,6 +540,11 @@ impl Compiler {
                             // TODO: cache results
                             eval::def_expr(self, module, scope, &ast, *value);
                         }
+                        &ast::Definition::Module(id) => {
+                            if self.modules[id.idx()].project == project {
+                                modules_to_check.push_back(id);
+                            }
+                        }
                         ast::Definition::Global(_) | ast::Definition::Generic(_) => {}
                     }
                 }
@@ -771,19 +836,34 @@ pub struct Project {
 }
 pub struct Module {
     pub path: PathBuf,
+    pub project: ProjectId,
     pub ast: Option<(Rc<Ast>, ModuleSymbols, IrFunctionInstances)>,
     pub root: ModuleId,
     pub parent: Option<ModuleId>,
 }
 impl Module {
-    pub fn at_path(path: PathBuf, root: ModuleId, parent: Option<ModuleId>) -> Self {
+    pub fn at_path(
+        path: PathBuf,
+        project: ProjectId,
+        root: ModuleId,
+        parent: Option<ModuleId>,
+    ) -> Self {
         Self {
             path,
+            project,
             ast: None,
             root,
             parent,
         }
     }
+}
+
+struct ModuleIds {
+    start: u32,
+    count: u32,
+}
+impl ModuleIds {
+    const EMPTY: Self = Self { start: 0, count: 0 };
 }
 
 #[derive(Debug)]

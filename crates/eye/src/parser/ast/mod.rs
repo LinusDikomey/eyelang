@@ -257,15 +257,6 @@ impl Scope {
         }
     }
 
-    pub fn empty(parent: Option<ScopeId>, span: TSpan) -> Self {
-        Self {
-            parent,
-            definitions: dmap::new(),
-            impls: Vec::new(),
-            span,
-        }
-    }
-
     pub fn from_generics(parent: ScopeId, src: &str, generics: &[GenericDef], span: TSpan) -> Self {
         Self {
             parent: Some(parent),
@@ -291,6 +282,7 @@ pub enum Definition {
     },
     Path(IdentPath),
     Global(GlobalId),
+    Module(ModuleId),
     Generic(u8),
 }
 

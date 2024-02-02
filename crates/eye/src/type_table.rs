@@ -4,7 +4,7 @@ use id::{TypeId, ModuleId};
 use span::Span;
 use types::{Type, Primitive};
 
-use crate::{parser::ast, error::{Error, Errors}, Compiler};
+use crate::{parser::ast, error::{Error, Errors}, Compiler, compiler::Def};
 
 id::id!(LocalTypeId);
 
@@ -192,7 +192,23 @@ impl TypeTable {
     ) -> TypeInfo {
         match ty {
             types::UnresolvedType::Primitive { ty, .. } => TypeInfo::Primitive(*ty),
-            types::UnresolvedType::Unresolved(_id, _generics) => todo!(),
+            types::UnresolvedType::Unresolved(path, generics) => {
+                assert!(generics.is_none(), "TODO: implement generics for type paths"); // TODO
+                let def = compiler.resolve_path(module, scope, *path);
+                match def {
+                    Def::Invalid => TypeInfo::Invalid,
+                    Def::Type(ty) => self.info_from_resolved(compiler, &ty),
+                    Def::ConstValue(_)
+                    | Def::Module(_)
+                    | Def::Global(_, _)
+                    | Def::Function(_, _) => {
+                        compiler.errors.emit_err(
+                            Error::TypeExpected.at_span(path.span().in_mod(module))
+                        );
+                        TypeInfo::Invalid
+                    }
+                }
+            }
             types::UnresolvedType::Pointer(b) => {
                 let (pointee, _) = &**b;
                 let pointee = self.info_from_unresolved(pointee, compiler, module, scope);
@@ -365,6 +381,9 @@ impl TypeTable {
             TypeInfo::FunctionItem { .. } => {
                 s.push_str("<function item>");
             }
+            TypeInfo::ModuleItem(_) => {
+                s.push_str("<module item>");
+            }
             TypeInfo::MethodItem { .. } => {
                 s.push_str("<method item>");
             }
@@ -528,6 +547,7 @@ pub enum TypeInfo {
         function: ast::FunctionId,
         generics: LocalTypeIds,
     },
+    ModuleItem(ModuleId),
     MethodItem {
         module: ModuleId,
         function: ast::FunctionId,

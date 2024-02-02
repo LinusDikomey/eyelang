@@ -101,6 +101,7 @@ pub fn get_from_info(
         | TypeInfo::TypeItem { .. }
         | TypeInfo::Array { element: _, count: None }
         | TypeInfo::FunctionItem { .. }
+        | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }
         | TypeInfo::Invalid => panic!("incomplete type during lowering to ir: {ty:?}"),
     }

@@ -273,58 +273,7 @@ pub fn check(
         &Expr::Root(_) => todo!("path roots"),
 
         &Expr::MemberAccess { left, name: name_span } => {
-            let left_ty = ctx.hir.types.add_unknown();
-            let left_node = check(ctx, left, scope, left_ty, return_ty);
-            let name = &ctx.ast.src()[name_span.range()];
-            match ctx.hir.types[left_ty] {
-                TypeInfo::TypeItem { ty: _ } => todo!("size/align/stride exprs here, also enums/assoc functions"),
-                TypeInfo::TypeDef(id, generics) => {
-                    let resolved = ctx.compiler.get_resolved_type_def(id);
-                    match &resolved.def {
-                        ResolvedTypeDef::Struct(def) => {
-                            let def = def.clone(); // PERF: cloning def
-                            let indexed_field = def.fields
-                                .iter()
-                                .zip(0..)
-                                .find_map(|((field_name, ty), index)| {
-                                    (field_name == name).then_some((index, ty))
-                                });
-                            if let Some((index, field_ty)) = indexed_field {
-                                let field_ty = ctx.type_from_resolved(field_ty, generics);
-                                match field_ty {
-                                    crate::type_table::TypeInfoOrIdx::TypeInfo(info) => {
-                                        ctx.specify(expected, info, |ast| ast[expr].span(ast));
-                                    }
-                                    crate::type_table::TypeInfoOrIdx::Idx(ty) => {
-                                        ctx.unify(expected, ty, |ast| ast[expr].span(ast));
-                                    }
-                                }
-                                Node::TupleIndex {
-                                    tuple_value: ctx.hir.add(left_node),
-                                    index,
-                                    elem_ty: expected,
-                                }
-                            } else {
-                                ctx.compiler.errors.emit_err(
-                                    Error::NonexistantMember.at_span(name_span.in_mod(ctx.module))
-                                );
-                                Node::Invalid
-                            }
-                        }
-                    }
-                }
-                TypeInfo::Unknown => {
-                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
-                    Node::Invalid
-                }
-                TypeInfo::Invalid => {
-                    Node::Invalid
-                }
-                _ => {
-                    ctx.compiler.errors.emit_err(Error::NonexistantMember.at_span(ctx.span(left)));
-                    Node::Invalid
-                }
-            }
+            check_member_access(ctx, left, name_span, expr, scope, expected, return_ty)
         }
         &Expr::Index { expr, idx, end: _ } => {
             let array_ty = ctx.hir.types.add(TypeInfo::Array { element: expected, count: None });
@@ -342,6 +291,7 @@ pub fn check(
             let tuple_value = check(ctx, left, scope, tuple_ty, return_ty);
             let elem_types = match ctx.hir.types[tuple_ty] {
                 TypeInfo::Tuple(ids) => ids,
+                TypeInfo::Invalid => return Node::Invalid,
                 _ => {
                     // TODO: could add TupleCountMode and stuff again to unify with tuple with
                     // Size::AtLeast. Not doing that for now since it is very rare.
@@ -473,103 +423,7 @@ pub fn check(
             }
         }
 
-        &Expr::FunctionCall(call) => {
-            let call = &ast[call];
-            let function_ty = ctx.hir.types.add_unknown();
-            let _called = check(ctx, call.called_expr, scope, function_ty, return_ty);
-            match ctx.hir.types[function_ty] {
-                TypeInfo::Invalid => Node::Invalid,
-                TypeInfo::TypeItem { ty: item_ty } => {
-                    match ctx.hir.types[item_ty] {
-                        TypeInfo::TypeDef(id, generics) => {
-                            let resolved = ctx.compiler.get_resolved_type_def(id);
-                            debug_assert_eq!(generics.count, resolved.generic_count.into());
-                            match &resolved.def {
-                                ResolvedTypeDef::Struct(struct_def) => {
-                                    // PERF: cloning struct def
-                                    let struct_def = struct_def.clone();
-                                    ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
-                                    check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
-                                }
-                                _ => {
-                                    ctx.compiler.errors.emit_err(
-                                        Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
-                                    );
-                                    Node::Invalid
-                                }
-                            }
-                        }
-                        _ => {
-                            ctx.compiler.errors.emit_err(
-                                Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
-                            );
-                            Node::Invalid
-                        }
-                    }
-                }
-                TypeInfo::FunctionItem { module, function, generics } => {
-                    let signature = Rc::clone(ctx.compiler.get_signature(module, function));
-
-                    let invalid_arg_count = if signature.varargs {
-                        call.args.count() < signature.args.len()
-                    } else {
-                        call.args.count() != signature.args.len()
-                    };
-                    if invalid_arg_count {
-                        let expected = signature.args.len() as _;
-                        let varargs = signature.varargs;
-                        let span = ctx.span(expr);
-                        ctx.compiler.errors.emit_err(Error::InvalidArgCount {
-                            expected,
-                            varargs, 
-                            found: call.args.count,
-                        }.at_span(span));
-                        return Node::Invalid;
-                    }
-
-                    
-                    let arg_types = ctx.hir.types.add_multiple_unknown(call.args.count);
-                    // iterating over the signature, all extra arguments in case of vararg
-                    // arguments will stay unknown which is intended
-                    for (i, (_, arg)) in signature.args.iter().enumerate() {
-                        let ty = ctx.type_from_resolved(arg, generics);
-                        ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
-                    }
-
-                    let func_return_ty = ctx.type_from_resolved(
-                        &signature.return_type,
-                        generics,
-                    );
-                    let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
-                    ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
-
-
-                    let args = ctx.hir.add_nodes((0..call.args.count).map(|_| Node::Invalid));
-                    for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
-                        let node = check(ctx, arg, scope, ty, return_ty);
-                        ctx.hir.modify_node(node_id, node);
-                    }
-
-                    Node::Call {
-                        function: (module, function),
-                        generics,
-                        args,
-                        return_ty: expected,
-                    }
-                }
-                TypeInfo::MethodItem { .. } => todo!("methods"),
-                TypeInfo::Unknown => {
-                    ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere
-                        .at_span(ctx.span(call.called_expr)));
-                    Node::Invalid
-                }
-                _ => {
-                    ctx.compiler.errors.emit_err(Error::FunctionOrTypeExpected
-                        .at_span(ctx.span(call.called_expr)));
-                    Node::Invalid
-                }
-            }
-        }
+        &Expr::FunctionCall(call) => check_call(ctx, &ast[call], expr, scope, expected, return_ty),
 
         Expr::Asm { .. } => todo!("implement inline assembly properly"),
     }
@@ -588,47 +442,7 @@ fn check_ident(
             ctx.unify(expected, ty, |_| span);
             Node::Variable(var)
         }
-        LocalItem::Def(def) => match def {
-            Def::Invalid => {
-                ctx.specify(expected, TypeInfo::Invalid, |_| span);
-                Node::Invalid
-            }
-            Def::Function(module, id) => function_item(ctx, module, id, expected, |_| span),
-            Def::Type(ty) => {
-                let ty = ctx.type_from_resolved(&ty, LocalTypeIds::EMPTY);
-                let ty = ctx.hir.types.add_info_or_idx(ty);
-                ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
-                Node::Invalid
-            }
-            Def::ConstValue(const_val) => {
-                match &ctx.compiler.const_values[const_val.idx()] {
-                    ConstValue::Undefined => todo!("should this invalidate the type?"),
-                    ConstValue::Unit => {
-                        ctx.specify(
-                            expected,
-                            TypeInfo::Primitive(Primitive::Unit),
-                            |_| span,
-                        );
-                    }
-                    ConstValue::Number(_) => {
-                        ctx.specify(
-                            expected,
-                            TypeInfo::Integer,
-                            |_| span,
-                        );
-                    }
-                }
-                Node::Const { id: const_val, ty: expected }
-            }
-            Def::Module(_) => {
-                ctx.compiler.errors.emit_err(
-                    Error::ExpectedValue.at_span(span.in_mod(ctx.module)),
-                );
-                ctx.invalidate(expected);
-                Node::Invalid
-            }
-            Def::Global(_, _) => todo!("globals"),
-        }
+        LocalItem::Def(def) => def_to_node(ctx, def, expected, span),
         LocalItem::Invalid => {
             ctx.specify(expected, TypeInfo::Invalid, |_| span);
             Node::Invalid
@@ -636,20 +450,63 @@ fn check_ident(
     }
 }
 
+fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> Node {
+    match def {
+        Def::Invalid => {
+            ctx.specify(expected, TypeInfo::Invalid, |_| span);
+            Node::Invalid
+        }
+        Def::Function(module, id) => {
+            function_item(ctx, module, id, expected, |_| span)
+        }
+        Def::Type(ty) => {
+            let ty = ctx.type_from_resolved(&ty, LocalTypeIds::EMPTY);
+            let ty = ctx.hir.types.add_info_or_idx(ty);
+            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+            Node::Invalid
+        }
+        Def::ConstValue(const_val) => {
+            match &ctx.compiler.const_values[const_val.idx()] {
+                ConstValue::Undefined => todo!("should this invalidate the type?"),
+                ConstValue::Unit => {
+                    ctx.specify(
+                        expected,
+                        TypeInfo::Primitive(Primitive::Unit),
+                        |_| span,
+                    );
+                }
+                ConstValue::Number(_) => {
+                    ctx.specify(
+                        expected,
+                        TypeInfo::Integer,
+                        |_| span,
+                    );
+                }
+            }
+            Node::Const { id: const_val, ty: expected }
+        }
+        Def::Module(id) => {
+            ctx.specify(expected, TypeInfo::ModuleItem(id), |_| span);
+            Node::Invalid
+        }
+        Def::Global(_, _) => todo!("globals"),
+    }
+}
+
 fn function_item(
     ctx: &mut Ctx,
-    _module: ModuleId,
+    function_module: ModuleId,
     function: FunctionId,
     expected: LocalTypeId,
     span: impl FnOnce(&Ast) -> TSpan,
 ) -> Node {
-    let signature = ctx.compiler.get_signature(ctx.module, function);
+    let signature = ctx.compiler.get_signature(function_module, function);
     let generics_count = signature.generics.len();
     let generics = ctx.hir.types.add_multiple_unknown(generics_count as _);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
-            module: ctx.module,
+            module: function_module,
             function,
             generics,
         },
@@ -683,4 +540,176 @@ fn check_struct_def(
         ctx.hir.modify_node(node_id, node);
     }
     Node::TupleLiteral { elems: elem_nodes, elem_types }
+}
+
+fn check_member_access(
+    ctx: &mut Ctx,
+    left: ExprId,
+    name_span: TSpan,
+    expr: ExprId,
+    scope: &mut LocalScope,
+    expected: LocalTypeId,
+    return_ty: LocalTypeId,
+) -> Node {
+    let left_ty = ctx.hir.types.add_unknown();
+    let left_node = check(ctx, left, scope, left_ty, return_ty);
+    let name = &ctx.ast.src()[name_span.range()];
+    match ctx.hir.types[left_ty] {
+        TypeInfo::TypeItem { ty: _ } => todo!("size/align/stride exprs here, also enums/assoc functions"),
+        TypeInfo::TypeDef(id, generics) => {
+            let resolved = ctx.compiler.get_resolved_type_def(id);
+            match &resolved.def {
+                ResolvedTypeDef::Struct(def) => {
+                    let def = def.clone(); // PERF: cloning def
+                    let indexed_field = def.fields
+                        .iter()
+                        .zip(0..)
+                        .find_map(|((field_name, ty), index)| {
+                            (field_name == name).then_some((index, ty))
+                        });
+                    if let Some((index, field_ty)) = indexed_field {
+                        let field_ty = ctx.type_from_resolved(field_ty, generics);
+                        match field_ty {
+                            crate::type_table::TypeInfoOrIdx::TypeInfo(info) => {
+                                ctx.specify(expected, info, |ast| ast[expr].span(ast));
+                            }
+                            crate::type_table::TypeInfoOrIdx::Idx(ty) => {
+                                ctx.unify(expected, ty, |ast| ast[expr].span(ast));
+                            }
+                        }
+                        Node::TupleIndex {
+                            tuple_value: ctx.hir.add(left_node),
+                            index,
+                            elem_ty: expected,
+                        }
+                    } else {
+                        ctx.compiler.errors.emit_err(
+                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module))
+                        );
+                        Node::Invalid
+                    }
+                }
+            }
+        }
+        TypeInfo::ModuleItem(id) => {
+            let def = ctx.compiler.resolve_in_module(id, name, name_span.in_mod(ctx.module));
+            def_to_node(ctx, def, expected, name_span)
+        }
+        TypeInfo::Unknown => {
+            ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+            Node::Invalid
+        }
+        TypeInfo::Invalid => {
+            ctx.invalidate(expected);
+            Node::Invalid
+        }
+        _ => {
+            ctx.compiler.errors.emit_err(Error::NonexistantMember.at_span(ctx.span(left)));
+            Node::Invalid
+        }
+    }
+}
+
+fn check_call(
+    ctx: &mut Ctx,
+    call: &Call,
+    expr: ExprId,
+    scope: &mut LocalScope,
+    expected: LocalTypeId,
+    return_ty: LocalTypeId,
+) -> Node {
+    let called_ty = ctx.hir.types.add_unknown();
+    let _called = check(ctx, call.called_expr, scope, called_ty, return_ty);
+    match ctx.hir.types[called_ty] {
+        TypeInfo::Invalid => Node::Invalid,
+        TypeInfo::TypeItem { ty: item_ty } => {
+            match ctx.hir.types[item_ty] {
+                TypeInfo::TypeDef(id, generics) => {
+                    let resolved = ctx.compiler.get_resolved_type_def(id);
+                    debug_assert_eq!(generics.count, resolved.generic_count.into());
+                    match &resolved.def {
+                        ResolvedTypeDef::Struct(struct_def) => {
+                            // PERF: cloning struct def
+                            let struct_def = struct_def.clone();
+                            ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
+                            check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
+                        }
+                        _ => {
+                            ctx.compiler.errors.emit_err(
+                                Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
+                            );
+                            Node::Invalid
+                        }
+                    }
+                }
+                _ => {
+                    ctx.compiler.errors.emit_err(
+                        Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr))
+                    );
+                    Node::Invalid
+                }
+            }
+        }
+        TypeInfo::FunctionItem { module, function, generics } => {
+            let signature = Rc::clone(ctx.compiler.get_signature(module, function));
+
+            let invalid_arg_count = if signature.varargs {
+                call.args.count() < signature.args.len()
+            } else {
+                call.args.count() != signature.args.len()
+            };
+            if invalid_arg_count {
+                let expected = signature.args.len() as _;
+                let varargs = signature.varargs;
+                let span = ctx.span(expr);
+                ctx.compiler.errors.emit_err(Error::InvalidArgCount {
+                    expected,
+                    varargs, 
+                    found: call.args.count,
+                }.at_span(span));
+                return Node::Invalid;
+            }
+
+            
+            let arg_types = ctx.hir.types.add_multiple_unknown(call.args.count);
+            // iterating over the signature, all extra arguments in case of vararg
+            // arguments will stay unknown which is intended
+            for (i, (_, arg)) in signature.args.iter().enumerate() {
+                let ty = ctx.type_from_resolved(arg, generics);
+                ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
+            }
+
+            let func_return_ty = ctx.type_from_resolved(
+                &signature.return_type,
+                generics,
+            );
+            let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
+            ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
+
+
+            let args = ctx.hir.add_nodes((0..call.args.count).map(|_| Node::Invalid));
+            for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
+                let node = check(ctx, arg, scope, ty, return_ty);
+                ctx.hir.modify_node(node_id, node);
+            }
+
+            Node::Call {
+                function: (module, function),
+                generics,
+                args,
+                return_ty: expected,
+            }
+        }
+        TypeInfo::MethodItem { .. } => todo!("methods"),
+        TypeInfo::Unknown => {
+            ctx.compiler.errors.emit_err(Error::TypeMustBeKnownHere
+                .at_span(ctx.span(call.called_expr)));
+            Node::Invalid
+        }
+        _ => {
+            ctx.compiler.errors.emit_err(Error::FunctionOrTypeExpected
+                .at_span(ctx.span(call.called_expr)));
+            Node::Invalid
+        }
+    }
 }

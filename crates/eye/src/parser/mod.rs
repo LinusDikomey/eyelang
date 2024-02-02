@@ -3,6 +3,7 @@ pub mod token;
 mod lexer;
 mod reader;
 
+use dmap::DHashMap;
 pub use reader::ExpectedTokens;
 
 use id::ModuleId;
@@ -22,6 +23,7 @@ pub fn parse(
     source: String,
     errors: &mut Errors,
     module: ModuleId,
+    definitions: DHashMap<String, Definition>,
 ) -> Option<ast::Ast> {
     let tokens = lexer::lex(&source, errors, module)?;
     let mut ast_builder = ast::AstBuilder::new();
@@ -31,7 +33,7 @@ pub fn parse(
         toks: reader::TokenReader::new(tokens, module),
     };
 
-    match parser.parse_module() {
+    match parser.parse_module(definitions) {
         Ok(scope) => Some(ast_builder.finish_with_top_level_scope(source, scope)),
         Err(err) => {
             errors.emit_err(err);
@@ -103,24 +105,30 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_module(&mut self) -> ParseResult<ScopeId> {
+    fn parse_module(&mut self, module_defs: DHashMap<String, Definition>) -> ParseResult<ScopeId> {
         debug_assert!(
             self.toks.previous().is_none(),
             "parsing module not from start, start position wrong",
         );
-        self.parse_items_until(0, None, |p| p.toks.is_at_end(), Self::on_module_level_expr)
+        self.parse_items_until(0, None, module_defs, |p| p.toks.is_at_end(), Self::on_module_level_expr)
     }
 
     fn parse_items_until(
         &mut self,
         start: u32,
         parent: Option<ScopeId>,
+        definitions: DHashMap<String, Definition>,
         mut end: impl FnMut(&mut Self) -> bool,
         mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, ScopeId, Expr, Span) -> ParseResult<()>,
     ) -> ParseResult<ScopeId> {
         let parent_scope = parent.as_ref().map(|scope| *scope);
         let scope_id = self.ast.scope(ast::Scope::missing());
-        let mut scope = ast::Scope::empty(parent_scope, TSpan::MISSING);
+        let mut scope = ast::Scope {
+            parent,
+            definitions,
+            impls: Vec::new(),
+            span: TSpan::MISSING, // span will be updated at the end of this function
+        };
 
         while !end(self) {
             let start = self.toks.current().unwrap().start; 
@@ -260,6 +268,7 @@ impl<'a> Parser<'a> {
         let scope = self.parse_items_until(
             lbrace.start,
             Some(parent),
+            dmap::new(),
             |p| p.toks.step_if(TokenType::RBrace).inspect(|rbrace| end = rbrace.end).is_some(),
             |_, _, _, expr, _| { items.push(expr); Ok(())}
         )?;

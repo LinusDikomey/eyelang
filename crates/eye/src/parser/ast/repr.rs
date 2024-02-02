@@ -118,6 +118,11 @@ impl Definition {
                     c.ast()[val].repr(c);
                 }
             }
+            Self::Module(_) => {
+                c.write_add("<module ");
+                c.write_add(name);
+                c.write_add(">");
+            }
             Self::Generic(i) => c.write_add(format!("<generic #{i}>"))
         }
     }
