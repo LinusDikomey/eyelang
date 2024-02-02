@@ -202,7 +202,7 @@ pub fn check(
                 }
                 Operator::Assignment(AssignType::Assign) => {
                     ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
-                    let (lval, ty) = lval::check(ctx, l, scope);
+                    let (lval, ty) = lval::check(ctx, l, scope, return_ty);
                     let val = check(ctx, r, scope, ty, return_ty);
                     Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val))
                 }

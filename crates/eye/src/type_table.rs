@@ -69,7 +69,7 @@ impl TypeTable {
                 ),
             },
             TypeInfo::Invalid => Type::Invalid,
-            _ => todo!(),
+            _ => todo!("type to resolved: {info:?}"),
         }
     }
 
@@ -134,7 +134,6 @@ impl TypeTable {
     /// Only produces an Index instead of a TypeInfo when the Type is Type::Generic
     /// generics: None will produce generic TypeInfos for generic functions
     fn from_generic_resolved_internal(&mut self, compiler: &mut Compiler, ty: &Type, generics: Option<LocalTypeIds>) -> TypeInfoOrIdx {
-        dbg!(ty, generics);
         let info = match ty {
             Type::Invalid => TypeInfo::Invalid,
             &Type::Primitive(p) => TypeInfo::Primitive(p),

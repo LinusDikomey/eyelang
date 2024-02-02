@@ -166,6 +166,7 @@ pub enum LValue {
     Invalid,
     Variable(VarId),
     Global(ModuleId, GlobalId),
+    Deref(NodeId),
 }
 
 #[derive(Debug, Clone)]

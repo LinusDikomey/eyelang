@@ -1,12 +1,13 @@
 use crate::{hir::LValue, type_table::{LocalTypeId, TypeInfo, LocalTypeIds}, parser::ast::{Expr, ExprId, UnOp}, compiler::{LocalScope, LocalItem, Def}, error::Error};
 
-use super::Ctx;
+use super::{Ctx, expr};
 
 
 pub fn check(
     ctx: &mut Ctx,
     expr: ExprId,
     scope: &mut LocalScope,
+    return_ty: LocalTypeId,
 ) -> (LValue, LocalTypeId) {
     match &ctx.ast[expr] {
         &Expr::Ident { span } => {
@@ -35,7 +36,12 @@ pub fn check(
                 }
             }
         }
-        Expr::UnOp(_, UnOp::Deref, _) => todo!("assign to derefs"),
+        &Expr::UnOp(_, UnOp::Deref, inner) => {
+            let pointee = ctx.hir.types.add_unknown();
+            let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
+            let node = expr::check(ctx, inner, scope, pointer, return_ty);
+            (LValue::Deref(ctx.hir.add(node)), pointee)
+        }
         Expr::MemberAccess { .. } => todo!("struct member assignment"),
         _ => {
             ctx.compiler.errors.emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));

@@ -495,6 +495,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
         LValue::Invalid => build_crash_point(ctx, noreturn),
         LValue::Variable(id) => ctx.vars[id.idx()],
         LValue::Global(_, _) => todo!("handle ir for globals"),
+        LValue::Deref(pointer) => lower(ctx, pointer, noreturn),
     }
 }
 

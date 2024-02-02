@@ -51,6 +51,11 @@ pub fn check(
             // TODO: check enum is valid for casting
             CastType::EnumToInt { from: from_ty, to: b.as_int().unwrap() }
         }
+        (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
+            // TODO: check pointees are different, emit TrivialCast otherwise
+            // pointers are untyped in the ir
+            CastType::Noop
+        }
         (a, b) => {
             let mut a_string = String::new();
             let mut b_string = String::new();
