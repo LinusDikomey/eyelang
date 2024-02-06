@@ -1,3 +1,5 @@
+pub mod builtins;
+
 use std::{path::PathBuf, rc::Rc, collections::VecDeque};
 
 use dmap::DHashMap;
@@ -7,6 +9,8 @@ use types::{UnresolvedType, Type};
 
 use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfoOrIdx}, irgen, hir::{HIRBuilder, HIR}, check, MainError};
 
+use builtins::Builtins;
+
 pub struct Compiler {
     projects: Vec<Project>,
     pub modules: Vec<Module>,
@@ -14,6 +18,7 @@ pub struct Compiler {
     pub types: Vec<ResolvableTypeDef>,
     pub ir_module: ir::Module,
     pub errors: Errors,
+    pub builtins: Builtins,
 }
 impl Compiler {
     pub fn new() -> Self {
@@ -27,6 +32,7 @@ impl Compiler {
                 funcs: Vec::new(),
             },
             errors: Errors::new(),
+            builtins: Builtins::default(),
         }
     }
 
@@ -97,7 +103,6 @@ impl Compiler {
                 })
                 .collect();
             let contents = if module.path.is_file() {
-                eprintln!("parsing file: {}", module.path.display());
                 std::fs::read_to_string(&module.path)
             } else {
                 if !module.path.is_dir() {
@@ -155,7 +160,6 @@ impl Compiler {
                         }
                     }
                 }
-                eprintln!("parsing file: {}", file.display());
                 std::fs::read_to_string(file)
             };
             let source = match contents {
@@ -382,7 +386,17 @@ impl Compiler {
                     .as_mut().unwrap().1.functions[id.idx()];
                 *resolving = Resolvable::Resolving;
                 let ast = self.modules[module.idx()].ast.as_ref().unwrap().0.clone();
+
                 let function = &ast[id];
+
+                let name = if function.associated_name != TSpan::EMPTY {
+                    ast.src()[function.associated_name.range()].to_owned()
+                } else {
+                    // If no name is associated, assign a name based on unique ids.
+                    // This will be the case for lambdas right now, maybe a better name is possible
+                    format!("function_{}_{}", module.idx(), id.idx())
+                };
+
                 self.get_signature(module, id);
                 // signature is resolved above
                 let Resolvable::Resolved(signature) = &self.modules[module.idx()].ast
@@ -436,6 +450,7 @@ impl Compiler {
                 };
 
                 let checked = CheckedFunction {
+                    name,
                     types,
                     params: param_types,
                     varargs,
@@ -602,7 +617,6 @@ impl Compiler {
                     generics,
                 }];
                 while let Some(f) = to_generate.pop() {
-                    let ast = self.get_module_ast(f.module).clone();
                     self.get_hir(f.module, f.ast_function_id);
                     // got checked function above
                     let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().1;
@@ -612,12 +626,7 @@ impl Compiler {
                     // PERF: put CheckedFunction behind Rc
                     let checked = checked.clone();
                     // TODO: generics in function name
-                    let associated_name = ast[f.ast_function_id].associated_name;
-                    let mut name = if associated_name != TSpan::EMPTY {
-                        ast.src()[associated_name.range()].to_owned()
-                    } else {
-                        format!("function_{}_{}", f.module.idx(), f.ast_function_id.idx())
-                    };
+                    let mut name = checked.name.clone();
                     if name == "main" {
                         name.clear();
                         name.push_str("eyemain");
@@ -639,7 +648,7 @@ impl Compiler {
                         name.push(']');
                     }
 
-                    let func = irgen::lower_function(self, &mut to_generate, ast.src(), name, &checked, &f.generics);
+                    let func = irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
                     self.ir_module[f.ir_id] = func;
                 }
                 potential_id
@@ -858,14 +867,6 @@ impl Module {
     }
 }
 
-struct ModuleIds {
-    start: u32,
-    count: u32,
-}
-impl ModuleIds {
-    const EMPTY: Self = Self { start: 0, count: 0 };
-}
-
 #[derive(Debug)]
 pub struct Signature {
     pub args: Vec<(String, Type)>,
@@ -921,6 +922,7 @@ impl ModuleSymbols {
 
 #[derive(Debug, Clone)]
 pub struct CheckedFunction {
+    pub name: String,
     pub types: TypeTable,
     pub params: LocalTypeIds,
     pub varargs: bool,

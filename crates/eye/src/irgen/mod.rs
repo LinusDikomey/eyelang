@@ -15,7 +15,7 @@ use crate::eval::ConstValue;
 use crate::hir::{Node, PatternId, Pattern, CastType, LValueId, LValue};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::type_table::LocalTypeId;
+use crate::type_table::LocalTypeIds;
 use crate::{
     compiler::CheckedFunction,
     type_table::{TypeTable, TypeInfo},
@@ -25,7 +25,6 @@ use crate::{
 pub fn lower_function(
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
-    _src: &str,
     name: String,
     checked: &CheckedFunction,
     generics: &[Type],
@@ -38,12 +37,12 @@ pub fn lower_function(
 
     let ir = checked.body.as_ref().map(|hir| {
         let mut builder = ir::builder::IrBuilder::new(&mut types);
-        let mut vars = vec![Ref::UNDEF; hir.vars.len()];
+        let mut vars = vec![(Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
 
         for (i, ty) in params.iter().enumerate() {
-            vars[i] = builder.build_decl(ty);
+            vars[i] = (builder.build_decl(ty), ty);
             let param_val = builder.build_param(i as u32, ty);
-            builder.build_store(vars[i], param_val);
+            builder.build_store(vars[i].0, param_val);
         }
 
         let mut noreturn = false;
@@ -80,7 +79,7 @@ struct Ctx<'a> {
     types: &'a TypeTable,
     generics: TypeRefs,
     builder: IrBuilder<'a>,
-    vars: &'a mut [Ref],
+    vars: &'a mut [(Ref, ir::TypeRef)],
 }
 impl<'a> Ctx<'a> {
 
@@ -117,6 +116,10 @@ impl<'a> Ctx<'a> {
     fn get_type(&mut self, ty: TypeInfo) -> IrType {
         types::get_from_info(self.compiler, self.types, self.builder.types, ty, self.generics)
     }
+
+    fn get_multiple_types(&mut self, ids: LocalTypeIds) -> ir::TypeRefs {
+        types::get_multiple_infos(self.compiler, self.types, self.builder.types, ids, self.generics)
+    }
 }
 
 fn lower(
@@ -128,8 +131,7 @@ fn lower(
         ValueOrPlace::Value(r) => r,
         ValueOrPlace::Place { ptr, value_ty } => {
             if *noreturn { return Ref::UNDEF }
-            let ty = ctx.get_type(ctx.types[value_ty]);
-            ctx.builder.build_load(ptr, ty)
+            ctx.builder.build_load(ptr, value_ty)
         }
     }
 }
@@ -138,7 +140,7 @@ enum ValueOrPlace {
     Value(Ref),
     Place {
         ptr: Ref,
-        value_ty: LocalTypeId,
+        value_ty: ir::TypeRef,
     },
 }
 
@@ -207,7 +209,7 @@ fn lower_expr(
             }
             return ValueOrPlace::Place {
                 ptr: array_var,
-                value_ty: array_ty,
+                value_ty: array_ir_ty,
             }
         }
         &Node::TupleLiteral { elems, elem_types } => {
@@ -226,7 +228,18 @@ fn lower_expr(
             // maybe do this differently, could do it like llvm: insertvalue
             ctx.builder.build_load(var, tuple_ty)
         }
-        Node::StringLiteral(_) => todo!(),
+        Node::StringLiteral(str) => {
+            // TODO: cache string ir type to prevent generating it multiple times
+            let elems = ctx.builder.types.add_multiple([IrType::Ptr, IrType::U64]);
+            let str_ty = ctx.builder.types.add(IrType::Tuple(elems));
+            let str_var = ctx.builder.build_decl(str_ty);
+            let str_ptr = ctx.builder.build_string(str.as_bytes(), true);
+            ctx.builder.build_store(str_var, str_ptr);
+            let str_len_var = ctx.builder.build_member_ptr(str_var, 1, elems);
+            let str_len = ctx.builder.build_int(str.len() as u64, IrType::U64);
+            ctx.builder.build_store(str_len_var, str_len);
+            return ValueOrPlace::Place { ptr: str_var, value_ty: str_ty };
+        }
 
         Node::Declare { pattern: _ } => todo!("lower declarations without values"),
         &Node::DeclareWithVal { pattern, val } => {
@@ -237,8 +250,8 @@ fn lower_expr(
             Ref::UNIT
         }
         Node::Variable(id) => return ValueOrPlace::Place {
-            ptr: ctx.vars[id.idx()],
-            value_ty: ctx.hir.vars[id.idx()],
+            ptr: ctx.vars[id.idx()].0,
+            value_ty: ctx.vars[id.idx()].1,
         },
         &Node::Assign(lval, val) => {
             let lval = lower_lval(ctx, lval, noreturn);
@@ -371,11 +384,22 @@ fn lower_expr(
             ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
         }
 
-        &Node::TupleIndex { tuple_value, index, elem_ty } => {
-            let tuple = lower(ctx, tuple_value, noreturn);
+        &Node::TupleIndex { tuple_value, index, elem_types } => {
+            let value = lower_expr(ctx, tuple_value, noreturn);
             if *noreturn { return ValueOrPlace::Value(Ref::UNDEF) }
-            let elem_ty = ctx.get_type(ctx.types[elem_ty]);
-            ctx.builder.build_member_value(tuple, index, elem_ty)
+            let value = match value {
+                ValueOrPlace::Value(val) => {
+                    let elem_ty = ctx.get_type(ctx.types[elem_types.nth(index).unwrap()]);
+                    let value = ctx.builder.build_member_value(val, index, elem_ty);
+                    ValueOrPlace::Value(value)
+                }
+                ValueOrPlace::Place { ptr, value_ty: _ } => {
+                    let elem_types = ctx.get_multiple_types(elem_types);
+                    let member_ptr = ctx.builder.build_member_ptr(ptr, index, elem_types);
+                    ValueOrPlace::Place { ptr: member_ptr, value_ty: elem_types.nth(index) }
+                }
+            };
+            return value;
         }
         &Node::ArrayIndex { array, index, elem_ty } => {
             let array = match lower_expr(ctx, array, noreturn) {
@@ -389,7 +413,7 @@ fn lower_expr(
             let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
             return ValueOrPlace::Place {
                 ptr: ctx.builder.build_array_index(array, index, elem_ir_ty),
-                value_ty: elem_ty,
+                value_ty: elem_ir_ty,
             }
         }
 
@@ -493,7 +517,7 @@ fn lower_expr(
 fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
     match ctx.hir[lval] {
         LValue::Invalid => build_crash_point(ctx, noreturn),
-        LValue::Variable(id) => ctx.vars[id.idx()],
+        LValue::Variable(id) => ctx.vars[id.idx()].0,
         LValue::Global(_, _) => todo!("handle ir for globals"),
         LValue::Deref(pointer) => lower(ctx, pointer, noreturn),
     }
@@ -510,8 +534,9 @@ fn lower_pattern(
         Pattern::Variable(id) => {
             let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
             let ty = ctx.get_type(var_ty);
+            let ty = ctx.builder.types.add(ty);
             let var = ctx.builder.build_decl(ty);
-            ctx.vars[id.idx()] = var;
+            ctx.vars[id.idx()] = (var, ty);
             ctx.builder.build_store(var, value);
             Ref::val(RefVal::True)
         }

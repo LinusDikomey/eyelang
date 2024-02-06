@@ -121,7 +121,6 @@ impl<'a> Parser<'a> {
         mut end: impl FnMut(&mut Self) -> bool,
         mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, ScopeId, Expr, Span) -> ParseResult<()>,
     ) -> ParseResult<ScopeId> {
-        let parent_scope = parent.as_ref().map(|scope| *scope);
         let scope_id = self.ast.scope(ast::Scope::missing());
         let mut scope = ast::Scope {
             parent,

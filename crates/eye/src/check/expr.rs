@@ -9,7 +9,7 @@ use crate::{
         ast::{ExprId, Expr, FunctionId, Ast, UnOp, Call},
         token::{IntLiteral, Operator, AssignType, FloatLiteral},
     },
-    compiler::{LocalScope, LocalItem, Def, ResolvedTypeDef, ResolvedStructDef},
+    compiler::{LocalScope, LocalItem, Def, ResolvedTypeDef, ResolvedStructDef, builtins},
     type_table::{LocalTypeId, TypeInfo, LocalTypeIds},
     hir::{Node, self, Comparison},
     error::Error,
@@ -70,7 +70,12 @@ pub fn check(
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[expr].span(ast));
             Node::BoolLiteral(val)
         }
-        Expr::StringLiteral(_) => todo!("string literals"),
+        &Expr::StringLiteral(span) => {
+            let str = get_string_literal(ctx.ast.src(), span);
+            let str_ty = builtins::get_str(ctx.compiler);
+            ctx.specify(expected, TypeInfo::TypeDef(str_ty, LocalTypeIds::EMPTY), |_| span);
+            Node::StringLiteral(str)
+        }
         &Expr::Array(span, elems) => {
             // PERF: reuse existing Array TypeInfo @TypeInfoReuse
             let elem_ty = ctx.hir.types.add_unknown();
@@ -301,7 +306,7 @@ pub fn check(
             };
             if let Some(elem_ty) = elem_types.nth(idx) {
                 ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
-                Node::TupleIndex { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_ty }
+                Node::TupleIndex { tuple_value: ctx.hir.add(tuple_value), index: idx, elem_types }
             } else {
                 ctx.compiler.errors.emit_err(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
                 Node::Invalid
@@ -561,26 +566,29 @@ fn check_member_access(
             match &resolved.def {
                 ResolvedTypeDef::Struct(def) => {
                     let def = def.clone(); // PERF: cloning def
-                    let indexed_field = def.fields
+                    // PERF: Every time we index a struct, all fields are mapped to TypeInfo's
+                    // again. This could be improved by caching structs somehow ?? or by putting
+                    // the fields along the TypeDef (easier but would make TypeDef very large,
+                    // similar problem for enums and extra solution required).
+                    let elem_types = ctx.hir.types.add_multiple_unknown(def.fields.len() as _);
+                    let mut indexed_field = None;
+                    let fields = def.fields
                         .iter()
                         .zip(0..)
-                        .find_map(|((field_name, ty), index)| {
-                            (field_name == name).then_some((index, ty))
-                        });
-                    if let Some((index, field_ty)) = indexed_field {
-                        let field_ty = ctx.type_from_resolved(field_ty, generics);
-                        match field_ty {
-                            crate::type_table::TypeInfoOrIdx::TypeInfo(info) => {
-                                ctx.specify(expected, info, |ast| ast[expr].span(ast));
-                            }
-                            crate::type_table::TypeInfoOrIdx::Idx(ty) => {
-                                ctx.unify(expected, ty, |ast| ast[expr].span(ast));
-                            }
+                        .zip(elem_types.iter());
+                    for (((field_name, ty), index), r) in fields {
+                        let ty = ctx.type_from_resolved(ty, generics);
+                        if field_name == name {
+                            indexed_field = Some((index, r));
                         }
+                        ctx.hir.types.replace(r, ty);
+                    }
+                    if let Some((index, field_ty)) = indexed_field {
+                        ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
                         Node::TupleIndex {
                             tuple_value: ctx.hir.add(left_node),
                             index,
-                            elem_ty: expected,
+                            elem_types,
                         }
                     } else {
                         ctx.compiler.errors.emit_err(
@@ -712,4 +720,13 @@ fn check_call(
             Node::Invalid
         }
     }
+}
+
+fn get_string_literal(src: &str, span: TSpan) -> String {
+    src[span.start as usize + 1 .. span.end as usize]
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace("\\0", "\0")
+        .replace("\\\"", "\"")
 }

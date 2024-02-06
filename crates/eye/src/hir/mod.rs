@@ -1,7 +1,6 @@
 use std::ops::{Index, IndexMut};
 
 use id::{id, ConstValueId, ModuleId};
-use span::TSpan;
 use types::{Primitive, IntType, FloatType};
 
 use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId}};
@@ -83,7 +82,7 @@ pub struct PatternIds {
     count: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Node {
     Invalid,
 
@@ -112,7 +111,7 @@ pub enum Node {
         elems: NodeIds,
         elem_types: LocalTypeIds,
     },
-    StringLiteral(TSpan),
+    StringLiteral(String),
 
     Declare {
         pattern: PatternId,
@@ -141,7 +140,7 @@ pub enum Node {
     TupleIndex {
         tuple_value: NodeId,
         index: u32,
-        elem_ty: LocalTypeId,
+        elem_types: LocalTypeIds
     },
     ArrayIndex {
         array: NodeId,

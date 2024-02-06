@@ -81,6 +81,7 @@ fn main() -> Result<(), MainError> {
     // add standard library
     let std = compiler.add_project("std".to_owned(), "std".into())?;
     compiler.add_dependency(project, std);
+    compiler.builtins.set_std(std);
 
     if args.reconstruct_src {
         let ast = compiler.get_module_ast(root_module);
@@ -150,7 +151,7 @@ fn main() -> Result<(), MainError> {
             let exe_file_extension = "";
             #[cfg(target_os = "windows")]
             let exe_file_extension = ".exe";
-            let exe_file = format!("eyebuild/name{exe_file_extension}");
+            let exe_file = format!("eyebuild/{name}{exe_file_extension}");
             if let Err(err) = link::link(&obj_file, &exe_file, &args) {
                 return Err(MainError::LinkingFailed(err));
             }

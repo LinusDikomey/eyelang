@@ -27,8 +27,6 @@ impl FunctionId {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlobalId(u64);
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypeId(u64);
 
 #[derive(Debug)]
 pub struct Function {

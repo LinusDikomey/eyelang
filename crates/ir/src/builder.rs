@@ -224,14 +224,13 @@ impl<'a> IrBuilder<'a> {
         self.add_unused(Tag::Store, Data { bin_op: (var, val) });
     }
 
-    pub fn build_string(&mut self, string: &[u8], null_terminate: bool, ty: impl Into<IdxOrTy>) -> Ref {
-        let ty = self.ty(ty);
+    pub fn build_string(&mut self, string: &[u8], null_terminate: bool) -> Ref {
         debug_assert!(string.len() <= u32::MAX as usize, "String is too long");
         let extra = self.extra_data(string);
         if null_terminate {
             self.extra_data(&[b'\0']);
         }
-        self.add(Data { extra_len: (extra, string.len() as u32) }, Tag::String, ty)
+        self.add(Data { extra_len: (extra, string.len() as u32) }, Tag::String, IrType::Ptr)
     }
 
     pub fn build_call(&mut self, func: FunctionId, params: impl IntoIterator<Item = Ref>, return_ty: impl Into<IdxOrTy>)
