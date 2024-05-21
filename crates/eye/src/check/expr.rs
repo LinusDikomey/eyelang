@@ -141,8 +141,10 @@ pub fn check(
         }
         &Expr::Type { id } => {
             let resolved_id = ctx.compiler.add_type_def(ctx.module, id);
-            ctx.compiler.get_module_ast_and_symbols(ctx.module).1.types[id.idx()] =
-                Some(resolved_id);
+            ctx.compiler
+                .get_module_ast_and_symbols(ctx.module)
+                .symbols
+                .types[id.idx()] = Some(resolved_id);
             let ty = ctx.compiler.get_resolved_type_def(resolved_id);
             let generics = ctx.hir.types.add_multiple_unknown(ty.generic_count.into());
             let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));

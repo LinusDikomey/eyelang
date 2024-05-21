@@ -1,8 +1,8 @@
-use id::{ProjectId, TypeId};
+use id::{ModuleId, ProjectId, TypeId};
 use span::Span;
 use types::Type;
 
-use crate::Compiler;
+use crate::{parser::ast::FunctionId, Compiler};
 
 use super::Def;
 
@@ -10,6 +10,8 @@ use super::Def;
 pub struct Builtins {
     std: Option<ProjectId>,
     str_type: Option<TypeId>,
+    prelude: Option<ModuleId>,
+    panic: Option<(ModuleId, FunctionId)>,
 }
 impl Builtins {
     pub fn set_std(&mut self, std: ProjectId) {
@@ -44,4 +46,34 @@ pub fn get_str(compiler: &mut Compiler) -> TypeId {
     };
     compiler.builtins.str_type = Some(str_type);
     str_type
+}
+
+pub fn get_prelude(compiler: &mut Compiler) -> Option<ModuleId> {
+    if let Some(module) = compiler.builtins.prelude {
+        return Some(module);
+    }
+    compiler.builtins.std.map(|std| {
+        let root = compiler.get_project(std).root_module;
+        let prelude = compiler.resolve_in_module(root, "prelude", Span::MISSING);
+        let Def::Module(prelude) = prelude else {
+            panic!("expected a module for std.prelude, found {prelude:?}");
+        };
+        compiler.builtins.prelude = Some(prelude);
+        prelude
+    })
+}
+
+pub fn get_panic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
+    if let Some(panic) = compiler.builtins.panic {
+        return panic;
+    }
+
+    let std = compiler.builtins.std();
+    let root = compiler.get_project(std).root_module;
+    let def = compiler.resolve_in_module(root, "panic", Span::MISSING);
+    let Def::Function(panic_mod, panic_func) = def else {
+        panic!("expected a function for std.panic, found {def:?}")
+    };
+    compiler.builtins.panic = Some((panic_mod, panic_func));
+    (panic_mod, panic_func)
 }

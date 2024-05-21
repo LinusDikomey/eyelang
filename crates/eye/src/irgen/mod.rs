@@ -96,7 +96,11 @@ impl<'a> Ctx<'a> {
         generics: Vec<Type>,
     ) -> ir::FunctionId {
         self.compiler.get_hir(module, id);
-        let instances = &mut self.compiler.modules[module.idx()].ast.as_mut().unwrap().2;
+        let instances = &mut self.compiler.modules[module.idx()]
+            .ast
+            .as_mut()
+            .unwrap()
+            .instances;
 
         let potential_id = ir::FunctionId(self.compiler.ir_module.funcs.len() as _);
 
@@ -257,18 +261,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
         }
         Node::StringLiteral(str) => {
             // TODO: cache string ir type to prevent generating it multiple times
-            let elems = ctx.builder.types.add_multiple([IrType::Ptr, IrType::U64]);
-            let str_ty = ctx.builder.types.add(IrType::Tuple(elems));
-            let str_var = ctx.builder.build_decl(str_ty);
-            let str_ptr = ctx.builder.build_string(str.as_bytes(), true);
-            ctx.builder.build_store(str_var, str_ptr);
-            let str_len_var = ctx.builder.build_member_ptr(str_var, 1, elems);
-            let str_len = ctx.builder.build_int(str.len() as u64, IrType::U64);
-            ctx.builder.build_store(str_len_var, str_len);
-            return ValueOrPlace::Place {
-                ptr: str_var,
-                value_ty: str_ty,
-            };
+            let (ptr, value_ty) = lower_string_literal(&mut ctx.builder, str);
+            return ValueOrPlace::Place { ptr, value_ty };
         }
 
         Node::Declare { pattern: _ } => todo!("lower declarations without values"),
@@ -655,14 +649,27 @@ fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut b
     }
 }
 
+fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) {
+    let elems = builder.types.add_multiple([IrType::Ptr, IrType::U64]);
+    let str_ty = builder.types.add(IrType::Tuple(elems));
+    let str_var = builder.build_decl(str_ty);
+    let str_ptr = builder.build_string(s.as_bytes(), true);
+    builder.build_store(str_var, str_ptr);
+    let str_len_var = builder.build_member_ptr(str_var, 1, elems);
+    let str_len = builder.build_int(s.len() as u64, IrType::U64);
+    builder.build_store(str_len_var, str_len);
+    (str_var, str_ty)
+}
+
 fn build_crash_point(ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
     // TODO: build proper crash point
-    // let msg = "program reached a compile error at runtime";
-    // let msg = ctx.builder.build_string(msg.as_bytes(), true, IrType::Ptr);
-    let block = ctx.builder.create_block();
-    ctx.builder.terminate_block(Terminator::Goto(block));
-    ctx.builder.begin_block(block);
-    ctx.builder.terminate_block(Terminator::Goto(block));
+    let msg = "program reached a compile error at runtime";
+    let (ptr, str_ty) = lower_string_literal(&mut ctx.builder, msg);
+    let msg = ctx.builder.build_load(ptr, str_ty);
+    let panic_function = ctx.compiler.get_builtin_panic();
+    eprintln!("BUILDING TEMPORARY CRASH POINT");
+    ctx.builder.build_call(panic_function, [msg], IrType::Unit);
     *noreturn = true;
+    ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
     Ref::UNDEF
 }

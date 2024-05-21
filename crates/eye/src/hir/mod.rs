@@ -24,6 +24,352 @@ impl HIR {
     pub fn root_id(&self) -> NodeId {
         NodeId((self.nodes.len() - 1) as _)
     }
+
+    pub fn dump(&self, node: NodeId, types: &TypeTable, indent_count: usize) {
+        fn indent_n(n: usize) {
+            for _ in 0..n {
+                eprint!("  ");
+            }
+        }
+        let indent = || indent_n(indent_count);
+        match &self[node] {
+            Node::Invalid => eprint!("(invalid)"),
+            &Node::CheckPattern(pat, val) => {
+                eprint!("(is ");
+                self.dump(val, types, indent_count);
+                eprint!(" ");
+                self.dump_pattern(pat, types);
+                eprint!(")");
+            }
+            Node::Block(ids) => {
+                eprintln!("(");
+                for id in ids.iter() {
+                    indent_n(indent_count + 1);
+                    self.dump(id, types, indent_count + 1);
+                    eprintln!();
+                }
+                indent();
+                eprint!(")");
+            }
+            Node::Unit => eprint!("(unit)"),
+            &Node::IntLiteral { val, ty } => {
+                eprint!("(int {val}): ");
+                types.dump_type(ty);
+            }
+            &Node::FloatLiteral { val, ty } => {
+                eprint!("(float {val}): ");
+                types.dump_type(ty);
+            }
+            Node::BoolLiteral(b) => {
+                eprint!("{b}")
+            }
+            &Node::ArrayLiteral { elems, array_ty } => {
+                eprint!("(array ");
+                for (i, elem) in elems.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    self.dump(elem, types, indent_count);
+                }
+                eprint!("): [");
+                types.dump_type(array_ty);
+                eprint!("; {}]", elems.count);
+            }
+            Node::TupleLiteral { elems, elem_types } => {
+                eprint!("(tuple ");
+                for (i, (elem, ty)) in elems.iter().zip(elem_types.iter()).enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    self.dump(elem, types, indent_count);
+                    eprint!(": ");
+                    types.dump_type(ty);
+                }
+                eprint!(")");
+            }
+            Node::StringLiteral(s) => eprint!("(string {s:?})"),
+            &Node::Declare { pattern } => {
+                eprint!("(decl ");
+                self.dump_pattern(pattern, types);
+                eprint!(")");
+            }
+            &Node::DeclareWithVal { pattern, val } => {
+                eprint!("(decl ");
+                self.dump_pattern(pattern, types);
+                eprint!(" ");
+                self.dump(val, types, indent_count);
+                eprint!(")");
+            }
+            Node::Variable(id) => eprint!("(var {})", id.0),
+            &Node::Assign(lval, val) => {
+                eprint!("(assign ");
+                self.dump_lvalue(lval, types, indent_count);
+                eprint!(" ");
+                self.dump(val, types, indent_count);
+                eprint!(")");
+            }
+            &Node::Const { id, ty } => {
+                eprint!("(const {}): ", id.0);
+                types.dump_type(ty);
+            }
+            &Node::Negate(id, ty) => {
+                eprint!("(neg");
+                self.dump(id, types, indent_count);
+                eprint!("): ");
+                types.dump_type(ty);
+            }
+            &Node::Not(id) => {
+                eprint!("(not ");
+                self.dump(id, types, indent_count);
+                eprint!(")");
+            }
+            &Node::AddressOf { inner, value_ty } => {
+                eprint!("(addr ");
+                self.dump(inner, types, indent_count);
+                eprint!(": ");
+                types.dump_type(value_ty);
+                eprint!(")");
+            }
+            &Node::Deref { value, deref_ty } => {
+                eprint!("(addr ");
+                self.dump(value, types, indent_count);
+                eprint!("): ");
+                types.dump_type(deref_ty);
+            }
+            &Node::Cast(id) => {
+                let cast = &self[id];
+                eprint!("(cast ");
+                match cast.cast_ty {
+                    CastType::Invalid => eprint!("invalid"),
+                    CastType::Noop => eprint!("noop"),
+                    CastType::Int { from, to } => eprint!(
+                        "(int {} {})",
+                        <&str>::from(Primitive::from(from)),
+                        <&str>::from(Primitive::from(to)),
+                    ),
+                    CastType::Float { from, to } => eprint!(
+                        "(float {} {})",
+                        <&str>::from(Primitive::from(from)),
+                        <&str>::from(Primitive::from(to)),
+                    ),
+                    CastType::IntToFloat { from, to } => eprint!(
+                        "(int-float {} {})",
+                        <&str>::from(Primitive::from(from)),
+                        <&str>::from(Primitive::from(to)),
+                    ),
+                    CastType::FloatToInt { from, to } => eprint!(
+                        "(float-int {} {})",
+                        <&str>::from(Primitive::from(from)),
+                        <&str>::from(Primitive::from(to)),
+                    ),
+                    CastType::IntToPtr { from } => {
+                        eprint!("(int-ptr {})", <&str>::from(Primitive::from(from)))
+                    }
+                    CastType::PtrToInt { to } => {
+                        eprint!("(ptr-int {})", <&str>::from(Primitive::from(to)))
+                    }
+                    CastType::EnumToInt { from, to } => {
+                        eprint!("(enum-int ");
+                        types.dump_type(from);
+                        eprint!(" {})", <&str>::from(Primitive::from(to)));
+                    }
+                }
+                eprint!(" ");
+                self.dump(cast.val, types, indent_count);
+            }
+            &Node::Comparison(l, r, cmp) => {
+                let cmp = match cmp {
+                    Comparison::Eq => "==",
+                    Comparison::NE => "!=",
+                    Comparison::LT => "<",
+                    Comparison::GT => ">",
+                    Comparison::LE => "<=",
+                    Comparison::GE => ">=",
+                    Comparison::And => "and",
+                    Comparison::Or => "or",
+                };
+                eprint!("({cmp} ");
+                self.dump(l, types, indent_count);
+                eprint!(" ");
+                self.dump(r, types, indent_count);
+                eprint!(")");
+            }
+            &Node::Arithmetic(l, r, op, ty) => {
+                let op = match op {
+                    Arithmetic::Add => "+",
+                    Arithmetic::Sub => "-",
+                    Arithmetic::Mul => "*",
+                    Arithmetic::Div => "/",
+                    Arithmetic::Mod => "%",
+                };
+                eprint!("({op} ");
+                self.dump(l, types, indent_count);
+                eprint!(" ");
+                self.dump(r, types, indent_count);
+                eprint!("): ");
+                types.dump_type(ty);
+            }
+            &Node::TupleIndex {
+                tuple_value,
+                index,
+                elem_types,
+            } => {
+                eprint!("(element {index} ");
+                self.dump(tuple_value, types, indent_count);
+                eprint!(": (");
+                for (i, elem) in elem_types.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(", ");
+                    }
+                    types.dump_type(elem);
+                }
+                eprint!(")");
+            }
+            &Node::ArrayIndex {
+                array,
+                index,
+                elem_ty,
+            } => {
+                eprint!(" ");
+                self.dump(array, types, indent_count);
+                eprint!("(index ");
+                self.dump(index, types, indent_count);
+                eprint!("): ");
+                types.dump_type(elem_ty);
+            }
+            &Node::Return(val) => {
+                eprint!("(return ");
+                self.dump(val, types, indent_count);
+                eprint!(")");
+            }
+            &Node::IfElse {
+                cond,
+                then,
+                else_,
+                resulting_ty,
+            } => {
+                eprint!("(if ");
+                self.dump(cond, types, indent_count);
+                eprintln!("");
+                indent_n(indent_count + 1);
+                self.dump(then, types, indent_count + 1);
+                eprintln!();
+                indent_n(indent_count + 1);
+                self.dump(else_, types, indent_count + 1);
+                eprintln!();
+                indent();
+                eprint!("): ");
+                types.dump_type(resulting_ty);
+            }
+            &Node::Match {
+                value,
+                branch_index,
+                pattern_index,
+                branch_count,
+            } => {
+                eprint!("(match ");
+                self.dump(value, types, indent_count);
+                for i in 0..branch_count {
+                    eprintln!();
+                    indent();
+                    let pattern = PatternId(pattern_index + i);
+                    let branch = NodeId(branch_index + i);
+                    self.dump_pattern(pattern, types);
+                    eprint!(" ");
+                    self.dump(branch, types, indent_count + 1);
+                }
+                eprint!("\n)")
+            }
+            &Node::While { cond, body } => {
+                eprint!("(while ");
+                self.dump(cond, types, indent_count);
+                eprint!(" ");
+                self.dump(body, types, indent_count);
+                eprint!(")");
+            }
+            &Node::Call {
+                function,
+                generics,
+                args,
+                return_ty,
+            } => {
+                eprint!("(call {}:{} (", function.0 .0, function.1 .0);
+                for (i, generic) in generics.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    types.dump_type(generic);
+                }
+                eprint!(") ");
+                for (i, arg) in args.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    self.dump(arg, types, indent_count);
+                }
+                eprint!("): ");
+                types.dump_type(return_ty);
+            }
+        }
+    }
+
+    fn dump_pattern(&self, pattern: PatternId, types: &TypeTable) {
+        match self[pattern] {
+            Pattern::Invalid => eprint!("<invalid>"),
+            Pattern::Variable(id) => eprint!("(var {})", id.0),
+            Pattern::Ignore => eprint!("_"),
+            Pattern::Tuple(ids) => {
+                eprint!("(");
+                for (i, id) in ids.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    self.dump_pattern(id, types);
+                }
+                eprint!(")");
+            }
+            Pattern::Int(signed, unsigned_val, ty) => {
+                eprint!("(int ");
+                if signed {
+                    eprint!("-");
+                }
+                eprint!("{unsigned_val}): ");
+                types.dump_type(ty);
+            }
+            Pattern::Bool(b) => eprint!("{b}"),
+            Pattern::Range {
+                min_max,
+                min_max_signs,
+                inclusive,
+            } => {
+                if min_max_signs.0 {
+                    eprint!("-")
+                }
+                eprint!("{} ", min_max.0);
+                if min_max_signs.1 {
+                    eprint!("-")
+                }
+                eprint!("{}", min_max.1);
+                if inclusive {
+                    eprint!(" inclusive");
+                }
+                eprint!(")");
+            }
+        }
+    }
+
+    fn dump_lvalue(&self, lval: LValueId, types: &TypeTable, indent_count: usize) {
+        match self[lval] {
+            LValue::Invalid => eprint!("(invalid)"),
+            LValue::Variable(id) => eprint!("(var {})", id.0),
+            LValue::Global(module, id) => eprint!("(global {} {})", module.0, id.0),
+            LValue::Deref(val) => {
+                eprint!("(deref ");
+                self.dump(val, types, indent_count);
+                eprint!(")");
+            }
+        }
+    }
 }
 id!(NodeId);
 impl Index<NodeId> for HIR {
@@ -83,6 +429,11 @@ impl Index<PatternId> for HIR {
 pub struct PatternIds {
     index: u32,
     count: u32,
+}
+impl PatternIds {
+    pub fn iter(self) -> impl Iterator<Item = PatternId> {
+        (self.index..self.count).map(PatternId)
+    }
 }
 
 #[derive(Debug, Clone)]

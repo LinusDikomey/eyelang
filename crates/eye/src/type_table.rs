@@ -357,6 +357,12 @@ impl TypeTable {
         }
     }
 
+    pub fn dump_type(&self, ty: LocalTypeId) {
+        let mut s = String::new();
+        self.type_to_string(self[ty], &mut s);
+        eprint!("{s}");
+    }
+
     pub fn type_to_string(&self, ty: TypeInfo, s: &mut String) {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols

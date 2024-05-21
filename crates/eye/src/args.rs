@@ -103,6 +103,11 @@ pub struct Args {
     #[clap(long)]
     pub debug_infer: bool,
 
+    /// Print the internal HIR (high-level intermediate representation) to stderr.
+    /// This will still normally execute the subcommand.
+    #[clap(long)]
+    pub hir: bool,
+
     /// Print the internal IR (intermediate representation) to stderr.
     /// This will still normally execute the subcommand.
     #[clap(long)]

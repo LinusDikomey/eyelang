@@ -49,12 +49,13 @@ pub fn def_expr(
         &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val),
         &Expr::Function { id } => Def::Function(module, id),
         &Expr::Type { id } => {
-            let symbols = compiler.get_module_ast_and_symbols(module).1;
+            let symbols = &mut compiler.get_module_ast_and_symbols(module).symbols;
             let id = if let Some(id) = symbols.types[id.idx()] {
                 id
             } else {
                 let assigned_id = compiler.add_type_def(module, id);
-                compiler.get_module_ast_and_symbols(module).1.types[id.idx()] = Some(assigned_id);
+                compiler.get_module_ast_and_symbols(module).symbols.types[id.idx()] =
+                    Some(assigned_id);
                 assigned_id
             };
             // TODO: check/pass generics somehow

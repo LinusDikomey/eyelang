@@ -106,19 +106,16 @@ impl Compiler {
     }
 
     pub fn get_module_ast(&mut self, module_id: ModuleId) -> &Rc<Ast> {
-        self.get_module_ast_and_symbols(module_id).0
+        &self.get_module_ast_and_symbols(module_id).ast
     }
 
-    pub fn get_module_ast_and_symbols(
-        &mut self,
-        module_id: ModuleId,
-    ) -> (&Rc<Ast>, &mut ModuleSymbols) {
+    pub fn get_module_ast_and_symbols(&mut self, module_id: ModuleId) -> &mut ParsedModule {
         if self.modules[module_id.idx()].ast.is_some() {
             // borrowing bullshit
-            let Some((ast, symbols, _)) = &mut self.modules[module_id.idx()].ast else {
+            let Some(parsed) = &mut self.modules[module_id.idx()].ast else {
                 unreachable!()
             };
-            (ast, symbols)
+            parsed
         } else {
             let module = &mut self.modules[module_id.idx()];
             // add dependencies to each module first
@@ -134,6 +131,7 @@ impl Compiler {
                 )
             })
             .collect();
+            let mut child_modules = Vec::new();
             let contents = if module.path.is_file() {
                 std::fs::read_to_string(&module.path)
             } else {
@@ -185,6 +183,7 @@ impl Compiler {
                                     Some(module_id),
                                 ));
                                 definitions.insert(name, ast::Definition::Module(id));
+                                child_modules.push(id);
                             }
                         }
                     } else if ty.is_dir() {
@@ -203,6 +202,7 @@ impl Compiler {
                                 Some(module_id),
                             ));
                             definitions.insert(name, ast::Definition::Module(id));
+                            child_modules.push(id);
                         }
                     }
                 }
@@ -230,11 +230,16 @@ impl Compiler {
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
             let instances = IrFunctionInstances::new(ast.function_count());
-            module.ast = Some((Rc::new(ast), checked, instances));
-            let Some((ast, symbols, _)) = module.ast.as_mut() else {
+            module.ast = Some(ParsedModule {
+                ast: Rc::new(ast),
+                child_modules,
+                symbols: checked,
+                instances,
+            });
+            let Some(parsed) = module.ast.as_mut() else {
                 unreachable!()
             };
-            (ast, symbols)
+            parsed
         }
     }
 
@@ -246,17 +251,31 @@ impl Compiler {
     pub fn resolve_in_scope(
         &mut self,
         module: ModuleId,
-        scope: ScopeId,
+        mut scope: ScopeId,
         name: &str,
         name_span: Span,
     ) -> Def {
-        self.get_scope_def(module, scope, name).unwrap_or_else(|| {
-            if let Some(parent) = self.get_module_ast(module)[scope].parent {
-                self.resolve_in_scope(module, parent, name, name_span)
-            } else {
-                self.errors.emit_err(Error::UnknownIdent.at_span(name_span));
-                Def::Invalid
+        let def = loop {
+            match self.get_scope_def(module, scope, name) {
+                Some(def) => break Some(def),
+                None => {
+                    if let Some(parent) = self.get_module_ast(module)[scope].parent {
+                        scope = parent;
+                    } else {
+                        break None;
+                    }
+                }
             }
+        };
+        def.unwrap_or_else(|| {
+            if let Some(builtin_module) = builtins::get_prelude(self) {
+                let builtin_scope = self.get_module_ast(builtin_module).top_level_scope_id();
+                if let Some(def) = self.get_scope_def(builtin_module, builtin_scope, name) {
+                    return def;
+                }
+            }
+            self.errors.emit_err(Error::UnknownIdent.at_span(name_span));
+            Def::Invalid
         })
     }
 
@@ -390,15 +409,15 @@ impl Compiler {
     }
 
     pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<Signature> {
-        let (ast, checked, _) = self.modules[module.idx()].ast.as_ref().unwrap();
-        match &checked.function_signatures[id.idx()] {
+        let parsed = self.modules[module.idx()].ast.as_ref().unwrap();
+        match &parsed.symbols.function_signatures[id.idx()] {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
                 let Resolvable::Resolved(signature) = &self.modules[module.idx()]
                     .ast
                     .as_ref()
                     .unwrap()
-                    .1
+                    .symbols
                     .function_signatures[id.idx()]
                 else {
                     unreachable!()
@@ -407,7 +426,7 @@ impl Compiler {
             }
             Resolvable::Resolving => panic!("function signature depends on itself recursively"),
             Resolvable::Unresolved => {
-                let ast = ast.clone();
+                let ast = parsed.ast.clone();
                 let function = &ast[id];
                 let scope = function.scope;
                 let generics = function
@@ -439,7 +458,7 @@ impl Compiler {
                     .ast
                     .as_mut()
                     .unwrap()
-                    .1
+                    .symbols
                     .function_signatures[id.idx()]
                 .put(Rc::new(signature))
             }
@@ -447,12 +466,16 @@ impl Compiler {
     }
 
     pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
-        let checked = &self.modules[module.idx()].ast.as_ref().unwrap().1;
+        let checked = &self.modules[module.idx()].ast.as_ref().unwrap().symbols;
         match &checked.functions[id.idx()] {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
-                let Resolvable::Resolved(checked) =
-                    &self.modules[module.idx()].ast.as_ref().unwrap().1.functions[id.idx()]
+                let Resolvable::Resolved(checked) = &self.modules[module.idx()]
+                    .ast
+                    .as_ref()
+                    .unwrap()
+                    .symbols
+                    .functions[id.idx()]
                 else {
                     unreachable!()
                 };
@@ -460,10 +483,14 @@ impl Compiler {
             }
             Resolvable::Resolving => panic!("checked function depends on itself recursively"),
             Resolvable::Unresolved => {
-                let resolving =
-                    &mut self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()];
+                let resolving = &mut self.modules[module.idx()]
+                    .ast
+                    .as_mut()
+                    .unwrap()
+                    .symbols
+                    .functions[id.idx()];
                 *resolving = Resolvable::Resolving;
-                let ast = self.modules[module.idx()].ast.as_ref().unwrap().0.clone();
+                let ast = self.modules[module.idx()].ast.as_ref().unwrap().ast.clone();
 
                 let function = &ast[id];
 
@@ -481,7 +508,7 @@ impl Compiler {
                     .ast
                     .as_ref()
                     .unwrap()
-                    .1
+                    .symbols
                     .function_signatures[id.idx()]
                 else {
                     unreachable!()
@@ -548,7 +575,13 @@ impl Compiler {
                     generic_count,
                     body,
                 };
-                self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()].put(checked)
+                self.modules[module.idx()]
+                    .ast
+                    .as_mut()
+                    .unwrap()
+                    .symbols
+                    .functions[id.idx()]
+                .put(checked)
             }
         }
     }
@@ -595,12 +628,12 @@ impl Compiler {
     }
 
     pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(Type, ConstValue) {
-        let (ast, symbols) = self.get_module_ast_and_symbols(module);
-        let ast = ast.clone();
-        match &symbols.globals[id.idx()] {
+        let parsed = self.get_module_ast_and_symbols(module);
+        let ast = parsed.ast.clone();
+        match &parsed.symbols.globals[id.idx()] {
             Resolvable::Resolved(_) => {
                 let Resolvable::Resolved(global) =
-                    &self.get_module_ast_and_symbols(module).1.globals[id.idx()]
+                    &self.get_module_ast_and_symbols(module).symbols.globals[id.idx()]
                 else {
                     unreachable!()
                 };
@@ -610,11 +643,11 @@ impl Compiler {
                 let span = ast[id].span.in_mod(module);
                 self.errors
                     .emit_err(Error::RecursiveDefinition.at_span(span));
-                self.get_module_ast_and_symbols(module).1.globals[id.idx()]
+                self.get_module_ast_and_symbols(module).symbols.globals[id.idx()]
                     .put((Type::Invalid, ConstValue::Undefined))
             }
             Resolvable::Unresolved => {
-                symbols.globals[id.idx()] = Resolvable::Resolving;
+                parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
                 let ty = self.resolve_type(&global.ty, module, global.scope);
                 let val = if let Some(val) = global.val {
@@ -631,9 +664,20 @@ impl Compiler {
                 } else {
                     ConstValue::Undefined
                 };
-                self.modules[module.idx()].ast.as_mut().unwrap().1.globals[id.idx()].put((ty, val))
+                self.modules[module.idx()]
+                    .ast
+                    .as_mut()
+                    .unwrap()
+                    .symbols
+                    .globals[id.idx()]
+                .put((ty, val))
             }
         }
+    }
+
+    pub fn get_builtin_panic(&mut self) -> ir::FunctionId {
+        let (panic_mod, panic_function) = builtins::get_panic(self);
+        self.get_ir_function_id(panic_mod, panic_function, Vec::new())
     }
 
     pub fn check_complete_project(&mut self, project: ProjectId) {
@@ -671,15 +715,20 @@ impl Compiler {
             }
 
             for id in ast.type_ids() {
-                let id =
-                    match &mut self.modules[module.idx()].ast.as_mut().unwrap().1.types[id.idx()] {
-                        Some(id) => *id,
-                        ty @ None => {
-                            let id = Self::add_type_def_to_types(module, id, &mut self.types);
-                            *ty = Some(id);
-                            id
-                        }
-                    };
+                let id = match &mut self.modules[module.idx()]
+                    .ast
+                    .as_mut()
+                    .unwrap()
+                    .symbols
+                    .types[id.idx()]
+                {
+                    Some(id) => *id,
+                    ty @ None => {
+                        let id = Self::add_type_def_to_types(module, id, &mut self.types);
+                        *ty = Some(id);
+                        id
+                    }
+                };
                 self.get_resolved_type_def(id);
             }
 
@@ -695,8 +744,8 @@ impl Compiler {
         function: ast::FunctionId,
         generics: Vec<Type>,
     ) -> ir::FunctionId {
-        self.get_module_ast(module);
-        let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().2;
+        self.get_module_ast_and_symbols(module);
+        let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().instances;
 
         let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
         match instances.get_or_insert(function, &generics, potential_id) {
@@ -720,7 +769,7 @@ impl Compiler {
                 while let Some(f) = to_generate.pop() {
                     self.get_hir(f.module, f.ast_function_id);
                     // got checked function above
-                    let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().1;
+                    let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
                     let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()]
                     else {
                         unreachable!()
@@ -757,6 +806,39 @@ impl Compiler {
                 potential_id
             }
         }
+    }
+
+    pub fn emit_project_hir(
+        &mut self,
+        project: ProjectId,
+        main: Option<(ModuleId, FunctionId)>,
+    ) -> Vec<ir::FunctionId> {
+        let Some(main) = main else {
+            todo!("emitting libraries is not supported right now")
+        };
+        let project = self.get_project(project);
+        let mut module_queue = VecDeque::from([project.root_module]);
+        while let Some(module) = module_queue.pop_front() {
+            let functions = self.get_module_ast(module).function_ids();
+            for function in functions {
+                let hir = self.get_hir(module, function);
+                hir.dump();
+            }
+            module_queue.extend(
+                self.get_module_ast_and_symbols(module)
+                    .child_modules
+                    .iter()
+                    .copied(),
+            )
+        }
+        let mut functions_to_emit = VecDeque::from([(main.0, main.1, vec![])]);
+        let mut finished_functions = Vec::new();
+        while let Some((module, function, generics)) = functions_to_emit.pop_front() {
+            let id = self.get_ir_function_id(module, function, generics);
+            finished_functions.push(id);
+        }
+
+        finished_functions
     }
 
     /// Emit project ir. If main function is provided, all functions required by main will also be
@@ -974,7 +1056,7 @@ pub struct Project {
 pub struct Module {
     pub path: PathBuf,
     pub project: ProjectId,
-    pub ast: Option<(Rc<Ast>, ModuleSymbols, IrFunctionInstances)>,
+    pub ast: Option<ParsedModule>,
     pub root: ModuleId,
     pub parent: Option<ModuleId>,
 }
@@ -993,6 +1075,13 @@ impl Module {
             parent,
         }
     }
+}
+
+pub struct ParsedModule {
+    pub ast: Rc<Ast>,
+    pub child_modules: Vec<ModuleId>,
+    pub symbols: ModuleSymbols,
+    pub instances: IrFunctionInstances,
 }
 
 #[derive(Debug)]
@@ -1059,6 +1148,27 @@ pub struct CheckedFunction {
     pub return_type: LocalTypeId,
     pub generic_count: u8,
     pub body: Option<HIR>,
+}
+impl CheckedFunction {
+    pub fn dump(&self) {
+        eprint!("BEGIN HIR {}(", self.name);
+        for (i, param) in self.params.iter().enumerate() {
+            if i != 0 {
+                eprint!(", ");
+            }
+            self.types.dump_type(param);
+        }
+        eprint!(")\n  ");
+        match &self.body {
+            Some(body) => {
+                body.dump(body.root_id(), &self.types, 1);
+            }
+            None => {
+                eprintln!("  <extern>");
+            }
+        }
+        eprintln!("\nEND HIR\n");
+    }
 }
 
 pub struct IrFunctionInstances {

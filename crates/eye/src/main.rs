@@ -125,12 +125,15 @@ fn main() -> Result<(), MainError> {
             Ok((main_module, main_id))
         })
         .transpose()?;
-    if compiler.print_errors() && !args.run_with_errors {
-        return Err(MainError::ErrorsFound);
+    if args.hir {
+        compiler.emit_project_hir(project, main);
     }
     if args.ir {
         compiler.emit_project_ir(project, main);
         println!("Displaying IR:\n{}", &compiler.ir_module);
+    }
+    if compiler.print_errors() && !args.run_with_errors {
+        return Err(MainError::ErrorsFound);
     }
 
     match args.cmd {
@@ -140,6 +143,9 @@ fn main() -> Result<(), MainError> {
             if let Some(main) = main {
                 // verification was already done so the error can be ignored here
                 _ = compiler.verify_main_and_add_entry_point(main);
+            }
+            if compiler.print_errors() && !args.run_with_errors {
+                return Err(MainError::ErrorsFound);
             }
             std::fs::create_dir_all(Path::new("eyebuild")).unwrap();
             let obj_file = format!("eyebuild/{name}.o");

@@ -1,11 +1,11 @@
 use string.str
 use option.Option
 
-print :: fn(s str) { 
-    c.printf("%.*s".ptr, i32(s.len), s.ptr)
+print :: fn(s str) {
+    c.printf("%.*s".ptr, s.len as i32, s.ptr)
 }
 println :: fn(s str) {
-    c.printf("%.*s\n".ptr, i32(s.len), s.ptr)
+    c.printf("%.*s\n".ptr, s.len as i32, s.ptr)
 }
 
 skip_char :: fn {
@@ -70,7 +70,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
 }
 
 panic :: fn(msg str) -> ! {
-    c.printf("[PANIC]: %.*s\n".ptr, i32(msg.len), msg.ptr)
+    c.printf("[PANIC]: %.*s\n".ptr, msg.len as i32, msg.ptr)
     c.exit(1)
 }
 
