@@ -4,9 +4,18 @@ use crate::{FloatType, IntType, Layout};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
-    I8, I16, I32, I64, I128,
-    U8, U16, U32, U64, U128,
-    F32, F64,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F32,
+    F64,
     Bool,
     Unit,
     Never,
@@ -26,7 +35,7 @@ impl Primitive {
             U32 => IntType::U32,
             U64 => IntType::U64,
             U128 => IntType::U128,
-            _ => return None
+            _ => return None,
         })
     }
     pub fn is_int(self) -> bool {
@@ -38,7 +47,7 @@ impl Primitive {
         Some(match self {
             F32 => FloatType::F32,
             F64 => FloatType::F64,
-            _ => return None
+            _ => return None,
         })
     }
     pub fn is_float(self) -> bool {
@@ -55,7 +64,10 @@ impl Primitive {
             I64 | U64 | F64 => 8,
             I128 | U128 => 16,
         };
-        Layout { size: size_and_align, alignment: size_and_align.max(1) }
+        Layout {
+            size: size_and_align,
+            alignment: size_and_align.max(1),
+        }
     }
 
     pub fn token_len(self) -> NonZeroU32 {
@@ -63,11 +75,10 @@ impl Primitive {
         let len = match self {
             P::Never => NonZeroU32::new(1).unwrap(),
             P::I8 | P::U8 | P::Unit => NonZeroU32::new(2).unwrap(),
-            | P::I16 | P::I32 | P::I64
-            | P::U16 | P::U32 | P::U64
-            | P::F32 | P::F64 => NonZeroU32::new(3).unwrap(),
-            | P::I128 | P::U128
-            | P::Bool | P::Type => NonZeroU32::new(4).unwrap(),
+            P::I16 | P::I32 | P::I64 | P::U16 | P::U32 | P::U64 | P::F32 | P::F64 => {
+                NonZeroU32::new(3).unwrap()
+            }
+            P::I128 | P::U128 | P::Bool | P::Type => NonZeroU32::new(4).unwrap(),
         };
         debug_assert_eq!(Into::<&'static str>::into(self).len(), len.get() as usize);
         len

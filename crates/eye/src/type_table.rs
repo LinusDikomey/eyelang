@@ -1,10 +1,15 @@
 use std::ops::Index;
 
-use id::{TypeId, ModuleId};
+use id::{ModuleId, TypeId};
 use span::Span;
-use types::{Type, Primitive};
+use types::{Primitive, Type};
 
-use crate::{parser::ast, error::{Error, Errors}, Compiler, compiler::Def};
+use crate::{
+    compiler::Def,
+    error::{Error, Errors},
+    parser::ast,
+    Compiler,
+};
 
 id::id!(LocalTypeId);
 
@@ -28,9 +33,7 @@ impl Index<LocalTypeId> for TypeTable {
 }
 impl TypeTable {
     pub fn new() -> Self {
-        Self {
-            types: Vec::new(),
-        }
+        Self { types: Vec::new() }
     }
 
     pub fn add(&mut self, info: TypeInfo) -> LocalTypeId {
@@ -55,9 +58,7 @@ impl TypeTable {
     pub fn to_resolved(&self, info: TypeInfo) -> Type {
         match info {
             TypeInfo::Primitive(p) => Type::Primitive(p),
-            TypeInfo::Unknown
-            | TypeInfo::Integer
-            | TypeInfo::Float => unreachable!(),
+            TypeInfo::Unknown | TypeInfo::Integer | TypeInfo::Float => unreachable!(),
             TypeInfo::Pointer(pointee) => Type::Pointer(Box::new(self.to_resolved(self[pointee]))),
             TypeInfo::TypeDef(id, generics) => Type::DefId {
                 id,
@@ -75,7 +76,8 @@ impl TypeTable {
 
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> LocalTypeIds {
         let start = self.types.len();
-        self.types.extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
+        self.types
+            .extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
         let count = self.types.len() - start;
         LocalTypeIds {
             start: start as _,
@@ -83,7 +85,10 @@ impl TypeTable {
         }
     }
 
-    pub fn add_multiple_info_or_idx(&mut self, infos: impl IntoIterator<Item = TypeInfoOrIdx>) -> LocalTypeIds {
+    pub fn add_multiple_info_or_idx(
+        &mut self,
+        infos: impl IntoIterator<Item = TypeInfoOrIdx>,
+    ) -> LocalTypeIds {
         let start = self.types.len();
         self.types.extend(infos.into_iter());
         let count = self.types.len() - start;
@@ -96,8 +101,7 @@ impl TypeTable {
     pub fn add_multiple_unknown(&mut self, count: u32) -> LocalTypeIds {
         let start = self.types.len() as _;
         self.types.extend(
-            std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown))
-                .take(count as usize)
+            std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(count as usize),
         );
         LocalTypeIds { start, count }
     }
@@ -128,16 +132,29 @@ impl TypeTable {
         info
     }
 
-    pub fn from_generic_resolved(&mut self, compiler: &mut Compiler, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+    pub fn from_generic_resolved(
+        &mut self,
+        compiler: &mut Compiler,
+        ty: &Type,
+        generics: LocalTypeIds,
+    ) -> TypeInfoOrIdx {
         self.from_generic_resolved_internal(compiler, ty, Some(generics))
     }
     /// Only produces an Index instead of a TypeInfo when the Type is Type::Generic
     /// generics: None will produce generic TypeInfos for generic functions
-    fn from_generic_resolved_internal(&mut self, compiler: &mut Compiler, ty: &Type, generics: Option<LocalTypeIds>) -> TypeInfoOrIdx {
+    fn from_generic_resolved_internal(
+        &mut self,
+        compiler: &mut Compiler,
+        ty: &Type,
+        generics: Option<LocalTypeIds>,
+    ) -> TypeInfoOrIdx {
         let info = match ty {
             Type::Invalid => TypeInfo::Invalid,
             &Type::Primitive(p) => TypeInfo::Primitive(p),
-            Type::DefId { id, generics: inner_generics } => {
+            Type::DefId {
+                id,
+                generics: inner_generics,
+            } => {
                 if let Some(inner_generics) = inner_generics {
                     let count = inner_generics.len();
                     let generics_ids = self.add_multiple_unknown(count as u32);
@@ -161,27 +178,28 @@ impl TypeTable {
                 let (elem_ty, count) = &**b;
                 let element = self.from_generic_resolved_internal(compiler, elem_ty, generics);
                 let element = self.add_info_or_idx(element);
-                TypeInfo::Array { element, count: Some(*count) }
+                TypeInfo::Array {
+                    element,
+                    count: Some(*count),
+                }
             }
             Type::Tuple(elements) => {
                 let element_ids = self.add_multiple_unknown(elements.len() as _);
                 for (element, id) in elements.iter().zip(element_ids.iter()) {
-                    self.types[id.idx()] = self.from_generic_resolved_internal(compiler, element, generics);
+                    self.types[id.idx()] =
+                        self.from_generic_resolved_internal(compiler, element, generics);
                 }
                 TypeInfo::Tuple(element_ids)
             }
-            &Type::Generic(i) => {
-                match generics {
-                    Some(generics) => return TypeInfoOrIdx::Idx(generics.nth(i.into()).unwrap()),
-                    None => TypeInfo::Generic(i),
-                }
-            }
+            &Type::Generic(i) => match generics {
+                Some(generics) => return TypeInfoOrIdx::Idx(generics.nth(i.into()).unwrap()),
+                None => TypeInfo::Generic(i),
+            },
             Type::LocalEnum(_) => todo!("local enum infos"),
             Type::TraitSelf => todo!("trait self"),
         };
         TypeInfoOrIdx::TypeInfo(info)
     }
-
 
     pub fn info_from_unresolved(
         &mut self,
@@ -193,7 +211,10 @@ impl TypeTable {
         match ty {
             types::UnresolvedType::Primitive { ty, .. } => TypeInfo::Primitive(*ty),
             types::UnresolvedType::Unresolved(path, generics) => {
-                assert!(generics.is_none(), "TODO: implement generics for type paths"); // TODO
+                assert!(
+                    generics.is_none(),
+                    "TODO: implement generics for type paths"
+                ); // TODO
                 let def = compiler.resolve_path(module, scope, *path);
                 match def {
                     Def::Invalid => TypeInfo::Invalid,
@@ -202,9 +223,9 @@ impl TypeTable {
                     | Def::Module(_)
                     | Def::Global(_, _)
                     | Def::Function(_, _) => {
-                        compiler.errors.emit_err(
-                            Error::TypeExpected.at_span(path.span().in_mod(module))
-                        );
+                        compiler
+                            .errors
+                            .emit_err(Error::TypeExpected.at_span(path.span().in_mod(module)));
                         TypeInfo::Invalid
                     }
                 }
@@ -217,7 +238,10 @@ impl TypeTable {
             types::UnresolvedType::Array(b) => {
                 let (elem, count, _) = &**b;
                 let elem = self.info_from_unresolved(elem, compiler, module, scope);
-                TypeInfo::Array { element: self.add(elem), count: *count }
+                TypeInfo::Array {
+                    element: self.add(elem),
+                    count: *count,
+                }
             }
             types::UnresolvedType::Tuple(elems, _) => {
                 let ids = LocalTypeIds {
@@ -225,7 +249,7 @@ impl TypeTable {
                     count: elems.len() as _,
                 };
                 self.types.extend(
-                    std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(elems.len())
+                    std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(elems.len()),
                 );
 
                 for (id, unresolved) in ids.iter().zip(elems) {
@@ -288,12 +312,13 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(ty) => break ty,
             }
         };
-        a == b || unify(a_ty, b_ty, self)
-            .inspect(|_| {
-                self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-                self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
-            })
-            .is_some()
+        a == b
+            || unify(a_ty, b_ty, self)
+                .inspect(|_| {
+                    self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
+                    self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
+                })
+                .is_some()
     }
 
     pub fn specify(
@@ -414,8 +439,8 @@ pub enum TypeInfoOrIdx {
 }
 
 fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
-    use TypeInfo::*;
     use types::Primitive as P;
+    use TypeInfo::*;
     Some(match (a, b) {
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
         (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
@@ -433,7 +458,8 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
             }
             a
         }
-        (TypeDef(id, generics), Enum { idx, count }) | (Enum { idx, count }, TypeDef(id, generics)) => {
+        (TypeDef(id, generics), Enum { idx, count })
+        | (Enum { idx, count }, TypeDef(id, generics)) => {
             _ = (id, generics, idx, count);
             todo!("unify with enums (requires symbol access)")
         }
@@ -447,17 +473,28 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
             }
             Pointer(a)
         }
-        (Array { element: a, count: c_a }, Array { element: b, count: c_b }) => {
+        (
+            Array {
+                element: a,
+                count: c_a,
+            },
+            Array {
+                element: b,
+                count: c_b,
+            },
+        ) => {
             if !types.try_unify(a, b) {
                 return None;
             }
             let count = match (c_a, c_b) {
                 (Some(c), None) | (None, Some(c)) => Some(c),
                 (None, None) => None,
-                (Some(a), Some(b)) => if a == b {
-                    Some(a)
-                } else {
-                    return None;
+                (Some(a), Some(b)) => {
+                    if a == b {
+                        Some(a)
+                    } else {
+                        return None;
+                    }
                 }
             };
             Array { element: a, count }
@@ -475,14 +512,27 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
             Tuple(a)
         }
         (TypeItem { ty: a_ty }, TypeItem { ty: b_ty }) => {
-            if !types.try_unify(a_ty, b_ty) { return None }
+            if !types.try_unify(a_ty, b_ty) {
+                return None;
+            }
             a
         }
         (
-            FunctionItem { module: a_m, function: a_f, generics: a_g },
-            FunctionItem { module: b_m, function: b_f, generics: b_g },
+            FunctionItem {
+                module: a_m,
+                function: a_f,
+                generics: a_g,
+            },
+            FunctionItem {
+                module: b_m,
+                function: b_f,
+                generics: b_g,
+            },
         ) if a_m == b_m && a_f == b_f => {
-            debug_assert_eq!(a_g.count, b_g.count, "invalid generics count, incorrect type info constructed");
+            debug_assert_eq!(
+                a_g.count, b_g.count,
+                "invalid generics count, incorrect type info constructed"
+            );
             for (a, b) in a_g.iter().zip(b_g.iter()) {
                 if !types.try_unify(a, b) {
                     return None;
@@ -491,8 +541,18 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
             a
         }
         (
-            MethodItem { module: a_m, function: a_f, generics: a_g, this_ty: a_t },
-            MethodItem { module: b_m, function: b_f, generics: b_g, this_ty: b_t },
+            MethodItem {
+                module: a_m,
+                function: a_f,
+                generics: a_g,
+                this_ty: a_t,
+            },
+            MethodItem {
+                module: b_m,
+                function: b_f,
+                generics: b_g,
+                this_ty: b_t,
+            },
         ) if a_m == b_m && a_f == b_f => {
             if !types.try_unify(a_t, b_t) {
                 return None;
@@ -516,7 +576,7 @@ impl LocalTypeIds {
     pub const EMPTY: Self = Self { start: 0, count: 0 };
 
     pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
-        (self.start .. self.start + self.count).map(LocalTypeId)
+        (self.start..self.start + self.count).map(LocalTypeId)
     }
 
     pub fn nth(self, i: u32) -> Option<LocalTypeId> {
@@ -541,7 +601,9 @@ pub enum TypeInfo {
         count: u32,
     },
     Tuple(LocalTypeIds),
-    TypeItem { ty: LocalTypeId },
+    TypeItem {
+        ty: LocalTypeId,
+    },
     FunctionItem {
         module: ModuleId,
         function: ast::FunctionId,

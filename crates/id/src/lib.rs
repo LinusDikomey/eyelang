@@ -21,4 +21,3 @@ id!(ModuleId);
 id!(TypeId);
 id!(ConstValueId);
 id!(TraitId);
-

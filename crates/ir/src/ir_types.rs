@@ -1,15 +1,12 @@
 use std::ops::Index;
 
-
 #[derive(Debug)]
 pub struct IrTypes {
     types: Vec<IrType>,
 }
 impl IrTypes {
     pub fn new() -> Self {
-        Self {
-            types: vec![],
-        }
+        Self { types: vec![] }
     }
 
     pub fn add(&mut self, ty: IrType) -> TypeRef {
@@ -20,13 +17,16 @@ impl IrTypes {
     pub fn add_multiple(&mut self, types: impl IntoIterator<Item = IrType>) -> TypeRefs {
         let start = self.types.len();
         self.types.extend(types);
-        TypeRefs { idx: start as _, count: (self.types.len() - start) as _ }
+        TypeRefs {
+            idx: start as _,
+            count: (self.types.len() - start) as _,
+        }
     }
 
     pub fn replace(&mut self, idx: TypeRef, ty: IrType) {
         self.types[idx.idx()] = ty;
     }
-    
+
     /*
     #[allow(clippy::wrong_self_convention)]
     pub fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
@@ -44,7 +44,7 @@ impl IrTypes {
             Type::Id(id, generics) => {
                 let generic_idx = self.types.len() as u32;
                 self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Never)).take(generics.len()));
-                
+
                 for (i, ty) in generics.iter().enumerate() {
                     self.types[generic_idx as usize + i] = self.from_resolved(ty, on_generic);
                 }
@@ -95,9 +95,18 @@ impl Index<TypeRef> for IrTypes {
 pub enum IrType {
     // ---------- scalar types ----------
     Unit,
-    I8, I16, I32, I64, I128,
-    U8, U16, U32, U64, U128,
-    F32, F64,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    F32,
+    F64,
     U1,
     Ptr,
 
@@ -111,29 +120,26 @@ pub enum IrType {
 impl IrType {
     pub fn is_int(self) -> bool {
         use IrType as T;
-        matches!(
-            self,
-            | T::I8 | T::I16 | T::I32 | T::I64 | T::I128
-            | T::U8 | T::U16 | T::U32 | T::U64 | T::U128
-            | T::U1
-        )
+        matches!(self, |T::I8| T::I16
+            | T::I32
+            | T::I64
+            | T::I128
+            | T::U8
+            | T::U16
+            | T::U32
+            | T::U64
+            | T::U128
+            | T::U1)
     }
 
     pub fn is_unsigned_int(self) -> bool {
         use IrType as T;
-        matches!(
-            self,
-            | T::U8 | T::U16 | T::U32 | T::U64 | T::U128
-            | T::U1
-        )
+        matches!(self, |T::U8| T::U16 | T::U32 | T::U64 | T::U128 | T::U1)
     }
 
     pub fn is_signed_int(self) -> bool {
         use IrType as T;
-        matches!(
-            self,
-            | T::I8 | T::I16 | T::I32 | T::I64 | T::I128
-        )
+        matches!(self, |T::I8| T::I16 | T::I32 | T::I64 | T::I128)
     }
 
     pub fn is_float(self) -> bool {
@@ -171,7 +177,10 @@ impl TypeRef {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TypeRefs { pub idx: u32, pub count: u32 }
+pub struct TypeRefs {
+    pub idx: u32,
+    pub count: u32,
+}
 impl TypeRefs {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
 
@@ -182,9 +191,9 @@ impl TypeRefs {
     pub fn from_single(r: TypeRef) -> Self {
         Self { idx: r.0, count: 1 }
     }
-    
+
     pub fn iter(self) -> impl Iterator<Item = TypeRef> {
-        (self.idx .. self.idx + self.count).map(TypeRef)
+        (self.idx..self.idx + self.count).map(TypeRef)
     }
 
     pub fn len(self) -> usize {

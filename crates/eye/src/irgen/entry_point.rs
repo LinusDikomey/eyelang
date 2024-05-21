@@ -1,5 +1,8 @@
-use ir::{FunctionId, builder::{IrBuilder, Terminator}, IrTypes, IrType, TypeRefs};
-use types::{Type, Primitive};
+use ir::{
+    builder::{IrBuilder, Terminator},
+    FunctionId, IrType, IrTypes, TypeRefs,
+};
+use types::{Primitive, Type};
 
 /// Create function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
@@ -12,7 +15,7 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
     let main_return = match main_return_ty {
         Type::Primitive(Primitive::Unit) => IrType::Unit,
         &Type::Primitive(p) if p.is_int() => super::types::get_primitive(p),
-        _ => unreachable!()
+        _ => unreachable!(),
     };
 
     let main_ret_ty = builder.types.add(main_return);
@@ -25,7 +28,7 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
         _ => builder.build_cast_int(main_val, IrType::I32),
     };
     builder.terminate_block(Terminator::Ret(exit_code));
-    
+
     let ir = builder.finish();
 
     ir::Function {
@@ -34,6 +37,6 @@ pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function 
         params: TypeRefs::EMPTY,
         varargs: false,
         return_type: IrType::I32,
-        ir: Some(ir)
+        ir: Some(ir),
     }
 }

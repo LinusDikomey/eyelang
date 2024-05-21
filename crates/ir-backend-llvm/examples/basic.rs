@@ -1,17 +1,22 @@
 //! Example for compiling a function using this backend based on llvm. Creates a module, displays
 //! it and then emits it to an object file called 'out.o'.
 
-use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, Module};
+use ir::{
+    builder::{BinOp, IrBuilder, Terminator},
+    Function, IrType, IrTypes, Module,
+};
 
 fn main() {
     let module = Module {
         name: "main_module".to_owned(),
-        funcs: vec![build_mul() , build_extern_printf()],
+        funcs: vec![build_mul(), build_extern_printf()],
     };
     eprintln!("Module:\n{module}");
     let mut backend = ir_backend_llvm::Backend::new();
     backend.enable_logging();
-    backend.emit_module(&module, true, None, std::path::Path::new("out.o")).expect("Backend failed");
+    backend
+        .emit_module(&module, true, None, std::path::Path::new("out.o"))
+        .expect("Backend failed");
 }
 
 fn build_mul() -> Function {

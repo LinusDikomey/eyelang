@@ -1,8 +1,8 @@
-use std::{u128, fmt, str::FromStr};
+use std::{fmt, str::FromStr, u128};
 
 use color_format::cwrite;
 use span::TSpan;
-use types::{Primitive, IntType, FloatType};
+use types::{FloatType, IntType, Primitive};
 
 use super::reader::TokenTypes;
 
@@ -17,11 +17,16 @@ pub struct Token {
 
 impl Token {
     pub fn new(ty: TokenType, start: u32, end: u32, new_line: bool) -> Self {
-        Self { start, end, ty, new_line }
+        Self {
+            start,
+            end,
+            ty,
+            new_line,
+        }
     }
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
-        &src[self.start as usize ..= self.end as usize]
+        &src[self.start as usize..=self.end as usize]
     }
 
     pub fn span(&self) -> TSpan {
@@ -52,19 +57,19 @@ pub enum TokenType {
     RBracket,
 
     Bang,
-    
+
     Plus,
     Minus,
     Star,
     Slash,
     Percent,
-    
+
     Ampersand,
     SnackWave,
     Caret,
-    
+
     Underscore,
-    
+
     Equals,
     DoubleEquals,
     BangEquals,
@@ -87,7 +92,7 @@ pub enum TokenType {
     StringLiteral,
     IntLiteral,
     FloatLiteral,
-    
+
     Keyword(Keyword),
     Ident,
 }
@@ -147,7 +152,10 @@ impl TokenType {
             TokenType::StringLiteral => "string literal",
             TokenType::IntLiteral => "int literal",
             TokenType::FloatLiteral => "float literal",
-            TokenType::Keyword(kw) => { is_keyword = true; kw.into() },
+            TokenType::Keyword(kw) => {
+                is_keyword = true;
+                kw.into()
+            }
             TokenType::Ident => "identifier",
         };
         (s, is_keyword)
@@ -157,7 +165,7 @@ impl TokenType {
 #[derive(Debug, Clone, Copy)]
 pub struct IntLiteral {
     pub val: u128,
-    pub ty: Option<IntType>
+    pub ty: Option<IntType>,
 }
 impl IntLiteral {
     pub fn parse(s: &str) -> Self {
@@ -174,11 +182,14 @@ impl fmt::Display for IntLiteral {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloatLiteral {
     pub val: f64,
-    pub ty: Option<FloatType>
+    pub ty: Option<FloatType>,
 }
 impl FloatLiteral {
     pub fn parse(s: &str) -> Self {
-        Self { val: s.parse().unwrap(), ty: None }
+        Self {
+            val: s.parse().unwrap(),
+            ty: None,
+        }
     }
 }
 impl fmt::Display for FloatLiteral {
@@ -245,26 +256,25 @@ impl FromStr for Keyword {
         use Keyword::Primitive as P;
         use Primitive::*;
         Ok(match s {
-            "i8"   => P(I8),
-            "i16"  => P(I16),
-            "i32"  => P(I32),
-            "i64"  => P(I64),
+            "i8" => P(I8),
+            "i16" => P(I16),
+            "i32" => P(I32),
+            "i64" => P(I64),
             "i128" => P(I128),
-            
-            "u8"   => P(U8),
-            "u16"  => P(U16),
-            "u32"  => P(U32),
-            "u64"  => P(U64),
+
+            "u8" => P(U8),
+            "u16" => P(U16),
+            "u32" => P(U32),
+            "u64" => P(U64),
             "u128" => P(U128),
 
-            
             "f32" => P(F32),
             "f64" => P(F64),
-            
+
             "bool" => P(Bool),
-            
+
             "type" => P(Type),
-            
+
             "fn" => Keyword::Fn,
             "ret" => Keyword::Ret,
             "true" => Keyword::True,
@@ -289,7 +299,7 @@ impl FromStr for Keyword {
             "use" => Keyword::Use,
 
             "asm" => Keyword::Asm,
-            _ => return Err(())
+            _ => return Err(()),
         })
     }
 }
@@ -306,12 +316,12 @@ pub enum Operator {
     Mul,
     Div,
     Mod,
-    
+
     Assignment(AssignType),
 
     Or,
     And,
-    
+
     Equals,
     NotEquals,
 
@@ -339,7 +349,7 @@ impl From<TokenType> for Option<Operator> {
             TokenType::StarEquals => Assignment(AssignType::MulAssign),
             TokenType::SlashEquals => Assignment(AssignType::DivAssign),
             TokenType::PercentEquals => Assignment(AssignType::ModAssign),
-            
+
             TokenType::Keyword(Keyword::Or) => Or,
             TokenType::Keyword(Keyword::And) => And,
 
@@ -354,7 +364,7 @@ impl From<TokenType> for Option<Operator> {
             TokenType::DotDot => Range,
             TokenType::DotDotLessThan => RangeExclusive,
 
-            _ => return None
+            _ => return None,
         })
     }
 }
@@ -373,16 +383,17 @@ impl Operator {
         }
     }
     pub fn is_boolean(self) -> bool {
-        matches!(
-            self,
-            Operator::Or | Operator::And
-        )
+        matches!(self, Operator::Or | Operator::And)
     }
     pub fn is_logical(self) -> bool {
         matches!(
             self,
-            Operator::Equals |Operator::NotEquals 
-            | Operator::LT | Operator::GT | Operator::LE | Operator::GE
+            Operator::Equals
+                | Operator::NotEquals
+                | Operator::LT
+                | Operator::GT
+                | Operator::LE
+                | Operator::GE
         )
     }
 }
@@ -394,5 +405,5 @@ pub enum AssignType {
     SubAssign,
     MulAssign,
     DivAssign,
-    ModAssign
+    ModAssign,
 }

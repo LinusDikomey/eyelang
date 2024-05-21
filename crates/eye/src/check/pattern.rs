@@ -1,10 +1,19 @@
 use dmap::DHashMap;
 use types::Primitive;
 
-use crate::{compiler::VarId, parser::{ast::{ExprId, Expr, UnOp}, token::{Operator, IntLiteral}}, type_table::{LocalTypeId, TypeInfo}, hir::Pattern, check::exhaust, error::Error};
+use crate::{
+    check::exhaust,
+    compiler::VarId,
+    error::Error,
+    hir::Pattern,
+    parser::{
+        ast::{Expr, ExprId, UnOp},
+        token::{IntLiteral, Operator},
+    },
+    type_table::{LocalTypeId, TypeInfo},
+};
 
-use super::{Ctx, exhaust::Exhaustion};
-
+use super::{exhaust::Exhaustion, Ctx};
 
 pub fn check(
     ctx: &mut Ctx,
@@ -17,7 +26,9 @@ pub fn check(
         &Expr::Nested(_, inner) => check(ctx, variables, exhaustion, inner, expected),
         Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
-            let ty = lit.ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+            let ty = lit
+                .ty
+                .map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
             ctx.specify(expected, ty, |ast| ast[pat].span(ast));
             exhaustion.exhaust_int(exhaust::SignedInt(lit.val, false));
             Pattern::Int(false, lit.val, expected)
@@ -27,7 +38,9 @@ pub fn check(
             match ctx.ast[inner] {
                 Expr::IntLiteral(span) => {
                     let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
-                    let ty = lit.ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+                    let ty = lit
+                        .ty
+                        .map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
                     // TODO: constrain negation with traits when they are available
                     ctx.specify(expected, ty, |ast| ast[pat].span(ast));
                     exhaustion.exhaust_int(exhaust::SignedInt(lit.val, true));
@@ -35,15 +48,17 @@ pub fn check(
                 }
                 Expr::FloatLiteral(_) => todo!("negative float patterns"),
                 _ => {
-                    ctx.compiler.errors.emit_err(
-                        Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
-                    );
+                    ctx.compiler
+                        .errors
+                        .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
                     Pattern::Invalid
                 }
             }
         }
         &Expr::BoolLiteral { start: _, val } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| ast[pat].span(ast));
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| {
+                ast[pat].span(ast)
+            });
             exhaustion.exhaust_bool(val);
             Pattern::Bool(val)
         }
@@ -87,13 +102,17 @@ pub fn check(
                             Kind::Float
                         }
                         _ => {
-                            ctx.compiler.errors.emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
+                            ctx.compiler
+                                .errors
+                                .emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
                             ctx.invalidate(expected);
                             Kind::Invalid
                         }
-                    }
+                    },
                     _ => {
-                        ctx.compiler.errors.emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
+                        ctx.compiler
+                            .errors
+                            .emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
                         ctx.invalidate(expected);
                         Kind::Invalid
                     }
@@ -102,11 +121,15 @@ pub fn check(
             if let (Kind::Int(l), Kind::Int(r)) = (range_side(l), range_side(r)) {
                 exhaustion.exhaust_int_range(l, r);
                 let inclusive = op == Operator::Range;
-                Pattern::Range { min_max: (l.0, r.0), min_max_signs: (l.1, r.1), inclusive }
+                Pattern::Range {
+                    min_max: (l.0, r.0),
+                    min_max_signs: (l.1, r.1),
+                    inclusive,
+                }
             } else {
-                ctx.compiler.errors.emit_err(
-                    Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
-                );
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
                 Pattern::Invalid
             }
         }
@@ -137,11 +160,10 @@ pub fn check(
         }
         */
         _ => {
-            ctx.compiler.errors.emit_err(
-                Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat))
-            );
+            ctx.compiler
+                .errors
+                .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
             Pattern::Invalid
         }
     }
 }
-

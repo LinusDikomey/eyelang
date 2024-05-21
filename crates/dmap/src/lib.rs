@@ -21,4 +21,3 @@ pub fn new<K, V>() -> DHashMap<K, V> {
 pub fn with_capacity<K, V>(capacity: usize) -> DHashMap<K, V> {
     DHashMap::with_capacity_and_hasher(capacity, DeterministicState)
 }
-

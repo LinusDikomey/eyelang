@@ -1,7 +1,7 @@
-use std::{ptr, ffi::CStr};
+use std::{ffi::CStr, ptr};
 
-use llvm_sys as llvm;
 use llvm::{prelude::LLVMModuleRef, target_machine};
+use llvm_sys as llvm;
 
 use crate::{Error, NONE};
 
@@ -28,7 +28,7 @@ pub unsafe fn emit(
             target,
             target_triple,
             "generic\0".as_ptr().cast(), // cpu
-            NONE, // features
+            NONE,                        // features
             opt_level,
             target_machine::LLVMRelocMode::LLVMRelocDefault,
             target_machine::LLVMCodeModel::LLVMCodeModelDefault,
@@ -43,7 +43,8 @@ pub unsafe fn emit(
         out_file as _,
         file_type,
         &mut error,
-    ) != 0 {
+    ) != 0
+    {
         let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
         return Err(Error::EmitFailed(msg));
     }

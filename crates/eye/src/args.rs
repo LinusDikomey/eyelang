@@ -1,6 +1,5 @@
 use std::fmt;
 
-
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Cmd {
     /// Check a file or project for errors and warnings.

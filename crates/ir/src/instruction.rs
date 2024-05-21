@@ -2,15 +2,14 @@ use std::fmt;
 
 use color_format::cwrite;
 
-use super::{Ref, BlockIndex, ir_types::TypeRef};
-
+use super::{ir_types::TypeRef, BlockIndex, Ref};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
     pub ty: TypeRef,
-    pub used: bool
+    pub used: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,10 +105,16 @@ impl Tag {
         match self {
             Tag::BlockBegin | Tag::Param => V::Int32,
             Tag::Uninit => V::None,
-            Tag::Ret | Tag::Load | Tag::Neg | Tag::Not
-            | Tag::CastInt | Tag::CastFloat
-            | Tag::CastIntToFloat | Tag::CastFloatToInt
-            | Tag::IntToPtr | Tag::PtrToInt => V::UnOp,
+            Tag::Ret
+            | Tag::Load
+            | Tag::Neg
+            | Tag::Not
+            | Tag::CastInt
+            | Tag::CastFloat
+            | Tag::CastIntToFloat
+            | Tag::CastFloatToInt
+            | Tag::IntToPtr
+            | Tag::PtrToInt => V::UnOp,
             Tag::Int => V::Int,
             Tag::LargeInt => V::LargeInt,
             Tag::Float => V::Float,
@@ -118,16 +123,26 @@ impl Tag {
             Tag::Call => V::Call,
             Tag::MemberPtr => V::MemberPtr,
             Tag::ArrayIndex => V::ArrayIndex,
-            Tag::Store | Tag::Add | Tag::Sub | Tag::Mul | Tag::Div | Tag::Mod
-            | Tag::Or | Tag::And    
-            | Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE => V::BinOp,
+            Tag::Store
+            | Tag::Add
+            | Tag::Sub
+            | Tag::Mul
+            | Tag::Div
+            | Tag::Mod
+            | Tag::Or
+            | Tag::And
+            | Tag::Eq
+            | Tag::NE
+            | Tag::LT
+            | Tag::GT
+            | Tag::LE
+            | Tag::GE => V::BinOp,
 
             Tag::MemberValue => V::RefInt,
             Tag::Goto => V::Block,
             Tag::Branch => V::Branch,
             Tag::Phi => V::ExtraBranchRefs,
             Tag::Asm => V::Asm,
-
             //Tag::EnumTag | Tag::EnumValueTag => UnOp,
             //Tag::EnumVariantMember | Tag::EnumValueVariantMember => VariantMember,
         }
@@ -135,9 +150,9 @@ impl Tag {
 
     /// returns true if this instruction yields a value
     pub fn is_usable(self) -> bool {
-        !matches!(self,
-            Tag::BlockBegin | Tag::Ret
-            | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
+        !matches!(
+            self,
+            Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
         )
     }
     pub fn is_terminator(self) -> bool {
@@ -167,7 +182,7 @@ pub union Data {
     /// extra_index, length of string, amount of arguments
     pub asm: (u32, u16, u16),
     pub none: (),
-    pub block: BlockIndex
+    pub block: BlockIndex,
 }
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

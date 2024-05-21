@@ -1,6 +1,9 @@
 #![feature(variant_count)]
-use std::{fmt, ops::{Index, IndexMut}};
 use color_format::*;
+use std::{
+    fmt,
+    ops::{Index, IndexMut},
+};
 
 pub mod builder;
 pub mod display;
@@ -11,9 +14,9 @@ mod ir_types;
 mod layout;
 
 pub use eval::{eval, Val};
-pub use instruction::{Instruction, Tag, Data};
-pub use ir_types::{IrTypes, IrType, TypeRef, TypeRefs};
-pub use layout::{Layout, type_layout, offset_in_tuple};
+pub use instruction::{Data, Instruction, Tag};
+pub use ir_types::{IrType, IrTypes, TypeRef, TypeRefs};
+pub use layout::{offset_in_tuple, type_layout, Layout};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u64);
@@ -77,11 +80,16 @@ impl Ref {
     pub fn index(idx: u32) -> Self {
         Self(INDEX_OFFSET + idx)
     }
-    pub fn is_val(self) -> bool { self.0 < INDEX_OFFSET }
-    pub fn into_val(self) -> Option<RefVal> {
-        self.is_val().then(|| unsafe { std::mem::transmute(self.0 as u8) })
+    pub fn is_val(self) -> bool {
+        self.0 < INDEX_OFFSET
     }
-    pub fn is_ref(self) -> bool { !self.is_val() }
+    pub fn into_val(self) -> Option<RefVal> {
+        self.is_val()
+            .then(|| unsafe { std::mem::transmute(self.0 as u8) })
+    }
+    pub fn is_ref(self) -> bool {
+        !self.is_val()
+    }
     pub fn into_ref(self) -> Option<u32> {
         self.is_ref().then_some(self.0 - INDEX_OFFSET)
     }
@@ -111,7 +119,7 @@ pub enum RefVal {
     True,
     False,
     Unit,
-    Undef
+    Undef,
 }
 impl fmt::Display for RefVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -125,7 +133,6 @@ impl fmt::Display for RefVal {
         }
     }
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockIndex(u32);

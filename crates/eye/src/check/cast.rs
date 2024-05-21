@@ -1,5 +1,8 @@
-use crate::{hir::CastType, type_table::{TypeInfo, TypeTable, LocalTypeId}, error::Error};
-
+use crate::{
+    error::Error,
+    hir::CastType,
+    type_table::{LocalTypeId, TypeInfo, TypeTable},
+};
 
 pub fn check(
     from_ty: LocalTypeId,
@@ -41,15 +44,18 @@ pub fn check(
                 to: b.as_int().unwrap(),
             }
         }
-        (TypeInfo::Primitive(a), TypeInfo::Pointer(_)) if a.is_int() => {
-            CastType::IntToPtr { from: a.as_int().unwrap() }
-        }
-        (TypeInfo::Pointer(_), TypeInfo::Primitive(b)) if b.is_int() => {
-            CastType::PtrToInt { to: b.as_int().unwrap() }
-        }
-        (TypeInfo::Enum { ..}, TypeInfo::Primitive(b)) if b.is_int() => {
+        (TypeInfo::Primitive(a), TypeInfo::Pointer(_)) if a.is_int() => CastType::IntToPtr {
+            from: a.as_int().unwrap(),
+        },
+        (TypeInfo::Pointer(_), TypeInfo::Primitive(b)) if b.is_int() => CastType::PtrToInt {
+            to: b.as_int().unwrap(),
+        },
+        (TypeInfo::Enum { .. }, TypeInfo::Primitive(b)) if b.is_int() => {
             // TODO: check enum is valid for casting
-            CastType::EnumToInt { from: from_ty, to: b.as_int().unwrap() }
+            CastType::EnumToInt {
+                from: from_ty,
+                to: b.as_int().unwrap(),
+            }
         }
         (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
             // TODO: check pointees are different, emit TrivialCast otherwise
@@ -61,7 +67,10 @@ pub fn check(
             let mut b_string = String::new();
             types.type_to_string(a, &mut a_string);
             types.type_to_string(b, &mut b_string);
-            error = Some(Error::InvalidCast { from: a_string, to: b_string });
+            error = Some(Error::InvalidCast {
+                from: a_string,
+                to: b_string,
+            });
             CastType::Invalid
         }
     };

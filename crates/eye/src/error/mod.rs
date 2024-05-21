@@ -1,9 +1,13 @@
-use core::fmt;
-use std::{iter::{Peekable, Enumerate}, str::Lines, path::Path};
-use color_format::*;
-use id::ModuleId;
 use crate::parser::{token::TokenType, ExpectedTokens};
+use color_format::*;
+use core::fmt;
+use id::ModuleId;
 use span::{Span, TSpan};
+use std::{
+    iter::{Enumerate, Peekable},
+    path::Path,
+    str::Lines,
+};
 
 #[derive(Debug)]
 pub struct Errors {
@@ -26,7 +30,7 @@ impl Errors {
         self.errors.extend(errors.errors);
         self.warnings.extend(errors.warnings);
     }
-    
+
     #[track_caller]
     pub fn emit_span(&mut self, err: Error, span: Span) {
         self.emit_err(CompileError { err, span });
@@ -45,7 +49,7 @@ impl Errors {
         };
         list.push(err);
     }
-    
+
     pub fn error_count(&self) -> usize {
         self.errors.len()
     }
@@ -74,7 +78,11 @@ impl Errors {
         }
     }
 
-    pub fn _emit_unwrap_or<T>(&mut self, res: Result<T, CompileError>, otherwise: impl Fn() -> T) -> T {
+    pub fn _emit_unwrap_or<T>(
+        &mut self,
+        res: Result<T, CompileError>,
+        otherwise: impl Fn() -> T,
+    ) -> T {
         match res {
             Ok(t) => t,
             Err(err) => {
@@ -88,7 +96,7 @@ impl Errors {
 #[derive(Debug, Clone)]
 pub struct CompileError {
     pub err: Error,
-    pub span: Span
+    pub span: Span,
 }
 impl CompileError {
     pub fn new(err: Error, span: Span) -> Self {
@@ -103,7 +111,10 @@ pub enum Error {
     FileSizeExceeeded,
     UnexpectedEndOfFile,
     UnexpectedCharacters,
-    UnexpectedToken { expected: ExpectedTokens, found: TokenType },
+    UnexpectedToken {
+        expected: ExpectedTokens,
+        found: TokenType,
+    },
     UnknownIdent,
     UnknownType,
     UnknownFunction,
@@ -129,14 +140,21 @@ pub enum Error {
     TraitExpected,
     IntExpected,
     FloatExpected,
-    MismatchedType { expected: String, found: String },
+    MismatchedType {
+        expected: String,
+        found: String,
+    },
     ExpectedVarFoundDefinition,
     ExpectedValue,
     ExpectedValueFoundDefinition,
     ExpectedValueFoundFunction,
     ExpectedValueOrModuleFoundDefiniton,
     ExpectedValueFoundHole,
-    InvalidArgCount { expected: u32, varargs: bool, found: u32 },
+    InvalidArgCount {
+        expected: u32,
+        varargs: bool,
+        found: u32,
+    },
     CantNegateType,
     NonexistantMember,
     NonexistantEnumVariant,
@@ -153,7 +171,10 @@ pub enum Error {
     TupleIndexingOnNonValue,
     TupleIndexOutOfRange,
     NotAnInstanceMethod,
-    InvalidGenericCount { expected: u8, found: u8 },
+    InvalidGenericCount {
+        expected: u8,
+        found: u8,
+    },
     UnexpectedGenerics,
     NotConst,
     FunctionOrStructTypeExpected,
@@ -162,7 +183,9 @@ pub enum Error {
     ExpectedConstValue,
     UnusedExpressionValue,
     InfiniteLoop,
-    NotAPattern { coming_soon: bool },
+    NotAPattern {
+        coming_soon: bool,
+    },
     NotAPatternRangeValue,
     Inexhaustive,
     DuplicateDependency(String),
@@ -174,7 +197,9 @@ pub enum Error {
         trait_name: String,
         function: String,
     },
-    NotAllFunctionsImplemented { unimplemented: Vec<String>, },
+    NotAllFunctionsImplemented {
+        unimplemented: Vec<String>,
+    },
     TraitSignatureMismatch,
     InvalidCast {
         from: String,
@@ -220,7 +245,9 @@ impl Error {
             Error::ExpectedValue => "a value was expected",
             Error::ExpectedValueFoundDefinition => "expected value but found a definition",
             Error::ExpectedValueFoundFunction => "expected value but found a function",
-            Error::ExpectedValueOrModuleFoundDefiniton => "expected value or module but found a definition",
+            Error::ExpectedValueOrModuleFoundDefiniton => {
+                "expected value or module but found a definition"
+            }
             Error::ExpectedValueFoundHole => "expected a value but found a hole",
             Error::InvalidArgCount { .. } => "invalid argument count",
             Error::CantNegateType => "can't negate this value",
@@ -257,8 +284,12 @@ impl Error {
             Error::CantMutateHole => "can't mutate hole",
             Error::InvalidGlobalVarPattern => "invalid pattern for a global variable definition",
             Error::NotATraitMember { .. } => "not a member of the implemented trait",
-            Error::NotAllFunctionsImplemented { .. } => "not all functions of the trait are implemented",
-            Error::TraitSignatureMismatch => "signature doesn't match the function's signature in the trait definition",
+            Error::NotAllFunctionsImplemented { .. } => {
+                "not all functions of the trait are implemented"
+            }
+            Error::TraitSignatureMismatch => {
+                "signature doesn't match the function's signature in the trait definition"
+            }
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
         }
@@ -348,11 +379,10 @@ impl Error {
     }
     pub fn severity(&self) -> Severity {
         match self {
-            Self::UnusedExpressionValue
-            | Self::CantMutateHole
-            | Self::TrivialCast
-                => Severity::Warn,
-            _ => Severity::Error
+            Self::UnusedExpressionValue | Self::CantMutateHole | Self::TrivialCast => {
+                Severity::Warn
+            }
+            _ => Severity::Error,
         }
     }
 }
@@ -360,7 +390,7 @@ impl Error {
     pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {
         CompileError {
             err: self,
-            span: Span::new(start, end, module)
+            span: Span::new(start, end, module),
         }
     }
     pub fn at_span(self, span: Span) -> CompileError {
@@ -369,7 +399,10 @@ impl Error {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Severity { Error, Warn }
+pub enum Severity {
+    Error,
+    Warn,
+}
 impl fmt::Display for Severity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -393,7 +426,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
             line += 1;
             col = 1;
 
-            start_of_line_byte = i+1;
+            start_of_line_byte = i + 1;
         } else {
             col += 1;
         }
@@ -420,9 +453,8 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         while surrounding_end < src.len() && src.as_bytes()[surrounding_end] != b'\n' {
             surrounding_end += 1;
         }
-        &src[(e+1)..surrounding_end]
+        &src[(e + 1)..surrounding_end]
     };
-    
 
     cprint!("{}: ", error.severity());
     match error.severity() {
@@ -438,7 +470,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     let mut lines = src_loc.lines().enumerate().peekable();
 
     let first = lines.next().unwrap();
-    
+
     let post_if_last = |lines: &mut Peekable<Enumerate<Lines>>| {
         if lines.peek().is_some() {
             println!();
@@ -452,8 +484,18 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
 
     let pre_error_offset = " ".repeat(pre.chars().count());
     match error.severity() {
-        Severity::Error => cprintln!("{}{}#r!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count())),
-        Severity::Warn => cprintln!("{}{}#y!<{}>", p, pre_error_offset, "^".repeat(first.1.chars().count()))
+        Severity::Error => cprintln!(
+            "{}{}#r!<{}>",
+            p,
+            pre_error_offset,
+            "^".repeat(first.1.chars().count())
+        ),
+        Severity::Warn => cprintln!(
+            "{}{}#y!<{}>",
+            p,
+            pre_error_offset,
+            "^".repeat(first.1.chars().count())
+        ),
     }
     if let Some(details) = error.details() {
         cprintln!("{}{}{}", p, pre_error_offset, details);
@@ -461,7 +503,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
 
     while let Some((i, line_str)) = lines.next() {
         let line = line + i;
-        
+
         cprint!("#c<{:#4} | >{}", line, line_str);
         post_if_last(&mut lines);
 

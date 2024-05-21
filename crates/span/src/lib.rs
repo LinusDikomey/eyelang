@@ -2,17 +2,13 @@ use std::num::NonZeroU32;
 
 use id::ModuleId;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TSpan {
     pub start: u32,
-    pub end: u32
+    pub end: u32,
 }
 impl TSpan {
-    pub const EMPTY: Self = Self {
-        start: 0,
-        end: 0,
-    };
+    pub const EMPTY: Self = Self { start: 0, end: 0 };
 
     pub const MISSING: Self = Self {
         start: u32::MAX,
@@ -25,7 +21,10 @@ impl TSpan {
     }
 
     pub fn with_len(start: u32, len: NonZeroU32) -> Self {
-        Self { start, end: start + len.get() }
+        Self {
+            start,
+            end: start + len.get(),
+        }
     }
 
     pub fn in_mod(self, module: ModuleId) -> Span {
@@ -33,7 +32,7 @@ impl TSpan {
     }
 
     pub fn range(self) -> std::ops::RangeInclusive<usize> {
-        self.start as usize ..= self.end as usize
+        self.start as usize..=self.end as usize
     }
 }
 
@@ -41,7 +40,7 @@ impl TSpan {
 pub struct Span {
     pub start: u32,
     pub end: u32,
-    pub module: ModuleId
+    pub module: ModuleId,
 }
 impl Span {
     pub const MISSING: Self = Self {
@@ -57,7 +56,6 @@ impl Span {
     pub fn is_missing(&self) -> bool {
         self.start == u32::MAX && self.end == u32::MAX && self.module == ModuleId::MISSING
     }
-
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,17 +67,26 @@ impl IdentPath {
     }
     /// Returns: (`root`, `segments_without_last`, `last_segment`)
     /// `last_segment` will only be None if the path is a single root item
-    pub fn segments<'a>(&'a self, src: &'a str)
-    -> (Option<TSpan>, impl Iterator<Item = (&str, TSpan)>, Option<(&str, TSpan)>) {
+    pub fn segments<'a>(
+        &'a self,
+        src: &'a str,
+    ) -> (
+        Option<TSpan>,
+        impl Iterator<Item = (&str, TSpan)>,
+        Option<(&str, TSpan)>,
+    ) {
         let start_addr = src.as_ptr() as usize;
 
         let s = &src[self.0.range()];
 
-        let mut split = s.split('.').map(move |segment| {
-            let trimmed = segment.trim();
-            let idx = (trimmed.as_ptr() as usize - start_addr) as u32;
-            (trimmed, TSpan::new(idx, idx + trimmed.len() as u32 - 1))
-        }).peekable();
+        let mut split = s
+            .split('.')
+            .map(move |segment| {
+                let trimmed = segment.trim();
+                let idx = (trimmed.as_ptr() as usize - start_addr) as u32;
+                (trimmed, TSpan::new(idx, idx + trimmed.len() as u32 - 1))
+            })
+            .peekable();
         let first = split.peek().copied();
         let last = split.next_back().unwrap();
         if let Some(("root", first_span)) = first {

@@ -1,7 +1,12 @@
-use crate::{hir::LValue, type_table::{LocalTypeId, TypeInfo, LocalTypeIds}, parser::ast::{Expr, ExprId, UnOp}, compiler::{LocalScope, LocalItem, Def}, error::Error};
+use crate::{
+    compiler::{Def, LocalItem, LocalScope},
+    error::Error,
+    hir::LValue,
+    parser::ast::{Expr, ExprId, UnOp},
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
+};
 
-use super::{Ctx, expr};
-
+use super::{expr, Ctx};
 
 pub fn check(
     ctx: &mut Ctx,
@@ -12,10 +17,9 @@ pub fn check(
     match &ctx.ast[expr] {
         &Expr::Ident { span } => {
             match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
-                LocalItem::Invalid | LocalItem::Def(Def::Invalid) => (
-                    LValue::Invalid,
-                    ctx.hir.types.add(TypeInfo::Invalid),
-                ),
+                LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                }
                 LocalItem::Var(id) => {
                     let var_ty = ctx.hir.get_var(id);
                     (LValue::Variable(id), var_ty)
@@ -28,11 +32,10 @@ pub fn check(
                     (LValue::Global(module, id), ty)
                 }
                 LocalItem::Def(_) => {
-                    ctx.compiler.errors.emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
-                    (
-                        LValue::Invalid,
-                        ctx.hir.types.add(TypeInfo::Invalid),
-                    )
+                    ctx.compiler
+                        .errors
+                        .emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
                 }
             }
         }
@@ -44,11 +47,10 @@ pub fn check(
         }
         Expr::MemberAccess { .. } => todo!("struct member assignment"),
         _ => {
-            ctx.compiler.errors.emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
-            (
-                LValue::Invalid,
-                ctx.hir.types.add(TypeInfo::Invalid),
-            )
+            ctx.compiler
+                .errors
+                .emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
+            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
         }
     }
 }

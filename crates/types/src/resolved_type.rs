@@ -5,7 +5,10 @@ use crate::Primitive;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Primitive(Primitive),
-    DefId { id: id::TypeId, generics: Option<Box<[Type]>> },
+    DefId {
+        id: id::TypeId,
+        generics: Option<Box<[Type]>>,
+    },
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
     Tuple(Box<[Type]>),
@@ -60,19 +63,23 @@ impl Type {
             Type::TraitSelf => unreachable!("TraitSelf should always be replaced in concrete instances"),
             Type::Invalid => Layout::EMPTY,
         }
-    } 
+    }
     */
 
     pub fn instantiate_generics(&self, generics: &[Type]) -> Self {
         match self {
             Type::Primitive(p) => Type::Primitive(*p),
-            Type::DefId { id, generics: ty_generics } => Type::DefId {
+            Type::DefId {
+                id,
+                generics: ty_generics,
+            } => Type::DefId {
                 id: *id,
-                generics: ty_generics.as_ref().map(|ty_generics| ty_generics
-                    .iter()
-                    .map(|ty| ty.instantiate_generics(generics))
-                    .collect()
-                )
+                generics: ty_generics.as_ref().map(|ty_generics| {
+                    ty_generics
+                        .iter()
+                        .map(|ty| ty.instantiate_generics(generics))
+                        .collect()
+                }),
             },
             Type::Pointer(inner) => Type::Pointer(Box::new(inner.instantiate_generics(generics))),
             Type::Array(b) => {
@@ -81,19 +88,21 @@ impl Type {
             }
             Type::Tuple(types) => Type::Tuple(
                 types
-                .iter()
-                .map(|ty| ty.instantiate_generics(generics))
-                    .collect()
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect(),
             ),
             Type::Generic(idx) => generics[*idx as usize].clone(),
-            Type::LocalEnum(variants) => Type::LocalEnum(variants
-                .iter()
-                .map(|variant| variant
-                     .iter()
-                     .map(|ty| ty.instantiate_generics(generics))
-                     .collect()
-                )
-                .collect()
+            Type::LocalEnum(variants) => Type::LocalEnum(
+                variants
+                    .iter()
+                    .map(|variant| {
+                        variant
+                            .iter()
+                            .map(|ty| ty.instantiate_generics(generics))
+                            .collect()
+                    })
+                    .collect(),
             ),
             Type::TraitSelf => unreachable!(),
             Type::Invalid => Type::Invalid,
@@ -104,7 +113,10 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Primitive(p) => write!(f, "{}", <&str>::from(*p)),
-            Type::DefId { id, generics: Some(generics) } => {
+            Type::DefId {
+                id,
+                generics: Some(generics),
+            } => {
                 write!(f, "TypeId({})[", id.idx())?;
                 for (i, generic) in generics.iter().enumerate() {
                     if i != 0 {

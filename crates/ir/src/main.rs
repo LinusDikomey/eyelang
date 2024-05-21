@@ -1,7 +1,11 @@
 //! Example for using the ir crate. A function is constructed manually and evaluated.
 //! It is also debug printed.
 
-use ir::{IrTypes, IrType, builder::{BinOp, Terminator, IrBuilder}, Function, display::Info, TypeRefs};
+use ir::{
+    builder::{BinOp, IrBuilder, Terminator},
+    display::Info,
+    Function, IrType, IrTypes, TypeRefs,
+};
 
 fn main() {
     let mut types = IrTypes::new();
@@ -25,7 +29,11 @@ fn main() {
     let new_value = builder.build_bin_op(BinOp::Sub, loaded, one, int_ty);
     builder.build_store(variable, new_value);
     let is_zero = builder.build_bin_op(BinOp::Eq, new_value, zero, IrType::U1);
-    builder.terminate_block(Terminator::Branch { cond: is_zero, on_true: end, on_false: loop_body });
+    builder.terminate_block(Terminator::Branch {
+        cond: is_zero,
+        on_true: end,
+        on_false: loop_body,
+    });
 
     builder.begin_block(end);
     builder.terminate_block(Terminator::Ret(three));
@@ -40,14 +48,22 @@ fn main() {
         ir: Some(ir),
     };
 
-    let display = function.ir.as_ref().unwrap().display(Info { funcs: &[] }, &function.types);
+    let display = function
+        .ir
+        .as_ref()
+        .unwrap()
+        .display(Info { funcs: &[] }, &function.types);
     eprintln!("{display}");
     let value = ir::eval(&function, &[]);
     eprintln!("Function evaluated to {value:?}");
 
     // another example: square function taking in parameters
     let mul = build_mul();
-    let display = mul.ir.as_ref().unwrap().display(Info { funcs: &[] }, &mul.types);
+    let display = mul
+        .ir
+        .as_ref()
+        .unwrap()
+        .display(Info { funcs: &[] }, &mul.types);
     eprintln!("{display}");
     let args = [ir::Val::Int(5), ir::Val::Int(3)];
     let result = ir::eval(&mul, &args).expect("Function call failed");

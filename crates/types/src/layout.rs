@@ -1,18 +1,23 @@
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub size: u64,
     pub alignment: u64,
 }
 impl Layout {
-    pub const EMPTY: Self = Self { size: 0, alignment: 1 };
+    pub const EMPTY: Self = Self {
+        size: 0,
+        alignment: 1,
+    };
     // TODO: configure based on target
-    pub const PTR: Self = Self { size: 8, alignment: 8 };
+    pub const PTR: Self = Self {
+        size: 8,
+        alignment: 8,
+    };
 
     pub fn array(elem: Layout, count: u32) -> Layout {
         Layout {
             size: elem.stride() * count as u64,
-            alignment: elem.alignment
+            alignment: elem.alignment,
         }
     }
 
@@ -70,9 +75,27 @@ mod tests {
     fn basic() {
         use IntType as I;
 
-        assert_eq!(layout([I::I16, I::I32]), Layout { size: 8, alignment: 4 });
-        assert_eq!(layout([I::I32, I::I16]), Layout { size: 6, alignment: 4 });
-        assert_eq!(layout([I::I32, I::I16, I::I32]), Layout { size: 12, alignment: 4 });
+        assert_eq!(
+            layout([I::I16, I::I32]),
+            Layout {
+                size: 8,
+                alignment: 4
+            }
+        );
+        assert_eq!(
+            layout([I::I32, I::I16]),
+            Layout {
+                size: 6,
+                alignment: 4
+            }
+        );
+        assert_eq!(
+            layout([I::I32, I::I16, I::I32]),
+            Layout {
+                size: 12,
+                alignment: 4
+            }
+        );
     }
 
     #[test]
@@ -83,6 +106,12 @@ mod tests {
         let mut b = Layout::EMPTY;
         b.accumulate(a);
         b.accumulate(Primitive::I32.layout());
-        assert_eq!(b, Layout { size: 12, alignment: 4 });
+        assert_eq!(
+            b,
+            Layout {
+                size: 12,
+                alignment: 4
+            }
+        );
     }
 }

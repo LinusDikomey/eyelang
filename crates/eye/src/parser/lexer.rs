@@ -1,5 +1,5 @@
 use super::token::{Token, TokenType};
-use crate::error::{Errors, Error};
+use crate::error::{Error, Errors};
 use id::ModuleId;
 
 pub fn lex(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
@@ -9,14 +9,17 @@ pub fn lex(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token
     }
 
     let chars = src.char_indices().map(|(i, c)| (i as u32, c)).collect();
-    Some(Lexer {
-        src,
-        chars,
-        index: 0,
-        tokens: Vec::new(),
-        module,
-        newline: true,
-    }.parse(errors))
+    Some(
+        Lexer {
+            src,
+            chars,
+            index: 0,
+            tokens: Vec::new(),
+            module,
+            newline: true,
+        }
+        .parse(errors),
+    )
 }
 
 struct Lexer<'a> {
@@ -32,7 +35,9 @@ impl<'a> Lexer<'a> {
     fn parse(mut self, errors: &mut Errors) -> Vec<Token> {
         while self.index < self.chars.len() {
             self.newline |= self.skip_junk();
-            if self.is_at_end() { break; }
+            if self.is_at_end() {
+                break;
+            }
 
             if let Some(token) = self.parse_token(errors) {
                 self.tokens.push(token);
@@ -42,23 +47,20 @@ impl<'a> Lexer<'a> {
     }
 
     fn pos(&self) -> u32 {
-        self.chars.get(self.index)
-            .map_or_else(
-                || self.chars.last()
-                    .map_or(0, |(pos, c)| *pos + c.len_utf8() as u32),
-                |(x, _)| *x,
-            )
+        self.chars.get(self.index).map_or_else(
+            || {
+                self.chars
+                    .last()
+                    .map_or(0, |(pos, c)| *pos + c.len_utf8() as u32)
+            },
+            |(x, _)| *x,
+        )
     }
 
     fn parse_token(&mut self, errors: &mut Errors) -> Option<Token> {
         fn emit_invalid(invalid: &mut Option<(u32, u32)>, errors: &mut Errors, module: ModuleId) {
             if let Some((start, end)) = invalid.take() {
-                errors.emit(
-                    Error::UnexpectedCharacters,
-                    start,
-                    end,
-                    module
-                );
+                errors.emit(Error::UnexpectedCharacters, start, end, module);
             }
         }
 
@@ -101,35 +103,37 @@ impl<'a> Lexer<'a> {
                     self.newline |= self.skip_junk();
                     continue;
                 }
-                ':' => {
-                    match self.peek() {
-                        Some(':') => { self.step(); TokenType::DoubleColon },
-                        Some('=') => { self.step(); TokenType::Declare }
-                        _ => TokenType::Colon
+                ':' => match self.peek() {
+                    Some(':') => {
+                        self.step();
+                        TokenType::DoubleColon
                     }
+                    Some('=') => {
+                        self.step();
+                        TokenType::Declare
+                    }
+                    _ => TokenType::Colon,
                 },
                 ',' => TokenType::Comma,
                 ';' => TokenType::Semicolon,
-                '.' => {
-                    match self.peek() {
-                        Some('.') => {
-                            self.step();
-                            match self.peek() {
-                                Some('.') => {
-                                    self.step();
-                                    TokenType::TripleDot
-                                }
-                                Some('<') => {
-                                    self.step();
-                                    TokenType::DotDotLessThan
-                                }
-                                _ => TokenType::DotDot
+                '.' => match self.peek() {
+                    Some('.') => {
+                        self.step();
+                        match self.peek() {
+                            Some('.') => {
+                                self.step();
+                                TokenType::TripleDot
                             }
+                            Some('<') => {
+                                self.step();
+                                TokenType::DotDotLessThan
+                            }
+                            _ => TokenType::DotDot,
                         }
-                        _ => TokenType::Dot
                     }
-                }
-                
+                    _ => TokenType::Dot,
+                },
+
                 '(' => TokenType::LParen,
                 ')' => TokenType::RParen,
                 '{' => TokenType::LBrace,
@@ -137,57 +141,80 @@ impl<'a> Lexer<'a> {
                 '[' => TokenType::LBracket,
                 ']' => TokenType::RBracket,
 
-                '=' => {
-                    match self.peek() {
-                        Some('=') => { self.step(); TokenType::DoubleEquals }
-                        _ => TokenType::Equals
+                '=' => match self.peek() {
+                    Some('=') => {
+                        self.step();
+                        TokenType::DoubleEquals
                     }
+                    _ => TokenType::Equals,
                 },
-                '+' => if self.step_if('=') {
-                    TokenType::PlusEquals
-                } else {
-                    TokenType::Plus
+                '+' => {
+                    if self.step_if('=') {
+                        TokenType::PlusEquals
+                    } else {
+                        TokenType::Plus
+                    }
                 }
                 '-' => match self.peek() {
-                    Some('>') => { self.step(); TokenType::Arrow }
-                    Some('=') => { self.step(); TokenType::MinusEquals }
+                    Some('>') => {
+                        self.step();
+                        TokenType::Arrow
+                    }
+                    Some('=') => {
+                        self.step();
+                        TokenType::MinusEquals
+                    }
                     _ => TokenType::Minus,
+                },
+                '*' => {
+                    if self.step_if('=') {
+                        TokenType::StarEquals
+                    } else {
+                        TokenType::Star
+                    }
                 }
-                '*' => if self.step_if('=') {
-                    TokenType::StarEquals
-                } else {
-                    TokenType::Star
+                '/' => {
+                    if self.step_if('=') {
+                        TokenType::SlashEquals
+                    } else {
+                        TokenType::Slash
+                    }
                 }
-                '/' => if self.step_if('=') {
-                    TokenType::SlashEquals
-                } else {
-                    TokenType::Slash
-                }
-                '%' => if self.step_if('=') {
-                    TokenType::PercentEquals
-                } else {
-                    TokenType::Percent
+                '%' => {
+                    if self.step_if('=') {
+                        TokenType::PercentEquals
+                    } else {
+                        TokenType::Percent
+                    }
                 }
                 '&' => TokenType::Ampersand,
                 '~' => TokenType::SnackWave,
                 '^' => TokenType::Caret,
 
                 '<' => match self.peek() {
-                    Some('=') => { self.step(); TokenType::LessEquals },
-                    _ => TokenType::LessThan
-                }
-                '>' => match self.peek() {
-                    Some('=') => { self.step(); TokenType::GreaterEquals },
-                    _ => TokenType::GreaterThan
-                }
-                '!' => {
-                    match self.peek() {
-                        Some('=') => { self.step(); TokenType::BangEquals }
-                        _ => TokenType::Bang
+                    Some('=') => {
+                        self.step();
+                        TokenType::LessEquals
                     }
-                }
+                    _ => TokenType::LessThan,
+                },
+                '>' => match self.peek() {
+                    Some('=') => {
+                        self.step();
+                        TokenType::GreaterEquals
+                    }
+                    _ => TokenType::GreaterThan,
+                },
+                '!' => match self.peek() {
+                    Some('=') => {
+                        self.step();
+                        TokenType::BangEquals
+                    }
+                    _ => TokenType::Bang,
+                },
 
-                '0'..='9' => { // int/float literal
+                '0'..='9' => {
+                    // int/float literal
                     let mut is_float = false;
                     while matches!(self.peek(), Some('0'..='9' | '.')) {
                         if self.step().unwrap() == '.' {
@@ -200,7 +227,7 @@ impl<'a> Lexer<'a> {
                                     Error::MultipleDotsInFloatLiteral,
                                     self.pos(),
                                     self.pos(),
-                                    self.module
+                                    self.module,
                                 );
                             }
                             is_float = true;
@@ -212,29 +239,31 @@ impl<'a> Lexer<'a> {
                         TokenType::IntLiteral
                     }
                 }
-                '"' => { // string literal
+                '"' => {
+                    // string literal
                     while self.peek() != Some('"') {
                         if self.step().is_none() {
                             errors.emit(
                                 Error::UnexpectedEndOfFile,
                                 start,
-                                self.pos()-1,
-                                self.module
+                                self.pos() - 1,
+                                self.module,
                             );
                             break;
                         }
                     }
                     self.step();
                     TokenType::StringLiteral
-                },
-                c @ ('A'..='Z' | 'a'..='z' | '_') => { // keyword/identifier
+                }
+                c @ ('A'..='Z' | 'a'..='z' | '_') => {
+                    // keyword/identifier
                     if c == '_' && !is_ident_char(self.peek()) {
-                        break TokenType::Underscore
+                        break TokenType::Underscore;
                     }
                     while is_ident_char(self.peek()) {
                         self.step().unwrap();
                     }
-                    if let Ok(keyword) = self.src[start as usize ..= self.pos() as usize].parse() {
+                    if let Ok(keyword) = self.src[start as usize..=self.pos() as usize].parse() {
                         TokenType::Keyword(keyword)
                     } else {
                         TokenType::Ident
@@ -261,7 +290,7 @@ impl<'a> Lexer<'a> {
         self.newline = false;
         Some(Token::new(ty, start, end, new_line))
     }
-    
+
     fn parse_multiline_comment(&mut self, errors: &mut Errors) -> usize {
         let start = self.pos() - 1;
         let mut newlines = 0;
@@ -280,13 +309,12 @@ impl<'a> Lexer<'a> {
                     errors.emit(
                         Error::UnexpectedEndOfFile,
                         start,
-                        self.pos()-1,
-                        self.module
+                        self.pos() - 1,
+                        self.module,
                     );
                     break;
                 }
                 _ => {}
-
             }
         }
         newlines
@@ -296,15 +324,20 @@ impl<'a> Lexer<'a> {
     #[must_use]
     fn skip_junk(&mut self) -> bool {
         let mut new_line = false;
-        if self.is_at_end() { return new_line; }
+        if self.is_at_end() {
+            return new_line;
+        }
         while let ' ' | '\r' | '\n' = self.current() {
             if self.current() == '\n' {
                 new_line = true;
             }
-            if self.step().is_none() { // end of file, no more checking for junk tokens
+            if self.step().is_none() {
+                // end of file, no more checking for junk tokens
                 return new_line;
             }
-            if self.is_at_end() { return new_line; }
+            if self.is_at_end() {
+                return new_line;
+            }
         }
         new_line
     }
@@ -312,7 +345,7 @@ impl<'a> Lexer<'a> {
     fn is_at_end(&self) -> bool {
         self.index >= self.chars.len()
     }
-    
+
     fn current(&self) -> char {
         self.chars[self.index].1
     }

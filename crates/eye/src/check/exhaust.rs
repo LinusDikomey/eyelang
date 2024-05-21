@@ -1,7 +1,10 @@
 use dmap::DHashMap;
 use types::Primitive;
 
-use crate::{type_table::{TypeInfo, TypeTable}, Compiler};
+use crate::{
+    type_table::{TypeInfo, TypeTable},
+    Compiler,
+};
 
 #[derive(Clone, Copy)]
 pub struct SignedInt(pub u128, pub bool);
@@ -26,12 +29,18 @@ pub enum Exhaustion {
     Invalid,
 }
 impl Default for Exhaustion {
-    fn default() -> Self { Self::None }
+    fn default() -> Self {
+        Self::None
+    }
 }
 impl Exhaustion {
     pub fn is_trivially_exhausted(&self) -> bool {
         match self {
-            Self::Full | Self::Bool { true_: true, false_: true } => true,
+            Self::Full
+            | Self::Bool {
+                true_: true,
+                false_: true,
+            } => true,
             Self::Tuple(_) => false, //TODO: with proper tuple exhaustion, check trivial tuples
             _ => false,
         }
@@ -49,8 +58,7 @@ impl Exhaustion {
     ) -> Option<bool> {
         Some(match self {
             Exhaustion::None => match ty {
-                TypeInfo::Primitive(Primitive::Never)
-                | TypeInfo::Enum { count: 0, .. } => true,
+                TypeInfo::Primitive(Primitive::Never) | TypeInfo::Enum { count: 0, .. } => true,
                 TypeInfo::TypeDef(id, _) => {
                     match compiler.get_resolved_type_def(id) {
                         // TODO: empty enum case
@@ -59,31 +67,38 @@ impl Exhaustion {
                     }
                 }
                 _ => false,
-            }
+            },
             Exhaustion::Full => true,
             Exhaustion::UnsignedInt(ranges) => {
                 match ty {
                     TypeInfo::Primitive(p) if p.is_int() => {
                         let int = p.as_int().unwrap();
-                        if int.is_signed() { return Some(false) }
+                        if int.is_signed() {
+                            return Some(false);
+                        }
 
-                        ranges.first().map_or(false, |r| r.start == 0 && r.end >= int.max())
+                        ranges
+                            .first()
+                            .map_or(false, |r| r.start == 0 && r.end >= int.max())
                     }
                     TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
-                    _ => return None
+                    _ => return None,
                 }
-            },
+            }
             Exhaustion::SignedInt { neg, pos } => {
                 match ty {
                     TypeInfo::Primitive(p) if p.is_int() => {
                         let int = p.as_int().unwrap();
 
-                        pos.first().map_or(false, |r| r.start == 0 && r.end >= int.max()) &&
-                        neg.first().map_or(false, |r| r.start == 0 && r.end >= int.min())
+                        pos.first()
+                            .map_or(false, |r| r.start == 0 && r.end >= int.max())
+                            && neg
+                                .first()
+                                .map_or(false, |r| r.start == 0 && r.end >= int.min())
                     }
                     TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
 
-                    _ => return None
+                    _ => return None,
                 }
             }
             Exhaustion::Enum(_) => {
@@ -126,17 +141,18 @@ impl Exhaustion {
             Exhaustion::Tuple(members) => {
                 let member_types = match ty {
                     TypeInfo::Tuple(member_types) => {
-                        if member_types.count as usize != members.len() { return None };
+                        if member_types.count as usize != members.len() {
+                            return None;
+                        };
                         member_types.iter()
                     }
-                    _ => return None
+                    _ => return None,
                 };
-                
+
                 for (member, ty) in members.iter().zip(member_types) {
                     if !member.is_exhausted(types[ty], types, compiler)? {
-                        return Some(false)
+                        return Some(false);
                     }
-                    
                 }
                 true
             }
@@ -164,14 +180,14 @@ impl Exhaustion {
                     ranges.insert(0, Range { start, end });
                     return true;
                 }
-                for i in 0..ranges.len()-1 {
-                    let next_range = ranges[i+1];
+                for i in 0..ranges.len() - 1 {
+                    let next_range = ranges[i + 1];
                     let range = &mut ranges[i];
                     if let Some(merged) = merge_ranges(*range, Range { start, end }) {
                         if let Some(merged) = merge_ranges(merged, next_range) {
                             debug_assert!(merged.start < range.start || merged.end > range.end);
                             *range = merged;
-                            ranges.remove(i+1);
+                            ranges.remove(i + 1);
                             return true;
                         }
                         debug_assert!(merged.start < range.start || merged.end > range.end);
@@ -184,7 +200,9 @@ impl Exhaustion {
                 }
                 let last = ranges.last_mut().unwrap();
                 if let Some(merged) = merge_ranges(Range { start, end }, *last) {
-                    debug_assert!(merged.start < last.start || merged.end > last.end || (merged == *last));
+                    debug_assert!(
+                        merged.start < last.start || merged.end > last.end || (merged == *last)
+                    );
                     *last = merged;
                     true
                 } else {
@@ -205,22 +223,29 @@ impl Exhaustion {
                     (false, false) => Self::UnsignedInt(vec![Range::new(start.0, end.0)]),
                     (true, false) => Self::SignedInt {
                         neg: vec![Range::new(0, start.0)],
-                        pos: vec![Range::new(0, end.0)]
+                        pos: vec![Range::new(0, end.0)],
                     },
-                    (true, true) => Self::SignedInt { neg: vec![Range::new(start.0, end.0)], pos: vec![] },
-                    (false, true) => unreachable!()
+                    (true, true) => Self::SignedInt {
+                        neg: vec![Range::new(start.0, end.0)],
+                        pos: vec![],
+                    },
+                    (false, true) => unreachable!(),
                 };
                 true
-            },
+            }
             Self::UnsignedInt(ranges) => {
                 if start.1 {
-                    let Self::UnsignedInt(mut ranges) = std::mem::take(self) else { unreachable!() };
+                    let Self::UnsignedInt(mut ranges) = std::mem::take(self) else {
+                        unreachable!()
+                    };
                     *self = Self::SignedInt {
                         neg: vec![Range::new(if end.1 { end.0 } else { 0 }, start.0)],
-                        pos: if end.1 { ranges } else {
+                        pos: if end.1 {
+                            ranges
+                        } else {
                             exhaust(&mut ranges, 0, end.0);
                             ranges
-                        }
+                        },
                     };
                     true
                 } else {
@@ -245,11 +270,14 @@ impl Exhaustion {
             }
         }
     }
-    
+
     pub fn exhaust_bool(&mut self, b: bool) -> bool {
         match self {
             Self::None => {
-                *self = Self::Bool { true_: b, false_: !b };
+                *self = Self::Bool {
+                    true_: b,
+                    false_: !b,
+                };
                 true
             }
             Self::Bool { true_, false_ } => {
@@ -273,7 +301,10 @@ impl Exhaustion {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Range { pub start: u128, pub end: u128 }
+pub struct Range {
+    pub start: u128,
+    pub end: u128,
+}
 impl Range {
     pub fn new(start: u128, end: u128) -> Self {
         Self { start, end }
@@ -307,21 +338,30 @@ mod tests {
         e.exhaust_int(SignedInt(5, true));
         e.exhaust_int(SignedInt(8, true));
         e.exhaust_int_range(SignedInt(7, true), SignedInt(6, true));
-        debug_assert_eq!(e, Exhaustion::SignedInt {
-            neg: vec![Range::new(5, 8)],
-            pos: vec![Range::new(1, 3), Range::new(6, 6)]
-        });
+        debug_assert_eq!(
+            e,
+            Exhaustion::SignedInt {
+                neg: vec![Range::new(5, 8)],
+                pos: vec![Range::new(1, 3), Range::new(6, 6)]
+            }
+        );
 
         let mut e = Exhaustion::None;
         e.exhaust_int_range(SignedInt(3, true), SignedInt(5, false));
-        debug_assert_eq!(e, Exhaustion::SignedInt {
-            neg: vec![Range::new(0, 3)],
-            pos: vec![Range::new(0, 5)]
-        });
+        debug_assert_eq!(
+            e,
+            Exhaustion::SignedInt {
+                neg: vec![Range::new(0, 3)],
+                pos: vec![Range::new(0, 5)]
+            }
+        );
         e.exhaust_int_range(SignedInt(5, true), SignedInt(4, true));
-        debug_assert_eq!(e, Exhaustion::SignedInt {
-            neg: vec![Range::new(0, 5)],
-            pos: vec![Range::new(0, 5)]
-        });
+        debug_assert_eq!(
+            e,
+            Exhaustion::SignedInt {
+                neg: vec![Range::new(0, 5)],
+                pos: vec![Range::new(0, 5)]
+            }
+        );
     }
 }

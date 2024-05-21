@@ -1,7 +1,7 @@
-use std::ops::Index;
-use id::ModuleId;
-use span::{TSpan, Span, IdentPath};
 use dmap::{self, DHashMap};
+use id::ModuleId;
+use span::{IdentPath, Span, TSpan};
+use std::ops::Index;
 use types::{Primitive, UnresolvedType};
 
 use crate::parser::token::Operator;
@@ -55,12 +55,12 @@ impl Ast {
     pub fn top_level_scope_id(&self) -> ScopeId {
         self.top_level_scope
     }
-    
+
     pub fn top_level_scope(&self) -> &Scope {
         // the last scope is guaranteed to exist and to represent the top level scope of this Ast
         &self[self.top_level_scope]
     }
-    
+
     pub fn function_count(&self) -> usize {
         self.functions.len()
     }
@@ -95,7 +95,7 @@ impl Index<ExprExtra> for Ast {
     type Output = [Expr];
 
     fn index(&self, index: ExprExtra) -> &Self::Output {
-        &self.exprs[index.idx as usize .. index.idx as usize + index.count as usize]
+        &self.exprs[index.idx as usize..index.idx as usize + index.count as usize]
     }
 }
 impl Index<CallId> for Ast {
@@ -165,7 +165,10 @@ impl AstBuilder {
         let idx = self.exprs.len();
         self.exprs.extend(exprs);
         let count = self.exprs.len() - idx;
-        ExprExtra { idx: idx as _, count: count as _ }
+        ExprExtra {
+            idx: idx as _,
+            count: count as _,
+        }
     }
 
     pub fn call(&mut self, call: Call) -> CallId {
@@ -263,10 +266,12 @@ impl Scope {
             definitions: generics
                 .iter()
                 .enumerate()
-                .map(|(i, generic)| (
-                    src[generic.name.range()].to_owned(),
-                    Definition::Generic(i as u8)),
-                )
+                .map(|(i, generic)| {
+                    (
+                        src[generic.name.range()].to_owned(),
+                        Definition::Generic(i as u8),
+                    )
+                })
                 .collect(),
             impls: Vec::new(),
             span,
@@ -276,10 +281,7 @@ impl Scope {
 
 #[derive(Debug)]
 pub enum Definition {
-    Expr {
-        value: ExprId,
-        ty: UnresolvedType,
-    },
+    Expr { value: ExprId, ty: UnresolvedType },
     Path(IdentPath),
     Global(GlobalId),
     Module(ModuleId),
@@ -287,7 +289,10 @@ pub enum Definition {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ExprExtra { pub idx: u32, pub count: u32 }
+pub struct ExprExtra {
+    pub idx: u32,
+    pub count: u32,
+}
 impl Iterator for ExprExtra {
     type Item = ExprId;
 
@@ -441,7 +446,6 @@ pub enum Expr {
     /// underscore: _ for ignoring values
     Hole(u32),
 
-
     // ---------- operations ----------
     UnOp(u32, UnOp, ExprId),
     BinOp(Operator, ExprId, ExprId),
@@ -483,7 +487,7 @@ pub enum Expr {
         start: u32,
         cond: ExprId,
         then: ExprId,
-        else_: ExprId
+        else_: ExprId,
     },
     IfPat {
         start: u32,
@@ -507,7 +511,7 @@ pub enum Expr {
     While {
         start: u32,
         cond: ExprId,
-        body: ExprId
+        body: ExprId,
     },
     /// while ... := ...
     WhilePat {
@@ -531,11 +535,23 @@ impl Expr {
     }
 
     pub fn span(&self, ast: &Ast) -> TSpan {
-        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
+        self.span_inner(
+            &ast.exprs,
+            &ast.functions,
+            &ast.types,
+            &ast.calls,
+            &ast.scopes,
+        )
     }
 
     pub fn span_builder(&self, ast: &AstBuilder) -> TSpan {
-        self.span_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
+        self.span_inner(
+            &ast.exprs,
+            &ast.functions,
+            &ast.types,
+            &ast.calls,
+            &ast.scopes,
+        )
     }
 
     fn span_inner(
@@ -551,46 +567,59 @@ impl Expr {
         let e = |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, calls, scopes);
 
         match self {
-            | Expr::StringLiteral(span) | Expr::IntLiteral(span) | Expr::FloatLiteral(span)
-            | Expr::Nested(span, _) 
+            Expr::StringLiteral(span)
+            | Expr::IntLiteral(span)
+            | Expr::FloatLiteral(span)
+            | Expr::Nested(span, _)
             | Expr::Unit(span)
             | Expr::Ident { span, .. }
             | Expr::Array(span, _)
             | Expr::Tuple(span, _)
             | Expr::Match { span, .. }
-            | Expr::EnumLiteral { span, .. }
-            => *span,
+            | Expr::EnumLiteral { span, .. } => *span,
             Expr::Block { scope, .. } => scopes[scope.idx()].span,
             Expr::Function { id } => scopes[functions[id.idx()].scope.idx()].span,
             Expr::Type { id } => types[id.idx()].span(scopes),
-            Expr::Declare { pat, annotated_ty, .. } => TSpan::new(s(pat), annotated_ty.span().end),
+            Expr::Declare {
+                pat, annotated_ty, ..
+            } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::ReturnUnit { start } => TSpan::new(*start, start + 2),
-            Expr::BoolLiteral { start, val } => TSpan::new(*start, start + if *val {4} else {5}),
+            Expr::BoolLiteral { start, val } => {
+                TSpan::new(*start, start + if *val { 4 } else { 5 })
+            }
             &Expr::Hole(start) => TSpan::new(start, start),
-            Expr::If { start, then, .. }
-            | Expr::IfPat { start, then, .. }
-            => TSpan::new(*start, e(then) ),
-            Expr::IfElse { start, else_, .. }
-            | Expr::IfPatElse { start, else_, .. }
-            => TSpan::new(*start, e(else_) ),
-            Expr::While { start, body, .. }
-            | Expr::WhilePat { start, body, .. }
-            => TSpan::new(*start, e(body)),
+            Expr::If { start, then, .. } | Expr::IfPat { start, then, .. } => {
+                TSpan::new(*start, e(then))
+            }
+            Expr::IfElse { start, else_, .. } | Expr::IfPatElse { start, else_, .. } => {
+                TSpan::new(*start, e(else_))
+            }
+            Expr::While { start, body, .. } | Expr::WhilePat { start, body, .. } => {
+                TSpan::new(*start, e(body))
+            }
             Expr::FunctionCall(call_id) => {
-                let Call { called_expr, end, .. } = &calls[call_id.idx()];
+                let Call {
+                    called_expr, end, ..
+                } = &calls[call_id.idx()];
                 TSpan::new(s(called_expr), *end)
             }
-            Expr::UnOp(start_or_end, un_op, expr) => if un_op.postfix() {
-                TSpan::new(s(expr), *start_or_end)
-            } else {
-                TSpan::new(*start_or_end, e(expr))
+            Expr::UnOp(start_or_end, un_op, expr) => {
+                if un_op.postfix() {
+                    TSpan::new(s(expr), *start_or_end)
+                } else {
+                    TSpan::new(*start_or_end, e(expr))
+                }
             }
             Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
-            Expr::TupleIdx { left: expr, idx: _, end } => TSpan::new(s(expr), *end),
+            Expr::TupleIdx {
+                left: expr,
+                idx: _,
+                end,
+            } => TSpan::new(s(expr), *end),
             Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
             Expr::Asm { span, .. } => *span,
@@ -605,11 +634,23 @@ impl Expr {
     }
 
     pub fn start(&self, ast: &Ast) -> u32 {
-        self.start_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
+        self.start_inner(
+            &ast.exprs,
+            &ast.functions,
+            &ast.types,
+            &ast.calls,
+            &ast.scopes,
+        )
     }
 
     pub fn end(&self, ast: &Ast) -> u32 {
-        self.end_inner(&ast.exprs, &ast.functions, &ast.types, &ast.calls, &ast.scopes)
+        self.end_inner(
+            &ast.exprs,
+            &ast.functions,
+            &ast.types,
+            &ast.calls,
+            &ast.scopes,
+        )
     }
 
     pub fn start_inner(
@@ -621,7 +662,8 @@ impl Expr {
         scopes: &[Scope],
     ) -> u32 {
         //TODO: more efficient implementation
-        self.span_inner(exprs, functions, types, calls, scopes).start
+        self.span_inner(exprs, functions, types, calls, scopes)
+            .start
     }
 
     pub fn end_inner(
@@ -657,4 +699,3 @@ impl UnOp {
         matches!(self, UnOp::Deref)
     }
 }
-

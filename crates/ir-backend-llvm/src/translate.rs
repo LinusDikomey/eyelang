@@ -4,15 +4,15 @@ use ir::{IrType, IrTypes, TypeRefs};
 use llvm_sys::{
     core::{
         self, LLVMAddFunction, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca, LLVMBuildAnd,
-        LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv,
-        LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem, LLVMBuildFSub, LLVMBuildGlobalStringPtr,
-        LLVMBuildICmp, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
-        LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
-        LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
+        LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue, LLVMBuildFAdd,
+        LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem, LLVMBuildFSub,
+        LLVMBuildGlobalStringPtr, LLVMBuildICmp, LLVMBuildInBoundsGEP2, LLVMBuildIntCast2,
+        LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi,
+        LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub,
+        LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
-        LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMVoidTypeInContext, LLVMBuildIntCast2, LLVMBuildInBoundsGEP2, LLVMInt8TypeInContext,
-        LLVMInt32TypeInContext, LLVMBuildExtractValue, LLVMPointerTypeInContext,
+        LLVMInt32TypeInContext, LLVMInt8TypeInContext, LLVMPointerTypeInContext,
+        LLVMPositionBuilderAtEnd, LLVMPrintValueToString, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -317,22 +317,14 @@ unsafe fn build_func(
                         _ => panic!("invalid type for mul"),
                     },
                     ir::Tag::Div => match func.types[ty] {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildUDiv(builder, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildSDiv(builder, l, r, NONE)
-                        }
+                        t if t.is_unsigned_int() => LLVMBuildUDiv(builder, l, r, NONE),
+                        t if t.is_signed_int() => LLVMBuildSDiv(builder, l, r, NONE),
                         t if t.is_float() => LLVMBuildFDiv(builder, l, r, NONE),
                         _ => panic!("invalid type for div"),
                     },
                     ir::Tag::Mod => match func.types[ty] {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildURem(builder, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildSRem(builder, l, r, NONE)
-                        }
+                        t if t.is_unsigned_int() => LLVMBuildURem(builder, l, r, NONE),
+                        t if t.is_signed_int() => LLVMBuildSRem(builder, l, r, NONE),
                         t if t.is_float() => LLVMBuildFRem(builder, l, r, NONE),
                         _ => panic!("invalid type for mod"),
                     },
@@ -440,8 +432,8 @@ unsafe fn build_func(
             ir::Tag::MemberPtr => {
                 let (ptr, extra_idx) = data.ref_int;
                 let i = extra_idx as usize;
-                let elem_types = TypeRefs::from_bytes(ir.extra[i..i+8].try_into().unwrap());
-                let elem_idx = u32::from_le_bytes(ir.extra[i+8..i+12].try_into().unwrap());
+                let elem_types = TypeRefs::from_bytes(ir.extra[i..i + 8].try_into().unwrap());
+                let elem_idx = u32::from_le_bytes(ir.extra[i + 8..i + 12].try_into().unwrap());
 
                 let offset = ir::offset_in_tuple(elem_types, elem_idx, &func.types);
 
@@ -503,13 +495,20 @@ unsafe fn build_func(
             ir::Tag::ArrayIndex => {
                 let (array_ptr, extra_idx) = data.ref_int;
                 let i = extra_idx as usize;
-                let elem_ty = ir::TypeRef::from_bytes(ir.extra[i..i+4].try_into().unwrap());
-                let index_ref = ir::Ref::from_bytes(ir.extra[i+4..i+8].try_into().unwrap());
+                let elem_ty = ir::TypeRef::from_bytes(ir.extra[i..i + 4].try_into().unwrap());
+                let index_ref = ir::Ref::from_bytes(ir.extra[i + 4..i + 8].try_into().unwrap());
 
                 let ptr = get_ref(&instructions, array_ptr).unwrap();
                 let ty = llvm_ty(ctx, func.types[elem_ty], &func.types).unwrap();
                 let mut indices = [get_ref(&instructions, index_ref).unwrap()];
-                LLVMBuildInBoundsGEP2(builder, ty, ptr, indices.as_mut_ptr(), indices.len() as _, NONE)
+                LLVMBuildInBoundsGEP2(
+                    builder,
+                    ty,
+                    ptr,
+                    indices.as_mut_ptr(),
+                    indices.len() as _,
+                    NONE,
+                )
             }
             ir::Tag::CastInt => {
                 let val = get_ref(&instructions, data.un_op);
@@ -649,7 +648,6 @@ unsafe fn build_func(
 fn val_str(val: LLVMValueRef) -> CString {
     unsafe { CString::from_raw(LLVMPrintValueToString(val)) }
 }
-
 
 /*
 unsafe fn extract_value_from_byte_array(

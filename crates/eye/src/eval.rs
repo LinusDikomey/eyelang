@@ -1,7 +1,13 @@
 use id::ModuleId;
 use types::Type;
 
-use crate::{Compiler, Def, parser::{ast::{ExprId, ScopeId, Expr, Ast}, token::IntLiteral}};
+use crate::{
+    parser::{
+        ast::{Ast, Expr, ExprId, ScopeId},
+        token::IntLiteral,
+    },
+    Compiler, Def,
+};
 
 #[derive(Debug, Clone)]
 pub enum ConstValue {
@@ -15,7 +21,7 @@ impl ConstValue {
         match self {
             Self::Undefined => print!("undefined"),
             Self::Unit => print!("()"),
-            Self::Number(n) => print!("{n}")
+            Self::Number(n) => print!("{n}"),
         }
     }
 }
@@ -30,7 +36,9 @@ pub fn def_expr(
     match &ast[expr] {
         Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ast[*span]);
-            let Ok(val) = lit.val.try_into() else { todo!("handle large constants") };
+            let Ok(val) = lit.val.try_into() else {
+                todo!("handle large constants")
+            };
             Def::ConstValue(compiler.add_const_value(ConstValue::Number(val)))
         }
         Expr::Ident { span } => {
@@ -64,4 +72,3 @@ pub fn def_expr(
         }
     }
 }
-

@@ -1,8 +1,7 @@
 use crate::{
-    Ref,
-    BlockIndex,
-    ir_types::{IrType, ConstIrType, IrTypes},
-    layout::{Layout, type_layout}, FunctionIr, Function,
+    ir_types::{ConstIrType, IrType, IrTypes},
+    layout::{type_layout, Layout},
+    BlockIndex, Function, FunctionIr, Ref,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -32,9 +31,7 @@ struct StackMem {
 }
 impl StackMem {
     pub fn new() -> StackMem {
-        Self {
-            mem: Vec::new(),
-        }
+        Self { mem: Vec::new() }
     }
 
     pub fn alloc(&mut self, layout: Layout) -> StackAddr {
@@ -44,12 +41,12 @@ impl StackMem {
     }
 
     pub fn store(&mut self, addr: StackAddr, value: &[u8]) {
-        self.mem[addr.0 as usize .. addr.0 as usize + value.len()].copy_from_slice(value);
+        self.mem[addr.0 as usize..addr.0 as usize + value.len()].copy_from_slice(value);
     }
 
     pub fn load_n<const N: usize>(&mut self, addr: StackAddr) -> [u8; N] {
         let mut arr = [0; N];
-        arr.copy_from_slice(&self.mem[addr.0 as usize .. addr.0 as usize + N]);
+        arr.copy_from_slice(&self.mem[addr.0 as usize..addr.0 as usize + N]);
         arr
     }
 }
@@ -78,7 +75,12 @@ pub fn eval(function: &Function, params: &[Val]) -> Result<Val, Error> {
 }
 
 // TODO: give errors a span by giving all IR instructions spans.
-unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack: &mut StackMem) -> Result<Val, Error> {
+unsafe fn eval_internal(
+    ir: &FunctionIr,
+    types: &IrTypes,
+    params: &[Val],
+    stack: &mut StackMem,
+) -> Result<Val, Error> {
     let mut values = vec![Val::Invalid; ir.inst.len()];
 
     let get_ref_and_ty = |values: &[Val], r: Ref| -> (Val, IrType) {
@@ -157,10 +159,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             super::Tag::Uninit => Val::Invalid,
             super::Tag::Int => Val::Int(inst.data.int),
             super::Tag::LargeInt => {
-                let bytes = &ir.extra[
-                    inst.data.extra as usize
-                    .. (inst.data.extra + 16) as usize
-                ];
+                let bytes = &ir.extra[inst.data.extra as usize..(inst.data.extra + 16) as usize];
                 let mut bytes_arr = [0; 16];
                 bytes_arr.copy_from_slice(bytes);
                 todo!("support large ints")
@@ -178,8 +177,9 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             }
             super::Tag::Load => {
                 let Val::StackPointer(addr) = values[inst.data.un_op.into_ref().unwrap() as usize]
-                    else { panic!() };
-
+                else {
+                    panic!()
+                };
 
                 use IrType as P;
                 match types[inst.ty] {
@@ -202,7 +202,9 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             }
             super::Tag::Store => {
                 let (var, val) = inst.data.bin_op;
-                let Val::StackPointer(addr) = get_ref(&values, var) else { panic!() };
+                let Val::StackPointer(addr) = get_ref(&values, var) else {
+                    panic!()
+                };
                 let (val, ty) = get_ref_and_ty(&values, val);
                 match val {
                     Val::Unit | Val::Invalid => {}
@@ -212,7 +214,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                         IrType::I32 | IrType::U32 => stack.store(addr, &(i as u32).to_le_bytes()),
                         IrType::I64 | IrType::U64 => stack.store(addr, &(i as u64).to_le_bytes()),
                         _ => panic!(),
-                    }
+                    },
                     Val::F32(v) => stack.store(addr, &v.to_le_bytes()),
                     Val::F64(v) => stack.store(addr, &v.to_le_bytes()),
                     Val::StackPointer(addr) => stack.store(addr, &addr.0.to_le_bytes()),
@@ -220,30 +222,27 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 Val::Invalid
             }
             super::Tag::String => {
-                let _string = ir.extra[
-                    inst.data.extra_len.0 as usize
-                    .. (inst.data.extra_len.0 + inst.data.extra_len.1) as usize
-                ].to_vec();
+                let _string = ir.extra[inst.data.extra_len.0 as usize
+                    ..(inst.data.extra_len.0 + inst.data.extra_len.1) as usize]
+                    .to_vec();
                 todo!()
             }
             super::Tag::Call => {
                 todo!();
             }
-            super::Tag::Neg => {
-                match get_ref(&values, inst.data.un_op) {
-                    Val::Invalid => Val::Invalid,
-                    Val::Int(val) => Val::Int(-(val as i64) as u64),
-                    Val::F32(val) => Val::F32(-val),
-                    Val::F64(val) => Val::F64(-val),
-                    _ => panic!("Invalid value to negate")
-                }
-            }
+            super::Tag::Neg => match get_ref(&values, inst.data.un_op) {
+                Val::Invalid => Val::Invalid,
+                Val::Int(val) => Val::Int(-(val as i64) as u64),
+                Val::F32(val) => Val::F32(-val),
+                Val::F64(val) => Val::F64(-val),
+                _ => panic!("Invalid value to negate"),
+            },
             super::Tag::Not => {
                 let val = get_ref(&values, inst.data.un_op);
                 match val {
                     Val::Int(0) => Val::Int(1),
                     Val::Int(1) => Val::Int(0),
-                    _ => panic!()
+                    _ => panic!(),
                 }
             }
             super::Tag::Add => bin_op!(+, inst),
@@ -254,15 +253,19 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
             super::Tag::Or => {
                 let (Val::Int(a), Val::Int(b)) = (
                     get_ref(&values, inst.data.bin_op.0),
-                    get_ref(&values, inst.data.bin_op.1)
-                ) else { panic!("Invalid values for or") };
+                    get_ref(&values, inst.data.bin_op.1),
+                ) else {
+                    panic!("Invalid values for or")
+                };
                 Val::Int((a != 0 || b != 0) as u64)
             }
             super::Tag::And => {
                 let (Val::Int(a), Val::Int(b)) = (
                     get_ref(&values, inst.data.bin_op.0),
-                    get_ref(&values, inst.data.bin_op.1)
-                ) else { panic!("Invalid values for and") };
+                    get_ref(&values, inst.data.bin_op.1),
+                ) else {
+                    panic!("Invalid values for and")
+                };
                 Val::Int((a != 0 && b != 0) as u64)
             }
             super::Tag::Eq => {
@@ -355,7 +358,7 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
-                        return Err(Error::InfiniteLoop)
+                        return Err(Error::InfiniteLoop);
                     }
                 }
                 pos = target;
@@ -365,25 +368,28 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 let val = get_ref(&values, inst.data.ref_int.0);
                 let i = inst.data.ref_int.1 as usize;
                 let mut bytes = [0; 4];
-                bytes.copy_from_slice(&ir.extra[i..i+4]);
+                bytes.copy_from_slice(&ir.extra[i..i + 4]);
                 let a = u32::from_le_bytes(bytes);
-                bytes.copy_from_slice(&ir.extra[i+4..i+8]);
+                bytes.copy_from_slice(&ir.extra[i + 4..i + 8]);
                 let b = u32::from_le_bytes(bytes);
                 let val = match val {
                     Val::Int(0) => false,
                     Val::Int(1) => true,
                     _ => panic!("bool value expected"),
                 };
-                let target = if val { ir.blocks[a as usize] } else { ir.blocks[b as usize] };
+                let target = if val {
+                    ir.blocks[a as usize]
+                } else {
+                    ir.blocks[b as usize]
+                };
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
-                        return Err(Error::InfiniteLoop)
+                        return Err(Error::InfiniteLoop);
                     }
                 }
                 pos = target;
                 continue;
-
             }
             super::Tag::Phi => {
                 let mut val = None;
@@ -392,8 +398,8 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                     let begin = (inst.data.extra_len.0 + i * 8) as usize;
                     current_bytes.copy_from_slice(&ir.extra[begin..begin + 4]);
                     let block = BlockIndex(u32::from_le_bytes(current_bytes));
-                    current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
-                    current_bytes.copy_from_slice(&ir.extra[begin + 4 .. begin + 8]);
+                    current_bytes.copy_from_slice(&ir.extra[begin + 4..begin + 8]);
+                    current_bytes.copy_from_slice(&ir.extra[begin + 4..begin + 8]);
                     let r = Ref::from_bytes(current_bytes);
                     if block == previous_block {
                         val = Some(get_ref(&values, r));
@@ -402,8 +408,12 @@ unsafe fn eval_internal(ir: &FunctionIr, types: &IrTypes, params: &[Val], stack:
                 }
                 val.expect("Invalid phi node: didn't go through any of the blocks")
             }
-            super::Tag::IntToPtr => todo!("IntToPtr semantics, might have to be disallowed at compile time"),
-            super::Tag::PtrToInt => todo!("PtrToInt semantics, might have to be disallowed at compile time"),
+            super::Tag::IntToPtr => {
+                todo!("IntToPtr semantics, might have to be disallowed at compile time")
+            }
+            super::Tag::PtrToInt => {
+                todo!("PtrToInt semantics, might have to be disallowed at compile time")
+            }
             super::Tag::Asm => todo!(), // TODO: error handling
         };
         values[pos as usize] = value;

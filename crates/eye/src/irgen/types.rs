@@ -2,8 +2,11 @@ use id::TypeId;
 use ir::{IrType, IrTypes, TypeRefs};
 use types::Type;
 
-use crate::{type_table::{TypeTable, TypeInfo, LocalTypeIds}, Compiler, compiler::ResolvedTypeDef};
-
+use crate::{
+    compiler::ResolvedTypeDef,
+    type_table::{LocalTypeIds, TypeInfo, TypeTable},
+    Compiler,
+};
 
 pub fn get(
     compiler: &mut Compiler,
@@ -23,11 +26,14 @@ pub fn get(
             IrType::Array(elem, *size)
         }
         Type::TraitSelf => todo!(),
-        Type::Tuple(elems) => {
-            IrType::Tuple(get_multiple(compiler, ir_types, elems, generics))
-        }
-        Type::DefId { id, generics: def_generics } => {
-            let def_generics = def_generics.as_ref().expect("TODO: handle missing generics"); // TODO
+        Type::Tuple(elems) => IrType::Tuple(get_multiple(compiler, ir_types, elems, generics)),
+        Type::DefId {
+            id,
+            generics: def_generics,
+        } => {
+            let def_generics = def_generics
+                .as_ref()
+                .expect("TODO: handle missing generics"); // TODO
             let def_generics = get_multiple(compiler, ir_types, def_generics, generics);
             get_def(compiler, ir_types, *id, def_generics)
         }
@@ -49,7 +55,12 @@ pub fn get_multiple(
     refs
 }
 
-pub fn get_def(compiler: &mut Compiler, ir_types: &mut IrTypes, def: TypeId, generics: TypeRefs) -> IrType {
+pub fn get_def(
+    compiler: &mut Compiler,
+    ir_types: &mut IrTypes,
+    def: TypeId,
+    generics: TypeRefs,
+) -> IrType {
     let resolved = compiler.get_resolved_type_def(def);
     match &resolved.def {
         ResolvedTypeDef::Struct(def) => {
@@ -77,19 +88,21 @@ pub fn get_from_info(
         TypeInfo::Integer => IrType::I32,
         TypeInfo::Float => IrType::F32,
         TypeInfo::TypeDef(id, inner_generics) => {
-            let inner_generics = get_multiple_infos(compiler, types, ir_types, inner_generics, generics);
+            let inner_generics =
+                get_multiple_infos(compiler, types, ir_types, inner_generics, generics);
             get_def(compiler, ir_types, id, inner_generics)
         }
         TypeInfo::Pointer(_) => IrType::Ptr,
-        TypeInfo::Array { element, count: Some(count) } => {
+        TypeInfo::Array {
+            element,
+            count: Some(count),
+        } => {
             let element = get_from_info(compiler, types, ir_types, types[element], generics);
             IrType::Array(ir_types.add(element), count)
         }
         TypeInfo::Enum { .. } => todo!(),
         TypeInfo::Tuple(members) => {
-            let member_refs = ir_types.add_multiple(
-                (0..members.count).map(|_| IrType::Unit)
-            );
+            let member_refs = ir_types.add_multiple((0..members.count).map(|_| IrType::Unit));
             for (ty, r) in members.iter().zip(member_refs.iter()) {
                 let ty = get_from_info(compiler, types, ir_types, types[ty], generics);
                 ir_types.replace(r, ty);
@@ -99,7 +112,10 @@ pub fn get_from_info(
         TypeInfo::Generic(id) => ir_types[generics.nth(id.into())],
         TypeInfo::Unknown
         | TypeInfo::TypeItem { .. }
-        | TypeInfo::Array { element: _, count: None }
+        | TypeInfo::Array {
+            element: _,
+            count: None,
+        }
         | TypeInfo::FunctionItem { .. }
         | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }

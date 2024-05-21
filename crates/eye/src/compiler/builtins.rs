@@ -1,11 +1,10 @@
-use id::{TypeId, ProjectId};
+use id::{ProjectId, TypeId};
 use span::Span;
 use types::Type;
 
 use crate::Compiler;
 
 use super::Def;
-
 
 #[derive(Default)]
 pub struct Builtins {
@@ -36,7 +35,11 @@ pub fn get_str(compiler: &mut Compiler) -> TypeId {
         panic!("expected a module for builtin std.string, found {string:?}");
     };
     let str = compiler.resolve_in_module(string_module, "str", Span::MISSING);
-    let Def::Type(Type::DefId { id: str_type, generics: None }) = str else {
+    let Def::Type(Type::DefId {
+        id: str_type,
+        generics: None,
+    }) = str
+    else {
         panic!("expected a type definition for builtin std.string.str, found {str:?}");
     };
     compiler.builtins.str_type = Some(str_type);

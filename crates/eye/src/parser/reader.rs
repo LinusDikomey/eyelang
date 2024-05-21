@@ -1,19 +1,27 @@
 use id::ModuleId;
 use span::Span;
 
-use crate::{parser::token::{TokenType, Token}, error::{CompileError, Error}};
+use crate::{
+    error::{CompileError, Error},
+    parser::token::{Token, TokenType},
+};
 
 pub struct TokenReader {
     tokens: Vec<Token>,
     index: usize,
     len: usize,
-    pub module: ModuleId
+    pub module: ModuleId,
 }
 
 impl TokenReader {
     pub fn new(tokens: Vec<Token>, module: ModuleId) -> Self {
         let len = tokens.len();
-        Self { tokens, index: 0, len, module }
+        Self {
+            tokens,
+            index: 0,
+            len,
+            module,
+        }
     }
     pub fn current(&self) -> Result<&Token, CompileError> {
         if self.index < self.len {
@@ -22,7 +30,7 @@ impl TokenReader {
             let end = self.last_src_pos();
             Err(CompileError {
                 err: Error::UnexpectedEndOfFile,
-                span: Span::new(end, end, self.module)
+                span: Span::new(end, end, self.module),
             })
         }
     }
@@ -45,7 +53,8 @@ impl TokenReader {
     /// steps over the current token and returns it
     pub fn step(&mut self) -> Result<Token, CompileError> {
         self.index += 1;
-        if self.index <= self.len { // <= because we are only getting the previous token
+        if self.index <= self.len {
+            // <= because we are only getting the previous token
             Ok(self.tokens[self.index - 1])
         } else {
             let end = self.last_src_pos();
@@ -68,21 +77,33 @@ impl TokenReader {
         tok
     }
 
-    pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T)
-    -> Result<Token, CompileError> {
+    pub fn step_expect<const N: usize, T: Into<TokenTypes<N>>>(
+        &mut self,
+        expected: T,
+    ) -> Result<Token, CompileError> {
         let expected = expected.into();
         let module = self.module;
         let tok = self.step()?;
-        if !expected.0.iter().any(|expected_tok| *expected_tok == tok.ty) {
+        if !expected
+            .0
+            .iter()
+            .any(|expected_tok| *expected_tok == tok.ty)
+        {
             return Err(CompileError {
-                err: Error::UnexpectedToken { expected: expected.into(), found: tok.ty },
-                span: Span::new(tok.start, tok.end, module)
+                err: Error::UnexpectedToken {
+                    expected: expected.into(),
+                    found: tok.ty,
+                },
+                span: Span::new(tok.start, tok.end, module),
             });
         }
         Ok(tok)
     }
 
-    pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(&mut self, expected: T) -> Option<Token> {
+    pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(
+        &mut self,
+        expected: T,
+    ) -> Option<Token> {
         if let Some(next) = self.peek() {
             next.is(expected).then(|| self.step().unwrap())
         } else {
@@ -103,7 +124,7 @@ impl TokenReader {
     }
 
     pub fn is_at_end(&self) -> bool {
-        self.index >= self.len 
+        self.index >= self.len
     }
 }
 
@@ -164,7 +185,9 @@ pub enum Delimit {
     OptionalIfNewLine,
 }
 impl From<()> for Delimit {
-    fn from((): ()) -> Self { Self::Yes }
+    fn from((): ()) -> Self {
+        Self::Yes
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +207,7 @@ impl std::fmt::Display for ExpectedTokens {
                 for (i, tok) in toks.iter().enumerate() {
                     match i {
                         0 => {}
-                        i if i != 0 || i == toks.len() -1 => {
+                        i if i != 0 || i == toks.len() - 1 => {
                             write!(f, " or ")?;
                         }
                         _ => write!(f, ", ")?,
@@ -202,7 +225,7 @@ impl<const N: usize> From<TokenTypes<N>> for ExpectedTokens {
     fn from(t: TokenTypes<N>) -> Self {
         match t.0.as_slice() {
             [t] => Self::Specific(*t),
-            other => Self::AnyOf(other.to_vec())
+            other => Self::AnyOf(other.to_vec()),
         }
     }
 }

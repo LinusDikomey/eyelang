@@ -1,22 +1,29 @@
 pub mod ast;
-pub mod token;
 mod lexer;
 mod reader;
+pub mod token;
 
 use dmap::DHashMap;
 pub use reader::ExpectedTokens;
 
 use id::ModuleId;
 
-use span::{TSpan, Span, IdentPath};
+use span::{IdentPath, Span, TSpan};
 use token::Token;
-use types::{UnresolvedType, Primitive};
+use types::{Primitive, UnresolvedType};
 
-use crate::{error::{CompileError, Error, Errors}, parser::reader::match_or_unexpected};
+use crate::{
+    error::{CompileError, Error, Errors},
+    parser::reader::match_or_unexpected,
+};
 
 use self::{
-    ast::{Expr, Item, Global, GenericDef, Function, ExprId, TraitDefinition, TraitImpl, UnOp, Definition, ScopeId},
-    token::{TokenType, Keyword, Operator}, reader::{Delimit, match_or_unexpected_value},
+    ast::{
+        Definition, Expr, ExprId, Function, GenericDef, Global, Item, ScopeId, TraitDefinition,
+        TraitImpl, UnOp,
+    },
+    reader::{match_or_unexpected_value, Delimit},
+    token::{Keyword, Operator, TokenType},
 };
 
 pub fn parse(
@@ -94,12 +101,12 @@ impl<'a> Parser<'a> {
                             if !after.new_line && after.ty != end {
                                 return Err(Error::UnexpectedToken {
                                     expected: ExpectedTokens::AnyOf(vec![delim, end]),
-                                    found: after.ty
-                                }.at_span(after.span().in_mod(self.toks.module)));
+                                    found: after.ty,
+                                }
+                                .at_span(after.span().in_mod(self.toks.module)));
                             }
                         }
                     }
-
                 }
             }
         }
@@ -110,7 +117,13 @@ impl<'a> Parser<'a> {
             self.toks.previous().is_none(),
             "parsing module not from start, start position wrong",
         );
-        self.parse_items_until(0, None, module_defs, |p| p.toks.is_at_end(), Self::on_module_level_expr)
+        self.parse_items_until(
+            0,
+            None,
+            module_defs,
+            |p| p.toks.is_at_end(),
+            Self::on_module_level_expr,
+        )
     }
 
     fn parse_items_until(
@@ -130,18 +143,25 @@ impl<'a> Parser<'a> {
         };
 
         while !end(self) {
-            let start = self.toks.current().unwrap().start; 
+            let start = self.toks.current().unwrap().start;
 
             match self.parse_item(scope_id)? {
-                Item::Definition { name, name_span, value } => {
+                Item::Definition {
+                    name,
+                    name_span,
+                    value,
+                } => {
                     if let &Expr::Function { id } = self.ast.get_expr(value) {
                         // this is a bit hacky but fine for now
                         self.ast.assign_function_name(id, name_span);
                     }
-                    let prev = scope.definitions.insert(name, Definition::Expr {
-                        value,
-                        ty: UnresolvedType::Infer(0),
-                    });
+                    let prev = scope.definitions.insert(
+                        name,
+                        Definition::Expr {
+                            value,
+                            ty: UnresolvedType::Infer(0),
+                        },
+                    );
                     if let Some(_) = prev {
                         return Err(Error::DuplicateDefinition.at(
                             name_span.start,
@@ -184,25 +204,22 @@ impl<'a> Parser<'a> {
         let expr = self.ast.expr(expr);
         let name_pat = |pat: &Expr, s: &Self| match pat {
             Expr::Ident { span, .. } => Ok(*span),
-            expr => {
-                Err(Error::InvalidGlobalVarPattern.at_span(
-                    expr.span_builder(s.ast).in_mod(s.toks.module)
-                ))
-            }
+            expr => Err(Error::InvalidGlobalVarPattern
+                .at_span(expr.span_builder(s.ast).in_mod(s.toks.module))),
         };
         let (pat, global) = match self.ast.get_expr(expr) {
-            Expr::Declare {
-                pat,
-                annotated_ty,
-            } => {
+            Expr::Declare { pat, annotated_ty } => {
                 let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
                 let end = annotated_ty.span().end;
-                (pat, Global {
-                    scope: scope_id,
-                    ty: annotated_ty.clone(),
-                    val: None,
-                    span: TSpan::new(start, end),
-                })
+                (
+                    pat,
+                    Global {
+                        scope: scope_id,
+                        ty: annotated_ty.clone(),
+                        val: None,
+                        span: TSpan::new(start, end),
+                    },
+                )
             }
             Expr::DeclareWithVal {
                 pat,
@@ -211,12 +228,15 @@ impl<'a> Parser<'a> {
             } => {
                 let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
                 let end = self.ast.get_expr(*val).span_builder(self.ast).end;
-                (pat, Global {
-                    scope: scope_id,
-                    ty: annotated_ty.clone(),
-                    val: Some(*val),
-                    span: TSpan::new(start, end),
-                })
+                (
+                    pat,
+                    Global {
+                        scope: scope_id,
+                        ty: annotated_ty.clone(),
+                        val: Some(*val),
+                        span: TSpan::new(start, end),
+                    },
+                )
             }
             _ => {
                 return Err(CompileError {
@@ -254,11 +274,7 @@ impl<'a> Parser<'a> {
         self.parse_block_from_lbrace(lbrace, parent)
     }
 
-    fn parse_block_from_lbrace(
-        &mut self,
-        lbrace: Token,
-        parent: ScopeId,
-    ) -> ParseResult<Expr> {
+    fn parse_block_from_lbrace(&mut self, lbrace: Token, parent: ScopeId) -> ParseResult<Expr> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut items = Vec::new();
 
@@ -268,17 +284,22 @@ impl<'a> Parser<'a> {
             lbrace.start,
             Some(parent),
             dmap::new(),
-            |p| p.toks.step_if(TokenType::RBrace).inspect(|rbrace| end = rbrace.end).is_some(),
-            |_, _, _, expr, _| { items.push(expr); Ok(())}
+            |p| {
+                p.toks
+                    .step_if(TokenType::RBrace)
+                    .inspect(|rbrace| end = rbrace.end)
+                    .is_some()
+            },
+            |_, _, _, expr, _| {
+                items.push(expr);
+                Ok(())
+            },
         )?;
 
         debug_assert_ne!(end, u32::MAX);
 
         let items = self.ast.exprs(items);
-        Ok(Expr::Block {
-            scope,
-            items,
-        })
+        Ok(Expr::Block { scope, items })
     }
 
     fn parse_item(&mut self, scope: ScopeId) -> Result<Item, CompileError> {
@@ -395,7 +416,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_def(&mut self, fn_tok: Token, scope: ScopeId, associated_name: TSpan) -> ParseResult<Function> {
+    fn parse_function_def(
+        &mut self,
+        fn_tok: Token,
+        scope: ScopeId,
+        associated_name: TSpan,
+    ) -> ParseResult<Function> {
         let mut func = self.parse_function_header(fn_tok, scope, associated_name)?;
         if let Some(body) = self.parse_function_body(func.scope)? {
             self.attach_func_body(&mut func, body)
@@ -475,16 +501,16 @@ impl<'a> Parser<'a> {
         let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             match p.toks.peek().map(|t| t.ty) {
-                Some(TokenType::LParen) => { 
+                Some(TokenType::LParen) => {
                     p.toks.step_assert(TokenType::LParen);
                     let mut span = ident.span();
                     let variant = ident.get_val(p.src).to_owned();
                     let mut args = vec![];
-                    span.end = p.parse_delimited(
-                        TokenType::Comma,
-                        TokenType::RParen,
-                        |p| p.parse_type().map(|ty| args.push(ty)),
-                    )?.end;
+                    span.end = p
+                        .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                            p.parse_type().map(|ty| args.push(ty))
+                        })?
+                        .end;
                     variants.push((span, variant, args));
                     Ok(Delimit::OptionalIfNewLine)
                 }
@@ -519,18 +545,26 @@ impl<'a> Parser<'a> {
             span: TSpan::new(enum_tok.start, rbrace.end),
         })
     }
-    
+
     /// Will just return a function with the body always set to `None`
-    fn parse_function_header(&mut self, fn_tok: Token, scope: ScopeId, associated_name: TSpan) -> ParseResult<Function> {
+    fn parse_function_header(
+        &mut self,
+        fn_tok: Token,
+        scope: ScopeId,
+        associated_name: TSpan,
+    ) -> ParseResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
         let mut end = fn_tok.end;
-        let generics = self.parse_optional_generics()?
-            .map_or(Vec::new(), |(span, generics)| { end = span.end; generics });
+        let generics = self
+            .parse_optional_generics()?
+            .map_or(Vec::new(), |(span, generics)| {
+                end = span.end;
+                generics
+            });
 
         let mut params = Vec::new();
         let mut varargs = false;
-
 
         if self.toks.step_if(TokenType::LParen).is_some() {
             let rparen = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
@@ -561,13 +595,15 @@ impl<'a> Parser<'a> {
             ty
         } else {
             UnresolvedType::Primitive {
-                ty: Primitive::Unit, 
+                ty: Primitive::Unit,
                 span_start: self.toks.previous().unwrap().start,
             }
         };
 
         let span = TSpan::new(start, end);
-        let function_scope = self.ast.scope(ast::Scope::from_generics(scope, self.src, &generics, span));
+        let function_scope = self
+            .ast
+            .scope(ast::Scope::from_generics(scope, self.src, &generics, span));
 
         Ok(Function {
             generics,
@@ -581,10 +617,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_function_body(
-        &mut self,
-        scope: ScopeId,
-    ) -> ParseResult<Option<ExprId>> {
+    fn parse_function_body(&mut self, scope: ScopeId) -> ParseResult<Option<ExprId>> {
         let first = self.toks.step()?;
         Ok(match_or_unexpected! {first, self.toks.module,
             TokenType::LBrace = TokenType::LBrace => {
@@ -601,7 +634,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_trait_def(&mut self, trait_tok: Token, scope: ScopeId) -> ParseResult<TraitDefinition> {
+    fn parse_trait_def(
+        &mut self,
+        trait_tok: Token,
+        scope: ScopeId,
+    ) -> ParseResult<TraitDefinition> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let generics = self.parse_optional_generics()?.map_or(Vec::new(), |g| g.1);
         self.toks.step_expect(TokenType::LBrace)?;
@@ -664,7 +701,7 @@ impl<'a> Parser<'a> {
             if previous.is_some() {
                 return Err(CompileError::new(
                     Error::DuplicateDefinition,
-                    name_span.in_mod(p.toks.module)
+                    name_span.in_mod(p.toks.module),
                 ));
             }
             Ok(Delimit::OptionalIfNewLine)
@@ -684,11 +721,7 @@ impl<'a> Parser<'a> {
         self.stmt_postfix(expr, scope)
     }
 
-    fn parse_stmt_starting_with(
-        &mut self,
-        expr: Expr,
-        scope: ScopeId,
-    ) -> ParseResult<Expr> {
+    fn parse_stmt_starting_with(&mut self, expr: Expr, scope: ScopeId) -> ParseResult<Expr> {
         let lhs = self.parse_factor_postfix(expr, true, scope)?;
         let expr = self.parse_bin_op_rhs(0, lhs, scope)?;
         self.stmt_postfix(expr, scope)
@@ -709,9 +742,8 @@ impl<'a> Parser<'a> {
                 None => Expr::Declare {
                     pat: self.ast.expr(expr),
                     annotated_ty,
-                }
+                },
             }
-            
         } else if let Some(declare) = self.toks.step_if(TokenType::Declare) {
             let val = self.parse_expr(scope)?;
             Expr::DeclareWithVal {
@@ -729,8 +761,6 @@ impl<'a> Parser<'a> {
         let lhs = self.parse_factor(true, scope)?;
         self.parse_bin_op_rhs(0, lhs, scope)
     }
-
-    
 
     fn parse_factor(&mut self, include_as: bool, scope: ScopeId) -> ParseResult<Expr> {
         let first = self.toks.step()?;
@@ -896,7 +926,7 @@ impl<'a> Parser<'a> {
                         unimplemented!("no more record syntax")
                     }
                 }
-                
+
             },
             TokenType::Keyword(Keyword::Asm) => {
                 self.toks.step_expect(TokenType::LParen)?;
@@ -963,7 +993,11 @@ impl<'a> Parser<'a> {
 
                     let end = self.toks.step_expect(TokenType::RBracket)?.end;
 
-                    Expr::Index { expr: self.ast.expr(expr), idx, end }
+                    Expr::Index {
+                        expr: self.ast.expr(expr),
+                        idx,
+                        end,
+                    }
                 }
                 Some(TokenType::Dot) => {
                     let dot = self.toks.step_assert(TokenType::Dot);
@@ -1044,11 +1078,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Starts after the while keyword has already been parsed
-    fn parse_while_from_cond(
-        &mut self,
-        while_tok: Token,
-        scope: ScopeId,
-    ) -> ParseResult<Expr> {
+    fn parse_while_from_cond(&mut self, while_tok: Token, scope: ScopeId) -> ParseResult<Expr> {
         debug_assert_eq!(while_tok.ty, TokenType::Keyword(Keyword::While));
         let cond = self.parse_expr(scope)?;
         let cond = self.ast.expr(cond);
@@ -1194,7 +1224,9 @@ impl<'a> Parser<'a> {
                     if p.toks.step_if(TokenType::Colon).is_some() {
                         loop {
                             requirements.push(p.parse_path()?);
-                            if p.toks.step_if(TokenType::Plus).is_none() { break }
+                            if p.toks.step_if(TokenType::Plus).is_none() {
+                                break;
+                            }
                         }
                         p.toks.step_if(TokenType::Ident);
                     }
@@ -1218,7 +1250,10 @@ impl<'a> Parser<'a> {
                         types.push(p.parse_type()?);
                         Ok(())
                     })?;
-                Ok((types.into_boxed_slice(), TSpan::new(l_bracket.start, r_bracket.end)))
+                Ok((
+                    types.into_boxed_slice(),
+                    TSpan::new(l_bracket.start, r_bracket.end),
+                ))
             })
             .transpose()
     }
@@ -1227,13 +1262,19 @@ impl<'a> Parser<'a> {
     /// present.
     fn parse_enum_args(&mut self, scope: ScopeId) -> ParseResult<(Vec<Expr>, Option<u32>)> {
         let mut args = vec![];
-        let end = self.toks.peek().is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line).then(|| {
-            self.toks.step_assert(TokenType::LParen);
-            self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                args.push(p.parse_expr(scope)?);
-                Ok(Delimit::OptionalIfNewLine)
-            }).map(|end_tok| end_tok.end)
-        }).transpose()?;
+        let end = self
+            .toks
+            .peek()
+            .is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line)
+            .then(|| {
+                self.toks.step_assert(TokenType::LParen);
+                self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                    args.push(p.parse_expr(scope)?);
+                    Ok(Delimit::OptionalIfNewLine)
+                })
+                .map(|end_tok| end_tok.end)
+            })
+            .transpose()?;
 
         Ok((args, end))
     }

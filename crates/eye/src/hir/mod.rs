@@ -1,10 +1,13 @@
 use std::ops::{Index, IndexMut};
 
 use id::{id, ConstValueId, ModuleId};
-use types::{Primitive, IntType, FloatType};
+use types::{FloatType, IntType, Primitive};
 
-use crate::{compiler::VarId, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfo}, parser::ast::{FunctionId, GlobalId}};
-
+use crate::{
+    compiler::VarId,
+    parser::ast::{FunctionId, GlobalId},
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
+};
 
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
@@ -52,13 +55,13 @@ impl NodeIds {
     pub const EMPTY: Self = Self { index: 0, count: 0 };
 
     pub fn iter(self) -> impl Iterator<Item = NodeId> {
-        (self.index .. self.index + self.count).map(NodeId)
+        (self.index..self.index + self.count).map(NodeId)
     }
 }
 impl Index<NodeIds> for HIR {
     type Output = [Node];
     fn index(&self, index: NodeIds) -> &Self::Output {
-        &self.nodes[index.index as usize .. index.index as usize + index.count as usize]
+        &self.nodes[index.index as usize..index.index as usize + index.count as usize]
     }
 }
 id!(LValueId);
@@ -130,8 +133,14 @@ pub enum Node {
 
     Negate(NodeId, LocalTypeId),
     Not(NodeId),
-    AddressOf { inner: NodeId, value_ty: LocalTypeId },
-    Deref { value: NodeId, deref_ty: LocalTypeId },
+    AddressOf {
+        inner: NodeId,
+        value_ty: LocalTypeId,
+    },
+    Deref {
+        value: NodeId,
+        deref_ty: LocalTypeId,
+    },
 
     Cast(CastId),
     Comparison(NodeId, NodeId, Comparison),
@@ -140,7 +149,7 @@ pub enum Node {
     TupleIndex {
         tuple_value: NodeId,
         index: u32,
-        elem_types: LocalTypeIds
+        elem_types: LocalTypeIds,
     },
     ArrayIndex {
         array: NodeId,
@@ -149,9 +158,22 @@ pub enum Node {
     },
 
     Return(NodeId),
-    IfElse { cond: NodeId, then: NodeId, else_: NodeId, resulting_ty: LocalTypeId },
-    Match { value: NodeId, branch_index: u32, pattern_index: u32, branch_count: u32 },
-    While { cond: NodeId, body: NodeId },
+    IfElse {
+        cond: NodeId,
+        then: NodeId,
+        else_: NodeId,
+        resulting_ty: LocalTypeId,
+    },
+    Match {
+        value: NodeId,
+        branch_index: u32,
+        pattern_index: u32,
+        branch_count: u32,
+    },
+    While {
+        cond: NodeId,
+        body: NodeId,
+    },
     Call {
         function: (ModuleId, FunctionId),
         generics: LocalTypeIds,
@@ -250,17 +272,23 @@ impl HIRBuilder {
                 TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
                 TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
                 TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
-                TypeInfo::Array { element: _, count: count @ None } => *count = Some(0),
+                TypeInfo::Array {
+                    element: _,
+                    count: count @ None,
+                } => *count = Some(0),
                 _ => {}
             }
         }
-        (HIR {
-            nodes: self.nodes,
-            lvalues: self.lvalues,
-            patterns: self.patterns,
-            vars: self.vars,
-            casts: self.casts,
-        }, self.types)
+        (
+            HIR {
+                nodes: self.nodes,
+                lvalues: self.lvalues,
+                patterns: self.patterns,
+                vars: self.vars,
+                casts: self.casts,
+            },
+            self.types,
+        )
     }
 
     pub fn add(&mut self, node: Node) -> NodeId {

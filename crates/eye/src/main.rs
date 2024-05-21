@@ -52,12 +52,14 @@ fn main() -> Result<(), MainError> {
     let (name, path) = match &args.path {
         Some(path_str) => {
             let path = Path::new(path_str);
-            if !path.try_exists().map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))? {
+            if !path
+                .try_exists()
+                .map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))?
+            {
                 return Err(MainError::NonexistentPath(path.to_owned()));
             }
             let name = if path.is_file() {
-                path
-                    .file_stem()
+                path.file_stem()
                     .ok_or_else(|| MainError::MissingProjectFileName(path.to_path_buf()))?
                     .to_str()
                     .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
@@ -71,7 +73,7 @@ fn main() -> Result<(), MainError> {
         }
         None => ("main", Path::new("./")),
     };
-    
+
     // create project
     let project = compiler.add_project(name.to_owned(), path.to_path_buf())?;
     let root_module = compiler.get_project(project).root_module;
@@ -87,38 +89,42 @@ fn main() -> Result<(), MainError> {
         let ast = compiler.get_module_ast(root_module);
         parser::ast::repr::ReprPrinter::new("  ", ast).print_module();
     }
-    
+
     // always check the complete project
     compiler.check_complete_project(project);
 
     // check that the main function exists if we are not compiling a library
-    let main = (!args.lib).then(|| {
-        let main_def = compiler.resolve_in_module(root_module, "main", Span::MISSING);
-        let (main_module, main_id) = match main_def {
-            Def::Function(main_module, main_id) => (main_module, main_id),
-            Def::Invalid => {
-                compiler.print_errors();
-                return Err(MainError::ErrorsFound);
-            }
-            other => {
-                // unwrapping is fine, only returns none when the Def is invalid
-                let span = other.get_span(&mut compiler).unwrap();
+    let main = (!args.lib)
+        .then(|| {
+            let main_def = compiler.resolve_in_module(root_module, "main", Span::MISSING);
+            let (main_module, main_id) = match main_def {
+                Def::Function(main_module, main_id) => (main_module, main_id),
+                Def::Invalid => {
+                    compiler.print_errors();
+                    return Err(MainError::ErrorsFound);
+                }
+                other => {
+                    // unwrapping is fine, only returns none when the Def is invalid
+                    let span = other.get_span(&mut compiler).unwrap();
 
-                compiler.errors.emit_err(Error::MainIsNotAFunction.at_span(span));
+                    compiler
+                        .errors
+                        .emit_err(Error::MainIsNotAFunction.at_span(span));
+                    compiler.print_errors();
+                    return Err(MainError::ErrorsFound);
+                }
+            };
+            let signature = compiler.get_signature(main_module, main_id);
+            if let Err(err) = check::verify_main_signature(signature, main_module) {
+                if let Some(error) = err {
+                    compiler.errors.emit_err(error);
+                }
                 compiler.print_errors();
                 return Err(MainError::ErrorsFound);
             }
-        };
-        let signature = compiler.get_signature(main_module, main_id);
-        if let Err(err) = check::verify_main_signature(signature, main_module) {
-            if let Some(error) = err {
-                compiler.errors.emit_err(error);
-            }
-            compiler.print_errors();
-            return Err(MainError::ErrorsFound);
-        }
-        Ok((main_module, main_id))
-    }).transpose()?;
+            Ok((main_module, main_id))
+        })
+        .transpose()?;
     if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
     }
@@ -143,7 +149,13 @@ fn main() -> Result<(), MainError> {
                 #[cfg(feature = "llvm-backend")]
                 Backend::LLVM => {
                     let backend = ir_backend_llvm::Backend::new();
-                    backend.emit_module(&compiler.ir_module, args.backend_ir, None, Path::new(&obj_file))
+                    backend
+                        .emit_module(
+                            &compiler.ir_module,
+                            args.backend_ir,
+                            None,
+                            Path::new(&obj_file),
+                        )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
                 }
             }
@@ -162,7 +174,8 @@ fn main() -> Result<(), MainError> {
                 let exit_code = std::process::Command::new(exe_file)
                     .status()
                     .map_err(MainError::RunningProgramFailed)?
-                    .code().unwrap_or(0);
+                    .code()
+                    .unwrap_or(0);
                 std::process::exit(exit_code);
             }
         }

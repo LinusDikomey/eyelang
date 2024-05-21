@@ -1,12 +1,11 @@
 use std::borrow::Borrow;
-use types::{IntType, FloatType};
+use types::{FloatType, IntType};
 
 use crate::parser::token::AssignType;
 
 use super::*;
 
-
-/// Represent ast nodes as the original code 
+/// Represent ast nodes as the original code
 pub trait Repr<C: Representer> {
     fn repr(&self, c: &C);
 }
@@ -33,7 +32,11 @@ pub struct ReprPrinter<'a> {
 }
 impl<'a> ReprPrinter<'a> {
     pub fn new(indent: &'a str, ast: &'a Ast) -> Self {
-        Self { indent, count: 0, ast }
+        Self {
+            indent,
+            count: 0,
+            ast,
+        }
     }
 
     pub fn print_module(&self) {
@@ -55,7 +58,9 @@ impl Representer for ReprPrinter<'_> {
     fn whole_src(&self) -> &str {
         self.ast.src()
     }
-    fn ast(&self) -> &Ast { self.ast }
+    fn ast(&self) -> &Ast {
+        self.ast
+    }
     fn child(&self) -> Self {
         Self {
             indent: self.indent,
@@ -93,7 +98,7 @@ impl Definition {
             Self::Path(path) => {
                 c.write_start("use ");
                 path.repr(c);
-                
+
                 c.write_add(" as ");
                 c.write_add(name);
             }
@@ -123,7 +128,7 @@ impl Definition {
                 c.write_add(name);
                 c.write_add(">");
             }
-            Self::Generic(i) => c.write_add(format!("<generic #{i}>"))
+            Self::Generic(i) => c.write_add(format!("<generic #{i}>")),
         }
     }
 }
@@ -147,7 +152,7 @@ impl Function {
         c.write_add(" -> ");
         self.return_type.repr(c);
         match &self.body.map(|body| &c.ast()[body]) {
-            Some(block@Expr::Block { .. }) => {
+            Some(block @ Expr::Block { .. }) => {
                 c.space();
                 block.repr(c);
             }
@@ -155,7 +160,11 @@ impl Function {
                 c.write_add(": ");
                 expr.repr(c);
             }
-            None => if !in_trait { c.write_add(" extern") }
+            None => {
+                if !in_trait {
+                    c.write_add(" extern")
+                }
+            }
         }
     }
 }
@@ -177,7 +186,11 @@ impl StructDefinition {
             child.write_add(&c.ast()[*name_span]);
             child.space();
             ty.repr(&child);
-            child.write_add(if i == (self.members.len() - 1) { "\n" } else { ",\n" });
+            child.write_add(if i == (self.members.len() - 1) {
+                "\n"
+            } else {
+                ",\n"
+            });
         }
         c.write_start("}");
     }
@@ -211,7 +224,6 @@ impl EnumDefinition {
     }
 }
 
-
 impl TraitDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("trait {\n");
@@ -224,7 +236,6 @@ impl TraitDefinition {
         c.write_start("}");
     }
 }
-
 
 impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
@@ -247,16 +258,20 @@ impl<C: Representer> Repr<C> for Expr {
                     child.writeln("");
                 }
                 c.write_start("}");
-            },
+            }
             Self::Declare { pat, annotated_ty } => {
                 ast[*pat].repr(c);
 
                 c.write_add(": ");
                 annotated_ty.repr(c);
             }
-            Self::DeclareWithVal { pat, annotated_ty, val } => {
+            Self::DeclareWithVal {
+                pat,
+                annotated_ty,
+                val,
+            } => {
                 ast[*pat].repr(c);
-                
+
                 if matches!(annotated_ty, UnresolvedType::Infer(_)) {
                     c.write_add(" := ");
                 } else {
@@ -274,10 +289,15 @@ impl<C: Representer> Repr<C> for Expr {
             Self::ReturnUnit { .. } => {
                 c.write_add("ret");
             }
-            Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) 
-                => c.write_add(c.src(*span)),
+            Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) => {
+                c.write_add(c.src(*span))
+            }
             Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
-            Self::EnumLiteral { span: _, ident, args } => {
+            Self::EnumLiteral {
+                span: _,
+                ident,
+                args,
+            } => {
                 c.char('.');
                 c.write_add(c.src(*ident));
                 if args.count > 0 {
@@ -323,17 +343,26 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.char(')');
             }
-            Self::If { start: _, cond, then } => {
+            Self::If {
+                start: _,
+                cond,
+                then,
+            } => {
                 c.write_add("if ");
                 ast[*cond].repr(c);
                 let then = &ast[*then];
                 match then {
                     Expr::Block { .. } => c.space(),
-                    _ => c.write_add(": ")
+                    _ => c.write_add(": "),
                 }
                 then.repr(c);
             }
-            Self::IfPat { start: _, pat, value, then } => {
+            Self::IfPat {
+                start: _,
+                pat,
+                value,
+                then,
+            } => {
                 c.write_add("if ");
                 ast[*pat].repr(c);
                 c.write_add(" := ");
@@ -341,23 +370,34 @@ impl<C: Representer> Repr<C> for Expr {
                 let then = &ast[*then];
                 match then {
                     Expr::Block { .. } => c.space(),
-                    _ => c.write_add(": ")
+                    _ => c.write_add(": "),
                 }
                 then.repr(c);
             }
-            Self::IfElse { start: _, cond, then, else_ } => {
+            Self::IfElse {
+                start: _,
+                cond,
+                then,
+                else_,
+            } => {
                 c.write_add("if ");
                 ast[*cond].repr(c);
                 let then = &ast[*then];
                 match then {
                     Expr::Block { .. } => c.space(),
-                    _ => c.write_add(": ")
+                    _ => c.write_add(": "),
                 }
                 then.repr(c);
                 c.write_add(" else ");
                 ast[*else_].repr(c);
             }
-            Self::IfPatElse { start: _, pat, value, then, else_ } => {
+            Self::IfPatElse {
+                start: _,
+                pat,
+                value,
+                then,
+                else_,
+            } => {
                 c.write_add("if ");
                 ast[*pat].repr(c);
                 c.write_add(" := ");
@@ -365,17 +405,25 @@ impl<C: Representer> Repr<C> for Expr {
                 let then = &ast[*then];
                 match then {
                     Expr::Block { .. } => c.space(),
-                    _ => c.write_add(": ")
+                    _ => c.write_add(": "),
                 }
                 then.repr(c);
                 c.write_add(" else ");
                 ast[*else_].repr(c);
             }
-            Self::Match { span: _, val, extra_branches, branch_count } => {
+            Self::Match {
+                span: _,
+                val,
+                extra_branches,
+                branch_count,
+            } => {
                 c.write_add("match ");
                 ast[*val].repr(c);
                 c.write_add(" {\n");
-                let extra = ExprExtra { idx: *extra_branches, count: *branch_count * 2 };
+                let extra = ExprExtra {
+                    idx: *extra_branches,
+                    count: *branch_count * 2,
+                };
                 let match_c = c.child();
                 let branches = &ast[extra];
                 debug_assert_eq!(branches.len() % 2, 0);
@@ -392,7 +440,11 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.writeln("}");
             }
-            Self::While { start: _, cond, body } => {
+            Self::While {
+                start: _,
+                cond,
+                body,
+            } => {
                 c.write_add("while ");
                 ast[*cond].repr(c);
                 let body = &ast[*body];
@@ -403,7 +455,12 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 body.repr(c);
             }
-            Self::WhilePat { start: _, pat, val, body } => {
+            Self::WhilePat {
+                start: _,
+                pat,
+                val,
+                body,
+            } => {
                 c.write_add("while ");
                 ast[*pat].repr(c);
                 c.write_add(" := ");
@@ -417,7 +474,9 @@ impl<C: Representer> Repr<C> for Expr {
                 body.repr(c);
             }
             Self::FunctionCall(call_id) => {
-                let Call { called_expr, args, .. } = &ast[*call_id];
+                let Call {
+                    called_expr, args, ..
+                } = &ast[*call_id];
                 let args = &ast[*args];
                 let called = &ast[*called_expr];
                 called.repr(c);
@@ -463,7 +522,11 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*expr].repr(c);
                 c.char(']');
             }
-            Self::TupleIdx { left: expr, idx, end: _ } => {
+            Self::TupleIdx {
+                left: expr,
+                idx,
+                end: _,
+            } => {
                 ast[*expr].repr(c);
                 c.char('.');
                 c.write_add(idx.to_string());
@@ -474,7 +537,11 @@ impl<C: Representer> Repr<C> for Expr {
                 ty.repr(c);
             }
             Self::Root(_) => c.write_add("root"),
-            Self::Asm { span: _, asm_str_span, args } => {
+            Self::Asm {
+                span: _,
+                asm_str_span,
+                args,
+            } => {
                 c.write_add("asm(");
                 c.write_add(c.src(*asm_str_span));
                 for arg in &ast[*args] {
@@ -483,7 +550,7 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 c.char(')');
             }
-            Self::Primitive { primitive, .. } => c.write_add(<&str>::from(*primitive))
+            Self::Primitive { primitive, .. } => c.write_add(<&str>::from(*primitive)),
         }
     }
 }
@@ -549,27 +616,33 @@ impl<R: Representer> Repr<R> for UnresolvedType {
             Self::Tuple(elems, _) => {
                 c.char('(');
                 let mut elems = elems.iter();
-                if let Some(e) = elems.next() { e.repr(c) }
+                if let Some(e) = elems.next() {
+                    e.repr(c)
+                }
                 for elem in elems {
                     c.write_add(", ");
                     elem.repr(c);
                 }
                 c.char(')');
             }
-            Self::Infer(_) => c.char('_')
+            Self::Infer(_) => c.char('_'),
         }
     }
 }
 
 impl<C: Representer> Repr<C> for Primitive {
     fn repr(&self, c: &C) {
-        match self { 
-            Self::I8 | Self::U8
-            | Self::I16 | Self::U16
-            | Self::I32 | Self::U32
-            | Self::I64 | Self::U64
-            | Self::I128 | Self::U128
-                => self.as_int().unwrap().repr(c),
+        match self {
+            Self::I8
+            | Self::U8
+            | Self::I16
+            | Self::U16
+            | Self::I32
+            | Self::U32
+            | Self::I64
+            | Self::U64
+            | Self::I128
+            | Self::U128 => self.as_int().unwrap().repr(c),
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
             Self::Bool => c.write_add("bool"),
             Self::Unit => c.write_add("()"),
@@ -601,7 +674,7 @@ impl<C: Representer> Repr<C> for FloatType {
     fn repr(&self, c: &C) {
         c.write_add(match self {
             Self::F32 => "f32",
-            Self::F64 => "f64"
+            Self::F64 => "f64",
         });
     }
 }
@@ -616,10 +689,10 @@ impl<C: Representer> Repr<C> for Operator {
             Operator::Mod => "%",
 
             Operator::Assignment(assignment) => return assignment.repr(c),
-            
+
             Operator::Equals => "==",
             Operator::NotEquals => "!=",
-            
+
             Operator::Or => "or",
             Operator::And => "and",
 

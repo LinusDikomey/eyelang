@@ -1,13 +1,25 @@
 pub mod builtins;
 
-use std::{path::PathBuf, rc::Rc, collections::VecDeque};
+use std::{collections::VecDeque, path::PathBuf, rc::Rc};
 
 use dmap::DHashMap;
-use id::{ProjectId, ModuleId, TypeId, ConstValueId};
-use span::{Span, IdentPath, TSpan};
-use types::{UnresolvedType, Type};
+use id::{ConstValueId, ModuleId, ProjectId, TypeId};
+use span::{IdentPath, Span, TSpan};
+use types::{Type, UnresolvedType};
 
-use crate::{eval::{ConstValue, self}, error::{CompileError, Errors, Error}, parser::{ast::{self, Ast, ScopeId, GlobalId, FunctionId}, self}, type_table::{LocalTypeId, TypeTable, LocalTypeIds, TypeInfoOrIdx}, irgen, hir::{HIRBuilder, HIR}, check, MainError};
+use crate::{
+    check,
+    error::{CompileError, Error, Errors},
+    eval::{self, ConstValue},
+    hir::{HIRBuilder, HIR},
+    irgen,
+    parser::{
+        self,
+        ast::{self, Ast, FunctionId, GlobalId, ScopeId},
+    },
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfoOrIdx, TypeTable},
+    MainError,
+};
 
 use builtins::Builtins;
 
@@ -38,12 +50,20 @@ impl Compiler {
 
     pub fn add_project(&mut self, name: String, root: PathBuf) -> Result<ProjectId, MainError> {
         let root = root.canonicalize().unwrap_or(root);
-        if !root.try_exists().map_err(|err| MainError::CantAccessPath(err, root.clone()))? {
+        if !root
+            .try_exists()
+            .map_err(|err| MainError::CantAccessPath(err, root.clone()))?
+        {
             return Err(MainError::NonexistentPath(root));
         }
         let project_id = ProjectId(self.projects.len() as _);
         let root_module_id = ModuleId(self.modules.len() as _);
-        self.modules.push(Module::at_path(root.clone(), project_id, root_module_id, None));
+        self.modules.push(Module::at_path(
+            root.clone(),
+            project_id,
+            root_module_id,
+            None,
+        ));
         self.projects.push(Project {
             name,
             root,
@@ -61,7 +81,11 @@ impl Compiler {
     pub fn add_type_def(&mut self, module: ModuleId, id: ast::TypeId) -> TypeId {
         Self::add_type_def_to_types(module, id, &mut self.types)
     }
-    pub fn add_type_def_to_types(module: ModuleId, id: ast::TypeId, types: &mut Vec<ResolvableTypeDef>) -> TypeId {
+    pub fn add_type_def_to_types(
+        module: ModuleId,
+        id: ast::TypeId,
+        types: &mut Vec<ResolvableTypeDef>,
+    ) -> TypeId {
         let type_id = TypeId(types.len() as _);
         types.push(ResolvableTypeDef {
             module,
@@ -85,30 +109,41 @@ impl Compiler {
         self.get_module_ast_and_symbols(module_id).0
     }
 
-    pub fn get_module_ast_and_symbols(&mut self, module_id: ModuleId) -> (&Rc<Ast>, &mut ModuleSymbols) {
+    pub fn get_module_ast_and_symbols(
+        &mut self,
+        module_id: ModuleId,
+    ) -> (&Rc<Ast>, &mut ModuleSymbols) {
         if self.modules[module_id.idx()].ast.is_some() {
             // borrowing bullshit
-            let Some((ast, symbols, _)) = &mut self.modules[module_id.idx()].ast else { unreachable!() };
+            let Some((ast, symbols, _)) = &mut self.modules[module_id.idx()].ast else {
+                unreachable!()
+            };
             (ast, symbols)
         } else {
             let module = &mut self.modules[module_id.idx()];
             // add dependencies to each module first
-            let mut definitions: DHashMap<String, ast::Definition> = self
-                .projects[module.project.idx()]
-                .dependencies
-                .iter()
-                .map(|dependency| {
-                    let dependency = &self.projects[dependency.idx()];
-                    (dependency.name.clone(), ast::Definition::Module(dependency.root_module))
-                })
-                .collect();
+            let mut definitions: DHashMap<String, ast::Definition> = self.projects
+                [module.project.idx()]
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                let dependency = &self.projects[dependency.idx()];
+                (
+                    dependency.name.clone(),
+                    ast::Definition::Module(dependency.root_module),
+                )
+            })
+            .collect();
             let contents = if module.path.is_file() {
                 std::fs::read_to_string(&module.path)
             } else {
                 if !module.path.is_dir() {
                     // We canonicalized the path, this shouldn't really happen. Maybe still add an
                     // error for it.
-                    panic!("project at {} is not a directory or file", module.path.display());
+                    panic!(
+                        "project at {} is not a directory or file",
+                        module.path.display()
+                    );
                 }
                 let is_root = module_id == module.root;
                 let file = if is_root {
@@ -143,19 +178,30 @@ impl Compiler {
                                 .to_owned();
                             if !matches!(name.as_str(), "main" | "mod") {
                                 let id = ModuleId(self.modules.len() as _);
-                                self.modules.push(Module::at_path(path, project, root, Some(module_id)));
+                                self.modules.push(Module::at_path(
+                                    path,
+                                    project,
+                                    root,
+                                    Some(module_id),
+                                ));
                                 definitions.insert(name, ast::Definition::Module(id));
                             }
                         }
                     } else if ty.is_dir() {
                         let path = entry.path();
                         if path.join("mod.eye").exists() {
-                            let name = path.file_name()
+                            let name = path
+                                .file_name()
                                 .and_then(|name| name.to_str())
                                 .expect("directory doesn't have a valid name")
                                 .to_owned();
                             let id = ModuleId(self.modules.len() as _);
-                            self.modules.push(Module::at_path(path, project, root, Some(module_id)));
+                            self.modules.push(Module::at_path(
+                                path,
+                                project,
+                                root,
+                                Some(module_id),
+                            ));
                             definitions.insert(name, ast::Definition::Module(id));
                         }
                     }
@@ -175,7 +221,8 @@ impl Compiler {
             let mut errors = Errors::new();
             let ast = parser::parse(source, &mut errors, module_id, definitions);
             let ast = ast.unwrap_or_else(|| {
-                todo!("keep compiling after parsing errors {}: {errors:?}",
+                todo!(
+                    "keep compiling after parsing errors {}: {errors:?}",
                     self.modules[module_id.idx()].path.display()
                 );
             });
@@ -184,7 +231,9 @@ impl Compiler {
             let module = &mut self.modules[module_id.idx()];
             let instances = IrFunctionInstances::new(ast.function_count());
             module.ast = Some((Rc::new(ast), checked, instances));
-            let Some((ast, symbols, _)) = module.ast.as_mut() else { unreachable!() };
+            let Some((ast, symbols, _)) = module.ast.as_mut() else {
+                unreachable!()
+            };
             (ast, symbols)
         }
     }
@@ -194,7 +243,13 @@ impl Compiler {
         self.resolve_in_scope(module, scope, name, name_span)
     }
 
-    pub fn resolve_in_scope(&mut self, module: ModuleId, scope: ScopeId, name: &str, name_span: Span) -> Def {
+    pub fn resolve_in_scope(
+        &mut self,
+        module: ModuleId,
+        scope: ScopeId,
+        name: &str,
+        name_span: Span,
+    ) -> Def {
         self.get_scope_def(module, scope, name).unwrap_or_else(|| {
             if let Some(parent) = self.get_module_ast(module)[scope].parent {
                 self.resolve_in_scope(module, parent, name, name_span)
@@ -207,7 +262,9 @@ impl Compiler {
 
     pub fn get_scope_def(&mut self, module: ModuleId, scope: ScopeId, name: &str) -> Option<Def> {
         let ast = self.get_module_ast(module).clone();
-        let Some(def) = ast[scope].definitions.get(name) else { return None };
+        let Some(def) = ast[scope].definitions.get(name) else {
+            return None;
+        };
         let def = match def {
             ast::Definition::Expr { value, ty } => {
                 assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: respect type");
@@ -215,9 +272,7 @@ impl Compiler {
                 // TODO: cache results
                 eval::def_expr(self, module, scope, &ast, value)
             }
-            &ast::Definition::Path(path) => {
-                self.resolve_path(module, scope, path)
-            }
+            &ast::Definition::Path(path) => self.resolve_path(module, scope, path),
             ast::Definition::Global(id) => Def::Global(module, *id),
             &ast::Definition::Module(id) => Def::Module(id),
             &ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
@@ -225,12 +280,7 @@ impl Compiler {
         Some(def)
     }
 
-    pub fn resolve_path(
-        &mut self,
-        module: ModuleId,
-        scope: ScopeId,
-        path: IdentPath,
-    ) -> Def {
+    pub fn resolve_path(&mut self, module: ModuleId, scope: ScopeId, path: IdentPath) -> Def {
         let ast = self.get_module_ast(module).clone();
         let (root, segments, last) = path.segments(ast.src());
         let mut scope = Some(scope);
@@ -241,7 +291,8 @@ impl Compiler {
             scope = None;
         }
         for (name, name_span) in segments {
-            let scope_id = scope.unwrap_or_else(|| self.get_module_ast(module).top_level_scope_id());
+            let scope_id =
+                scope.unwrap_or_else(|| self.get_module_ast(module).top_level_scope_id());
             match self.resolve_in_scope(current_module, scope_id, name, name_span.in_mod(module)) {
                 Def::Module(new_mod) => {
                     current_module = new_mod;
@@ -249,7 +300,8 @@ impl Compiler {
                 }
                 Def::Invalid => return Def::Invalid,
                 _ => {
-                    self.errors.emit_err(Error::ModuleExpected.at_span(name_span.in_mod(module)));
+                    self.errors
+                        .emit_err(Error::ModuleExpected.at_span(name_span.in_mod(module)));
                     return Def::Invalid;
                 }
             }
@@ -268,7 +320,10 @@ impl Compiler {
                 match self.resolve_path(module, scope, *path) {
                     Def::Type(ty) => match ty {
                         Type::Invalid => Type::Invalid,
-                        Type::DefId { id, generics: existing_generics } => {
+                        Type::DefId {
+                            id,
+                            generics: existing_generics,
+                        } => {
                             let generics = match (existing_generics, generics) {
                                 (Some(generics), None) => Some(generics),
                                 (None, Some((generics, _span))) => {
@@ -285,7 +340,7 @@ impl Compiler {
                                 }
                                 (Some(_), Some((_, span))) => {
                                     self.errors.emit_err(
-                                        Error::UnexpectedGenerics.at_span(span.in_mod(module))
+                                        Error::UnexpectedGenerics.at_span(span.in_mod(module)),
                                     );
                                     return Type::Invalid;
                                 }
@@ -294,16 +349,19 @@ impl Compiler {
                         }
                         other => {
                             if let Some((_, span)) = generics {
-                                self.errors.emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                                self.errors.emit_err(
+                                    Error::UnexpectedGenerics.at_span(span.in_mod(module)),
+                                );
                                 Type::Invalid
                             } else {
                                 other
                             }
                         }
-                    }
+                    },
                     Def::Invalid => Type::Invalid,
                     _ => {
-                        self.errors.emit_err(Error::TypeExpected.at_span(ty.span().in_mod(module)));
+                        self.errors
+                            .emit_err(Error::TypeExpected.at_span(ty.span().in_mod(module)));
                         Type::Invalid
                     }
                 }
@@ -315,7 +373,9 @@ impl Compiler {
             UnresolvedType::Array(b) => {
                 let (elem_ty, size, _) = &**b;
                 let elem_ty = self.resolve_type(elem_ty, module, scope);
-                let Some(size) = *size else { panic!("inferred array size is not allowed here") };
+                let Some(size) = *size else {
+                    panic!("inferred array size is not allowed here")
+                };
                 Type::Array(Box::new((elem_ty, size)))
             }
             UnresolvedType::Tuple(elems, _) => {
@@ -335,8 +395,14 @@ impl Compiler {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
                 let Resolvable::Resolved(signature) = &self.modules[module.idx()]
-                    .ast.as_ref().unwrap().1.function_signatures[id.idx()]
-                else { unreachable!() };
+                    .ast
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .function_signatures[id.idx()]
+                else {
+                    unreachable!()
+                };
                 signature
             }
             Resolvable::Resolving => panic!("function signature depends on itself recursively"),
@@ -344,18 +410,22 @@ impl Compiler {
                 let ast = ast.clone();
                 let function = &ast[id];
                 let scope = function.scope;
-                let generics = function.generics
+                let generics = function
+                    .generics
                     .iter()
                     .map(|def| ast[def.name].to_owned())
                     .collect();
-    
-                let args = function.params
+
+                let args = function
+                    .params
                     .clone()
                     .into_iter()
-                    .map(|(name_span, ty)| (
-                        ast[name_span].to_owned(),
-                        self.resolve_type(&ty, module, scope),
-                    ))
+                    .map(|(name_span, ty)| {
+                        (
+                            ast[name_span].to_owned(),
+                            self.resolve_type(&ty, module, scope),
+                        )
+                    })
                     .collect();
                 let return_type = self.resolve_type(&function.return_type, module, scope);
                 let signature = Signature {
@@ -365,8 +435,13 @@ impl Compiler {
                     generics,
                     span: function.signature_span,
                 };
-                self.modules[module.idx()].ast.as_mut().unwrap().1.function_signatures[id.idx()]
-                    .put(Rc::new(signature))
+                self.modules[module.idx()]
+                    .ast
+                    .as_mut()
+                    .unwrap()
+                    .1
+                    .function_signatures[id.idx()]
+                .put(Rc::new(signature))
             }
         }
     }
@@ -376,14 +451,17 @@ impl Compiler {
         match &checked.functions[id.idx()] {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
-                let Resolvable::Resolved(checked) = &self.modules[module.idx()].ast
-                    .as_ref().unwrap().1.functions[id.idx()] else { unreachable!() };
+                let Resolvable::Resolved(checked) =
+                    &self.modules[module.idx()].ast.as_ref().unwrap().1.functions[id.idx()]
+                else {
+                    unreachable!()
+                };
                 checked
             }
             Resolvable::Resolving => panic!("checked function depends on itself recursively"),
             Resolvable::Unresolved => {
-                let resolving = &mut self.modules[module.idx()].ast
-                    .as_mut().unwrap().1.functions[id.idx()];
+                let resolving =
+                    &mut self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()];
                 *resolving = Resolvable::Resolving;
                 let ast = self.modules[module.idx()].ast.as_ref().unwrap().0.clone();
 
@@ -399,9 +477,15 @@ impl Compiler {
 
                 self.get_signature(module, id);
                 // signature is resolved above
-                let Resolvable::Resolved(signature) = &self.modules[module.idx()].ast
-                    .as_ref().unwrap()
-                    .1.function_signatures[id.idx()] else { unreachable!() };
+                let Resolvable::Resolved(signature) = &self.modules[module.idx()]
+                    .ast
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .function_signatures[id.idx()]
+                else {
+                    unreachable!()
+                };
 
                 let signature = Rc::clone(signature);
 
@@ -421,7 +505,8 @@ impl Compiler {
 
                 let (body, types) = if let Some(body) = function.body {
                     let mut hir = HIRBuilder::new(types);
-                    let parameter_variables = signature.args
+                    let parameter_variables = signature
+                        .args
                         .iter()
                         .map(|(name, _ty)| name)
                         .zip(param_types.iter())
@@ -441,8 +526,13 @@ impl Compiler {
                         deferred_exhaustions: Vec::new(),
                         deferred_casts: Vec::new(),
                     };
-                    let root = check::expr::check(&mut check_ctx, body, &mut scope,
-                        return_type, return_type);
+                    let root = check::expr::check(
+                        &mut check_ctx,
+                        body,
+                        &mut scope,
+                        return_type,
+                        return_type,
+                    );
                     let (hir, types) = check_ctx.finish(root);
                     (Some(hir), types)
                 } else {
@@ -458,8 +548,7 @@ impl Compiler {
                     generic_count,
                     body,
                 };
-                self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()]
-                    .put(checked)
+                self.modules[module.idx()].ast.as_mut().unwrap().1.functions[id.idx()].put(checked)
             }
         }
     }
@@ -468,7 +557,9 @@ impl Compiler {
         match &self.types[ty.idx()].resolved {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
-                let Resolvable::Resolved(id) = &self.types[ty.idx()].resolved else { unreachable!() };
+                let Resolvable::Resolved(id) = &self.types[ty.idx()].resolved else {
+                    unreachable!()
+                };
                 id
             }
             Resolvable::Resolving => panic!("recursive type definition"),
@@ -481,16 +572,19 @@ impl Compiler {
                 let generic_count = def.generic_count();
                 let resolved = match def {
                     ast::TypeDef::Struct(struct_def) => {
-                        let fields = struct_def.members
+                        let fields = struct_def
+                            .members
                             .iter()
-                            .map(|(name_span, ty)| (
-                                ast[*name_span].to_owned(),
-                                self.resolve_type(ty, module, struct_def.scope)
-                            ))
+                            .map(|(name_span, ty)| {
+                                (
+                                    ast[*name_span].to_owned(),
+                                    self.resolve_type(ty, module, struct_def.scope),
+                                )
+                            })
                             .collect();
                         ResolvedType {
                             generic_count,
-                            def: ResolvedTypeDef::Struct(ResolvedStructDef { fields })
+                            def: ResolvedTypeDef::Struct(ResolvedStructDef { fields }),
                         }
                     }
                     ast::TypeDef::Enum(_) => todo!(),
@@ -505,13 +599,17 @@ impl Compiler {
         let ast = ast.clone();
         match &symbols.globals[id.idx()] {
             Resolvable::Resolved(_) => {
-                let Resolvable::Resolved(global) = &self.get_module_ast_and_symbols(module).1
-                    .globals[id.idx()] else { unreachable!() };
+                let Resolvable::Resolved(global) =
+                    &self.get_module_ast_and_symbols(module).1.globals[id.idx()]
+                else {
+                    unreachable!()
+                };
                 global
             }
             Resolvable::Resolving => {
                 let span = ast[id].span.in_mod(module);
-                self.errors.emit_err(Error::RecursiveDefinition.at_span(span));
+                self.errors
+                    .emit_err(Error::RecursiveDefinition.at_span(span));
                 self.get_module_ast_and_symbols(module).1.globals[id.idx()]
                     .put((Type::Invalid, ConstValue::Undefined))
             }
@@ -524,7 +622,8 @@ impl Compiler {
                         // probably should just store id instead of cloning the value
                         Def::ConstValue(id) => self.const_values[id.idx()].clone(),
                         _ => {
-                            let error = Error::ExpectedValue.at_span(ast[val].span_in(&ast, module));
+                            let error =
+                                Error::ExpectedValue.at_span(ast[val].span_in(&ast, module));
                             self.errors.emit_err(error);
                             ConstValue::Undefined
                         }
@@ -532,8 +631,7 @@ impl Compiler {
                 } else {
                     ConstValue::Undefined
                 };
-                self.modules[module.idx()].ast.as_mut().unwrap().1
-                    .globals[id.idx()].put((ty, val))
+                self.modules[module.idx()].ast.as_mut().unwrap().1.globals[id.idx()].put((ty, val))
             }
         }
     }
@@ -551,7 +649,10 @@ impl Compiler {
                             self.resolve_path(module, scope, path);
                         }
                         ast::Definition::Expr { value, ty } => {
-                            assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: def type annotations");
+                            assert!(
+                                matches!(ty, UnresolvedType::Infer(_)),
+                                "TODO: def type annotations"
+                            );
                             // TODO: cache results
                             eval::def_expr(self, module, scope, &ast, *value);
                         }
@@ -570,14 +671,15 @@ impl Compiler {
             }
 
             for id in ast.type_ids() {
-                let id = match &mut self.modules[module.idx()].ast.as_mut().unwrap().1.types[id.idx()] {
-                    Some(id) => *id,
-                    ty @ None => {
-                        let id = Self::add_type_def_to_types(module, id, &mut self.types);
-                        *ty = Some(id);
-                        id
-                    }
-                };
+                let id =
+                    match &mut self.modules[module.idx()].ast.as_mut().unwrap().1.types[id.idx()] {
+                        Some(id) => *id,
+                        ty @ None => {
+                            let id = Self::add_type_def_to_types(module, id, &mut self.types);
+                            *ty = Some(id);
+                            id
+                        }
+                    };
                 self.get_resolved_type_def(id);
             }
 
@@ -594,8 +696,7 @@ impl Compiler {
         generics: Vec<Type>,
     ) -> ir::FunctionId {
         self.get_module_ast(module);
-        let instances = &mut self.modules[module.idx()]
-            .ast.as_mut().unwrap().2;
+        let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().2;
 
         let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
         match instances.get_or_insert(function, &generics, potential_id) {
@@ -620,7 +721,8 @@ impl Compiler {
                     self.get_hir(f.module, f.ast_function_id);
                     // got checked function above
                     let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().1;
-                    let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()] else {
+                    let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()]
+                    else {
                         unreachable!()
                     };
                     // PERF: put CheckedFunction behind Rc
@@ -648,7 +750,8 @@ impl Compiler {
                         name.push(']');
                     }
 
-                    let func = irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
+                    let func =
+                        irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
                     self.ir_module[f.ir_id] = func;
                 }
                 potential_id
@@ -664,7 +767,9 @@ impl Compiler {
         _project: ProjectId,
         main: Option<(ModuleId, FunctionId)>,
     ) -> Vec<ir::FunctionId> {
-        let Some(main) = main else { todo!("emitting libraries is not supported right now") };
+        let Some(main) = main else {
+            todo!("emitting libraries is not supported right now")
+        };
         let mut functions_to_emit = VecDeque::from([(main.0, main.1, vec![])]);
         let mut finished_functions = Vec::new();
         while let Some((module, function, generics)) = functions_to_emit.pop_front() {
@@ -711,13 +816,21 @@ impl Compiler {
             } else {
                 let ast = self.get_module_ast(error.span.module).clone();
                 let path = &self.modules[error.span.module.idx()].path;
-                crate::error::print(&error.err, TSpan::new(error.span.start, error.span.end), ast.src(), path);
+                crate::error::print(
+                    &error.err,
+                    TSpan::new(error.span.start, error.span.end),
+                    ast.src(),
+                    path,
+                );
             }
         };
         let err_count = errors.error_count();
         if err_count != 0 {
-            cprintln!("#r<Finished with #u;r!<{}> error{}>",
-                err_count, if err_count == 1 { "" } else { "s" });
+            cprintln!(
+                "#r<Finished with #u;r!<{}> error{}>",
+                err_count,
+                if err_count == 1 { "" } else { "s" }
+            );
             for error in &errors.errors {
                 print(error);
             }
@@ -725,8 +838,11 @@ impl Compiler {
         }
         if errors.warning_count() != 0 {
             let c = errors.warning_count();
-            cprintln!("#r<Finished with #u;r!<{}> warning{}>",
-                c, if c == 1 { "" } else { "s" });
+            cprintln!(
+                "#r<Finished with #u;r!<{}> warning{}>",
+                c,
+                if c == 1 { "" } else { "s" }
+            );
             for warn in &errors.warnings {
                 print(warn);
             }
@@ -771,14 +887,27 @@ impl<'p> LocalScope<'p> {
     pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
-        } else if let Some(def) = self.static_scope.and_then(|static_scope| compiler.get_scope_def(self.module, static_scope, name)) {
+        } else if let Some(def) = self
+            .static_scope
+            .and_then(|static_scope| compiler.get_scope_def(self.module, static_scope, name))
+        {
             LocalItem::Def(def)
         } else if let Some(parent) = self.parent {
             parent.resolve(name, name_span, compiler)
-        } else if let Some(static_parent) = self.static_scope.and_then(|static_scope| compiler.get_module_ast(self.module)[static_scope].parent) {
-            LocalItem::Def(compiler.resolve_in_scope(self.module, static_parent, name, name_span.in_mod(self.module)))
+        } else if let Some(static_parent) = self
+            .static_scope
+            .and_then(|static_scope| compiler.get_module_ast(self.module)[static_scope].parent)
+        {
+            LocalItem::Def(compiler.resolve_in_scope(
+                self.module,
+                static_parent,
+                name,
+                name_span.in_mod(self.module),
+            ))
         } else {
-            compiler.errors.emit_err(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
+            compiler
+                .errors
+                .emit_err(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
             LocalItem::Invalid
         }
     }
@@ -835,7 +964,6 @@ impl Def {
         }
     }
 }
-
 
 pub struct Project {
     pub name: String,
@@ -915,7 +1043,9 @@ impl ModuleSymbols {
                 .map(|_| Resolvable::Unresolved)
                 .collect(),
             types: vec![None; ast.type_count()],
-            globals: (0..ast.global_count()).map(|_| Resolvable::Unresolved).collect()
+            globals: (0..ast.global_count())
+                .map(|_| Resolvable::Unresolved)
+                .collect(),
         }
     }
 }
@@ -941,7 +1071,12 @@ impl IrFunctionInstances {
         }
     }
 
-    pub fn get_or_insert(&mut self, id: FunctionId, generics: &[Type], potential_ir_id: ir::FunctionId) -> Option<ir::FunctionId> {
+    pub fn get_or_insert(
+        &mut self,
+        id: FunctionId,
+        generics: &[Type],
+        potential_ir_id: ir::FunctionId,
+    ) -> Option<ir::FunctionId> {
         let instances = &mut self.functions[id.idx()].0;
         match instances.get(generics) {
             None => {

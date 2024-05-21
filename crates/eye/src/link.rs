@@ -1,4 +1,4 @@
-use std::process::{Command, self};
+use std::process::{self, Command};
 
 use crate::args::Args;
 
@@ -6,7 +6,7 @@ use crate::args::Args;
 enum Os {
     Linux,
     Windows,
-    Osx
+    Osx,
 }
 
 #[cfg(target_os = "linux")]
@@ -20,7 +20,6 @@ const OS: Option<Os> = Some(Os::Osx);
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 const OS: Option<Os> = None;
-
 
 pub fn link(obj: &str, out: &str, args: &Args) -> Result<(), String> {
     let mut cmd = if let Some(link) = &args.link_cmd {
@@ -51,7 +50,9 @@ pub fn link(obj: &str, out: &str, args: &Args) -> Result<(), String> {
 }
 
 fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
-    let Some(os) = OS else { return None; };
+    let Some(os) = OS else {
+        return None;
+    };
     Some(match os {
         Os::Linux => {
             let mut cmd = Command::new("ld");
@@ -61,7 +62,8 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
                 "/lib64/ld-linux-x86-64.so.2",
                 "-lc",
                 "help/linux/entry.o",
-                "-o", out,
+                "-o",
+                out,
             ]);
             for lib in link {
                 cmd.arg(format!("-l{lib}"));
@@ -98,9 +100,9 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
         }
         Os::Osx => {
             let sdk_path_output = Command::new("xcrun")
-            .args(["-sdk", "macosx", "--show-sdk-path"])
-            .output()
-            .expect("Failed to run command to find sdk path");
+                .args(["-sdk", "macosx", "--show-sdk-path"])
+                .output()
+                .expect("Failed to run command to find sdk path");
             let sdk_path = String::from_utf8(sdk_path_output.stdout)
                 .expect("SDK path contains invalid characters. Can't link against system library");
 
@@ -111,7 +113,8 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
                 "-lSystem",
                 "-syslibroot",
                 sdk_path.trim(),
-                "-o", out,
+                "-o",
+                out,
             ]);
             for lib in link {
                 cmd.arg(format!("-l{lib}"));

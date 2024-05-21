@@ -1,6 +1,7 @@
 use std::{
     ffi::{CStr, CString, NulError},
-    path::Path, ptr,
+    path::Path,
+    ptr,
 };
 
 use llvm::{
@@ -65,9 +66,7 @@ impl Backend {
         let llvm_funcs = module
             .funcs
             .iter()
-            .map(|func| unsafe {
-                translate::add_function(self.context, llvm_module, func)
-            })
+            .map(|func| unsafe { translate::add_function(self.context, llvm_module, func) })
             .collect::<Result<Vec<_>, _>>()?;
 
         for (func, (llvm_func, _)) in module.funcs.iter().zip(llvm_funcs.iter().copied()) {
