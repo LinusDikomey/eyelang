@@ -14,7 +14,7 @@ use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::type_table::LocalTypeIds;
+use crate::type_table::{LocalTypeId, LocalTypeIds};
 use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
@@ -599,6 +599,16 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             let return_ty = ctx.get_type(ctx.types[return_ty]);
             ctx.builder.build_call(func, arg_refs, return_ty)
         }
+        &Node::TypeProperty(ty, property) => {
+            let layout = ir::type_layout(ctx.get_type(ctx.types[ty]), &ctx.builder.types);
+            use crate::hir::TypeProperty;
+            let value = match property {
+                TypeProperty::Size => layout.size,
+                TypeProperty::Align => layout.align.get(),
+                TypeProperty::Stride => layout.stride(),
+            };
+            ctx.builder.build_int(value, IrType::U64)
+        }
     };
     ValueOrPlace::Value(value)
 }
@@ -632,21 +642,49 @@ fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut b
             };
             let ty = types::get_primitive(p);
             debug_assert!(p.is_int());
-            let mut pattern_value = if let Ok(small) = val.try_into() {
-                ctx.builder.build_int(small, ty)
-            } else {
-                ctx.builder.build_large_int(val, ty)
-            };
-            if sign {
-                pattern_value = ctx.builder.build_neg(pattern_value, ty);
-            }
+            let pattern_value = int_pat(&mut ctx.builder, sign, val, ty);
             ctx.builder
                 .build_bin_op(BinOp::Eq, value, pattern_value, ty)
         }
         Pattern::Bool(true) => value,
         Pattern::Bool(false) => ctx.builder.build_not(value, ir::IrType::U1),
-        Pattern::Range { .. } => todo!(),
+        Pattern::Range {
+            min_max: (min, max),
+            ty,
+            min_max_signs: (min_sign, max_sign),
+            inclusive,
+        } => {
+            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+                panic!("integer type expected")
+            };
+            let ty = types::get_primitive(p);
+            let min = int_pat(&mut ctx.builder, min_sign, min, ty);
+            let max = int_pat(&mut ctx.builder, max_sign, max, ty);
+            let left = ctx
+                .builder
+                .build_bin_op(ir::builder::BinOp::GE, value, min, ty);
+            let right_op = if inclusive {
+                ir::builder::BinOp::LE
+            } else {
+                ir::builder::BinOp::LT
+            };
+            let right = ctx.builder.build_bin_op(right_op, value, max, ty);
+            ctx.builder
+                .build_bin_op(ir::builder::BinOp::And, left, right, ty)
+        }
     }
+}
+
+fn int_pat(builder: &mut IrBuilder, sign: bool, val: u128, ty: IrType) -> Ref {
+    let mut pattern_value = if let Ok(small) = val.try_into() {
+        builder.build_int(small, ty)
+    } else {
+        builder.build_large_int(val, ty)
+    };
+    if sign {
+        pattern_value = builder.build_neg(pattern_value, ty);
+    }
+    pattern_value
 }
 
 fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) {

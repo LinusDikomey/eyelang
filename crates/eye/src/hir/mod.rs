@@ -310,6 +310,16 @@ impl HIR {
                 eprint!("): ");
                 types.dump_type(return_ty);
             }
+            &Node::TypeProperty(ty, property) => {
+                let prop = match property {
+                    TypeProperty::Size => "size",
+                    TypeProperty::Align => "align",
+                    TypeProperty::Stride => "stride",
+                };
+                eprint!("(type_prop {prop} ");
+                types.dump_type(ty);
+                eprint!(")");
+            }
         }
     }
 
@@ -339,6 +349,7 @@ impl HIR {
             Pattern::Bool(b) => eprint!("{b}"),
             Pattern::Range {
                 min_max,
+                ty: _,
                 min_max_signs,
                 inclusive,
             } => {
@@ -531,6 +542,7 @@ pub enum Node {
         args: NodeIds,
         return_ty: LocalTypeId,
     },
+    TypeProperty(LocalTypeId, TypeProperty),
 }
 
 #[derive(Debug, Clone)]
@@ -551,6 +563,7 @@ pub enum Pattern {
     Bool(bool),
     Range {
         min_max: (u128, u128),
+        ty: LocalTypeId,
         min_max_signs: (bool, bool),
         inclusive: bool,
     },
@@ -594,6 +607,13 @@ pub enum Arithmetic {
     Mul,
     Div,
     Mod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeProperty {
+    Size,
+    Align,
+    Stride,
 }
 
 pub struct HIRBuilder {

@@ -314,7 +314,8 @@ impl TypeTable {
         };
         a == b
             || unify(a_ty, b_ty, self)
-                .inspect(|_| {
+                .map(|unified| {
+                    self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
                     self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
                 })

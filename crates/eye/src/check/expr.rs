@@ -5,7 +5,9 @@ use span::TSpan;
 use types::Primitive;
 
 use crate::{
-    compiler::{builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef},
+    compiler::{
+        builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedType, ResolvedTypeDef,
+    },
     error::Error,
     eval::ConstValue,
     hir::{self, Comparison, Node},
@@ -565,8 +567,8 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
         }
         Def::Function(module, id) => function_item(ctx, module, id, expected, |_| span),
         Def::Type(ty) => {
-            let ty = ctx.type_from_resolved(&ty, LocalTypeIds::EMPTY);
-            let ty = ctx.hir.types.add_info_or_idx(ty);
+            let ty = ctx.hir.types.generic_info_from_resolved(ctx.compiler, &ty);
+            let ty = ctx.hir.types.add(ty);
             ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
             Node::Invalid
         }
@@ -666,9 +668,61 @@ fn check_member_access(
     let left_node = check(ctx, left, scope, left_ty, return_ty);
     let name = &ctx.ast.src()[name_span.range()];
     match ctx.hir.types[left_ty] {
-        TypeInfo::TypeItem { ty: _ } => {
-            todo!("size/align/stride exprs here, also enums/assoc functions")
-        }
+        TypeInfo::TypeItem { ty } => match name {
+            "size" => {
+                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                Node::TypeProperty(ty, hir::TypeProperty::Size)
+            }
+            "align" => {
+                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                Node::TypeProperty(ty, hir::TypeProperty::Align)
+            }
+            "stride" => {
+                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                Node::TypeProperty(ty, hir::TypeProperty::Stride)
+            }
+            _ => match ctx.hir.types[ty] {
+                TypeInfo::Invalid => Node::Invalid,
+                TypeInfo::TypeDef(id, generics) => {
+                    let ty = ctx.compiler.get_resolved_type_def(id);
+                    if let Some(&method) = ty.methods.get(name) {
+                        let module = ty.module;
+                        ctx.specify(
+                            expected,
+                            TypeInfo::FunctionItem {
+                                module,
+                                function: method,
+                                generics,
+                            },
+                            |ast| ast[expr].span(ast),
+                        );
+                        Node::Invalid
+                    } else {
+                        ctx.compiler.errors.emit_err(
+                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                        );
+                        ctx.invalidate(expected);
+                        Node::Invalid
+                    }
+                }
+                TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
+                TypeInfo::Unknown => {
+                    ctx.compiler
+                        .errors
+                        .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
+                _ => {
+                    ctx.compiler
+                        .errors
+                        .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
+            },
+        },
+        TypeInfo::Pointer(_) => todo!("auto deref"),
         TypeInfo::TypeDef(id, generics) => {
             let resolved = ctx.compiler.get_resolved_type_def(id);
             match &resolved.def {
@@ -699,6 +753,7 @@ fn check_member_access(
                         ctx.compiler.errors.emit_err(
                             Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
                         );
+                        ctx.invalidate(expected);
                         Node::Invalid
                     }
                 }
@@ -711,9 +766,11 @@ fn check_member_access(
             def_to_node(ctx, def, expected, name_span)
         }
         TypeInfo::Unknown => {
+            eprintln!("UNKNWON FOUND");
             ctx.compiler
                 .errors
                 .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+            ctx.invalidate(expected);
             Node::Invalid
         }
         TypeInfo::Invalid => {
@@ -723,7 +780,8 @@ fn check_member_access(
         _ => {
             ctx.compiler
                 .errors
-                .emit_err(Error::NonexistantMember.at_span(ctx.span(left)));
+                .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
+            ctx.invalidate(expected);
             Node::Invalid
         }
     }
@@ -752,12 +810,6 @@ fn check_call(
                             let struct_def = struct_def.clone();
                             ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
                             check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
-                        }
-                        _ => {
-                            ctx.compiler.errors.emit_err(
-                                Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)),
-                            );
-                            Node::Invalid
                         }
                     }
                 }

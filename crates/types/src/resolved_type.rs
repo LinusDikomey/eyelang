@@ -117,12 +117,16 @@ impl fmt::Display for Type {
                 id,
                 generics: Some(generics),
             } => {
-                write!(f, "TypeId({})[", id.idx())?;
-                for (i, generic) in generics.iter().enumerate() {
-                    if i != 0 {
-                        write!(f, ", ")?;
+                write!(f, "TypeId({})", id.idx())?;
+                if generics.len() != 0 {
+                    write!(f, "[")?;
+                    for (i, generic) in generics.iter().enumerate() {
+                        if i != 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{generic}")?;
                     }
-                    write!(f, "{generic}")?;
+                    write!(f, "]")?;
                 }
                 Ok(())
             }

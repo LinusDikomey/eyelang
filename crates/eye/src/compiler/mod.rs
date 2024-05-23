@@ -354,8 +354,25 @@ impl Compiler {
                                     Some(generics)
                                 }
                                 (None, None) => {
-                                    eprintln!("TODO: remove generics assumption");
-                                    Some([].into())
+                                    let def = self.get_resolved_type_def(id);
+                                    if def.generic_count != 0 {
+                                        let count = def.generic_count;
+                                        let span = path.span().in_mod(module);
+                                        self.errors.emit_err(
+                                            Error::InvalidGenericCount {
+                                                expected: count,
+                                                found: 0,
+                                            }
+                                            .at_span(span),
+                                        );
+                                        Some(
+                                            std::iter::repeat(Type::Invalid)
+                                                .take(count as usize)
+                                                .collect(),
+                                        )
+                                    } else {
+                                        Some([].into())
+                                    }
                                 }
                                 (Some(_), Some((_, span))) => {
                                     self.errors.emit_err(
@@ -615,9 +632,12 @@ impl Compiler {
                                 )
                             })
                             .collect();
+                        let methods = struct_def.methods.clone();
                         ResolvedType {
                             generic_count,
                             def: ResolvedTypeDef::Struct(ResolvedStructDef { fields }),
+                            module,
+                            methods,
                         }
                     }
                     ast::TypeDef::Enum(_) => todo!(),
@@ -1097,6 +1117,8 @@ pub struct Signature {
 pub struct ResolvedType {
     pub generic_count: u8,
     pub def: ResolvedTypeDef,
+    pub module: ModuleId,
+    pub methods: DHashMap<String, FunctionId>,
 }
 
 #[derive(Debug)]

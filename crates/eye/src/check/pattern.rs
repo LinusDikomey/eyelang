@@ -123,6 +123,7 @@ pub fn check(
                 let inclusive = op == Operator::Range;
                 Pattern::Range {
                     min_max: (l.0, r.0),
+                    ty: expected,
                     min_max_signs: (l.1, r.1),
                     inclusive,
                 }
