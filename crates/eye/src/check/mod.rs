@@ -57,10 +57,42 @@ impl<'a> Ctx<'a> {
         self.hir.types.invalidate(ty);
     }
 
-    fn type_from_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+    pub fn type_from_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
         self.hir
             .types
             .from_generic_resolved(self.compiler, ty, generics)
+    }
+
+    fn auto_ref_deref(
+        &mut self,
+        mut pointer_count: u32,
+        required_pointer_count: u32,
+        mut value: Node,
+        ty: LocalTypeId,
+    ) -> Node {
+        let mut current_ty = TypeInfoOrIdx::Idx(ty);
+        while pointer_count < required_pointer_count {
+            let inner = self.hir.add(value);
+            let value_ty = self.hir.types.add_info_or_idx(current_ty);
+            value = Node::AddressOf { inner, value_ty };
+            current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
+            pointer_count += 1;
+        }
+        while pointer_count > required_pointer_count {
+            let TypeInfo::Pointer(pointee) = self.hir.types.get_info_or_idx(current_ty) else {
+                // the deref was already checked so we know the type is wrapped in
+                // `pointer_count` pointers
+                unreachable!()
+            };
+            let prev_value = self.hir.add(value);
+            value = Node::Deref {
+                value: prev_value,
+                deref_ty: pointee,
+            };
+            current_ty = TypeInfoOrIdx::Idx(pointee);
+            pointer_count -= 1;
+        }
+        value
     }
 
     pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {

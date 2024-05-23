@@ -1,18 +1,16 @@
 use std::rc::Rc;
 
-use id::ModuleId;
+use id::{ModuleId, TypeId};
 use span::TSpan;
-use types::Primitive;
+use types::{Primitive, Type};
 
 use crate::{
-    compiler::{
-        builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedType, ResolvedTypeDef,
-    },
+    compiler::{builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef},
     error::Error,
     eval::ConstValue,
     hir::{self, Comparison, Node},
     parser::{
-        ast::{Ast, Call, Expr, ExprId, FunctionId, UnOp},
+        ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{AssignType, FloatLiteral, IntLiteral, Operator},
     },
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
@@ -351,7 +349,7 @@ pub fn check(
             };
             if let Some(elem_ty) = elem_types.nth(idx) {
                 ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
-                Node::TupleIndex {
+                Node::Element {
                     tuple_value: ctx.hir.add(tuple_value),
                     index: idx,
                     elem_types,
@@ -668,121 +666,205 @@ fn check_member_access(
     let left_node = check(ctx, left, scope, left_ty, return_ty);
     let name = &ctx.ast.src()[name_span.range()];
     match ctx.hir.types[left_ty] {
-        TypeInfo::TypeItem { ty } => match name {
-            "size" => {
-                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
-                Node::TypeProperty(ty, hir::TypeProperty::Size)
-            }
-            "align" => {
-                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
-                Node::TypeProperty(ty, hir::TypeProperty::Align)
-            }
-            "stride" => {
-                ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
-                Node::TypeProperty(ty, hir::TypeProperty::Stride)
-            }
-            _ => match ctx.hir.types[ty] {
-                TypeInfo::Invalid => Node::Invalid,
-                TypeInfo::TypeDef(id, generics) => {
-                    let ty = ctx.compiler.get_resolved_type_def(id);
-                    if let Some(&method) = ty.methods.get(name) {
-                        let module = ty.module;
-                        ctx.specify(
-                            expected,
-                            TypeInfo::FunctionItem {
-                                module,
-                                function: method,
-                                generics,
-                            },
-                            |ast| ast[expr].span(ast),
-                        );
+        TypeInfo::TypeItem { ty } => {
+            return match name {
+                "size" => {
+                    ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                    Node::TypeProperty(ty, hir::TypeProperty::Size)
+                }
+                "align" => {
+                    ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                    Node::TypeProperty(ty, hir::TypeProperty::Align)
+                }
+                "stride" => {
+                    ctx.specify(expected, Primitive::U64, |ast| ast[expr].span(ast));
+                    Node::TypeProperty(ty, hir::TypeProperty::Stride)
+                }
+                _ => match ctx.hir.types[ty] {
+                    TypeInfo::Invalid => Node::Invalid,
+                    TypeInfo::TypeDef(id, generics) => {
+                        let ty = ctx.compiler.get_resolved_type_def(id);
+                        if let Some(&method) = ty.methods.get(name) {
+                            let module = ty.module;
+                            let signature = ctx.compiler.get_signature(module, method);
+                            if signature.generics.len() != generics.count as usize {
+                                todo!("handle extra generics");
+                            }
+                            ctx.specify(
+                                expected,
+                                TypeInfo::FunctionItem {
+                                    module,
+                                    function: method,
+                                    generics,
+                                },
+                                |ast| ast[expr].span(ast),
+                            );
+                            Node::Invalid
+                        } else {
+                            ctx.compiler.errors.emit_err(
+                                Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                            );
+                            ctx.invalidate(expected);
+                            Node::Invalid
+                        }
+                    }
+                    TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
+                    TypeInfo::Unknown => {
+                        ctx.compiler
+                            .errors
+                            .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                        ctx.invalidate(expected);
                         Node::Invalid
-                    } else {
+                    }
+                    _ => {
                         ctx.compiler.errors.emit_err(
                             Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
                         );
                         ctx.invalidate(expected);
                         Node::Invalid
                     }
-                }
-                TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
-                TypeInfo::Unknown => {
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
-                    ctx.invalidate(expected);
-                    Node::Invalid
-                }
-                _ => {
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
-                    ctx.invalidate(expected);
-                    Node::Invalid
-                }
-            },
-        },
-        TypeInfo::Pointer(_) => todo!("auto deref"),
-        TypeInfo::TypeDef(id, generics) => {
-            let resolved = ctx.compiler.get_resolved_type_def(id);
-            match &resolved.def {
-                ResolvedTypeDef::Struct(def) => {
-                    let def = def.clone(); // PERF: cloning def
-                                           // PERF: Every time we index a struct, all fields are mapped to TypeInfo's
-                                           // again. This could be improved by caching structs somehow ?? or by putting
-                                           // the fields along the TypeDef (easier but would make TypeDef very large,
-                                           // similar problem for enums and extra solution required).
-                    let elem_types = ctx.hir.types.add_multiple_unknown(def.fields.len() as _);
-                    let mut indexed_field = None;
-                    let fields = def.fields.iter().zip(0..).zip(elem_types.iter());
-                    for (((field_name, ty), index), r) in fields {
-                        let ty = ctx.type_from_resolved(ty, generics);
-                        if field_name == name {
-                            indexed_field = Some((index, r));
-                        }
-                        ctx.hir.types.replace(r, ty);
-                    }
-                    if let Some((index, field_ty)) = indexed_field {
-                        ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
-                        Node::TupleIndex {
-                            tuple_value: ctx.hir.add(left_node),
-                            index,
-                            elem_types,
-                        }
-                    } else {
-                        ctx.compiler.errors.emit_err(
-                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
-                        );
-                        ctx.invalidate(expected);
-                        Node::Invalid
-                    }
-                }
-            }
+                },
+            };
         }
         TypeInfo::ModuleItem(id) => {
             let def = ctx
                 .compiler
                 .resolve_in_module(id, name, name_span.in_mod(ctx.module));
-            def_to_node(ctx, def, expected, name_span)
+            return def_to_node(ctx, def, expected, name_span);
         }
-        TypeInfo::Unknown => {
-            eprintln!("UNKNWON FOUND");
-            ctx.compiler
-                .errors
-                .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
-            ctx.invalidate(expected);
-            Node::Invalid
+        _ => {}
+    }
+    // now check the type while allowing auto deref for field access, methods
+    let mut current_ty = left_ty;
+    let mut pointer_count = 0;
+    loop {
+        match ctx.hir.types[current_ty] {
+            TypeInfo::Pointer(pointee) => {
+                pointer_count += 1;
+                current_ty = pointee;
+            }
+            TypeInfo::TypeDef(id, generics) => {
+                let resolved = ctx.compiler.get_resolved_type_def(id);
+                if let Some(&method) = resolved.methods.get(name) {
+                    let module = resolved.module;
+                    let signature = ctx.compiler.get_signature(module, method);
+                    if signature.generics.len() != generics.count as usize {
+                        todo!("handle extra generics");
+                    }
+                    let Some(required_pointer_count) = check_is_instance_method(signature, id)
+                    else {
+                        ctx.compiler
+                            .errors
+                            .emit_err(Error::NotAnInstanceMethod.at_span(ctx.span(expr)));
+                        ctx.invalidate(expected);
+                        return Node::Invalid;
+                    };
+                    let self_value = ctx.auto_ref_deref(
+                        pointer_count,
+                        required_pointer_count,
+                        left_node,
+                        left_ty,
+                    );
+                    ctx.specify(
+                        expected,
+                        TypeInfo::MethodItem {
+                            module,
+                            function: method,
+                            generics,
+                        },
+                        |ast| ast[expr].span(ast),
+                    );
+                    return self_value;
+                }
+                return match &resolved.def {
+                    ResolvedTypeDef::Struct(def) => {
+                        let def = def.clone(); // PERF: cloning def
+
+                        let (indexed_field, elem_types) =
+                            def.get_indexed_field(ctx, generics, name);
+                        if let Some((index, field_ty)) = indexed_field {
+                            // perform auto deref first
+                            let mut dereffed_node = left_node;
+                            let mut current_ty = left_ty;
+                            for _ in 0..pointer_count {
+                                let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
+                                    // the deref was already checked so we know the type is wrapped in
+                                    // `pointer_count` pointers
+                                    unreachable!()
+                                };
+                                let value = ctx.hir.add(dereffed_node);
+                                dereffed_node = Node::Deref {
+                                    value,
+                                    deref_ty: pointee,
+                                };
+                                current_ty = pointee;
+                            }
+                            ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
+                            Node::Element {
+                                tuple_value: ctx.hir.add(dereffed_node),
+                                index,
+                                elem_types,
+                            }
+                        } else {
+                            ctx.compiler.errors.emit_err(
+                                Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                            );
+                            ctx.invalidate(expected);
+                            Node::Invalid
+                        }
+                    }
+                };
+            }
+            TypeInfo::Unknown => {
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
+            TypeInfo::Invalid => {
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
+            _ => {
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
         }
-        TypeInfo::Invalid => {
-            ctx.invalidate(expected);
-            Node::Invalid
-        }
-        _ => {
-            ctx.compiler
-                .errors
-                .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
-            ctx.invalidate(expected);
-            Node::Invalid
+    }
+}
+
+/// checks if the provided method signature is valid as an instance medhot of the provided type.
+/// Returns the number of pointer indirections of the self type in case it is valid or None
+/// otherwise.
+fn check_is_instance_method(signature: &crate::compiler::Signature, id: TypeId) -> Option<u32> {
+    let Some((_, self_param_ty)) = signature.args.first() else {
+        return None;
+    };
+    let mut required_pointer_count = 0;
+    let mut current_ty = self_param_ty;
+    loop {
+        match current_ty {
+            Type::DefId {
+                id: _,
+                generics: Some(generics),
+            } if !generics.is_empty() => todo!("self types with additional generics"),
+            &Type::DefId {
+                id: self_id,
+                generics: _,
+            } if id == self_id => {
+                return Some(required_pointer_count);
+            }
+            Type::Pointer(inner) => {
+                required_pointer_count += 1;
+                current_ty = &*inner;
+            }
+            _ => {
+                return None;
+            }
         }
     }
 }
@@ -796,7 +878,7 @@ fn check_call(
     return_ty: LocalTypeId,
 ) -> Node {
     let called_ty = ctx.hir.types.add_unknown();
-    let _called = check(ctx, call.called_expr, scope, called_ty, return_ty);
+    let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty);
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => Node::Invalid,
         TypeInfo::TypeItem { ty: item_ty } => {
@@ -828,54 +910,82 @@ fn check_call(
         } => {
             let signature = Rc::clone(ctx.compiler.get_signature(module, function));
 
-            let invalid_arg_count = if signature.varargs {
-                call.args.count() < signature.args.len()
-            } else {
-                call.args.count() != signature.args.len()
-            };
-            if invalid_arg_count {
-                let expected = signature.args.len() as _;
-                let varargs = signature.varargs;
-                let span = ctx.span(expr);
-                ctx.compiler.errors.emit_err(
-                    Error::InvalidArgCount {
-                        expected,
-                        varargs,
-                        found: call.args.count,
-                    }
-                    .at_span(span),
-                );
-                return Node::Invalid;
-            }
-
-            let arg_types = ctx.hir.types.add_multiple_unknown(call.args.count);
-            // iterating over the signature, all extra arguments in case of vararg
-            // arguments will stay unknown which is intended
-            for (i, (_, arg)) in signature.args.iter().enumerate() {
-                let ty = ctx.type_from_resolved(arg, generics);
-                ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
-            }
-
-            let func_return_ty = ctx.type_from_resolved(&signature.return_type, generics);
-            let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
-            ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
-
-            let args = ctx
-                .hir
-                .add_nodes((0..call.args.count).map(|_| Node::Invalid));
-            for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
-                let node = check(ctx, arg, scope, ty, return_ty);
-                ctx.hir.modify_node(node_id, node);
-            }
-
-            Node::Call {
-                function: (module, function),
+            match check_call_signature(
+                ctx,
+                expr,
+                expected,
+                call.args,
                 generics,
-                args,
-                return_ty: expected,
+                &signature.args,
+                &signature.return_type,
+                signature.varargs,
+            ) {
+                Ok(arg_types) => {
+                    let args = ctx
+                        .hir
+                        .add_nodes((0..call.args.count).map(|_| Node::Invalid));
+                    for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
+                        let node = check(ctx, arg, scope, ty, return_ty);
+                        ctx.hir.modify_node(node_id, node);
+                    }
+
+                    Node::Call {
+                        function: (module, function),
+                        generics,
+                        args,
+                        return_ty: expected,
+                    }
+                }
+                Err(err) => {
+                    ctx.compiler.errors.emit_err(err);
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
             }
         }
-        TypeInfo::MethodItem { .. } => todo!("methods"),
+        TypeInfo::MethodItem {
+            module,
+            function,
+            generics,
+        } => {
+            let signature = Rc::clone(ctx.compiler.get_signature(module, function));
+            // it was already checked that the first argument fits the self parameter correctly
+            let signature_args = &signature.args[1..];
+            match check_call_signature(
+                ctx,
+                expr,
+                expected,
+                call.args,
+                generics,
+                signature_args,
+                &signature.return_type,
+                signature.varargs,
+            ) {
+                Ok(arg_types) => {
+                    let args = ctx
+                        .hir
+                        .add_nodes((0..call.args.count + 1).map(|_| Node::Invalid));
+                    let mut arg_iter = args.iter();
+                    ctx.hir.modify_node(arg_iter.next().unwrap(), called_node);
+                    for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(arg_iter) {
+                        let node = check(ctx, arg, scope, ty, return_ty);
+                        ctx.hir.modify_node(node_id, node);
+                    }
+
+                    Node::Call {
+                        function: (module, function),
+                        generics,
+                        args,
+                        return_ty: expected,
+                    }
+                }
+                Err(err) => {
+                    ctx.compiler.errors.emit_err(err);
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
+            }
+        }
         TypeInfo::Unknown => {
             ctx.compiler
                 .errors
@@ -889,6 +999,46 @@ fn check_call(
             Node::Invalid
         }
     }
+}
+
+fn check_call_signature(
+    ctx: &mut Ctx,
+    expr: ExprId,
+    expected: LocalTypeId,
+    args: ExprExtra,
+    generics: LocalTypeIds,
+    signature: &[(String, Type)],
+    return_type: &Type,
+    varargs: bool,
+) -> Result<LocalTypeIds, crate::error::CompileError> {
+    let invalid_arg_count = if varargs {
+        args.count() < signature.len()
+    } else {
+        args.count() != signature.len()
+    };
+    if invalid_arg_count {
+        let expected = signature.len() as _;
+        let span = ctx.span(expr);
+        return Err(Error::InvalidArgCount {
+            expected,
+            varargs,
+            found: args.count,
+        }
+        .at_span(span));
+    }
+
+    let arg_types = ctx.hir.types.add_multiple_unknown(args.count);
+    // iterating over the signature, all extra arguments in case of vararg
+    // arguments will stay unknown which is intended
+    for (i, (_, arg)) in signature.iter().enumerate() {
+        let ty = ctx.type_from_resolved(arg, generics);
+        ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
+    }
+
+    let func_return_ty = ctx.type_from_resolved(return_type, generics);
+    let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
+    ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
+    Ok(arg_types)
 }
 
 fn get_string_literal(src: &str, span: TSpan) -> String {

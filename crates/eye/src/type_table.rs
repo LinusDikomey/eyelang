@@ -552,18 +552,13 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
                 module: a_m,
                 function: a_f,
                 generics: a_g,
-                this_ty: a_t,
             },
             MethodItem {
                 module: b_m,
                 function: b_f,
                 generics: b_g,
-                this_ty: b_t,
             },
         ) if a_m == b_m && a_f == b_f => {
-            if !types.try_unify(a_t, b_t) {
-                return None;
-            }
             for (a, b) in a_g.iter().zip(b_g.iter()) {
                 types.try_unify(a, b);
             }
@@ -621,7 +616,6 @@ pub enum TypeInfo {
         module: ModuleId,
         function: ast::FunctionId,
         generics: LocalTypeIds,
-        this_ty: LocalTypeId,
     },
     Generic(u8),
     Invalid,

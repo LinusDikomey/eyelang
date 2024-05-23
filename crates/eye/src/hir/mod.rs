@@ -209,7 +209,7 @@ impl HIR {
                 eprint!("): ");
                 types.dump_type(ty);
             }
-            &Node::TupleIndex {
+            &Node::Element {
                 tuple_value,
                 index,
                 elem_types,
@@ -379,6 +379,22 @@ impl HIR {
                 self.dump(val, types, indent_count);
                 eprint!(")");
             }
+            LValue::Member {
+                ptr,
+                index,
+                elem_types,
+            } => {
+                eprint!("(member {index} ");
+                self.dump(ptr, types, indent_count);
+                eprint!("): (");
+                for (i, elem) in elem_types.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(", ");
+                    }
+                    types.dump_type(elem);
+                }
+                eprint!(")");
+            }
         }
     }
 }
@@ -508,7 +524,7 @@ pub enum Node {
     Comparison(NodeId, NodeId, Comparison),
     Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
 
-    TupleIndex {
+    Element {
         tuple_value: NodeId,
         index: u32,
         elem_types: LocalTypeIds,
@@ -551,6 +567,11 @@ pub enum LValue {
     Variable(VarId),
     Global(ModuleId, GlobalId),
     Deref(NodeId),
+    Member {
+        ptr: NodeId,
+        index: u32,
+        elem_types: LocalTypeIds,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -105,7 +105,6 @@ impl CompileError {
 }
 
 #[derive(Debug, Clone)]
-#[allow(unused)]
 pub enum Error {
     Internal(String),
     FileSizeExceeeded,

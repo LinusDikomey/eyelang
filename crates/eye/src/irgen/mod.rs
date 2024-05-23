@@ -14,7 +14,7 @@ use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::type_table::{LocalTypeId, LocalTypeIds};
+use crate::type_table::LocalTypeIds;
 use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
@@ -433,7 +433,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
         }
 
-        &Node::TupleIndex {
+        &Node::Element {
             tuple_value,
             index,
             elem_types,
@@ -619,6 +619,18 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
         LValue::Variable(id) => ctx.vars[id.idx()].0,
         LValue::Global(_, _) => todo!("handle ir for globals"),
         LValue::Deref(pointer) => lower(ctx, pointer, noreturn),
+        LValue::Member {
+            ptr,
+            index,
+            elem_types,
+        } => {
+            let ptr = lower(ctx, ptr, noreturn);
+            if *noreturn {
+                return Ref::UNDEF;
+            }
+            let types = ctx.get_multiple_types(elem_types);
+            ctx.builder.build_member_ptr(ptr, index, types)
+        }
     }
 }
 

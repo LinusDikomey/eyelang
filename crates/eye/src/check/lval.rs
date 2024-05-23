@@ -1,5 +1,5 @@
 use crate::{
-    compiler::{Def, LocalItem, LocalScope},
+    compiler::{Def, LocalItem, LocalScope, ResolvedTypeDef},
     error::Error,
     hir::LValue,
     parser::ast::{Expr, ExprId, UnOp},
@@ -24,19 +24,7 @@ pub fn check(
                     let var_ty = ctx.hir.get_var(id);
                     (LValue::Variable(id), var_ty)
                 }
-                LocalItem::Def(Def::Global(module, id)) => {
-                    // PERF: cloning type
-                    let global_ty = ctx.compiler.get_checked_global(module, id).0.clone();
-                    let ty = ctx.type_from_resolved(&global_ty, LocalTypeIds::EMPTY);
-                    let ty = ctx.hir.types.add_info_or_idx(ty);
-                    (LValue::Global(module, id), ty)
-                }
-                LocalItem::Def(_) => {
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
-                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
-                }
+                LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }
         &Expr::UnOp(_, UnOp::Deref, inner) => {
@@ -45,7 +33,98 @@ pub fn check(
             let node = expr::check(ctx, inner, scope, pointer, return_ty);
             (LValue::Deref(ctx.hir.add(node)), pointee)
         }
-        Expr::MemberAccess { .. } => todo!("struct member assignment"),
+        &Expr::MemberAccess {
+            left,
+            name: name_span,
+        } => {
+            let name = &ctx.ast.src()[name_span.range()];
+            let left_ty = ctx.hir.types.add_unknown();
+            let left_node = expr::check(ctx, left, scope, left_ty, return_ty);
+            match ctx.hir.types[left_ty] {
+                TypeInfo::ModuleItem(id) => {
+                    let def =
+                        ctx.compiler
+                            .resolve_in_module(id, name, name_span.in_mod(ctx.module));
+                    return def_lvalue(ctx, expr, def);
+                }
+                _ => {}
+            }
+            let mut pointer_count = 0;
+            let mut current_ty = left_ty;
+            loop {
+                match ctx.hir.types[current_ty] {
+                    TypeInfo::Unknown => {
+                        ctx.compiler
+                            .errors
+                            .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    }
+                    TypeInfo::Invalid => {
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    }
+                    TypeInfo::Pointer(pointee) => {
+                        current_ty = pointee;
+                        pointer_count += 1;
+                    }
+                    TypeInfo::TypeDef(id, generics) => {
+                        let ty = ctx.compiler.get_resolved_type_def(id);
+                        match &ty.def {
+                            ResolvedTypeDef::Struct(struct_) => {
+                                let struct_ = struct_.clone(); // PERF: cloning struct
+                                let (indexed_field, elem_types) =
+                                    struct_.get_indexed_field(ctx, generics, name);
+                                if let Some((index, field_ty)) = indexed_field {
+                                    let ptr =
+                                        ctx.auto_ref_deref(pointer_count, 1, left_node, left_ty);
+                                    let ptr = ctx.hir.add(ptr);
+                                    return (
+                                        LValue::Member {
+                                            ptr,
+                                            index,
+                                            elem_types,
+                                        },
+                                        field_ty,
+                                    );
+                                } else {
+                                    ctx.compiler.errors.emit_err(
+                                        Error::NonexistantMember
+                                            .at_span(name_span.in_mod(ctx.module)),
+                                    );
+                                    return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        ctx.compiler.errors.emit_err(
+                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                        );
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    }
+                }
+            }
+        }
+        Expr::TupleIdx { .. } => todo!("lvalue tuple indexing"),
+        Expr::Index { .. } => todo!("lvalue indexing"),
+        _ => {
+            ctx.compiler
+                .errors
+                .emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
+            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+        }
+    }
+}
+
+fn def_lvalue(ctx: &mut Ctx, expr: ExprId, def: Def) -> (LValue, LocalTypeId) {
+    match def {
+        Def::Global(module, id) => {
+            // PERF: cloning type
+            let global_ty = ctx.compiler.get_checked_global(module, id).0.clone();
+            let ty = ctx.type_from_resolved(&global_ty, LocalTypeIds::EMPTY);
+            let ty = ctx.hir.types.add_info_or_idx(ty);
+            (LValue::Global(module, id), ty)
+        }
+        Def::Invalid => (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid)),
         _ => {
             ctx.compiler
                 .errors

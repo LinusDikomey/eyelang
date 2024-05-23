@@ -1130,6 +1130,31 @@ pub enum ResolvedTypeDef {
 pub struct ResolvedStructDef {
     pub fields: Vec<(String, Type)>,
 }
+impl ResolvedStructDef {
+    /// get the index of a field while getting the element types of all fields
+    pub fn get_indexed_field(
+        &self,
+        ctx: &mut crate::check::Ctx,
+        generics: LocalTypeIds,
+        name: &str,
+    ) -> (Option<(u32, LocalTypeId)>, LocalTypeIds) {
+        // PERF: Every time we index a struct, all fields are mapped to TypeInfo's
+        // again. This could be improved by caching structs somehow ?? or by putting
+        // the fields along the TypeDef (easier but would make TypeDef very large,
+        // similar problem for enums and extra solution required).
+        let elem_types = ctx.hir.types.add_multiple_unknown(self.fields.len() as _);
+        let mut indexed_field = None;
+        let fields = self.fields.iter().zip(0..).zip(elem_types.iter());
+        for (((field_name, ty), index), r) in fields {
+            let ty = ctx.type_from_resolved(ty, generics);
+            if field_name == name {
+                indexed_field = Some((index, r));
+            }
+            ctx.hir.types.replace(r, ty);
+        }
+        (indexed_field, elem_types)
+    }
+}
 
 pub struct ResolvableTypeDef {
     module: ModuleId,
