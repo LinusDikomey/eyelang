@@ -110,7 +110,6 @@ unsafe fn build_func(
     globals: &[LLVMValueRef],
     */
 ) {
-    eprintln!("----- building func {}", func.name);
     let blocks: Vec<_> = (0..ir.blocks.len())
         .map(|_| core::LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE))
         .collect();
@@ -244,7 +243,6 @@ unsafe fn build_func(
                 let val = get_ref(&instructions, data.bin_op.1);
                 if let Some(val) = val {
                     if let Some(ptr) = get_ref(&instructions, data.bin_op.0) {
-                        eprintln!("BUILDING STORE {val:?} {:?}", data.bin_op);
                         LLVMBuildStore(builder, val, ptr);
                     }
                 }

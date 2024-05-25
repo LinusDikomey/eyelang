@@ -2,10 +2,12 @@ use id::ModuleId;
 use types::Type;
 
 use crate::{
+    error::Error,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
     },
+    type_table::TypeTable,
     Compiler, Def,
 };
 
@@ -69,14 +71,50 @@ pub fn def_expr(
             Def::Type(Type::DefId { id, generics: None })
         }
         &Expr::Primitive { primitive, .. } => Def::Type(Type::Primitive(primitive)),
-        expr => {
-            /*
-            let mut ir_types = ir::IrTypes::new();
-            let mut ir = ir::builder::IrBuilder::new(&mut ir_types);
+        _ => {
+            let mut types = TypeTable::new();
+            let expected = types.add_unknown();
+            let (hir, types) =
+                crate::check::check(compiler, ast, module, types, scope, [], expr, expected);
             let mut to_generate = Vec::new();
-            crate::irgen::lower_function(compiler, &mut to_generate, src, name, checked, generics)
-            */
-            todo!("generate and evaluate ir for {expr:?}")
+            let mut ir_types = ir::IrTypes::new();
+            let builder = ir::builder::IrBuilder::new(&mut ir_types);
+            let mut vars = vec![(ir::Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
+            let ir = crate::irgen::lower_hir(
+                builder,
+                &hir,
+                &types,
+                compiler,
+                &mut to_generate,
+                ir::TypeRefs::EMPTY,
+                &mut vars,
+            );
+            use ir::Val;
+            match ir::eval(&ir, &ir_types, &[]) {
+                Ok(val) => {
+                    let const_val = match val {
+                        Val::Invalid => panic!("internal error during evaluation occured"),
+                        Val::Unit => ConstValue::Unit,
+                        Val::Int(n) => ConstValue::Int(n),
+                        Val::F32(n) => ConstValue::Float(n as f64),
+                        Val::F64(n) => ConstValue::Float(n),
+                        Val::StackPointer(_) => {
+                            compiler.errors.emit_err(
+                                Error::EvalReturnedStackPointer
+                                    .at_span(ast[expr].span(ast).in_mod(module)),
+                            );
+                            return Def::Invalid;
+                        }
+                    };
+                    Def::ConstValue(compiler.add_const_value(const_val))
+                }
+                Err(err) => {
+                    compiler.errors.emit_err(
+                        Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)),
+                    );
+                    Def::Invalid
+                }
+            }
         }
     }
 }

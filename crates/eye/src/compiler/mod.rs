@@ -11,7 +11,7 @@ use crate::{
     check,
     error::{CompileError, Error, Errors},
     eval::{self, ConstValue},
-    hir::{HIRBuilder, HIR},
+    hir::HIR,
     irgen,
     parser::{
         self,
@@ -551,36 +551,22 @@ impl Compiler {
                 let varargs = signature.varargs;
 
                 let (body, types) = if let Some(body) = function.body {
-                    let mut hir = HIRBuilder::new(types);
-                    let parameter_variables = signature
+                    let args = signature
                         .args
                         .iter()
-                        .map(|(name, _ty)| name)
-                        .zip(param_types.iter())
-                        .map(|(name, ty)| (name.clone(), hir.add_var(ty)))
-                        .collect();
-                    let mut scope = LocalScope {
-                        parent: None,
-                        variables: parameter_variables,
+                        .map(|(name, _ty)| name.clone())
+                        .zip(param_types.iter());
+
+                    let (hir, types) = check::check(
+                        self,
+                        &ast,
                         module,
-                        static_scope: Some(function.scope),
-                    };
-                    let mut check_ctx = check::Ctx {
-                        compiler: self,
-                        ast: &ast,
-                        module,
-                        hir,
-                        deferred_exhaustions: Vec::new(),
-                        deferred_casts: Vec::new(),
-                    };
-                    let root = check::expr::check(
-                        &mut check_ctx,
+                        types,
+                        function.scope,
+                        args,
                         body,
-                        &mut scope,
-                        return_type,
                         return_type,
                     );
-                    let (hir, types) = check_ctx.finish(root);
                     (Some(hir), types)
                 } else {
                     (None, types)

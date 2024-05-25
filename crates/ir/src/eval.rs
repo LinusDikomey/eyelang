@@ -1,7 +1,7 @@
 use crate::{
     ir_types::{ConstIrType, IrType, IrTypes},
     layout::{type_layout, Layout},
-    BlockIndex, Function, FunctionIr, Ref,
+    BlockIndex, FunctionIr, Ref,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -54,18 +54,16 @@ impl StackMem {
 #[derive(Clone, Copy, Debug)]
 pub struct StackAddr(u32);
 
-pub static mut BACKWARDS_JUMP_LIMIT: usize = 1000;
+pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     InfiniteLoop,
 }
 
-pub fn eval(function: &Function, params: &[Val]) -> Result<Val, Error> {
+pub fn eval(ir: &FunctionIr, types: &IrTypes, params: &[Val]) -> Result<Val, Error> {
     // TODO: validate params
     let mut stack = StackMem::new();
-    let ir = function.ir.as_ref().expect("can't eval extern function");
-    let types = &function.types;
     let val = unsafe { eval_internal(ir, types, params, &mut stack) }?;
     assert!(
         !matches!(val, Val::Invalid),
@@ -227,9 +225,7 @@ unsafe fn eval_internal(
                     .to_vec();
                 todo!()
             }
-            super::Tag::Call => {
-                todo!();
-            }
+            super::Tag::Call => todo!("implement calls in ir evaluation"),
             super::Tag::Neg => match get_ref(&values, inst.data.un_op) {
                 Val::Invalid => Val::Invalid,
                 Val::Int(val) => Val::Int(-(val as i64) as u64),

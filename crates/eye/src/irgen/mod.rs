@@ -52,22 +52,15 @@ pub fn lower_function(
             builder.build_store(vars[i].0, param_val);
         }
 
-        let mut noreturn = false;
-
-        let mut ctx = Ctx {
+        lower_hir(
+            builder,
+            hir,
+            &checked.types,
             compiler,
             to_generate,
-            hir,
-            types: &checked.types,
             generics,
-            builder,
-            vars: &mut vars,
-        };
-        let val = lower(&mut ctx, hir.root_id(), &mut noreturn);
-        if !noreturn {
-            ctx.builder.terminate_block(Terminator::Ret(val));
-        }
-        ctx.builder.finish()
+            &mut vars,
+        )
     });
     ir::Function {
         name,
@@ -77,6 +70,33 @@ pub fn lower_function(
         varargs: checked.varargs,
         ir,
     }
+}
+
+pub fn lower_hir(
+    builder: ir::builder::IrBuilder,
+    hir: &HIR,
+    hir_types: &TypeTable,
+    compiler: &mut Compiler,
+    to_generate: &mut Vec<FunctionToGenerate>,
+    generics: TypeRefs,
+    vars: &mut [(Ref, ir::TypeRef)],
+) -> ir::FunctionIr {
+    let mut noreturn = false;
+
+    let mut ctx = Ctx {
+        compiler,
+        to_generate,
+        hir,
+        types: hir_types,
+        generics,
+        builder,
+        vars,
+    };
+    let val = lower(&mut ctx, hir.root_id(), &mut noreturn);
+    if !noreturn {
+        ctx.builder.terminate_block(Terminator::Ret(val));
+    }
+    ctx.builder.finish()
 }
 
 struct Ctx<'a> {

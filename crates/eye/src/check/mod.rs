@@ -12,12 +12,46 @@ use crate::{
     compiler::Signature,
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Node, HIR},
-    parser::ast::{Ast, ExprId},
+    parser::ast::{Ast, ExprId, ScopeId},
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     Compiler,
 };
 
 use self::exhaust::Exhaustion;
+
+pub fn check(
+    compiler: &mut Compiler,
+    ast: &Ast,
+    module: ModuleId,
+    types: TypeTable,
+    scope: ScopeId,
+    args: impl IntoIterator<Item = (String, LocalTypeId)>,
+    expr: ExprId,
+    expected: LocalTypeId,
+) -> (HIR, TypeTable) {
+    let mut hir = HIRBuilder::new(types);
+    let variables = args
+        .into_iter()
+        .map(|(name, ty)| (name, hir.add_var(ty)))
+        .collect();
+    let mut scope = crate::compiler::LocalScope {
+        parent: None,
+        variables,
+        module,
+        static_scope: Some(scope),
+    };
+    let mut check_ctx = Ctx {
+        compiler,
+        ast,
+        module,
+        hir,
+        deferred_exhaustions: Vec::new(),
+        deferred_casts: Vec::new(),
+    };
+    let root = expr::check(&mut check_ctx, expr, &mut scope, expected, expected);
+    let (hir, types) = check_ctx.finish(root);
+    (hir, types)
+}
 
 pub struct Ctx<'a> {
     pub compiler: &'a mut Compiler,

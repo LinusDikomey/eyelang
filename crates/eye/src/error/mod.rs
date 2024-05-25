@@ -205,6 +205,8 @@ pub enum Error {
         to: String,
     },
     TrivialCast,
+    EvalFailed(ir::Error),
+    EvalReturnedStackPointer,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -291,6 +293,12 @@ impl Error {
             }
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
+            Error::EvalFailed(ir::Error::InfiniteLoop) => {
+                "evaluation failed due to an infinite loop"
+            }
+            Error::EvalReturnedStackPointer => {
+                "evaluation returned an invalid pointer to the stack"
+            }
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -373,6 +381,12 @@ impl Error {
             }
             Error::TrivialCast => {
                 cformat!("#c<hint>: remove this cast")
+            }
+            Error::EvalFailed(ir::Error::InfiniteLoop) => {
+                cformat!("#c<hint>: configuring the backwards jump limit \
+                    (currently always #blue<{}>) will be configurable in the future",
+                    ir::BACKWARDS_JUMP_LIMIT
+                )
             }
             _ => return None
         })
