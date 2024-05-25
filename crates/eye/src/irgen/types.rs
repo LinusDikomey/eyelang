@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use id::TypeId;
 use ir::{IrType, IrTypes, TypeRefs};
 use types::Type;
@@ -62,16 +64,50 @@ pub fn get_def(
     generics: TypeRefs,
 ) -> IrType {
     let resolved = compiler.get_resolved_type_def(def);
-    match &resolved.def {
+    let def = Rc::clone(&resolved.def);
+    match &*def {
         ResolvedTypeDef::Struct(def) => {
-            // PERF: cloning struct def
-            let def = def.clone();
             let elems = ir_types.add_multiple((0..def.fields.len()).map(|_| IrType::Unit));
             for ((_, field), r) in def.fields.iter().zip(elems.iter()) {
                 let ty = get(compiler, ir_types, field, generics);
                 ir_types.replace(r, ty)
             }
             IrType::Tuple(elems)
+        }
+        ResolvedTypeDef::Enum(def) => {
+            let mut accumulated_layout = ir::Layout::EMPTY;
+            let ordinal_type = int_from_variant_count(def.variants.len() as u32);
+            for (_variant_name, args) in &*def.variants {
+                let elems = ir_types.add_multiple((0..args.len() + 1).map(|_| IrType::Unit));
+                let mut elem_iter = elems.iter();
+                ir_types.replace(elem_iter.next().unwrap(), ordinal_type);
+                for (arg, r) in args.iter().zip(elem_iter) {
+                    let elem = get(compiler, ir_types, arg, generics);
+                    ir_types.replace(r, elem);
+                }
+                let variant_layout = ir::type_layout(IrType::Tuple(elems), ir_types);
+                accumulated_layout.accumulate_variant(variant_layout);
+            }
+            let base_type = match accumulated_layout.align.get() {
+                1 => IrType::U8,
+                2 => IrType::U16,
+                4 => IrType::U32,
+                8 => IrType::U64,
+                16 => IrType::U128,
+                _ => unreachable!(),
+            };
+            let base_type_count = accumulated_layout.size / accumulated_layout.align.get();
+            let u8_count = accumulated_layout.size % accumulated_layout.align.get();
+            debug_assert!(
+                base_type_count > 0,
+                "can't represent a type with larger align than size"
+            );
+            let final_layout = ir_types.add_multiple(
+                std::iter::repeat(base_type)
+                    .take(base_type_count as usize)
+                    .chain(std::iter::repeat(IrType::U8).take(u8_count as usize)),
+            );
+            IrType::Tuple(final_layout)
         }
     }
 }
@@ -119,6 +155,7 @@ pub fn get_from_info(
         | TypeInfo::FunctionItem { .. }
         | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }
+        | TypeInfo::EnumVariantItem { .. }
         | TypeInfo::Invalid => panic!("incomplete type during lowering to ir: {ty:?}"),
     }
 }
@@ -136,6 +173,16 @@ pub fn get_multiple_infos(
         ir_types.replace(r, ty);
     }
     refs
+}
+
+pub fn int_from_variant_count(count: u32) -> IrType {
+    match count {
+        0 | 1 => IrType::Unit,
+        2 => IrType::U1,
+        3..256 => IrType::U8,
+        256..=0xFF_FF => IrType::U16,
+        _ => IrType::U32,
+    }
 }
 
 pub fn get_primitive(p: types::Primitive) -> IrType {

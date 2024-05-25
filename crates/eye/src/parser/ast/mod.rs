@@ -238,7 +238,7 @@ impl TypeDef {
     pub fn span(&self, scopes: &[Scope]) -> TSpan {
         match self {
             Self::Struct(struct_def) => scopes[struct_def.scope.idx()].span,
-            Self::Enum(enum_def) => enum_def.span,
+            Self::Enum(enum_def) => scopes[enum_def.scope.idx()].span,
         }
     }
 }
@@ -350,14 +350,26 @@ impl StructDefinition {
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
     pub name: String,
-    pub generics: Vec<GenericDef>,
-    pub variants: Vec<(TSpan, String, Vec<UnresolvedType>)>,
+    pub generics: Box<[GenericDef]>,
+    pub scope: ScopeId,
+    pub variants: Box<[EnumVariantDefinition]>,
     pub methods: DHashMap<String, FunctionId>,
-    pub span: TSpan,
 }
 impl EnumDefinition {
     pub fn generic_count(&self) -> u8 {
         self.generics.len() as u8
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantDefinition {
+    pub name_span: TSpan,
+    pub args: Box<[UnresolvedType]>,
+    pub end: u32,
+}
+impl EnumVariantDefinition {
+    pub fn span(&self) -> TSpan {
+        TSpan::new(self.name_span.start, self.end)
     }
 }
 

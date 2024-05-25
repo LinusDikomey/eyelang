@@ -43,7 +43,8 @@ impl Layout {
     }
 
     pub fn accumulate_variant(&mut self, variant: Layout) {
-        self.align = self.align.max(variant.align)
+        self.size = self.size.max(variant.size);
+        self.align = self.align.max(variant.align);
     }
 
     pub fn array(element: Self, size: u64) -> Self {

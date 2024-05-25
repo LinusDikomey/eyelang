@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{
     compiler::{Def, LocalItem, LocalScope, ResolvedTypeDef},
     error::Error,
@@ -27,6 +29,7 @@ pub fn check(
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }
+        Expr::Hole(_) => (LValue::Ignore, ctx.hir.types.add_unknown()),
         &Expr::UnOp(_, UnOp::Deref, inner) => {
             let pointee = ctx.hir.types.add_unknown();
             let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
@@ -68,9 +71,11 @@ pub fn check(
                     }
                     TypeInfo::TypeDef(id, generics) => {
                         let ty = ctx.compiler.get_resolved_type_def(id);
-                        match &ty.def {
+                        // TODO differentiate between nonexistant member and 'can't assign to
+                        // member' in the case of methods, enum variants etc.
+                        let def = Rc::clone(&ty.def);
+                        match &*def {
                             ResolvedTypeDef::Struct(struct_) => {
-                                let struct_ = struct_.clone(); // PERF: cloning struct
                                 let (indexed_field, elem_types) =
                                     struct_.get_indexed_field(ctx, generics, name);
                                 if let Some((index, field_ty)) = indexed_field {
@@ -87,17 +92,24 @@ pub fn check(
                                     );
                                 } else {
                                     ctx.compiler.errors.emit_err(
-                                        Error::NonexistantMember
+                                        Error::NonexistantMember(None)
                                             .at_span(name_span.in_mod(ctx.module)),
                                     );
                                     return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
                                 }
                             }
+                            ResolvedTypeDef::Enum(_) => {
+                                ctx.compiler.errors.emit_err(
+                                    Error::NonexistantMember(None)
+                                        .at_span(name_span.in_mod(ctx.module)),
+                                );
+                                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                            }
                         }
                     }
                     _ => {
                         ctx.compiler.errors.emit_err(
-                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                            Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)),
                         );
                         return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
                     }

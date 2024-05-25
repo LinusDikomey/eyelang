@@ -1,21 +1,24 @@
-use std::ops::Index;
+use std::{ops::Index, rc::Rc};
 
 use id::{ModuleId, TypeId};
 use span::Span;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::Def,
-    error::{Error, Errors},
+    check::expr::int_ty_from_variant_count,
+    compiler::{Def, ResolvedTypeDef},
+    error::Error,
     parser::ast,
     Compiler,
 };
 
 id::id!(LocalTypeId);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TypeTable {
     types: Vec<TypeInfoOrIdx>,
+    enums: Vec<InferredEnum>,
+    variants: Vec<InferredEnumVariant>,
 }
 impl Index<LocalTypeId> for TypeTable {
     type Output = TypeInfo;
@@ -31,9 +34,20 @@ impl Index<LocalTypeId> for TypeTable {
         }
     }
 }
+impl Index<VariantId> for TypeTable {
+    type Output = InferredEnumVariant;
+
+    fn index(&self, index: VariantId) -> &Self::Output {
+        &self.variants[index.idx()]
+    }
+}
 impl TypeTable {
     pub fn new() -> Self {
-        Self { types: Vec::new() }
+        Self {
+            types: Vec::new(),
+            enums: Vec::new(),
+            variants: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, info: TypeInfo) -> LocalTypeId {
@@ -53,6 +67,58 @@ impl TypeTable {
         let id = LocalTypeId(self.types.len() as _);
         self.types.push(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown));
         id
+    }
+
+    pub fn add_enum_type(&mut self) -> InferredEnumId {
+        let id = InferredEnumId(self.enums.len() as u32);
+        self.enums.push(InferredEnum {
+            variants: Vec::new(),
+        });
+        id
+    }
+
+    pub fn get_enum_variants(&self, enum_id: InferredEnumId) -> &[VariantId] {
+        &self.enums[enum_id.idx()].variants
+    }
+
+    pub fn append_enum_variant(
+        &mut self,
+        id: InferredEnumId,
+        name: Box<str>,
+        args: LocalTypeIds,
+    ) -> VariantId {
+        debug_assert!(args.count != 0, "enum args should contain ordinal type");
+        debug_assert!(
+            matches!(
+                self.types[args.start as usize],
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)
+            ),
+            "ordinal should not be filled in yet"
+        );
+        let variants = &mut self.enums[id.idx()].variants;
+        if let Some(&first) = variants.first() {
+            let ordinal_ty = int_ty_from_variant_count((variants.len() + 1) as u32);
+            let idx = self.variants[first.0 as usize].args.start;
+            // update the ordinal type because it could have changed with the increased variant
+            // count
+            self.types[idx as usize] = TypeInfoOrIdx::TypeInfo(ordinal_ty);
+            // make the ordinal type of the new variant point to the type
+            self.types[args.iter().next().unwrap().idx()] = TypeInfoOrIdx::Idx(LocalTypeId(idx));
+        } else {
+            // we are adding the first variant so we can fill in the ordinal type into the first
+            // arg (as unit for now since only one variant is present)
+            self.types[args.start as usize] =
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Primitive(Primitive::Unit));
+        }
+        let ordinal = variants.len() as u32;
+        let variant_id = VariantId(self.variants.len() as _);
+        self.variants.push(InferredEnumVariant {
+            name,
+            ordinal,
+            args,
+        });
+        variants.push(variant_id);
+        variant_id
     }
 
     pub fn to_resolved(&self, info: TypeInfo) -> Type {
@@ -106,12 +172,25 @@ impl TypeTable {
         LocalTypeIds { start, count }
     }
 
-    pub fn replace(&mut self, id: LocalTypeId, info_or_idx: TypeInfoOrIdx) {
+    pub fn replace(&mut self, id: LocalTypeId, info_or_idx: impl Into<TypeInfoOrIdx>) {
+        let info_or_idx = info_or_idx.into();
         debug_assert!(
             !matches!(info_or_idx, TypeInfoOrIdx::Idx(idx) if idx == id),
             "created recursive reference",
         );
         self.types[id.idx()] = info_or_idx;
+    }
+
+    pub fn replace_value(&mut self, mut id: LocalTypeId, info_or_idx: impl Into<TypeInfoOrIdx>) {
+        loop {
+            match &mut self.types[id.idx()] {
+                TypeInfoOrIdx::Idx(new_id) => id = *new_id,
+                value @ TypeInfoOrIdx::TypeInfo(_) => {
+                    *value = info_or_idx.into();
+                    break;
+                }
+            }
+        }
     }
 
     pub fn generic_info_from_resolved(&mut self, compiler: &mut Compiler, ty: &Type) -> TypeInfo {
@@ -267,7 +346,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         mut b: LocalTypeId,
-        errors: &mut Errors,
+        compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
         let a_ty = loop {
@@ -287,18 +366,25 @@ impl TypeTable {
             return;
         }
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-        let new = unify(a_ty, b_ty, self).unwrap_or_else(|| {
+        let new = unify(a_ty, b_ty, self, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
             self.type_to_string(a_ty, &mut expected);
             let mut found = String::new();
             self.type_to_string(b_ty, &mut found);
-            errors.emit_err(Error::MismatchedType { expected, found }.at_span(span()));
+            compiler
+                .errors
+                .emit_err(Error::MismatchedType { expected, found }.at_span(span()));
             TypeInfo::Invalid
         });
         self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(new);
     }
 
-    fn try_unify(&mut self, mut a: LocalTypeId, mut b: LocalTypeId) -> bool {
+    fn try_unify(
+        &mut self,
+        mut a: LocalTypeId,
+        mut b: LocalTypeId,
+        compiler: &mut Compiler,
+    ) -> bool {
         let original_b = b;
         let a_ty = loop {
             match self.types[a.idx()] {
@@ -313,7 +399,7 @@ impl TypeTable {
             }
         };
         a == b
-            || unify(a_ty, b_ty, self)
+            || unify(a_ty, b_ty, self, compiler)
                 .map(|unified| {
                     self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
@@ -324,26 +410,40 @@ impl TypeTable {
 
     pub fn specify(
         &mut self,
-        mut a: LocalTypeId,
+        a: LocalTypeId,
         info: TypeInfo,
-        errors: &mut Errors,
+        compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
+        if let Err((a, b)) = self.try_specify(a, info, compiler) {
+            let mut expected = String::new();
+            self.type_to_string(a, &mut expected);
+            let mut found = String::new();
+            self.type_to_string(b, &mut found);
+            compiler
+                .errors
+                .emit_err(Error::MismatchedType { expected, found }.at_span(span()));
+        }
+    }
+
+    pub fn try_specify(
+        &mut self,
+        mut a: LocalTypeId,
+        info: TypeInfo,
+        compiler: &mut Compiler,
+    ) -> Result<(), (TypeInfo, TypeInfo)> {
         let a_ty = loop {
             match self.types[a.idx()] {
                 TypeInfoOrIdx::Idx(idx) => a = idx,
                 TypeInfoOrIdx::TypeInfo(info) => break info,
             }
         };
-        let info = unify(a_ty, info, self).unwrap_or_else(|| {
-            let mut expected = String::new();
-            self.type_to_string(a_ty, &mut expected);
-            let mut found = String::new();
-            self.type_to_string(info, &mut found);
-            errors.emit_err(Error::MismatchedType { expected, found }.at_span(span()));
-            TypeInfo::Invalid
-        });
+        let Some(info) = unify(a_ty, info, self, compiler) else {
+            self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
+            return Err((a_ty, info));
+        };
         self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(info);
+        Ok(())
     }
 
     pub fn invalidate(&mut self, mut ty: LocalTypeId) {
@@ -387,7 +487,7 @@ impl TypeTable {
                     s.push_str("_]");
                 }
             }
-            TypeInfo::Enum { .. } => s.push_str("<enum>"), // TODO: display variants
+            TypeInfo::Enum(id) => self.enum_to_string(s, &self.enums[id.idx()].variants),
             TypeInfo::Tuple(members) => {
                 s.push('(');
                 let mut first = true;
@@ -419,9 +519,32 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => {
                 s.push_str("<method item>");
             }
+            TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
             TypeInfo::Generic(i) => write!(s, "<generic #{i}>").unwrap(),
             TypeInfo::Invalid => s.push_str("<invalid>"),
         }
+    }
+
+    pub fn enum_to_string(&self, s: &mut String, variants: &[VariantId]) {
+        s.push_str("enum { ");
+        for (i, variant) in variants.iter().enumerate() {
+            let variant = &self.variants[variant.idx()];
+            if i != 0 {
+                s.push_str(", ");
+            }
+            s.push_str(&variant.name);
+            if variant.args.count != 1 {
+                s.push('(');
+                for (i, arg) in variant.args.iter().skip(1).enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    self.type_to_string(self[arg], s);
+                }
+                s.push(')');
+            }
+        }
+        s.push_str(" }");
     }
 
     pub fn get_info_or_idx(&self, info_or_idx: TypeInfoOrIdx) -> TypeInfo {
@@ -444,8 +567,23 @@ pub enum TypeInfoOrIdx {
     TypeInfo(TypeInfo),
     Idx(LocalTypeId),
 }
+impl From<TypeInfo> for TypeInfoOrIdx {
+    fn from(value: TypeInfo) -> Self {
+        Self::TypeInfo(value)
+    }
+}
+impl From<LocalTypeId> for TypeInfoOrIdx {
+    fn from(value: LocalTypeId) -> Self {
+        Self::Idx(value)
+    }
+}
 
-fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
+fn unify(
+    a: TypeInfo,
+    b: TypeInfo,
+    types: &mut TypeTable,
+    compiler: &mut Compiler,
+) -> Option<TypeInfo> {
     use types::Primitive as P;
     use TypeInfo::*;
     Some(match (a, b) {
@@ -459,23 +597,67 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
         (TypeDef(id_a, generics_a), TypeDef(id_b, generics_b)) if id_a == id_b => {
             debug_assert_eq!(generics_a.count, generics_b.count);
             for (a, b) in generics_a.iter().zip(generics_b.iter()) {
-                if !types.try_unify(a, b) {
+                if !types.try_unify(a, b, compiler) {
                     return None;
                 }
             }
             a
         }
-        (TypeDef(id, generics), Enum { idx, count })
-        | (Enum { idx, count }, TypeDef(id, generics)) => {
-            _ = (id, generics, idx, count);
-            todo!("unify with enums (requires symbol access)")
+        (TypeDef(id, generics), Enum(enum_id)) | (Enum(enum_id), TypeDef(id, generics)) => {
+            let ty = compiler.get_resolved_type_def(id);
+            let def = Rc::clone(&ty.def);
+            let ResolvedTypeDef::Enum(def) = &*def else {
+                return None;
+            };
+            let variants = &types.enums[enum_id.idx()];
+            if let Some(&first_variant) = variants.variants.first() {
+                let ordinal_type = types[first_variant].args.iter().next().unwrap();
+                debug_assert!(matches!(
+                    types.types[ordinal_type.idx()],
+                    TypeInfoOrIdx::TypeInfo(_)
+                ));
+                types.types[ordinal_type.idx()] =
+                    TypeInfoOrIdx::TypeInfo(int_ty_from_variant_count(def.variants.len() as u32));
+            }
+            // iterate by index because we need to borrow types mutably during the loop
+            for variant_index in 0..variants.variants.len() {
+                let variant = types.enums[enum_id.idx()].variants[variant_index];
+                let variant = &mut types.variants[variant.idx()];
+                // TODO: make it possible to return specific errors here so it's more clear when an
+                // enum doesn't match a definition
+                let Some((declared_ordinal, declared_args)) = def.get_by_name(&variant.name) else {
+                    eprintln!("enum variant {} not found", variant.name);
+                    return None;
+                };
+                variant.ordinal = declared_ordinal;
+                // add one because the inferred enum args contain the ordinal type
+                if variant.args.count != declared_args.len() as u32 + 1 {
+                    return None;
+                }
+                for (arg, declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
+                    // TODO: a method like specify_from_generic_type would probably be better since
+                    // this instantiates TypeInfos for all variant args
+                    let declared = types.from_generic_resolved(compiler, declared_arg, generics);
+                    let ok = match declared {
+                        TypeInfoOrIdx::TypeInfo(info) => {
+                            types.try_specify(arg, info, compiler).is_ok()
+                        }
+                        TypeInfoOrIdx::Idx(idx) => types.try_unify(arg, idx, compiler),
+                    };
+                    dbg!(ok);
+                    if !ok {
+                        return None;
+                    }
+                }
+            }
+            TypeInfo::TypeDef(id, generics)
         }
-        (Enum { idx: a, count: c_a }, Enum { idx: b, count: c_b }) => {
-            _ = (a, c_a, b, c_b);
+        (Enum(a), Enum(b)) => {
+            _ = (a, b);
             todo!("unify enums")
         }
         (Pointer(a), Pointer(b)) => {
-            if !types.try_unify(a, b) {
+            if !types.try_unify(a, b, compiler) {
                 return None;
             }
             Pointer(a)
@@ -490,7 +672,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
                 count: c_b,
             },
         ) => {
-            if !types.try_unify(a, b) {
+            if !types.try_unify(a, b, compiler) {
                 return None;
             }
             let count = match (c_a, c_b) {
@@ -512,14 +694,14 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
                 return None;
             }
             for (a, b) in a.iter().zip(b.iter()) {
-                if !types.try_unify(a, b) {
+                if !types.try_unify(a, b, compiler) {
                     return None;
                 }
             }
             Tuple(a)
         }
         (TypeItem { ty: a_ty }, TypeItem { ty: b_ty }) => {
-            if !types.try_unify(a_ty, b_ty) {
+            if !types.try_unify(a_ty, b_ty, compiler) {
                 return None;
             }
             a
@@ -541,7 +723,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
                 "invalid generics count, incorrect type info constructed"
             );
             for (a, b) in a_g.iter().zip(b_g.iter()) {
-                if !types.try_unify(a, b) {
+                if !types.try_unify(a, b, compiler) {
                     return None;
                 }
             }
@@ -560,7 +742,7 @@ fn unify(a: TypeInfo, b: TypeInfo, types: &mut TypeTable) -> Option<TypeInfo> {
             },
         ) if a_m == b_m && a_f == b_f => {
             for (a, b) in a_g.iter().zip(b_g.iter()) {
-                types.try_unify(a, b);
+                types.try_unify(a, b, compiler);
             }
             a
         }
@@ -598,10 +780,7 @@ pub enum TypeInfo {
         element: LocalTypeId,
         count: Option<u32>,
     },
-    Enum {
-        idx: u32,
-        count: u32,
-    },
+    Enum(InferredEnumId),
     Tuple(LocalTypeIds),
     TypeItem {
         ty: LocalTypeId,
@@ -617,6 +796,13 @@ pub enum TypeInfo {
         function: ast::FunctionId,
         generics: LocalTypeIds,
     },
+    EnumVariantItem {
+        enum_type: TypeId,
+        generics: LocalTypeIds,
+        ordinal: u32,
+        /// always includes the ordinal type as it's first type
+        arg_types: LocalTypeIds,
+    },
     Generic(u8),
     Invalid,
 }
@@ -624,4 +810,19 @@ impl From<Primitive> for TypeInfo {
     fn from(value: Primitive) -> Self {
         TypeInfo::Primitive(value)
     }
+}
+
+id::id!(InferredEnumId);
+id::id!(VariantId);
+
+#[derive(Debug)]
+pub struct InferredEnum {
+    variants: Vec<VariantId>,
+}
+
+#[derive(Debug)]
+pub struct InferredEnumVariant {
+    pub name: Box<str>,
+    pub ordinal: u32,
+    pub args: LocalTypeIds,
 }

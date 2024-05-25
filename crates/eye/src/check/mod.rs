@@ -40,17 +40,15 @@ impl<'a> Ctx<'a> {
         info: impl Into<TypeInfo>,
         span: impl FnOnce(&Ast) -> TSpan,
     ) {
-        self.hir
-            .types
-            .specify(ty, info.into(), &mut self.compiler.errors, || {
-                span(self.ast).in_mod(self.module)
-            })
+        self.hir.types.specify(ty, info.into(), self.compiler, || {
+            span(self.ast).in_mod(self.module)
+        })
     }
 
     fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
-        self.hir.types.unify(a, b, &mut self.compiler.errors, || {
-            span(self.ast).in_mod(self.module)
-        })
+        self.hir
+            .types
+            .unify(a, b, self.compiler, || span(self.ast).in_mod(self.module))
     }
 
     fn invalidate(&mut self, ty: LocalTypeId) {
@@ -61,6 +59,19 @@ impl<'a> Ctx<'a> {
         self.hir
             .types
             .from_generic_resolved(self.compiler, ty, generics)
+    }
+
+    pub fn types_from_resolved<'t>(
+        &mut self,
+        types: impl ExactSizeIterator<Item = &'t Type>,
+        generics: LocalTypeIds,
+    ) -> LocalTypeIds {
+        let hir_types = self.hir.types.add_multiple_unknown(types.len() as u32);
+        for (r, ty) in hir_types.iter().zip(types) {
+            let ty = self.type_from_resolved(&ty, generics);
+            self.hir.types.replace(r, ty);
+        }
+        hir_types
     }
 
     fn auto_ref_deref(

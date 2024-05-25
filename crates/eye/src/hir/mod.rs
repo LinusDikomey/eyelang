@@ -6,7 +6,7 @@ use types::{FloatType, IntType, Primitive};
 use crate::{
     compiler::VarId,
     parser::ast::{FunctionId, GlobalId},
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable, VariantId},
 };
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -88,6 +88,7 @@ impl HIR {
                 eprint!(")");
             }
             Node::StringLiteral(s) => eprint!("(string {s:?})"),
+            Node::InferredEnumOrdinal(id) => eprint!("(enum-ordinal {})", id.0),
             &Node::Declare { pattern } => {
                 eprint!("(decl ");
                 self.dump_pattern(pattern, types);
@@ -326,7 +327,11 @@ impl HIR {
     fn dump_pattern(&self, pattern: PatternId, types: &TypeTable) {
         match self[pattern] {
             Pattern::Invalid => eprint!("<invalid>"),
-            Pattern::Variable(id) => eprint!("(var {})", id.0),
+            Pattern::Variable(id) => {
+                eprint!("(var {}): ", id.0);
+                let var_ty = self.vars[id.idx()];
+                types.dump_type(var_ty);
+            }
             Pattern::Ignore => eprint!("_"),
             Pattern::Tuple(ids) => {
                 eprint!("(");
@@ -373,6 +378,7 @@ impl HIR {
         match self[lval] {
             LValue::Invalid => eprint!("(invalid)"),
             LValue::Variable(id) => eprint!("(var {})", id.0),
+            LValue::Ignore => eprint!("(ignore)"),
             LValue::Global(module, id) => eprint!("(global {} {})", module.0, id.0),
             LValue::Deref(val) => {
                 eprint!("(deref ");
@@ -493,6 +499,7 @@ pub enum Node {
         elem_types: LocalTypeIds,
     },
     StringLiteral(String),
+    InferredEnumOrdinal(VariantId),
 
     Declare {
         pattern: PatternId,
@@ -565,6 +572,7 @@ pub enum Node {
 pub enum LValue {
     Invalid,
     Variable(VarId),
+    Ignore,
     Global(ModuleId, GlobalId),
     Deref(NodeId),
     Member {

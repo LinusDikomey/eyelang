@@ -14,7 +14,7 @@ use types::{Primitive, UnresolvedType};
 
 use crate::{
     error::{CompileError, Error, Errors},
-    parser::reader::match_or_unexpected,
+    parser::{ast::EnumVariantDefinition, reader::match_or_unexpected},
 };
 
 use self::{
@@ -494,6 +494,12 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(enum_tok.ty, TokenType::Keyword(Keyword::Enum));
         let generics = self.parse_optional_generics()?;
 
+        let scope = {
+            let generics: &[_] = generics.as_ref().map_or(&[], |(_, generics)| &generics);
+            let scope = ast::Scope::from_generics(scope, self.src, generics, TSpan::MISSING);
+            self.ast.scope(scope)
+        };
+
         self.toks.step_expect(TokenType::LBrace)?;
         let mut variants = Vec::new();
         let mut methods = dmap::new();
@@ -503,15 +509,18 @@ impl<'a> Parser<'a> {
             match p.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
                     p.toks.step_assert(TokenType::LParen);
-                    let mut span = ident.span();
-                    let variant = ident.get_val(p.src).to_owned();
+                    let name_span = ident.span();
                     let mut args = vec![];
-                    span.end = p
+                    let end = p
                         .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
                             p.parse_type().map(|ty| args.push(ty))
                         })?
                         .end;
-                    variants.push((span, variant, args));
+                    variants.push(EnumVariantDefinition {
+                        name_span,
+                        args: args.into_boxed_slice(),
+                        end,
+                    });
                     Ok(Delimit::OptionalIfNewLine)
                 }
                 Some(TokenType::DoubleColon) => {
@@ -531,18 +540,25 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                     // enum variant without arguments
-                    variants.push((ident.span(), ident.get_val(p.src).to_owned(), Vec::new()));
+                    let name_span = ident.span();
+                    variants.push(EnumVariantDefinition {
+                        name_span,
+                        args: Box::new([]),
+                        end: name_span.end,
+                    });
                     Ok(Delimit::OptionalIfNewLine)
                 }
             }
         })?;
 
+        self.ast.get_scope_mut(scope).span = TSpan::new(enum_tok.start, rbrace.end);
+
         Ok(ast::EnumDefinition {
             name,
-            generics: generics.map_or(Vec::new(), |g| g.1),
-            variants,
+            generics: generics.map_or(Box::new([]), |g| g.1.into_boxed_slice()),
+            scope,
+            variants: variants.into_boxed_slice(),
             methods,
-            span: TSpan::new(enum_tok.start, rbrace.end),
         })
     }
 

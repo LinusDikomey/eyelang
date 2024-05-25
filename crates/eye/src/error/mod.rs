@@ -155,7 +155,7 @@ pub enum Error {
         found: u32,
     },
     CantNegateType,
-    NonexistantMember,
+    NonexistantMember(Option<MemberHint>),
     NonexistantEnumVariant,
     TypeMustBeKnownHere,
     MissingMainFile,
@@ -250,7 +250,7 @@ impl Error {
             Error::ExpectedValueFoundHole => "expected a value but found a hole",
             Error::InvalidArgCount { .. } => "invalid argument count",
             Error::CantNegateType => "can't negate this value",
-            Error::NonexistantMember => "member doesn't exist",
+            Error::NonexistantMember(_) => "member doesn't exist",
             Error::NonexistantEnumVariant => "enum variant doesn't exist",
             Error::TypeMustBeKnownHere => "type of value must be known here",
             Error::MissingMainFile => "no main.eye file found",
@@ -321,6 +321,7 @@ impl Error {
                     found
                 )
             }
+            Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint().to_owned()),
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",
                 expected, found
@@ -512,4 +513,20 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         }
     }
     println!();
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MemberHint {
+    InferredEnum,
+}
+impl MemberHint {
+    fn hint(&self) -> &'static str {
+        match self {
+            Self::InferredEnum => {
+                "you are trying to access a member of an inferred enum, \
+                you might have to annotate the type of an explicit enum to be able to access \
+                it's members"
+            }
+        }
+    }
 }

@@ -200,12 +200,13 @@ impl EnumDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("enum {\n");
         let child = c.child();
-        for (_, name, args) in &self.variants {
+        for variant in &*self.variants {
             child.begin_line();
-            child.write_add(name.as_str());
-            if !args.is_empty() {
+            let name = c.src(variant.name_span);
+            child.write_add(name);
+            if !variant.args.is_empty() {
                 child.write_add("(");
-                for (i, arg) in args.iter().enumerate() {
+                for (i, arg) in variant.args.iter().enumerate() {
                     if i != 0 {
                         child.write_add(", ");
                     }

@@ -4,7 +4,7 @@ use types::Type;
 use crate::{
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
-        token::IntLiteral,
+        token::{FloatLiteral, IntLiteral},
     },
     Compiler, Def,
 };
@@ -14,14 +14,16 @@ pub enum ConstValue {
     /// represents an undefined value, for example when a global is not initialized
     Undefined,
     Unit,
-    Number(u64),
+    Int(u64),
+    Float(f64),
 }
 impl ConstValue {
     pub fn dump(&self) {
         match self {
             Self::Undefined => print!("undefined"),
             Self::Unit => print!("()"),
-            Self::Number(n) => print!("{n}"),
+            Self::Int(n) => print!("{n}"),
+            Self::Float(n) => print!("{n}"),
         }
     }
 }
@@ -34,12 +36,16 @@ pub fn def_expr(
     expr: ExprId,
 ) -> Def {
     match &ast[expr] {
-        Expr::IntLiteral(span) => {
-            let lit = IntLiteral::parse(&ast[*span]);
+        &Expr::IntLiteral(span) => {
+            let lit = IntLiteral::parse(&ast[span]);
             let Ok(val) = lit.val.try_into() else {
                 todo!("handle large constants")
             };
-            Def::ConstValue(compiler.add_const_value(ConstValue::Number(val)))
+            Def::ConstValue(compiler.add_const_value(ConstValue::Int(val)))
+        }
+        &Expr::FloatLiteral(span) => {
+            let lit = FloatLiteral::parse(&ast[span]);
+            Def::ConstValue(compiler.add_const_value(ConstValue::Float(lit.val)))
         }
         Expr::Ident { span } => {
             let name = &ast[*span];

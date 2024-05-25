@@ -58,7 +58,8 @@ impl Exhaustion {
     ) -> Option<bool> {
         Some(match self {
             Exhaustion::None => match ty {
-                TypeInfo::Primitive(Primitive::Never) | TypeInfo::Enum { count: 0, .. } => true,
+                TypeInfo::Primitive(Primitive::Never) => true,
+                TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
                 TypeInfo::TypeDef(id, _) => {
                     match compiler.get_resolved_type_def(id) {
                         // TODO: empty enum case

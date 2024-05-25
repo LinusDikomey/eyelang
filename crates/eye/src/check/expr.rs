@@ -13,7 +13,7 @@ use crate::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{AssignType, FloatLiteral, IntLiteral, Operator},
     },
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, VariantId},
 };
 
 use super::{exhaust::Exhaustion, lval, pattern, Ctx};
@@ -126,8 +126,9 @@ pub fn check(
             }
             Node::TupleLiteral { elems, elem_types }
         }
-        Expr::EnumLiteral { .. } => todo!("check enum literals"),
-
+        &Expr::EnumLiteral { span, ident, args } => {
+            check_enum_literal(ctx, scope, expected, return_ty, span, ident, args)
+        }
         &Expr::Function { id } => {
             function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast))
         }
@@ -576,9 +577,10 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
                 ConstValue::Unit => {
                     ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
                 }
-                ConstValue::Number(_) => {
+                ConstValue::Int(_) => {
                     ctx.specify(expected, TypeInfo::Integer, |_| span);
                 }
+                ConstValue::Float(_) => ctx.specify(expected, TypeInfo::Float, |_| span),
             }
             Node::Const {
                 id: const_val,
@@ -590,6 +592,151 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             Node::Invalid
         }
         Def::Global(_, _) => todo!("globals"),
+    }
+}
+
+fn check_enum_literal(
+    ctx: &mut Ctx,
+    scope: &mut LocalScope,
+    expected: LocalTypeId,
+    return_ty: LocalTypeId,
+    span: TSpan,
+    ident: TSpan,
+    args: ExprExtra,
+) -> Node {
+    // Do the type checking manually instead of using `specify`.
+    // This allows skipping construction of unneeded enum variant representations.
+
+    let name = &ctx.ast[ident];
+    let expected_type = || {
+        let mut expected_string = String::new();
+        ctx.hir
+            .types
+            .type_to_string(ctx.hir.types[expected], &mut expected_string);
+        expected_string
+    };
+
+    enum OrdinalType {
+        Inferred(VariantId),
+        Known(u32),
+    }
+    let res =
+        match ctx.hir.types[expected] {
+            TypeInfo::Invalid => {
+                for arg in args.into_iter() {
+                    let ty = ctx.hir.types.add_unknown();
+                    check(ctx, arg, scope, ty, return_ty);
+                }
+                return Node::Invalid;
+            }
+            TypeInfo::Enum(id) => {
+                let variants = ctx.hir.types.get_enum_variants(id);
+                if let Some(variant) = variants
+                    .iter()
+                    .copied()
+                    .find(|&variant| (&*ctx.hir.types[variant].name == name))
+                {
+                    let arg_types = ctx.hir.types[variant].args;
+                    Ok((OrdinalType::Inferred(variant), arg_types))
+                } else {
+                    let arg_types = ctx.hir.types.add_multiple_unknown(args.count + 1);
+                    let variant = ctx
+                        .hir
+                        .types
+                        .append_enum_variant(id, name.into(), arg_types);
+                    Ok((OrdinalType::Inferred(variant), arg_types))
+                }
+            }
+            TypeInfo::Unknown => {
+                let arg_types = ctx.hir.types.add_multiple_unknown(args.count + 1);
+                let enum_id = ctx.hir.types.add_enum_type();
+                let variant = ctx
+                    .hir
+                    .types
+                    .append_enum_variant(enum_id, name.into(), arg_types);
+                ctx.hir.types.replace(expected, TypeInfo::Enum(enum_id));
+                Ok((OrdinalType::Inferred(variant), arg_types))
+            }
+            TypeInfo::TypeDef(id, generics) => {
+                let def = Rc::clone(&ctx.compiler.get_resolved_type_def(id).def);
+                if let ResolvedTypeDef::Enum(enum_) = &*def {
+                    let variant = enum_.variants.iter().zip(0..).find_map(
+                        |((variant_name, arg_types), i)| {
+                            (variant_name == name).then_some((i, &*arg_types))
+                        },
+                    );
+                    if let Some((variant_index, arg_types)) = variant {
+                        if arg_types.len() != args.count as usize {
+                            Err(Error::InvalidArgCount {
+                                expected: arg_types.len() as _,
+                                varargs: false,
+                                found: args.count,
+                            }
+                            .at_span(span.in_mod(ctx.module)))
+                        } else {
+                            let arg_type_ids = ctx
+                                .hir
+                                .types
+                                .add_multiple_unknown(arg_types.len() as u32 + 1);
+                            let mut arg_type_iter = arg_type_ids.iter();
+                            ctx.hir.types.replace(
+                                arg_type_iter.next().unwrap(),
+                                int_ty_from_variant_count(enum_.variants.len() as u32),
+                            );
+                            for (r, ty) in arg_type_ids.iter().zip(arg_types.iter()) {
+                                let ty = ctx.type_from_resolved(ty, generics);
+                                ctx.hir.types.replace(r, ty);
+                            }
+
+                            Ok((OrdinalType::Known(variant_index), arg_type_ids))
+                        }
+                    } else {
+                        Err(Error::NonexistantEnumVariant.at_span(ident.in_mod(ctx.module)))
+                    }
+                } else {
+                    Err(Error::MismatchedType {
+                        expected: expected_type(),
+                        found: "an enum variant".to_owned(),
+                    }
+                    .at_span(span.in_mod(ctx.module)))
+                }
+            }
+            _ => Err(Error::MismatchedType {
+                expected: expected_type(),
+                found: "an enum variant".to_owned(),
+            }
+            .at_span(span.in_mod(ctx.module))),
+        };
+    match res {
+        Ok((variant_index, arg_type_ids)) => {
+            debug_assert_eq!(arg_type_ids.count, args.count + 1);
+            let arg_nodes = ctx.hir.add_invalid_nodes(arg_type_ids.count);
+            let mut arg_node_iter = arg_nodes.iter();
+            let mut arg_type_iter = arg_type_ids.iter();
+            let ordinal_type = arg_type_iter.next().unwrap();
+            let ordinal_node = match variant_index {
+                OrdinalType::Known(ordinal) => Node::IntLiteral {
+                    val: ordinal as u128,
+                    ty: ordinal_type,
+                },
+                OrdinalType::Inferred(variant) => Node::InferredEnumOrdinal(variant),
+            };
+            ctx.hir
+                .modify_node(arg_node_iter.next().unwrap(), ordinal_node);
+            for ((arg, ty), r) in args.into_iter().zip(arg_type_iter).zip(arg_node_iter) {
+                let arg_node = check(ctx, arg, scope, ty, return_ty);
+                ctx.hir.modify_node(r, arg_node);
+            }
+            Node::TupleLiteral {
+                elems: arg_nodes,
+                elem_types: arg_type_ids,
+            }
+        }
+        Err(err) => {
+            ctx.invalidate(expected);
+            ctx.compiler.errors.emit_err(err);
+            Node::Invalid
+        }
     }
 }
 
@@ -701,8 +848,58 @@ fn check_member_access(
                             );
                             Node::Invalid
                         } else {
+                            let def = Rc::clone(&ty.def);
+                            if let ResolvedTypeDef::Enum(def) = &*def {
+                                if let Some((ordinal, args)) = def.get_by_name(name) {
+                                    let ordinal_ty =
+                                        int_ty_from_variant_count(def.variants.len() as u32);
+                                    let node = if args.is_empty() {
+                                        ctx.specify(
+                                            expected,
+                                            TypeInfo::TypeDef(id, generics),
+                                            |ast| ast[expr].span(ast),
+                                        );
+                                        let ordinal_ty = ctx.hir.types.add(ordinal_ty);
+                                        let elem_types = ctx
+                                            .hir
+                                            .types
+                                            .add_multiple_info_or_idx([ordinal_ty.into()]);
+                                        let elems = ctx.hir.add_nodes([Node::IntLiteral {
+                                            val: ordinal as u128,
+                                            ty: ordinal_ty,
+                                        }]);
+                                        Node::TupleLiteral { elems, elem_types }
+                                    } else {
+                                        let arg_types = ctx
+                                            .hir
+                                            .types
+                                            .add_multiple_unknown(args.len() as u32 + 1);
+                                        let mut arg_type_iter = arg_types.iter();
+                                        ctx.hir
+                                            .types
+                                            .replace(arg_type_iter.next().unwrap(), ordinal_ty);
+                                        for (r, ty) in arg_type_iter.zip(args.iter()) {
+                                            let ty = ctx.type_from_resolved(ty, generics);
+                                            ctx.hir.types.replace(r, ty);
+                                        }
+                                        ctx.specify(
+                                            expected,
+                                            TypeInfo::EnumVariantItem {
+                                                enum_type: id,
+                                                generics,
+                                                ordinal: ordinal as u32,
+                                                arg_types,
+                                            },
+                                            |ast| ast[expr].span(ast),
+                                        );
+                                        Node::Invalid
+                                    };
+                                    return node;
+                                }
+                            }
                             ctx.compiler.errors.emit_err(
-                                Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                                Error::NonexistantMember(None)
+                                    .at_span(name_span.in_mod(ctx.module)),
                             );
                             ctx.invalidate(expected);
                             Node::Invalid
@@ -718,7 +915,7 @@ fn check_member_access(
                     }
                     _ => {
                         ctx.compiler.errors.emit_err(
-                            Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
+                            Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)),
                         );
                         ctx.invalidate(expected);
                         Node::Invalid
@@ -776,44 +973,39 @@ fn check_member_access(
                     );
                     return self_value;
                 }
-                return match &resolved.def {
-                    ResolvedTypeDef::Struct(def) => {
-                        let def = def.clone(); // PERF: cloning def
-
-                        let (indexed_field, elem_types) =
-                            def.get_indexed_field(ctx, generics, name);
-                        if let Some((index, field_ty)) = indexed_field {
-                            // perform auto deref first
-                            let mut dereffed_node = left_node;
-                            let mut current_ty = left_ty;
-                            for _ in 0..pointer_count {
-                                let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
-                                    // the deref was already checked so we know the type is wrapped in
-                                    // `pointer_count` pointers
-                                    unreachable!()
-                                };
-                                let value = ctx.hir.add(dereffed_node);
-                                dereffed_node = Node::Deref {
-                                    value,
-                                    deref_ty: pointee,
-                                };
-                                current_ty = pointee;
-                            }
-                            ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
-                            Node::Element {
-                                tuple_value: ctx.hir.add(dereffed_node),
-                                index,
-                                elem_types,
-                            }
-                        } else {
-                            ctx.compiler.errors.emit_err(
-                                Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)),
-                            );
-                            ctx.invalidate(expected);
-                            Node::Invalid
+                let def = Rc::clone(&resolved.def);
+                if let ResolvedTypeDef::Struct(def) = &*def {
+                    let (indexed_field, elem_types) = def.get_indexed_field(ctx, generics, name);
+                    if let Some((index, field_ty)) = indexed_field {
+                        // perform auto deref first
+                        let mut dereffed_node = left_node;
+                        let mut current_ty = left_ty;
+                        for _ in 0..pointer_count {
+                            let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
+                                // the deref was already checked so we know the type is wrapped in
+                                // `pointer_count` pointers
+                                unreachable!()
+                            };
+                            let value = ctx.hir.add(dereffed_node);
+                            dereffed_node = Node::Deref {
+                                value,
+                                deref_ty: pointee,
+                            };
+                            current_ty = pointee;
                         }
+                        ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
+                        return Node::Element {
+                            tuple_value: ctx.hir.add(dereffed_node),
+                            index,
+                            elem_types,
+                        };
                     }
-                };
+                }
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)));
+                ctx.invalidate(expected);
+                return Node::Invalid;
             }
             TypeInfo::Unknown => {
                 ctx.compiler
@@ -826,10 +1018,12 @@ fn check_member_access(
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
-            _ => {
+            other => {
+                let hint = matches!(other, TypeInfo::Enum(_))
+                    .then_some(crate::error::MemberHint::InferredEnum);
                 ctx.compiler
                     .errors
-                    .emit_err(Error::NonexistantMember.at_span(name_span.in_mod(ctx.module)));
+                    .emit_err(Error::NonexistantMember(hint).at_span(name_span.in_mod(ctx.module)));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -881,28 +1075,31 @@ fn check_call(
     let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty);
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => Node::Invalid,
-        TypeInfo::TypeItem { ty: item_ty } => {
-            match ctx.hir.types[item_ty] {
-                TypeInfo::TypeDef(id, generics) => {
-                    let resolved = ctx.compiler.get_resolved_type_def(id);
-                    debug_assert_eq!(generics.count, resolved.generic_count.into());
-                    match &resolved.def {
-                        ResolvedTypeDef::Struct(struct_def) => {
-                            // PERF: cloning struct def
-                            let struct_def = struct_def.clone();
-                            ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
-                            check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
-                        }
+        TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
+            TypeInfo::TypeDef(id, generics) => {
+                let resolved = ctx.compiler.get_resolved_type_def(id);
+                debug_assert_eq!(generics.count, resolved.generic_count.into());
+                let def = Rc::clone(&resolved.def);
+                match &*def {
+                    ResolvedTypeDef::Struct(struct_def) => {
+                        ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
+                        check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
+                    }
+                    ResolvedTypeDef::Enum(_) => {
+                        ctx.compiler
+                            .errors
+                            .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                        Node::Invalid
                     }
                 }
-                _ => {
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
-                    Node::Invalid
-                }
             }
-        }
+            _ => {
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                Node::Invalid
+            }
+        },
         TypeInfo::FunctionItem {
             module,
             function,
@@ -986,6 +1183,46 @@ fn check_call(
                 }
             }
         }
+        TypeInfo::EnumVariantItem {
+            enum_type,
+            generics,
+            ordinal: variant,
+            arg_types,
+        } => {
+            ctx.specify(expected, TypeInfo::TypeDef(enum_type, generics), |ast| {
+                ast[expr].span(ast)
+            });
+            if call.args.count + 1 != arg_types.count {
+                ctx.compiler.errors.emit_err(
+                    Error::InvalidArgCount {
+                        expected: arg_types.count - 1,
+                        varargs: false,
+                        found: arg_types.count,
+                    }
+                    .at_span(ctx.span(expr)),
+                );
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
+            let elems = ctx.hir.add_invalid_nodes(arg_types.count);
+            let mut elem_iter = elems.iter();
+            let mut arg_type_iter = arg_types.iter();
+            ctx.hir.modify_node(
+                elem_iter.next().unwrap(),
+                Node::IntLiteral {
+                    val: variant as _,
+                    ty: arg_type_iter.next().unwrap(),
+                },
+            );
+            for ((r, arg), ty) in elem_iter.zip(call.args).zip(arg_types.iter()) {
+                let node = check(ctx, arg, scope, ty, return_ty);
+                ctx.hir.modify_node(r, node);
+            }
+            Node::TupleLiteral {
+                elems,
+                elem_types: arg_types,
+            }
+        }
         TypeInfo::Unknown => {
             ctx.compiler
                 .errors
@@ -1048,4 +1285,13 @@ fn get_string_literal(src: &str, span: TSpan) -> String {
         .replace("\\r", "\r")
         .replace("\\0", "\0")
         .replace("\\\"", "\"")
+}
+
+pub fn int_ty_from_variant_count(count: u32) -> TypeInfo {
+    match count {
+        0 | 1 => TypeInfo::Primitive(Primitive::Unit),
+        2..=255 => TypeInfo::Primitive(Primitive::U8),
+        256..=65535 => TypeInfo::Primitive(Primitive::U16),
+        _ => TypeInfo::Primitive(Primitive::U32),
+    }
 }

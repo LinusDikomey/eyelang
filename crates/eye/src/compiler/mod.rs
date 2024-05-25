@@ -598,7 +598,7 @@ impl Compiler {
                     .unwrap()
                     .symbols
                     .functions[id.idx()]
-                .put(checked)
+                .put(Rc::new(checked))
             }
         }
     }
@@ -620,7 +620,8 @@ impl Compiler {
                 let ast = Rc::clone(self.get_module_ast(module));
                 let def = &ast[ast_id];
                 let generic_count = def.generic_count();
-                let resolved = match def {
+                let methods;
+                let def = match def {
                     ast::TypeDef::Struct(struct_def) => {
                         let fields = struct_def
                             .members
@@ -632,15 +633,33 @@ impl Compiler {
                                 )
                             })
                             .collect();
-                        let methods = struct_def.methods.clone();
-                        ResolvedType {
-                            generic_count,
-                            def: ResolvedTypeDef::Struct(ResolvedStructDef { fields }),
-                            module,
-                            methods,
-                        }
+                        methods = struct_def.methods.clone();
+                        ResolvedTypeDef::Struct(ResolvedStructDef { fields })
                     }
-                    ast::TypeDef::Enum(_) => todo!(),
+                    ast::TypeDef::Enum(def) => {
+                        methods = def.methods.clone();
+                        let variants = def
+                            .variants
+                            .iter()
+                            .map(|variant| {
+                                let variant_name = ast[variant.name_span].to_owned();
+                                let args = variant
+                                    .args
+                                    .iter()
+                                    .map(|ty| self.resolve_type(ty, module, def.scope))
+                                    .collect();
+                                (variant_name, args)
+                            })
+                            .collect();
+
+                        ResolvedTypeDef::Enum(ResolvedEnumDef { variants })
+                    }
+                };
+                let resolved = ResolvedType {
+                    generic_count,
+                    def: Rc::new(def),
+                    module,
+                    methods,
                 };
                 self.types[ty.idx()].resolved.put(resolved)
             }
@@ -794,8 +813,7 @@ impl Compiler {
                     else {
                         unreachable!()
                     };
-                    // PERF: put CheckedFunction behind Rc
-                    let checked = checked.clone();
+                    let checked = Rc::clone(checked);
                     // TODO: generics in function name
                     let mut name = checked.name.clone();
                     if name == "main" {
@@ -1116,7 +1134,9 @@ pub struct Signature {
 #[derive(Debug)]
 pub struct ResolvedType {
     pub generic_count: u8,
-    pub def: ResolvedTypeDef,
+    /// PERF: could put the specific vecs with variants/members into an Rc and avoid one level of
+    /// indirection
+    pub def: Rc<ResolvedTypeDef>,
     pub module: ModuleId,
     pub methods: DHashMap<String, FunctionId>,
 }
@@ -1124,9 +1144,10 @@ pub struct ResolvedType {
 #[derive(Debug)]
 pub enum ResolvedTypeDef {
     Struct(ResolvedStructDef),
+    Enum(ResolvedEnumDef),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ResolvedStructDef {
     pub fields: Vec<(String, Type)>,
 }
@@ -1156,6 +1177,21 @@ impl ResolvedStructDef {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedEnumDef {
+    pub variants: Box<[(String, Box<[Type]>)]>,
+}
+impl ResolvedEnumDef {
+    pub fn get_by_name(&self, name: &str) -> Option<(u32, &[Type])> {
+        self.variants
+            .iter()
+            .zip(0..)
+            .find_map(|((variant_name, args), ordinal)| {
+                (variant_name == name).then_some((ordinal, &**args))
+            })
+    }
+}
+
 pub struct ResolvableTypeDef {
     module: ModuleId,
     id: ast::TypeId,
@@ -1165,7 +1201,7 @@ pub struct ResolvableTypeDef {
 #[derive(Debug)]
 pub struct ModuleSymbols {
     pub function_signatures: Vec<Resolvable<Rc<Signature>>>,
-    pub functions: Vec<Resolvable<CheckedFunction>>,
+    pub functions: Vec<Resolvable<Rc<CheckedFunction>>>,
     pub types: Vec<Option<TypeId>>,
     pub globals: Vec<Resolvable<(Type, ConstValue)>>,
 }
@@ -1186,7 +1222,7 @@ impl ModuleSymbols {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CheckedFunction {
     pub name: String,
     pub types: TypeTable,

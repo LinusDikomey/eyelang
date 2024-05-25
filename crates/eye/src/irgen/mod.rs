@@ -3,7 +3,7 @@ mod types;
 
 pub use entry_point::entry_point;
 
-use ::types::Type;
+use ::types::{Primitive, Type};
 use id::ModuleId;
 use ir::builder::{BinOp, Terminator};
 use ir::{builder::IrBuilder, IrType, Ref};
@@ -260,9 +260,20 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             ctx.builder.build_load(var, tuple_ty)
         }
         Node::StringLiteral(str) => {
-            // TODO: cache string ir type to prevent generating it multiple times
             let (ptr, value_ty) = lower_string_literal(&mut ctx.builder, str);
             return ValueOrPlace::Place { ptr, value_ty };
+        }
+        &Node::InferredEnumOrdinal(variant) => {
+            let variant = &ctx.types[variant];
+            let ty = ctx.types[variant.args.iter().next().unwrap()];
+            match ty {
+                TypeInfo::Invalid => build_crash_point(ctx, noreturn),
+                TypeInfo::Primitive(Primitive::Unit) => Ref::UNIT,
+                _ => {
+                    let ty = ctx.get_type(ty);
+                    ctx.builder.build_int(variant.ordinal as u64, ty)
+                }
+            }
         }
 
         Node::Declare { pattern: _ } => todo!("lower declarations without values"),
@@ -288,7 +299,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             if *noreturn {
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
-            ctx.builder.build_store(lval, val);
+            // this will be none when the LValue is Ignore, don't perform a store in
+            // that case
+            if let Some(lval) = lval {
+                ctx.builder.build_store(lval, val);
+            }
             Ref::UNIT
         }
 
@@ -296,12 +311,23 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             let const_val = &ctx.compiler.const_values[id.idx()];
             match const_val {
                 ConstValue::Unit => Ref::UNIT,
-                &ConstValue::Number(num) => {
+                &ConstValue::Int(num) => {
                     let ty = ctx.types[ty];
                     match ty {
                         TypeInfo::Primitive(p) => {
                             debug_assert!(p.is_int());
                             ctx.builder.build_int(num, get_primitive(p))
+                        }
+                        TypeInfo::Invalid => build_crash_point(ctx, noreturn),
+                        _ => unreachable!(),
+                    }
+                }
+                &ConstValue::Float(num) => {
+                    let ty = ctx.types[ty];
+                    match ty {
+                        TypeInfo::Primitive(p) => {
+                            debug_assert!(p.is_float());
+                            ctx.builder.build_float(num, get_primitive(p))
                         }
                         TypeInfo::Invalid => build_crash_point(ctx, noreturn),
                         _ => unreachable!(),
@@ -613,10 +639,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
     ValueOrPlace::Value(value)
 }
 
-fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
-    match ctx.hir[lval] {
+fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Option<Ref> {
+    Some(match ctx.hir[lval] {
         LValue::Invalid => build_crash_point(ctx, noreturn),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
+        LValue::Ignore => return None,
         LValue::Global(_, _) => todo!("handle ir for globals"),
         LValue::Deref(pointer) => lower(ctx, pointer, noreturn),
         LValue::Member {
@@ -626,12 +653,12 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Ref {
         } => {
             let ptr = lower(ctx, ptr, noreturn);
             if *noreturn {
-                return Ref::UNDEF;
+                return None;
             }
             let types = ctx.get_multiple_types(elem_types);
             ctx.builder.build_member_ptr(ptr, index, types)
         }
-    }
+    })
 }
 
 fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut bool) -> Ref {
@@ -700,6 +727,7 @@ fn int_pat(builder: &mut IrBuilder, sign: bool, val: u128, ty: IrType) -> Ref {
 }
 
 fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) {
+    // TODO: cache string ir type to prevent generating it multiple times
     let elems = builder.types.add_multiple([IrType::Ptr, IrType::U64]);
     let str_ty = builder.types.add(IrType::Tuple(elems));
     let str_var = builder.build_decl(str_ty);
