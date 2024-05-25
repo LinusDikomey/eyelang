@@ -141,7 +141,9 @@ pub fn check(
             Node::Invalid
         }
         &Expr::Type { id } => {
-            let resolved_id = ctx.compiler.add_type_def(ctx.module, id);
+            let resolved_id = ctx
+                .compiler
+                .add_type_def(ctx.module, id, "TODO(type_name)".into());
             ctx.compiler
                 .get_module_ast_and_symbols(ctx.module)
                 .symbols
@@ -608,13 +610,6 @@ fn check_enum_literal(
     // This allows skipping construction of unneeded enum variant representations.
 
     let name = &ctx.ast[ident];
-    let expected_type = || {
-        let mut expected_string = String::new();
-        ctx.hir
-            .types
-            .type_to_string(ctx.hir.types[expected], &mut expected_string);
-        expected_string
-    };
 
     enum OrdinalType {
         Inferred(VariantId),
@@ -695,14 +690,14 @@ fn check_enum_literal(
                     }
                 } else {
                     Err(Error::MismatchedType {
-                        expected: expected_type(),
+                        expected: ctx.type_to_string(ctx.hir.types[expected]),
                         found: "an enum variant".to_owned(),
                     }
                     .at_span(span.in_mod(ctx.module)))
                 }
             }
             _ => Err(Error::MismatchedType {
-                expected: expected_type(),
+                expected: ctx.type_to_string(ctx.hir.types[expected]),
                 found: "an enum variant".to_owned(),
             }
             .at_span(span.in_mod(ctx.module))),
@@ -1272,9 +1267,7 @@ fn check_call_signature(
         ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
     }
 
-    let func_return_ty = ctx.type_from_resolved(return_type, generics);
-    let return_ty_info = ctx.hir.types.get_info_or_idx(func_return_ty);
-    ctx.specify(expected, return_ty_info, |ast| ast[expr].span(ast));
+    ctx.specify_resolved(expected, return_type, generics, |ast| ast[expr].span(ast));
     Ok(arg_types)
 }
 

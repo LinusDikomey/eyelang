@@ -297,7 +297,7 @@ impl TypeTable {
                 let def = compiler.resolve_path(module, scope, *path);
                 match def {
                     Def::Invalid => TypeInfo::Invalid,
-                    Def::Type(ty) => self.info_from_resolved(compiler, &ty),
+                    Def::Type(ty) => self.generic_info_from_resolved(compiler, &ty),
                     Def::ConstValue(_)
                     | Def::Module(_)
                     | Def::Global(_, _)
@@ -368,9 +368,9 @@ impl TypeTable {
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
         let new = unify(a_ty, b_ty, self, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
-            self.type_to_string(a_ty, &mut expected);
+            self.type_to_string(compiler, a_ty, &mut expected);
             let mut found = String::new();
-            self.type_to_string(b_ty, &mut found);
+            self.type_to_string(compiler, b_ty, &mut found);
             compiler
                 .errors
                 .emit_err(Error::MismatchedType { expected, found }.at_span(span()));
@@ -416,13 +416,51 @@ impl TypeTable {
         span: impl FnOnce() -> Span,
     ) {
         if let Err((a, b)) = self.try_specify(a, info, compiler) {
-            let mut expected = String::new();
-            self.type_to_string(a, &mut expected);
-            let mut found = String::new();
-            self.type_to_string(b, &mut found);
-            compiler
-                .errors
-                .emit_err(Error::MismatchedType { expected, found }.at_span(span()));
+            self.mismatched_type_error(compiler, a, b, span());
+        }
+    }
+
+    pub fn specify_resolved(
+        &mut self,
+        id: LocalTypeId,
+        resolved: &Type,
+        generics: LocalTypeIds,
+        compiler: &mut Compiler,
+        span: impl FnOnce() -> Span,
+    ) {
+        if let Err((a, b)) = self.try_specify_resolved(id, resolved, generics, compiler) {
+            self.mismatched_type_error(compiler, a, b, span());
+        }
+    }
+
+    fn mismatched_type_error(&self, compiler: &mut Compiler, a: TypeInfo, b: TypeInfo, span: Span) {
+        let mut expected = String::new();
+        self.type_to_string(compiler, a, &mut expected);
+        let mut found = String::new();
+        self.type_to_string(compiler, b, &mut found);
+        compiler
+            .errors
+            .emit_err(Error::MismatchedType { expected, found }.at_span(span));
+    }
+
+    pub fn try_specify_resolved(
+        &mut self,
+        id: LocalTypeId,
+        resolved: &Type,
+        generics: LocalTypeIds,
+        compiler: &mut Compiler,
+    ) -> Result<(), (TypeInfo, TypeInfo)> {
+        // PERF:could special-case this function to avoid instantiating the Type
+        let resolved_info = self.from_generic_resolved(compiler, resolved, generics);
+        match resolved_info {
+            TypeInfoOrIdx::TypeInfo(info) => self.try_specify(id, info, compiler),
+            TypeInfoOrIdx::Idx(idx) => {
+                if self.try_unify(id, idx, compiler) {
+                    Ok(())
+                } else {
+                    Err((self[id], self[idx]))
+                }
+            }
         }
     }
 
@@ -458,13 +496,13 @@ impl TypeTable {
         }
     }
 
-    pub fn dump_type(&self, ty: LocalTypeId) {
+    pub fn dump_type(&self, compiler: &Compiler, ty: LocalTypeId) {
         let mut s = String::new();
-        self.type_to_string(self[ty], &mut s);
+        self.type_to_string(compiler, self[ty], &mut s);
         eprint!("{s}");
     }
 
-    pub fn type_to_string(&self, ty: TypeInfo, s: &mut String) {
+    pub fn type_to_string(&self, compiler: &Compiler, ty: TypeInfo, s: &mut String) {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
@@ -472,14 +510,27 @@ impl TypeTable {
             TypeInfo::Primitive(p) => s.push_str(p.into()),
             TypeInfo::Integer => s.push_str("<integer>"),
             TypeInfo::Float => s.push_str("<float>"),
-            TypeInfo::TypeDef(_, _) => s.push_str("<type def>"),
+            TypeInfo::TypeDef(id, generics) => {
+                let name = compiler.get_type_name(id);
+                s.push_str(name);
+                if generics.count != 0 {
+                    s.push('[');
+                    for (i, generic) in generics.iter().enumerate() {
+                        if i != 0 {
+                            s.push_str(", ");
+                        }
+                        self.type_to_string(compiler, self[generic], s);
+                    }
+                    s.push(']');
+                }
+            }
             TypeInfo::Pointer(pointee) => {
                 s.push('*');
-                self.type_to_string(self[pointee], s);
+                self.type_to_string(compiler, self[pointee], s);
             }
             TypeInfo::Array { element, count } => {
                 s.push('[');
-                self.type_to_string(self[element], s);
+                self.type_to_string(compiler, self[element], s);
                 s.push_str("; ");
                 if let Some(count) = count {
                     write!(s, "{}]", count).unwrap();
@@ -487,7 +538,7 @@ impl TypeTable {
                     s.push_str("_]");
                 }
             }
-            TypeInfo::Enum(id) => self.enum_to_string(s, &self.enums[id.idx()].variants),
+            TypeInfo::Enum(id) => self.enum_to_string(compiler, s, &self.enums[id.idx()].variants),
             TypeInfo::Tuple(members) => {
                 s.push('(');
                 let mut first = true;
@@ -497,7 +548,7 @@ impl TypeTable {
                     } else {
                         s.push_str(", ");
                     }
-                    self.type_to_string(self[member], s);
+                    self.type_to_string(compiler, self[member], s);
                 }
                 if members.iter().count() == 1 {
                     s.push_str(",)");
@@ -507,7 +558,7 @@ impl TypeTable {
             }
             TypeInfo::TypeItem { ty } => {
                 s.push_str("<type item: (");
-                self.type_to_string(self[ty], s);
+                self.type_to_string(compiler, self[ty], s);
                 s.push_str(")>");
             }
             TypeInfo::FunctionItem { .. } => {
@@ -525,7 +576,7 @@ impl TypeTable {
         }
     }
 
-    pub fn enum_to_string(&self, s: &mut String, variants: &[VariantId]) {
+    pub fn enum_to_string(&self, compiler: &Compiler, s: &mut String, variants: &[VariantId]) {
         s.push_str("enum { ");
         for (i, variant) in variants.iter().enumerate() {
             let variant = &self.variants[variant.idx()];
@@ -539,7 +590,7 @@ impl TypeTable {
                     if i != 0 {
                         s.push_str(", ");
                     }
-                    self.type_to_string(self[arg], s);
+                    self.type_to_string(compiler, self[arg], s);
                 }
                 s.push(')');
             }
@@ -635,17 +686,10 @@ fn unify(
                     return None;
                 }
                 for (arg, declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
-                    // TODO: a method like specify_from_generic_type would probably be better since
-                    // this instantiates TypeInfos for all variant args
-                    let declared = types.from_generic_resolved(compiler, declared_arg, generics);
-                    let ok = match declared {
-                        TypeInfoOrIdx::TypeInfo(info) => {
-                            types.try_specify(arg, info, compiler).is_ok()
-                        }
-                        TypeInfoOrIdx::Idx(idx) => types.try_unify(arg, idx, compiler),
-                    };
-                    dbg!(ok);
-                    if !ok {
+                    if types
+                        .try_specify_resolved(arg, declared_arg, generics, compiler)
+                        .is_err()
+                    {
                         return None;
                     }
                 }

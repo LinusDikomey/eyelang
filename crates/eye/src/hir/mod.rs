@@ -7,6 +7,7 @@ use crate::{
     compiler::VarId,
     parser::ast::{FunctionId, GlobalId},
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable, VariantId},
+    Compiler,
 };
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -25,7 +26,7 @@ impl HIR {
         NodeId((self.nodes.len() - 1) as _)
     }
 
-    pub fn dump(&self, node: NodeId, types: &TypeTable, indent_count: usize) {
+    pub fn dump(&self, node: NodeId, compiler: &Compiler, types: &TypeTable, indent_count: usize) {
         fn indent_n(n: usize) {
             for _ in 0..n {
                 eprint!("  ");
@@ -36,16 +37,16 @@ impl HIR {
             Node::Invalid => eprint!("(invalid)"),
             &Node::CheckPattern(pat, val) => {
                 eprint!("(is ");
-                self.dump(val, types, indent_count);
+                self.dump(val, compiler, types, indent_count);
                 eprint!(" ");
-                self.dump_pattern(pat, types);
+                self.dump_pattern(pat, compiler, types);
                 eprint!(")");
             }
             Node::Block(ids) => {
                 eprintln!("(");
                 for id in ids.iter() {
                     indent_n(indent_count + 1);
-                    self.dump(id, types, indent_count + 1);
+                    self.dump(id, compiler, types, indent_count + 1);
                     eprintln!();
                 }
                 indent();
@@ -54,11 +55,11 @@ impl HIR {
             Node::Unit => eprint!("(unit)"),
             &Node::IntLiteral { val, ty } => {
                 eprint!("(int {val}): ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             &Node::FloatLiteral { val, ty } => {
                 eprint!("(float {val}): ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             Node::BoolLiteral(b) => {
                 eprint!("{b}")
@@ -69,10 +70,10 @@ impl HIR {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    self.dump(elem, types, indent_count);
+                    self.dump(elem, compiler, types, indent_count);
                 }
                 eprint!("): [");
-                types.dump_type(array_ty);
+                types.dump_type(compiler, array_ty);
                 eprint!("; {}]", elems.count);
             }
             Node::TupleLiteral { elems, elem_types } => {
@@ -81,9 +82,9 @@ impl HIR {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    self.dump(elem, types, indent_count);
+                    self.dump(elem, compiler, types, indent_count);
                     eprint!(": ");
-                    types.dump_type(ty);
+                    types.dump_type(compiler, ty);
                 }
                 eprint!(")");
             }
@@ -91,51 +92,51 @@ impl HIR {
             Node::InferredEnumOrdinal(id) => eprint!("(enum-ordinal {})", id.0),
             &Node::Declare { pattern } => {
                 eprint!("(decl ");
-                self.dump_pattern(pattern, types);
+                self.dump_pattern(pattern, compiler, types);
                 eprint!(")");
             }
             &Node::DeclareWithVal { pattern, val } => {
                 eprint!("(decl ");
-                self.dump_pattern(pattern, types);
+                self.dump_pattern(pattern, compiler, types);
                 eprint!(" ");
-                self.dump(val, types, indent_count);
+                self.dump(val, compiler, types, indent_count);
                 eprint!(")");
             }
             Node::Variable(id) => eprint!("(var {})", id.0),
             &Node::Assign(lval, val) => {
                 eprint!("(assign ");
-                self.dump_lvalue(lval, types, indent_count);
+                self.dump_lvalue(lval, compiler, types, indent_count);
                 eprint!(" ");
-                self.dump(val, types, indent_count);
+                self.dump(val, compiler, types, indent_count);
                 eprint!(")");
             }
             &Node::Const { id, ty } => {
                 eprint!("(const {}): ", id.0);
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             &Node::Negate(id, ty) => {
                 eprint!("(neg");
-                self.dump(id, types, indent_count);
+                self.dump(id, compiler, types, indent_count);
                 eprint!("): ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             &Node::Not(id) => {
                 eprint!("(not ");
-                self.dump(id, types, indent_count);
+                self.dump(id, compiler, types, indent_count);
                 eprint!(")");
             }
             &Node::AddressOf { inner, value_ty } => {
                 eprint!("(addr ");
-                self.dump(inner, types, indent_count);
+                self.dump(inner, compiler, types, indent_count);
                 eprint!(": ");
-                types.dump_type(value_ty);
+                types.dump_type(compiler, value_ty);
                 eprint!(")");
             }
             &Node::Deref { value, deref_ty } => {
-                eprint!("(addr ");
-                self.dump(value, types, indent_count);
+                eprint!("(deref ");
+                self.dump(value, compiler, types, indent_count);
                 eprint!("): ");
-                types.dump_type(deref_ty);
+                types.dump_type(compiler, deref_ty);
             }
             &Node::Cast(id) => {
                 let cast = &self[id];
@@ -171,12 +172,12 @@ impl HIR {
                     }
                     CastType::EnumToInt { from, to } => {
                         eprint!("(enum-int ");
-                        types.dump_type(from);
+                        types.dump_type(compiler, from);
                         eprint!(" {})", <&str>::from(Primitive::from(to)));
                     }
                 }
                 eprint!(" ");
-                self.dump(cast.val, types, indent_count);
+                self.dump(cast.val, compiler, types, indent_count);
             }
             &Node::Comparison(l, r, cmp) => {
                 let cmp = match cmp {
@@ -190,9 +191,9 @@ impl HIR {
                     Comparison::Or => "or",
                 };
                 eprint!("({cmp} ");
-                self.dump(l, types, indent_count);
+                self.dump(l, compiler, types, indent_count);
                 eprint!(" ");
-                self.dump(r, types, indent_count);
+                self.dump(r, compiler, types, indent_count);
                 eprint!(")");
             }
             &Node::Arithmetic(l, r, op, ty) => {
@@ -204,11 +205,11 @@ impl HIR {
                     Arithmetic::Mod => "%",
                 };
                 eprint!("({op} ");
-                self.dump(l, types, indent_count);
+                self.dump(l, compiler, types, indent_count);
                 eprint!(" ");
-                self.dump(r, types, indent_count);
+                self.dump(r, compiler, types, indent_count);
                 eprint!("): ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             &Node::Element {
                 tuple_value,
@@ -216,13 +217,13 @@ impl HIR {
                 elem_types,
             } => {
                 eprint!("(element {index} ");
-                self.dump(tuple_value, types, indent_count);
+                self.dump(tuple_value, compiler, types, indent_count);
                 eprint!(": (");
                 for (i, elem) in elem_types.iter().enumerate() {
                     if i != 0 {
                         eprint!(", ");
                     }
-                    types.dump_type(elem);
+                    types.dump_type(compiler, elem);
                 }
                 eprint!(")");
             }
@@ -232,15 +233,15 @@ impl HIR {
                 elem_ty,
             } => {
                 eprint!(" ");
-                self.dump(array, types, indent_count);
+                self.dump(array, compiler, types, indent_count);
                 eprint!("(index ");
-                self.dump(index, types, indent_count);
+                self.dump(index, compiler, types, indent_count);
                 eprint!("): ");
-                types.dump_type(elem_ty);
+                types.dump_type(compiler, elem_ty);
             }
             &Node::Return(val) => {
                 eprint!("(return ");
-                self.dump(val, types, indent_count);
+                self.dump(val, compiler, types, indent_count);
                 eprint!(")");
             }
             &Node::IfElse {
@@ -250,17 +251,17 @@ impl HIR {
                 resulting_ty,
             } => {
                 eprint!("(if ");
-                self.dump(cond, types, indent_count);
+                self.dump(cond, compiler, types, indent_count);
                 eprintln!("");
                 indent_n(indent_count + 1);
-                self.dump(then, types, indent_count + 1);
+                self.dump(then, compiler, types, indent_count + 1);
                 eprintln!();
                 indent_n(indent_count + 1);
-                self.dump(else_, types, indent_count + 1);
+                self.dump(else_, compiler, types, indent_count + 1);
                 eprintln!();
                 indent();
                 eprint!("): ");
-                types.dump_type(resulting_ty);
+                types.dump_type(compiler, resulting_ty);
             }
             &Node::Match {
                 value,
@@ -269,23 +270,23 @@ impl HIR {
                 branch_count,
             } => {
                 eprint!("(match ");
-                self.dump(value, types, indent_count);
+                self.dump(value, compiler, types, indent_count);
                 for i in 0..branch_count {
                     eprintln!();
                     indent();
                     let pattern = PatternId(pattern_index + i);
                     let branch = NodeId(branch_index + i);
-                    self.dump_pattern(pattern, types);
+                    self.dump_pattern(pattern, compiler, types);
                     eprint!(" ");
-                    self.dump(branch, types, indent_count + 1);
+                    self.dump(branch, compiler, types, indent_count + 1);
                 }
                 eprint!("\n)")
             }
             &Node::While { cond, body } => {
                 eprint!("(while ");
-                self.dump(cond, types, indent_count);
+                self.dump(cond, compiler, types, indent_count);
                 eprint!(" ");
-                self.dump(body, types, indent_count);
+                self.dump(body, compiler, types, indent_count);
                 eprint!(")");
             }
             &Node::Call {
@@ -294,22 +295,23 @@ impl HIR {
                 args,
                 return_ty,
             } => {
-                eprint!("(call {}:{} (", function.0 .0, function.1 .0);
+                let name = compiler.get_function_name(function.0, function.1);
+                eprint!("(call {name} (");
                 for (i, generic) in generics.iter().enumerate() {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    types.dump_type(generic);
+                    types.dump_type(compiler, generic);
                 }
                 eprint!(") ");
                 for (i, arg) in args.iter().enumerate() {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    self.dump(arg, types, indent_count);
+                    self.dump(arg, compiler, types, indent_count);
                 }
                 eprint!("): ");
-                types.dump_type(return_ty);
+                types.dump_type(compiler, return_ty);
             }
             &Node::TypeProperty(ty, property) => {
                 let prop = match property {
@@ -318,19 +320,19 @@ impl HIR {
                     TypeProperty::Stride => "stride",
                 };
                 eprint!("(type_prop {prop} ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
                 eprint!(")");
             }
         }
     }
 
-    fn dump_pattern(&self, pattern: PatternId, types: &TypeTable) {
+    fn dump_pattern(&self, pattern: PatternId, compiler: &Compiler, types: &TypeTable) {
         match self[pattern] {
             Pattern::Invalid => eprint!("<invalid>"),
             Pattern::Variable(id) => {
                 eprint!("(var {}): ", id.0);
                 let var_ty = self.vars[id.idx()];
-                types.dump_type(var_ty);
+                types.dump_type(compiler, var_ty);
             }
             Pattern::Ignore => eprint!("_"),
             Pattern::Tuple(ids) => {
@@ -339,7 +341,7 @@ impl HIR {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    self.dump_pattern(id, types);
+                    self.dump_pattern(id, compiler, types);
                 }
                 eprint!(")");
             }
@@ -349,7 +351,7 @@ impl HIR {
                     eprint!("-");
                 }
                 eprint!("{unsigned_val}): ");
-                types.dump_type(ty);
+                types.dump_type(compiler, ty);
             }
             Pattern::Bool(b) => eprint!("{b}"),
             Pattern::Range {
@@ -374,7 +376,13 @@ impl HIR {
         }
     }
 
-    fn dump_lvalue(&self, lval: LValueId, types: &TypeTable, indent_count: usize) {
+    fn dump_lvalue(
+        &self,
+        lval: LValueId,
+        compiler: &Compiler,
+        types: &TypeTable,
+        indent_count: usize,
+    ) {
         match self[lval] {
             LValue::Invalid => eprint!("(invalid)"),
             LValue::Variable(id) => eprint!("(var {})", id.0),
@@ -382,7 +390,7 @@ impl HIR {
             LValue::Global(module, id) => eprint!("(global {} {})", module.0, id.0),
             LValue::Deref(val) => {
                 eprint!("(deref ");
-                self.dump(val, types, indent_count);
+                self.dump(val, compiler, types, indent_count);
                 eprint!(")");
             }
             LValue::Member {
@@ -391,13 +399,13 @@ impl HIR {
                 elem_types,
             } => {
                 eprint!("(member {index} ");
-                self.dump(ptr, types, indent_count);
+                self.dump(ptr, compiler, types, indent_count);
                 eprint!("): (");
                 for (i, elem) in elem_types.iter().enumerate() {
                     if i != 0 {
                         eprint!(", ");
                     }
-                    types.dump_type(elem);
+                    types.dump_type(compiler, elem);
                 }
                 eprint!(")");
             }

@@ -2,11 +2,13 @@ use crate::{
     error::Error,
     hir::CastType,
     type_table::{LocalTypeId, TypeInfo, TypeTable},
+    Compiler,
 };
 
 pub fn check(
     from_ty: LocalTypeId,
     to_ty: LocalTypeId,
+    compiler: &Compiler,
     types: &TypeTable,
 ) -> (CastType, Option<Error>) {
     let mut error = None;
@@ -65,8 +67,8 @@ pub fn check(
         (a, b) => {
             let mut a_string = String::new();
             let mut b_string = String::new();
-            types.type_to_string(a, &mut a_string);
-            types.type_to_string(b, &mut b_string);
+            types.type_to_string(compiler, a, &mut a_string);
+            types.type_to_string(compiler, b, &mut b_string);
             error = Some(Error::InvalidCast {
                 from: a_string,
                 to: b_string,

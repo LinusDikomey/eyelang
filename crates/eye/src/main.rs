@@ -154,7 +154,10 @@ fn main() -> Result<(), MainError> {
                 Backend::X86 => todo!("reimplement x86 backend"),
                 #[cfg(feature = "llvm-backend")]
                 Backend::LLVM => {
-                    let backend = ir_backend_llvm::Backend::new();
+                    let mut backend = ir_backend_llvm::Backend::new();
+                    if args.log {
+                        backend.enable_logging();
+                    }
                     backend
                         .emit_module(
                             &compiler.ir_module,

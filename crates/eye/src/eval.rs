@@ -34,6 +34,7 @@ pub fn def_expr(
     scope: ScopeId,
     ast: &Ast,
     expr: ExprId,
+    name: &str,
 ) -> Def {
     match &ast[expr] {
         &Expr::IntLiteral(span) => {
@@ -52,14 +53,14 @@ pub fn def_expr(
             compiler.resolve_in_scope(module, scope, name, span.in_mod(module))
         }
         Expr::ReturnUnit { .. } => Def::ConstValue(compiler.add_const_value(ConstValue::Unit)),
-        &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val),
+        &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val, name),
         &Expr::Function { id } => Def::Function(module, id),
         &Expr::Type { id } => {
             let symbols = &mut compiler.get_module_ast_and_symbols(module).symbols;
             let id = if let Some(id) = symbols.types[id.idx()] {
                 id
             } else {
-                let assigned_id = compiler.add_type_def(module, id);
+                let assigned_id = compiler.add_type_def(module, id, name.into());
                 compiler.get_module_ast_and_symbols(module).symbols.types[id.idx()] =
                     Some(assigned_id);
                 assigned_id

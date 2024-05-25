@@ -202,41 +202,43 @@ impl<'a> Parser<'a> {
         span: Span,
     ) -> ParseResult<()> {
         let expr = self.ast.expr(expr);
-        let name_pat = |pat: &Expr, s: &Self| match pat {
-            Expr::Ident { span, .. } => Ok(*span),
-            expr => Err(Error::InvalidGlobalVarPattern
-                .at_span(expr.span_builder(s.ast).in_mod(s.toks.module))),
+        let mut add_global = |s: &mut Parser,
+                              pat: ExprId,
+                              annotated_ty: UnresolvedType,
+                              val: Option<ExprId>|
+         -> ParseResult<()> {
+            let start = s.ast.get_expr(expr).span_builder(s.ast).start;
+            let end = if let Some(val) = val {
+                s.ast.get_expr(val).span_builder(s.ast).end
+            } else {
+                annotated_ty.span().end
+            };
+            let name = match s.ast.get_expr(pat) {
+                Expr::Ident { span } => Ok(*span),
+                expr => Err(Error::InvalidGlobalVarPattern
+                    .at_span(expr.span_builder(s.ast).in_mod(s.toks.module))),
+            }?;
+            let name = s.src[name.range()].to_owned();
+            let id = s.ast.global(Global {
+                name: name.clone().into_boxed_str(),
+                scope: scope_id,
+                ty: annotated_ty,
+                val,
+                span: TSpan::new(start, end),
+            });
+            scope.definitions.insert(name, Definition::Global(id));
+            Ok(())
         };
-        let (pat, global) = match self.ast.get_expr(expr) {
+        match self.ast.get_expr(expr) {
             Expr::Declare { pat, annotated_ty } => {
-                let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
-                let end = annotated_ty.span().end;
-                (
-                    pat,
-                    Global {
-                        scope: scope_id,
-                        ty: annotated_ty.clone(),
-                        val: None,
-                        span: TSpan::new(start, end),
-                    },
-                )
+                add_global(self, *pat, annotated_ty.clone(), None)?;
             }
             Expr::DeclareWithVal {
                 pat,
                 annotated_ty,
                 val,
             } => {
-                let start = self.ast.get_expr(*pat).span_builder(self.ast).start;
-                let end = self.ast.get_expr(*val).span_builder(self.ast).end;
-                (
-                    pat,
-                    Global {
-                        scope: scope_id,
-                        ty: annotated_ty.clone(),
-                        val: Some(*val),
-                        span: TSpan::new(start, end),
-                    },
-                )
+                add_global(self, *pat, annotated_ty.clone(), Some(*val))?;
             }
             _ => {
                 return Err(CompileError {
@@ -245,10 +247,6 @@ impl<'a> Parser<'a> {
                 })
             }
         };
-        let name = name_pat(self.ast.get_expr(*pat), self)?;
-        let id = self.ast.global(global);
-        let name = self.src[name.range()].to_owned();
-        scope.definitions.insert(name, Definition::Global(id));
         Ok(())
     }
 
@@ -437,7 +435,6 @@ impl<'a> Parser<'a> {
 
     fn struct_definition(
         &mut self,
-        name: String,
         struct_tok: Token,
         scope: ScopeId,
     ) -> ParseResult<ast::StructDefinition> {
@@ -477,7 +474,6 @@ impl<'a> Parser<'a> {
         })?;
         self.ast.get_scope_mut(scope).span = TSpan::new(struct_tok.start, rbrace.end);
         Ok(ast::StructDefinition {
-            name,
             generics: generics.map_or(Vec::new(), |g| g.1),
             scope,
             members,
@@ -487,7 +483,6 @@ impl<'a> Parser<'a> {
 
     fn enum_definition(
         &mut self,
-        name: String,
         enum_tok: Token,
         scope: ScopeId,
     ) -> ParseResult<ast::EnumDefinition> {
@@ -554,7 +549,6 @@ impl<'a> Parser<'a> {
         self.ast.get_scope_mut(scope).span = TSpan::new(enum_tok.start, rbrace.end);
 
         Ok(ast::EnumDefinition {
-            name,
             generics: generics.map_or(Box::new([]), |g| g.1.into_boxed_slice()),
             scope,
             variants: variants.into_boxed_slice(),
@@ -788,12 +782,12 @@ impl<'a> Parser<'a> {
                 Expr::Function { id: self.ast.function(func) }
             },
             TokenType::Keyword(Keyword::Struct) => {
-                let struct_def = self.struct_definition("TODO: names".to_owned(), first, scope)?;
+                let struct_def = self.struct_definition(first, scope)?;
                 let id = self.ast.type_def(ast::TypeDef::Struct(struct_def));
                 Expr::Type { id }
             },
             TokenType::Keyword(Keyword::Enum) => {
-                let enum_def = self.enum_definition("TODO: names".to_owned(), first, scope)?;
+                let enum_def = self.enum_definition(first, scope)?;
                 let id = self.ast.type_def(ast::TypeDef::Enum(enum_def));
                 Expr::Type { id }
             },

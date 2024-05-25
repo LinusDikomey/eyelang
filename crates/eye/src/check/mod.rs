@@ -45,6 +45,21 @@ impl<'a> Ctx<'a> {
         })
     }
 
+    fn specify_resolved(
+        &mut self,
+        ty: LocalTypeId,
+        resolved: &Type,
+        generics: LocalTypeIds,
+        span: impl FnOnce(&Ast) -> TSpan,
+    ) {
+        // PERF:could special-case this function to avoid instantiating the Type
+        let func_return_ty = self.type_from_resolved(resolved, generics);
+        match func_return_ty {
+            TypeInfoOrIdx::TypeInfo(info) => self.specify(ty, info, span),
+            TypeInfoOrIdx::Idx(idx) => self.unify(ty, idx, span),
+        }
+    }
+
     fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
         self.hir
             .types
@@ -72,6 +87,12 @@ impl<'a> Ctx<'a> {
             self.hir.types.replace(r, ty);
         }
         hir_types
+    }
+
+    fn type_to_string(&self, ty: TypeInfo) -> String {
+        let mut s = String::new();
+        self.hir.types.type_to_string(&self.compiler, ty, &mut s);
+        s
     }
 
     fn auto_ref_deref(
@@ -117,7 +138,7 @@ impl<'a> Ctx<'a> {
             }
         }
         for (from_ty, to_ty, cast_expr, cast_id) in self.deferred_casts {
-            let (cast, err) = cast::check(from_ty, to_ty, &types);
+            let (cast, err) = cast::check(from_ty, to_ty, self.compiler, &types);
             hir[cast_id].cast_ty = cast;
             if let Some(err) = err {
                 self.compiler

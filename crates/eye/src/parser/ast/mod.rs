@@ -223,12 +223,6 @@ pub enum TypeDef {
     Enum(EnumDefinition),
 }
 impl TypeDef {
-    pub fn name(&self) -> &str {
-        match self {
-            TypeDef::Struct(s) => &s.name,
-            TypeDef::Enum(e) => &e.name,
-        }
-    }
     pub fn generic_count(&self) -> u8 {
         match self {
             TypeDef::Struct(s) => s.generic_count(),
@@ -335,7 +329,6 @@ impl TraitImpl {
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
-    pub name: String,
     pub generics: Vec<GenericDef>,
     pub scope: ScopeId,
     pub members: Vec<(TSpan, UnresolvedType)>,
@@ -349,7 +342,6 @@ impl StructDefinition {
 
 #[derive(Debug, Clone)]
 pub struct EnumDefinition {
-    pub name: String,
     pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
     pub variants: Box<[EnumVariantDefinition]>,
@@ -381,6 +373,7 @@ pub struct TraitDefinition {
 
 #[derive(Debug)]
 pub struct Global {
+    pub name: Box<str>,
     pub scope: ScopeId,
     pub ty: UnresolvedType,
     pub val: Option<ExprId>,

@@ -78,18 +78,21 @@ impl Compiler {
         self.projects[project.idx()].dependencies.push(dependency);
     }
 
-    pub fn add_type_def(&mut self, module: ModuleId, id: ast::TypeId) -> TypeId {
-        Self::add_type_def_to_types(module, id, &mut self.types)
+    pub fn add_type_def(&mut self, module: ModuleId, id: ast::TypeId, name: Box<str>) -> TypeId {
+        Self::add_type_def_to_types(module, id, name, &mut self.types)
     }
+
     pub fn add_type_def_to_types(
         module: ModuleId,
         id: ast::TypeId,
+        name: Box<str>,
         types: &mut Vec<ResolvableTypeDef>,
     ) -> TypeId {
         let type_id = TypeId(types.len() as _);
         types.push(ResolvableTypeDef {
             module,
             id,
+            name,
             resolved: Resolvable::Unresolved,
         });
         type_id
@@ -289,7 +292,7 @@ impl Compiler {
                 assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: respect type");
                 let value = *value;
                 // TODO: cache results
-                eval::def_expr(self, module, scope, &ast, value)
+                eval::def_expr(self, module, scope, &ast, value, name)
             }
             &ast::Definition::Path(path) => self.resolve_path(module, scope, path),
             ast::Definition::Global(id) => Def::Global(module, *id),
@@ -603,6 +606,15 @@ impl Compiler {
         }
     }
 
+    pub fn get_function_name(&self, module: ModuleId, function: ast::FunctionId) -> &str {
+        let ast = &self.modules[module.idx()].ast.as_ref().unwrap().ast;
+        &ast[ast[function].associated_name]
+    }
+
+    pub fn get_type_name(&self, ty: TypeId) -> &str {
+        &self.types[ty.idx()].name
+    }
+
     pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &ResolvedType {
         match &self.types[ty.idx()].resolved {
             Resolvable::Resolved(_) => {
@@ -690,7 +702,7 @@ impl Compiler {
                 let global = &ast[id];
                 let ty = self.resolve_type(&global.ty, module, global.scope);
                 let val = if let Some(val) = global.val {
-                    match eval::def_expr(self, module, global.scope, &ast, val) {
+                    match eval::def_expr(self, module, global.scope, &ast, val, &global.name) {
                         // probably should just store id instead of cloning the value
                         Def::ConstValue(id) => self.const_values[id.idx()].clone(),
                         _ => {
@@ -725,7 +737,7 @@ impl Compiler {
         while let Some(module) = modules_to_check.pop_front() {
             let ast = self.get_module_ast(module).clone();
             for scope in ast.scope_ids() {
-                for def in ast[scope].definitions.values() {
+                for (name, def) in &ast[scope].definitions {
                     match def {
                         &ast::Definition::Path(path) => {
                             // TODO: cache results
@@ -737,7 +749,7 @@ impl Compiler {
                                 "TODO: def type annotations"
                             );
                             // TODO: cache results
-                            eval::def_expr(self, module, scope, &ast, *value);
+                            eval::def_expr(self, module, scope, &ast, *value, name);
                         }
                         &ast::Definition::Module(id) => {
                             if self.modules[id.idx()].project == project {
@@ -763,7 +775,12 @@ impl Compiler {
                 {
                     Some(id) => *id,
                     ty @ None => {
-                        let id = Self::add_type_def_to_types(module, id, &mut self.types);
+                        let id = Self::add_type_def_to_types(
+                            module,
+                            id,
+                            "TODO(type_name)".into(),
+                            &mut self.types,
+                        );
                         *ty = Some(id);
                         id
                     }
@@ -859,8 +876,17 @@ impl Compiler {
         while let Some(module) = module_queue.pop_front() {
             let functions = self.get_module_ast(module).function_ids();
             for function in functions {
-                let hir = self.get_hir(module, function);
-                hir.dump();
+                self.get_hir(module, function);
+                let Resolvable::Resolved(hir) = &self.modules[module.idx()]
+                    .ast
+                    .as_ref()
+                    .unwrap()
+                    .symbols
+                    .functions[function.idx()]
+                else {
+                    unreachable!()
+                };
+                hir.dump(self);
             }
             module_queue.extend(
                 self.get_module_ast_and_symbols(module)
@@ -1195,6 +1221,7 @@ impl ResolvedEnumDef {
 pub struct ResolvableTypeDef {
     module: ModuleId,
     id: ast::TypeId,
+    name: Box<str>,
     resolved: Resolvable<ResolvedType>,
 }
 
@@ -1233,18 +1260,18 @@ pub struct CheckedFunction {
     pub body: Option<HIR>,
 }
 impl CheckedFunction {
-    pub fn dump(&self) {
+    pub fn dump(&self, compiler: &Compiler) {
         eprint!("BEGIN HIR {}(", self.name);
         for (i, param) in self.params.iter().enumerate() {
             if i != 0 {
                 eprint!(", ");
             }
-            self.types.dump_type(param);
+            self.types.dump_type(compiler, param);
         }
         eprint!(")\n  ");
         match &self.body {
             Some(body) => {
-                body.dump(body.root_id(), &self.types, 1);
+                body.dump(body.root_id(), compiler, &self.types, 1);
             }
             None => {
                 eprintln!("  <extern>");
