@@ -5,7 +5,10 @@ use types::{FloatType, IntType, Primitive};
 
 use crate::{
     compiler::VarId,
-    parser::ast::{FunctionId, GlobalId},
+    parser::{
+        ast::{FunctionId, GlobalId},
+        token::AssignType,
+    },
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable, VariantId},
     Compiler,
 };
@@ -103,9 +106,19 @@ impl HIR {
                 eprint!(")");
             }
             Node::Variable(id) => eprint!("(var {})", id.0),
-            &Node::Assign(lval, val) => {
-                eprint!("(assign ");
+            &Node::Assign(lval, val, assign_ty, ty) => {
+                let op = match assign_ty {
+                    AssignType::Assign => "",
+                    AssignType::AddAssign => "-add",
+                    AssignType::SubAssign => "-sub",
+                    AssignType::MulAssign => "-mul",
+                    AssignType::DivAssign => "-div",
+                    AssignType::ModAssign => "-mod",
+                };
+                eprint!("({op} ");
                 self.dump_lvalue(lval, compiler, types, indent_count);
+                eprint!(": ");
+                types.dump_type(compiler, ty);
                 eprint!(" ");
                 self.dump(val, compiler, types, indent_count);
                 eprint!(")");
@@ -517,7 +530,7 @@ pub enum Node {
         val: NodeId,
     },
     Variable(VarId),
-    Assign(LValueId, NodeId),
+    Assign(LValueId, NodeId, AssignType, LocalTypeId),
 
     Const {
         id: ConstValueId,

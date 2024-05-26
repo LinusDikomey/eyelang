@@ -310,7 +310,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
                 value_ty: ctx.vars[id.idx()].1,
             }
         }
-        &Node::Assign(lval, val) => {
+        &Node::Assign(lval, val, assign_ty, ty) => {
             let lval = lower_lval(ctx, lval, noreturn);
             if *noreturn {
                 return ValueOrPlace::Value(Ref::UNDEF);
@@ -321,9 +321,30 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             }
             // this will be none when the LValue is Ignore, don't perform a store in
             // that case
-            if let Some(lval) = lval {
-                ctx.builder.build_store(lval, val);
-            }
+            use crate::parser::token::AssignType;
+            let Some(lval) = lval else {
+                // TODO: is ignoring the value fine for arithmetic assignment operations like
+                // plus-equals?
+                return ValueOrPlace::Value(Ref::UNIT);
+            };
+            use crate::hir::Arithmetic;
+            let arithmetic = match assign_ty {
+                AssignType::Assign => {
+                    ctx.builder.build_store(lval, val);
+                    return ValueOrPlace::Value(Ref::UNIT);
+                }
+                AssignType::AddAssign => Arithmetic::Add,
+                AssignType::SubAssign => Arithmetic::Sub,
+                AssignType::MulAssign => Arithmetic::Mul,
+                AssignType::DivAssign => Arithmetic::Div,
+                AssignType::ModAssign => Arithmetic::Mod,
+            };
+
+            let ty = ctx.types[ty];
+            let ir_ty = ctx.get_type(ty);
+            let loaded = ctx.builder.build_load(lval, ir_ty);
+            let result = build_arithmetic(ctx, loaded, val, arithmetic, ty);
+            ctx.builder.build_store(lval, result);
             Ref::UNIT
         }
 
@@ -461,22 +482,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
 
-            use crate::hir::Arithmetic;
-            let op = match op {
-                Arithmetic::Add => BinOp::Add,
-                Arithmetic::Sub => BinOp::Sub,
-                Arithmetic::Mul => BinOp::Mul,
-                Arithmetic::Div => BinOp::Div,
-                Arithmetic::Mod => BinOp::Mod,
-            };
-            let TypeInfo::Primitive(p) = ctx.types[ty] else {
-                panic!(
-                    "Invalid type {:?} for arithmetic op. Will be handled properly with traits",
-                    ctx.types[ty]
-                );
-            };
-            assert!(p.is_int() || p.is_float(), "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits");
-            ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
+            build_arithmetic(ctx, l, r, op, ctx.types[ty])
         }
 
         &Node::Element {
@@ -770,4 +776,32 @@ fn build_crash_point(ctx: &mut Ctx, noreturn: &mut bool) -> Ref {
     *noreturn = true;
     ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
     Ref::UNDEF
+}
+
+fn build_arithmetic(
+    ctx: &mut Ctx,
+    l: Ref,
+    r: Ref,
+    op: crate::hir::Arithmetic,
+    ty: TypeInfo,
+) -> Ref {
+    use crate::hir::Arithmetic;
+    let op = match op {
+        Arithmetic::Add => BinOp::Add,
+        Arithmetic::Sub => BinOp::Sub,
+        Arithmetic::Mul => BinOp::Mul,
+        Arithmetic::Div => BinOp::Div,
+        Arithmetic::Mod => BinOp::Mod,
+    };
+    let TypeInfo::Primitive(p) = ty else {
+        panic!(
+            "Invalid type {:?} for arithmetic op. Will be handled properly with traits",
+            ty
+        );
+    };
+    assert!(
+        p.is_int() || p.is_float(),
+        "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits"
+    );
+    ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
 }

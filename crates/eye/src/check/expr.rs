@@ -243,13 +243,13 @@ pub fn check(
                     };
                     Node::Arithmetic(ctx.hir.add(l), ctx.hir.add(r), op, expected)
                 }
-                Operator::Assignment(AssignType::Assign) => {
+                Operator::Assignment(assign_ty) => {
+                    // TODO: arithmetic assignment operations will be have to bound/handled by traits
                     ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
                     let (lval, ty) = lval::check(ctx, l, scope, return_ty);
                     let val = check(ctx, r, scope, ty, return_ty);
-                    Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val))
+                    Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val), assign_ty, ty)
                 }
-                Operator::Assignment(_ty) => todo!("assignment-op type checking"),
                 Operator::Or | Operator::And => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
                     let l = check(ctx, l, scope, expected, return_ty);
