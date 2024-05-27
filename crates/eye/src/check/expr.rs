@@ -11,7 +11,7 @@ use crate::{
     hir::{self, Comparison, Node},
     parser::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
-        token::{AssignType, FloatLiteral, IntLiteral, Operator},
+        token::{FloatLiteral, IntLiteral, Operator},
     },
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo, VariantId},
 };
@@ -487,7 +487,45 @@ pub fn check(
                 resulting_ty: expected,
             }
         }
-        Expr::Match { .. } => todo!(),
+        &Expr::Match {
+            span: _,
+            val,
+            extra_branches,
+            branch_count,
+        } => {
+            let matched_ty = ctx.hir.types.add_unknown();
+            let value = check(ctx, val, scope, matched_ty, return_ty);
+            let value = ctx.hir.add(value);
+            let mut vars = dmap::new();
+            let mut exhaustion = Exhaustion::None;
+            let patterns = ctx
+                .hir
+                .add_patterns((0..branch_count).map(|_| hir::Pattern::Invalid));
+            let branches = ctx.hir.add_invalid_nodes(branch_count);
+            for i in 0..branch_count {
+                vars.clear();
+                let pat = ExprId(extra_branches + 2 * i);
+                let pat = pattern::check(ctx, &mut vars, &mut exhaustion, pat, matched_ty);
+                ctx.hir
+                    .modify_pattern(hir::PatternId(patterns.index + i), pat);
+                let mut scope = LocalScope {
+                    parent: Some(scope),
+                    variables: vars,
+                    module: scope.module,
+                    static_scope: None,
+                };
+                let branch = ExprId(extra_branches + 2 * i + 1);
+                let branch = check(ctx, branch, &mut scope, expected, return_ty);
+                vars = scope.variables;
+                ctx.hir.modify_node(hir::NodeId(branches.index + i), branch);
+            }
+            Node::Match {
+                value,
+                branch_index: branches.index,
+                pattern_index: patterns.index,
+                branch_count,
+            }
+        }
         &Expr::While {
             start: _,
             cond,

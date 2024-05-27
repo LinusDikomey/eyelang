@@ -414,7 +414,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
             let ty = ctx.get_type(ctx.types[deref_ty]);
-            ctx.builder.build_load(value, ty)
+            let value_ty = ctx.builder.types.add(ty);
+            //let ptr = ctx.builder.build_load(value, ty);
+            return ValueOrPlace::Place {
+                ptr: value,
+                value_ty,
+            };
         }
 
         &Node::Cast(id) => {

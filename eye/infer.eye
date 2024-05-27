@@ -43,4 +43,4 @@ main :: fn -> i8 {
     ret test(y, 3)
 }
 
-test :: fn(i i64, b i32) -> i8: i8(i)
+test :: fn(i i64, b i32) -> i8: i as i8

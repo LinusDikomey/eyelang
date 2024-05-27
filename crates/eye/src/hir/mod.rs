@@ -481,8 +481,8 @@ impl Index<PatternId> for HIR {
 }
 #[derive(Debug, Clone, Copy)]
 pub struct PatternIds {
-    index: u32,
-    count: u32,
+    pub index: u32,
+    pub count: u32,
 }
 impl PatternIds {
     pub fn iter(self) -> impl Iterator<Item = PatternId> {
@@ -745,6 +745,10 @@ impl HIRBuilder {
 
     pub fn modify_node(&mut self, node_id: NodeId, node: Node) {
         self.nodes[node_id.0 as usize] = node;
+    }
+
+    pub fn modify_pattern(&mut self, pattern_id: PatternId, pattern: Pattern) {
+        self.patterns[pattern_id.0 as usize] = pattern;
     }
 
     pub fn add_pattern(&mut self, pattern: Pattern) -> PatternId {

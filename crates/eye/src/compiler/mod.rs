@@ -209,7 +209,9 @@ impl Compiler {
                         }
                     }
                 }
-                std::fs::read_to_string(file)
+                let s = std::fs::read_to_string(&file);
+                self.modules[module_id.idx()].path = file;
+                s
             };
             let source = match contents {
                 Ok(source) => source,
