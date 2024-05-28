@@ -333,6 +333,7 @@ impl HIR {
                 generics,
                 args,
                 return_ty,
+                noreturn: _,
             } => {
                 let name = compiler.get_function_name(function.0, function.1);
                 eprint!("(call {name} (");
@@ -639,6 +640,7 @@ pub enum Node {
         generics: LocalTypeIds,
         args: NodeIds,
         return_ty: LocalTypeId,
+        noreturn: bool,
     },
     TypeProperty(LocalTypeId, TypeProperty),
 }

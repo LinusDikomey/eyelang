@@ -88,6 +88,7 @@ pub fn def_expr(
                 &types,
                 compiler,
                 &mut to_generate,
+                &[],
                 ir::TypeRefs::EMPTY,
                 &mut vars,
             );

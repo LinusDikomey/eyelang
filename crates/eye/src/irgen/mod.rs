@@ -30,7 +30,7 @@ pub fn lower_function(
     generics: &[Type],
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
-    let generics = types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY);
+    let generic_ir_types = types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY);
     // TODO: figure out what to do when params/return_type are Invalid. We can no longer generate a
     // valid signature
     let params = types::get_multiple_infos(
@@ -38,14 +38,19 @@ pub fn lower_function(
         &checked.types,
         &mut types,
         checked.params,
-        generics,
+        generic_ir_types,
     )
     .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| IrType::Unit)));
 
     let return_type = checked.types[checked.return_type];
-    let return_type =
-        types::get_from_info(compiler, &checked.types, &mut types, return_type, generics)
-            .unwrap_or(IrType::Unit);
+    let return_type = types::get_from_info(
+        compiler,
+        &checked.types,
+        &mut types,
+        return_type,
+        generic_ir_types,
+    )
+    .unwrap_or(IrType::Unit);
 
     let ir = checked.body.as_ref().map(|hir| {
         let mut builder = ir::builder::IrBuilder::new(&mut types);
@@ -64,6 +69,7 @@ pub fn lower_function(
             compiler,
             to_generate,
             generics,
+            generic_ir_types,
             &mut vars,
         )
     });
@@ -93,15 +99,18 @@ pub fn lower_hir(
     hir_types: &TypeTable,
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
-    generics: TypeRefs,
+    generics: &[Type],
+    generic_ir_types: TypeRefs,
     vars: &mut [(Ref, ir::TypeRef)],
 ) -> ir::FunctionIr {
+    debug_assert_eq!(generics.len(), generic_ir_types.count as usize);
     let mut ctx = Ctx {
         compiler,
         to_generate,
         hir,
         types: hir_types,
-        generics,
+        generics: generic_ir_types,
+        generic_types: generics,
         builder,
         vars,
     };
@@ -118,6 +127,7 @@ struct Ctx<'a> {
     hir: &'a HIR,
     types: &'a TypeTable,
     generics: TypeRefs,
+    generic_types: &'a [Type],
     builder: IrBuilder<'a>,
     vars: &'a mut [(Ref, ir::TypeRef)],
 }
@@ -556,11 +566,15 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     resulting_values.push((ctx.builder.current_block(), val));
                     let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
                     ctx.builder.terminate_block(Terminator::Goto(after));
-                    if is_last {
+                }
+                if is_last {
+                    // after could still be none if all branches are noreturn, we don't have to
+                    // create an after block at all in this case
+                    if let Some(after) = after_block {
                         ctx.builder.begin_block(after);
-                    } else {
-                        ctx.builder.begin_block(next_block);
                     }
+                } else {
+                    ctx.builder.begin_block(next_block);
                 }
             }
             if resulting_values.is_empty() {
@@ -607,8 +621,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             generics: call_generics,
             args,
             return_ty,
+            noreturn,
         } => {
-            // TODO: noreturn functions?
             let mut arg_refs = Vec::with_capacity(args.iter().count());
             for arg in args.iter() {
                 let arg = lower(ctx, arg)?;
@@ -616,13 +630,13 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             }
             let call_generics = call_generics
                 .iter()
-                .map(|generic| ctx.types.to_resolved(ctx.types[generic]))
+                .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
                 .collect();
             let func = ctx.get_ir_id(function.0, function.1, call_generics);
-            let noreturn = matches!(ctx.types[return_ty], TypeInfo::Primitive(Primitive::Never));
             let return_ty = ctx.get_type(ctx.types[return_ty])?;
             let res = ctx.builder.build_call(func, arg_refs, return_ty);
             if noreturn {
+                ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
                 return Err(NoReturn);
             }
             res
@@ -889,17 +903,10 @@ fn lower_if_else_branches(
         })
     };
     let then_val = check_branch(ctx, then);
+    ctx.builder.begin_block(else_block);
     if else_is_trival {
-        if then_val.is_none() {
-            // TODO: what to do with the else block in this case
-            // ctx.builder.begin_block(else_block);
-            return Err(NoReturn);
-        }
-        // else block effectively just becomes the after block in this case
-        ctx.builder.begin_block(else_block);
         return Ok(Ref::UNIT);
     }
-    ctx.builder.begin_block(else_block);
     let else_val = check_branch(ctx, else_);
     match (then_val, else_val) {
         (Some(t), Some(f)) => {

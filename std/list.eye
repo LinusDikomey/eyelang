@@ -14,7 +14,7 @@ List :: struct[T] {
     len u64,
     cap u64,
 
-    new :: fn() -> List[T]: List(u64(0) as *T, 0, 0)
+    new :: fn() -> List[T]: List(root.null(), 0, 0)
     with_capacity :: fn(cap u64) -> List[T]: List(malloc(cap * T.stride) as _, 0, cap)
 
     push :: fn(this *List[T], item T) {

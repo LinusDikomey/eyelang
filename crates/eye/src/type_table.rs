@@ -121,21 +121,24 @@ impl TypeTable {
         variant_id
     }
 
-    pub fn to_resolved(&self, info: TypeInfo) -> Type {
+    pub fn to_resolved(&self, info: TypeInfo, generics: &[Type]) -> Type {
         match info {
             TypeInfo::Primitive(p) => Type::Primitive(p),
             TypeInfo::Unknown | TypeInfo::Integer | TypeInfo::Float => unreachable!(),
-            TypeInfo::Pointer(pointee) => Type::Pointer(Box::new(self.to_resolved(self[pointee]))),
-            TypeInfo::TypeDef(id, generics) => Type::DefId {
+            TypeInfo::Pointer(pointee) => {
+                Type::Pointer(Box::new(self.to_resolved(self[pointee], generics)))
+            }
+            TypeInfo::TypeDef(id, inner_generics) => Type::DefId {
                 id,
                 generics: Some(
-                    generics
+                    inner_generics
                         .iter()
-                        .map(|generic| self.to_resolved(self[generic]))
+                        .map(|generic| self.to_resolved(self[generic], generics))
                         .collect(),
                 ),
             },
             TypeInfo::Invalid => Type::Invalid,
+            TypeInfo::Generic(i) => generics[i as usize].clone(),
             _ => todo!("type to resolved: {info:?}"),
         }
     }

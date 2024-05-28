@@ -314,7 +314,7 @@ pub enum Item {
 
 #[derive(Debug, Clone)]
 pub struct TraitImpl {
-    pub impl_generics: Vec<GenericDef>,
+    pub impl_generics: Box<[GenericDef]>,
     pub trait_path: IdentPath,
     pub trait_generics: Option<(Box<[UnresolvedType]>, TSpan)>,
     pub ty: UnresolvedType,
@@ -329,7 +329,7 @@ impl TraitImpl {
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
-    pub generics: Vec<GenericDef>,
+    pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
     pub members: Vec<(TSpan, UnresolvedType)>,
     pub methods: DHashMap<String, FunctionId>,
@@ -367,7 +367,7 @@ impl EnumVariantDefinition {
 
 #[derive(Debug)]
 pub struct TraitDefinition {
-    pub generics: Vec<GenericDef>,
+    pub generics: Box<[GenericDef]>,
     pub functions: DHashMap<String, (TSpan, Function)>,
 }
 

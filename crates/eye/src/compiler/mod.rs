@@ -770,7 +770,7 @@ impl Compiler {
                         let id = Self::add_type_def_to_types(
                             module,
                             id,
-                            "TODO(type_name)".into(),
+                            "<anonymous type>".into(),
                             &mut self.types,
                         );
                         *ty = Some(id);
