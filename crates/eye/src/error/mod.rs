@@ -114,7 +114,7 @@ pub enum Error {
         expected: ExpectedTokens,
         found: TokenType,
     },
-    UnknownIdent,
+    UnknownIdent(Box<str>),
     UnknownType,
     UnknownFunction,
     UnknownVariable,
@@ -216,7 +216,7 @@ impl Error {
             Error::UnexpectedEndOfFile => "unexpected end of file",
             Error::UnexpectedCharacters => "unexpected characters",
             Error::UnexpectedToken { .. } => "token was not expected here",
-            Error::UnknownIdent => "identifier not found",
+            Error::UnknownIdent(_) => "identifier not found",
             Error::UnknownType => "type not found",
             Error::UnknownFunction => "function not found",
             Error::UnknownVariable => "variable not found",
@@ -311,6 +311,7 @@ impl Error {
                 "expected {} but found {}",
                 expected, found
             ),
+            Error::UnknownIdent(name) => cformat!("the identifier #c<{name}> was not found"),
             Error::ExpectedValueFoundHole => cformat!(
                 "the name #r<_> is reserved for values that are thrown away"
             ),

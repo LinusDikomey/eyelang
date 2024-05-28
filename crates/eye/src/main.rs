@@ -96,7 +96,8 @@ fn main() -> Result<(), MainError> {
     // check that the main function exists if we are not compiling a library
     let main = (!args.lib)
         .then(|| {
-            let main_def = compiler.resolve_in_module(root_module, "main", Span::MISSING);
+            let main_def =
+                compiler.resolve_in_module(root_module, "main", Span::new(0, 0, root_module));
             let (main_module, main_id) = match main_def {
                 Def::Function(main_module, main_id) => (main_module, main_id),
                 Def::Invalid => {

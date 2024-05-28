@@ -18,7 +18,7 @@ file_mode_str :: fn(m FileMode) -> *i8: match m {
 
 open :: fn(path str, mode FileMode) -> File {
     handle := c.fopen(path.ptr, file_mode_str(mode))
-    if u64(handle) == 0 {
+    if handle as u64 == 0 {
         panic("failed to open file")
     }
     ret File(handle)

@@ -56,6 +56,11 @@ impl Compiler {
         {
             return Err(MainError::NonexistentPath(root));
         }
+        for (project, i) in self.projects.iter().zip(0..) {
+            if project.name == name && project.root == root {
+                return Ok(ProjectId(i));
+            }
+        }
         let project_id = ProjectId(self.projects.len() as _);
         let root_module_id = ModuleId(self.modules.len() as _);
         self.modules.push(Module::at_path(
@@ -283,7 +288,8 @@ impl Compiler {
                     return def;
                 }
             }
-            self.errors.emit_err(Error::UnknownIdent.at_span(name_span));
+            self.errors
+                .emit_err(Error::UnknownIdent(name.into()).at_span(name_span));
             Def::Invalid
         })
     }
@@ -744,7 +750,10 @@ impl Compiler {
                             eval::def_expr(self, module, scope, &ast, *value, name);
                         }
                         &ast::Definition::Module(id) => {
-                            if self.modules[id.idx()].project == project {
+                            // when checking std, each module still gets a reference to std. To
+                            // prevent an infinite loop when checking the std library, check that
+                            // this isn't the case by comparing against the root module
+                            if self.modules[id.idx()].project == project && id != root {
                                 modules_to_check.push_back(id);
                             }
                         }
@@ -1045,7 +1054,7 @@ impl<'p> LocalScope<'p> {
         } else {
             compiler
                 .errors
-                .emit_err(Error::UnknownIdent.at_span(name_span.in_mod(self.module)));
+                .emit_err(Error::UnknownIdent(name.into()).at_span(name_span.in_mod(self.module)));
             LocalItem::Invalid
         }
     }

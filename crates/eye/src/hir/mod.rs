@@ -84,6 +84,23 @@ impl HIR {
                 }
                 eprint!(")");
             }
+            &Node::EnumLiteral {
+                elems,
+                elem_types,
+                enum_ty,
+            } => {
+                eprint!("enum-literal ");
+                for (i, (elem, ty)) in elems.iter().zip(elem_types.iter()).enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    self.dump(elem, compiler, types, indent_count);
+                    eprint!(": ");
+                    types.dump_type(compiler, ty);
+                }
+                eprint!("): ");
+                types.dump_type(compiler, enum_ty);
+            }
             Node::StringLiteral(s) => eprint!("(string {s:?})"),
             Node::InferredEnumOrdinal(id) => eprint!("(enum-ordinal {})", id.0),
             &Node::Declare { pattern } => {
@@ -562,6 +579,12 @@ pub enum Node {
         elem_types: LocalTypeIds,
     },
     StringLiteral(String),
+    EnumLiteral {
+        // PERF(size): length has to match anyways, could only store it once
+        elems: NodeIds,
+        elem_types: LocalTypeIds,
+        enum_ty: LocalTypeId,
+    },
     InferredEnumOrdinal(VariantId),
 
     Declare {

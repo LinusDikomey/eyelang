@@ -1,5 +1,6 @@
 use std::{
     ffi::{CStr, CString, NulError},
+    fmt::write,
     path::Path,
     ptr,
 };
@@ -92,7 +93,12 @@ impl Backend {
         {
             let mut msg = ptr::null_mut();
             let action = llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction;
-            unsafe { llvm::analysis::LLVMVerifyModule(llvm_module, action, &mut msg) };
+            let invalid =
+                unsafe { llvm::analysis::LLVMVerifyModule(llvm_module, action, &mut msg) };
+            if invalid == TRUE {
+                let s = unsafe { CStr::from_ptr(msg) };
+                eprintln!("Verification of LLVM module failed: {s:?}");
+            }
         }
 
         let target_triple = target.map_or_else(

@@ -494,7 +494,7 @@ impl TypeTable {
                                 arg_type_iter.next().unwrap(),
                                 int_ty_from_variant_count(enum_.variants.len() as u32),
                             );
-                            for (r, ty) in arg_type_ids.iter().zip(arg_types.iter()) {
+                            for (r, ty) in arg_type_iter.zip(arg_types.iter()) {
                                 let ty = self.from_generic_resolved(compiler, ty, generics);
                                 self.replace(r, ty);
                             }

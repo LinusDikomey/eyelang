@@ -744,9 +744,10 @@ fn check_enum_literal(
                 let arg_node = check(ctx, arg, scope, ty, return_ty, noreturn);
                 ctx.hir.modify_node(r, arg_node);
             }
-            Node::TupleLiteral {
+            Node::EnumLiteral {
                 elems: arg_nodes,
                 elem_types: arg_type_ids,
+                enum_ty: expected,
             }
         }
         Err(err) => {
@@ -1321,9 +1322,10 @@ fn check_call(
                 let node = check(ctx, arg, scope, ty, return_ty, noreturn);
                 ctx.hir.modify_node(r, node);
             }
-            Node::TupleLiteral {
+            Node::EnumLiteral {
                 elems,
                 elem_types: arg_types,
+                enum_ty: called_ty,
             }
         }
         TypeInfo::Unknown => {

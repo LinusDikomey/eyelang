@@ -267,10 +267,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::TupleLiteral { elems, elem_types } => {
             debug_assert_eq!(elems.count, elem_types.count);
-            let tuple_ty = ctx.get_type(TypeInfo::Tuple(elem_types))?;
-            let IrType::Tuple(elem_types) = tuple_ty else {
-                unreachable!()
-            };
+            let elem_types = ctx.get_multiple_types(elem_types)?;
+            let tuple_ty = ctx.builder.types.add(IrType::Tuple(elem_types));
             let var = ctx.builder.build_decl(tuple_ty);
             for (elem, i) in elems.iter().zip(0..) {
                 let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
@@ -279,6 +277,23 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             }
             // maybe do this differently, could do it like llvm: insertvalue
             ctx.builder.build_load(var, tuple_ty)
+        }
+        &Node::EnumLiteral {
+            elems,
+            elem_types,
+            enum_ty,
+        } => {
+            debug_assert_eq!(elems.count, elem_types.count);
+            let enum_ty = ctx.get_type(ctx.types[enum_ty])?;
+            let elem_types = ctx.get_multiple_types(elem_types)?;
+            let var = ctx.builder.build_decl(enum_ty);
+            for (elem, i) in elems.iter().zip(0..) {
+                let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
+                let val = lower(ctx, elem)?;
+                ctx.builder.build_store(elem_ptr, val);
+            }
+            // maybe do this differently, could do it like llvm: insertvalue
+            ctx.builder.build_load(var, enum_ty)
         }
         Node::StringLiteral(str) => {
             let (ptr, value_ty) = lower_string_literal(&mut ctx.builder, str);
@@ -796,7 +811,7 @@ fn lower_pattern(
                             .build_bin_op(BinOp::Eq, actual_ordinal, expected, IrType::U1);
                     branch_bool(ctx, ordinal_matches);
                 }
-                _ => unreachable!(),
+                other => unreachable!("invalid ordinal type {other:?}"),
             }
             if args.count == 0 {
                 return Ok(());
