@@ -86,17 +86,14 @@ main :: fn {
 ### Enums
 Enums can be used locally without a type definition.
 ```rust
-use std.print
-use std.println
-
 main :: fn {
     color := .NoColor
     inp := std.input("Which color do you want? ")
     if inp == "red": color = .Red
         else if inp == "green": color = .Green
         else if inp == "blue": color = .Blue
-    
-    if color == .NoColor:
+
+    if .NoColor := color:
         print("You didn't select a valid color")
     else {
         print("Your color is ")

@@ -321,8 +321,13 @@ pub fn check(
             ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
             Node::Cast(cast_id)
         }
-        &Expr::Root(_) => todo!("path roots"),
-
+        &Expr::Root(_) => {
+            let root_module = ctx.compiler.get_root_module(ctx.module);
+            ctx.specify(expected, TypeInfo::ModuleItem(root_module), |ast| {
+                ast[expr].span(ast)
+            });
+            Node::Invalid
+        }
         &Expr::MemberAccess {
             left,
             name: name_span,

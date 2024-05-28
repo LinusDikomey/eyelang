@@ -557,15 +557,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
                 on_true: then_block,
                 on_false: else_block,
             });
-            lower_if_else_branches(
-                ctx,
-                noreturn,
-                then,
-                else_,
-                then_block,
-                else_block,
-                resulting_ty,
-            )
+            ctx.builder.begin_block(then_block);
+            lower_if_else_branches(ctx, noreturn, then, else_, else_block, resulting_ty)
         }
         &Node::IfPatElse {
             pat,
@@ -578,21 +571,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             if *noreturn {
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
-            let then_block = ctx.builder.create_block();
             let else_block = ctx.builder.create_block();
             lower_pattern(ctx, pat, val, else_block, noreturn);
             if *noreturn {
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
-            lower_if_else_branches(
-                ctx,
-                noreturn,
-                then,
-                else_,
-                then_block,
-                else_block,
-                resulting_ty,
-            )
+            lower_if_else_branches(ctx, noreturn, then, else_, else_block, resulting_ty)
         }
         &Node::Match {
             value,
@@ -971,7 +955,6 @@ fn lower_if_else_branches(
     noreturn: &mut bool,
     then: NodeId,
     else_: NodeId,
-    then_block: ir::BlockIndex,
     else_block: ir::BlockIndex,
     resulting_ty: LocalTypeId,
 ) -> Ref {
@@ -997,7 +980,6 @@ fn lower_if_else_branches(
             (block, val)
         })
     };
-    ctx.builder.begin_block(then_block);
     let then_val = check_branch(ctx, then);
     if else_is_trival {
         if then_val.is_none() {

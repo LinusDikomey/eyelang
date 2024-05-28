@@ -108,6 +108,10 @@ impl Compiler {
         &self.projects[id.idx()]
     }
 
+    pub fn get_root_module(&self, module: ModuleId) -> ModuleId {
+        self.modules[module.idx()].root
+    }
+
     pub fn get_module_ast(&mut self, module_id: ModuleId) -> &Rc<Ast> {
         &self.get_module_ast_and_symbols(module_id).ast
     }
