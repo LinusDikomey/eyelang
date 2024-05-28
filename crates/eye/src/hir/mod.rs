@@ -493,6 +493,18 @@ impl HIR {
                 }
                 eprint!(")");
             }
+            LValue::ArrayIndex {
+                array_ptr,
+                index,
+                element_type,
+            } => {
+                eprint!("(index ");
+                self.dump(array_ptr, compiler, types, indent_count);
+                eprint!(" ");
+                self.dump(index, compiler, types, indent_count);
+                eprint!("): ");
+                types.dump_type(compiler, element_type);
+            }
         }
     }
 }
@@ -690,6 +702,11 @@ pub enum LValue {
         ptr: NodeId,
         index: u32,
         elem_types: LocalTypeIds,
+    },
+    ArrayIndex {
+        array_ptr: NodeId,
+        index: NodeId,
+        element_type: LocalTypeId,
     },
 }
 

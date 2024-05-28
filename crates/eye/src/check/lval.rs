@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     compiler::{Def, LocalItem, LocalScope, ResolvedTypeDef},
     error::Error,
-    hir::LValue,
+    hir::{LValue, Node},
     parser::ast::{Expr, ExprId, UnOp},
     type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
@@ -118,7 +118,28 @@ pub fn check(
             }
         }
         Expr::TupleIdx { .. } => todo!("lvalue tuple indexing"),
-        Expr::Index { .. } => todo!("lvalue indexing"),
+        &Expr::Index { expr, idx, .. } => {
+            let element_type = ctx.hir.types.add_unknown();
+            let array_ty = ctx.hir.types.add(TypeInfo::Array {
+                element: element_type,
+                count: None,
+            });
+            let array = expr::check(ctx, expr, scope, array_ty, return_ty, noreturn);
+            let array_ptr = Node::AddressOf {
+                inner: ctx.hir.add(array),
+                value_ty: array_ty,
+            };
+            let index_ty = ctx.hir.types.add(TypeInfo::Integer);
+            let index = expr::check(ctx, idx, scope, index_ty, return_ty, noreturn);
+            (
+                LValue::ArrayIndex {
+                    array_ptr: ctx.hir.add(array_ptr),
+                    index: ctx.hir.add(index),
+                    element_type,
+                },
+                element_type,
+            )
+        }
         _ => {
             ctx.compiler
                 .errors

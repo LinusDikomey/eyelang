@@ -721,6 +721,17 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Option<Ref>> {
             let types = ctx.get_multiple_types(elem_types)?;
             ctx.builder.build_member_ptr(ptr, index, types)
         }
+        LValue::ArrayIndex {
+            array_ptr,
+            index,
+            element_type,
+        } => {
+            let ptr = lower(ctx, array_ptr)?;
+            let idx = lower(ctx, index)?;
+            let ty = ctx.get_type(ctx.types[element_type])?;
+            let ty = ctx.builder.types.add(ty);
+            ctx.builder.build_array_index(ptr, idx, ty)
+        }
     }))
 }
 
