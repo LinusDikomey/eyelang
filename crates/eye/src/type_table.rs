@@ -293,14 +293,25 @@ impl TypeTable {
         match ty {
             types::UnresolvedType::Primitive { ty, .. } => TypeInfo::Primitive(*ty),
             types::UnresolvedType::Unresolved(path, generics) => {
-                assert!(
-                    generics.is_none(),
-                    "TODO: implement generics for type paths"
-                ); // TODO
                 let def = compiler.resolve_path(module, scope, *path);
                 match def {
                     Def::Invalid => TypeInfo::Invalid,
-                    Def::Type(ty) => self.generic_info_from_resolved(compiler, &ty),
+                    Def::Type(ty) => {
+                        let generics = generics.as_ref().map(|(generics, _)| {
+                            let generic_infos = self.add_multiple_unknown(generics.len() as _);
+                            for (r, ty) in generic_infos.iter().zip(generics) {
+                                let info = self.info_from_unresolved(ty, compiler, module, scope);
+                                self.replace(r, info);
+                            }
+                            generic_infos
+                        });
+                        let TypeInfoOrIdx::TypeInfo(info) =
+                            self.from_generic_resolved_internal(compiler, &ty, generics)
+                        else {
+                            unreachable!()
+                        };
+                        info
+                    }
                     Def::ConstValue(_)
                     | Def::Module(_)
                     | Def::Global(_, _)

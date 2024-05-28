@@ -37,8 +37,11 @@ main :: fn {
     v3^.print()
 
     v.mul(2)
+
     v2.mul(3)
-    v3^.mul(4)
+    # v3^.mul(4) # this no longer works until traits are implemented
+    v3.x *= 4
+    v3.y *= 4
 
     v.print()
     v2.print()
@@ -62,7 +65,7 @@ Vec2 :: struct[T] {
         printf("[%d, %d]\n".ptr, x, this^.y)
     }
 
-    mul :: fn(this *Vec2[T], scalar T) {
+    mul :: fn(this *Vec2[u64], scalar u64) {
         this^.x *= scalar
         this^.y *= scalar
     }
