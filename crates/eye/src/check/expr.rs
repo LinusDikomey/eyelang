@@ -8,7 +8,7 @@ use crate::{
     compiler::{builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef},
     error::Error,
     eval::ConstValue,
-    hir::{self, Comparison, Node},
+    hir::{self, Comparison, Node, NodeIds},
     parser::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
@@ -24,6 +24,7 @@ pub fn check(
     scope: &mut LocalScope,
     expected: LocalTypeId,
     return_ty: LocalTypeId,
+    noreturn: &mut bool,
 ) -> Node {
     let ast = ctx.ast;
     match &ast[expr] {
@@ -37,21 +38,30 @@ pub fn check(
                 module: scope.module,
                 static_scope: Some(static_scope),
             };
-            // PERF: should preallocate in nodes list and put them in directly
-            let items = items
-                .into_iter()
-                .map(|item| {
-                    let unknown = ctx.hir.types.add_unknown();
-                    check(ctx, item, &mut scope, unknown, return_ty)
-                })
-                .collect::<Vec<_>>();
-            // TODO: check noreturn here and only specify unit type if the block returns
-            /* ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
-                ast[expr].span(ast)
-            }); */
-            Node::Block(ctx.hir.add_nodes(items))
+            let mut item_nodes = ctx.hir.add_invalid_nodes(items.count);
+            for ((item, r), i) in items.into_iter().zip(item_nodes.iter()).zip(0..) {
+                let statement_ty = ctx.hir.types.add_unknown();
+                let node = check(ctx, item, &mut scope, statement_ty, return_ty, noreturn);
+                ctx.hir.modify_node(r, node);
+                if *noreturn {
+                    // just shorten the node list. We waste the remaining nodes but this is not the
+                    // common case. Usually, there is no unreachable code in blocks.
+                    // TODO: unreachable code warning for the rest of the lines
+                    item_nodes = NodeIds {
+                        index: item_nodes.index,
+                        count: i + 1,
+                    };
+                    break;
+                }
+            }
+            if !*noreturn {
+                ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
+                    ast[expr].span(ast)
+                });
+            }
+            Node::Block(item_nodes)
         }
-        &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty),
+        &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty, noreturn),
 
         &Expr::Unit(span) => {
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
@@ -108,7 +118,8 @@ pub fn check(
             );
             let nodes = ctx.hir.add_invalid_nodes(elems.count);
             for (node, elem) in nodes.iter().zip(elems) {
-                let elem_node = check(ctx, elem, scope, elem_ty, return_ty);
+                let elem_node = check(ctx, elem, scope, elem_ty, return_ty, noreturn);
+                // TODO: can we return early here in case of noreturn?
                 ctx.hir.modify_node(node, elem_node);
             }
             Node::ArrayLiteral {
@@ -125,13 +136,14 @@ pub fn check(
             for ((value, ty), node_id) in
                 values.into_iter().zip(elem_types.iter()).zip(elems.iter())
             {
-                let node = check(ctx, value, scope, ty, return_ty);
+                let node = check(ctx, value, scope, ty, return_ty, noreturn);
+                // TODO: can we return early here in case of noreturn?
                 ctx.hir.modify_node(node_id, node);
             }
             Node::TupleLiteral { elems, elem_types }
         }
         &Expr::EnumLiteral { span, ident, args } => {
-            check_enum_literal(ctx, scope, expected, return_ty, span, ident, args)
+            check_enum_literal(ctx, scope, expected, return_ty, span, ident, args, noreturn)
         }
         &Expr::Function { id } => {
             function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast))
@@ -176,7 +188,7 @@ pub fn check(
                 scope.get_innermost_static_scope(),
             );
             let ty = ctx.hir.types.add(ty);
-            let val = check(ctx, *val, scope, ty, return_ty);
+            let val = check(ctx, *val, scope, ty, return_ty, noreturn);
             let pattern = pattern::check(ctx, &mut scope.variables, &mut exhaustion, *pat, ty);
             if !exhaustion.is_trivially_exhausted() {
                 ctx.deferred_exhaustions.push((exhaustion, ty, *pat));
@@ -198,14 +210,14 @@ pub fn check(
             match op {
                 UnOp::Neg => {
                     // TODO(trait): this should constrain the value with a trait
-                    let value = check(ctx, value, scope, expected, return_ty);
+                    let value = check(ctx, value, scope, expected, return_ty, noreturn);
                     Node::Negate(ctx.hir.add(value), expected)
                 }
                 UnOp::Not => {
                     ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| {
                         ast[expr].span(ast)
                     });
-                    let value = check(ctx, value, scope, expected, return_ty);
+                    let value = check(ctx, value, scope, expected, return_ty, noreturn);
                     Node::Not(ctx.hir.add(value))
                 }
                 UnOp::Ref => {
@@ -215,7 +227,7 @@ pub fn check(
                     ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| {
                         ast[expr].span(ast)
                     });
-                    let value = check(ctx, value, scope, pointee, return_ty);
+                    let value = check(ctx, value, scope, pointee, return_ty, noreturn);
                     Node::AddressOf {
                         inner: ctx.hir.add(value),
                         value_ty: pointee,
@@ -223,7 +235,7 @@ pub fn check(
                 }
                 UnOp::Deref => {
                     let ptr_ty = ctx.hir.types.add(TypeInfo::Pointer(expected));
-                    let value = check(ctx, value, scope, ptr_ty, return_ty);
+                    let value = check(ctx, value, scope, ptr_ty, return_ty, noreturn);
                     Node::Deref {
                         value: ctx.hir.add(value),
                         deref_ty: expected,
@@ -235,8 +247,8 @@ pub fn check(
             match op {
                 Operator::Add | Operator::Sub | Operator::Mul | Operator::Div | Operator::Mod => {
                     // TODO: this will be have to bound/handled by traits
-                    let l = check(ctx, l, scope, expected, return_ty);
-                    let r = check(ctx, r, scope, expected, return_ty);
+                    let l = check(ctx, l, scope, expected, return_ty, noreturn);
+                    let r = check(ctx, r, scope, expected, return_ty, noreturn);
                     let op = match op {
                         Operator::Add => hir::Arithmetic::Add,
                         Operator::Sub => hir::Arithmetic::Sub,
@@ -250,14 +262,14 @@ pub fn check(
                 Operator::Assignment(assign_ty) => {
                     // TODO: arithmetic assignment operations will be have to bound/handled by traits
                     ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
-                    let (lval, ty) = lval::check(ctx, l, scope, return_ty);
-                    let val = check(ctx, r, scope, ty, return_ty);
+                    let (lval, ty) = lval::check(ctx, l, scope, return_ty, noreturn);
+                    let val = check(ctx, r, scope, ty, return_ty, noreturn);
                     Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val), assign_ty, ty)
                 }
                 Operator::Or | Operator::And => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
-                    let l = check(ctx, l, scope, expected, return_ty);
-                    let r = check(ctx, r, scope, expected, return_ty);
+                    let l = check(ctx, l, scope, expected, return_ty, noreturn);
+                    let r = check(ctx, r, scope, expected, return_ty, noreturn);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
                     let cmp = if op == Operator::Or {
@@ -270,8 +282,8 @@ pub fn check(
                 Operator::Equals | Operator::NotEquals => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
                     let compared = ctx.hir.types.add_unknown();
-                    let l = check(ctx, l, scope, compared, return_ty);
-                    let r = check(ctx, r, scope, compared, return_ty);
+                    let l = check(ctx, l, scope, compared, return_ty, noreturn);
+                    let r = check(ctx, r, scope, compared, return_ty, noreturn);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
                     let cmp = if op == Operator::Equals {
@@ -285,8 +297,8 @@ pub fn check(
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
                     // FIXME: this will have to be bound by type like Ord
                     let compared = ctx.hir.types.add_unknown();
-                    let l = check(ctx, l, scope, compared, return_ty);
-                    let r = check(ctx, r, scope, compared, return_ty);
+                    let l = check(ctx, l, scope, compared, return_ty, noreturn);
+                    let r = check(ctx, r, scope, compared, return_ty, noreturn);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
                     let cmp = match op {
@@ -305,7 +317,7 @@ pub fn check(
         }
         Expr::As(val, new_ty) => {
             let from_ty = ctx.hir.types.add_unknown();
-            let val = check(ctx, *val, scope, from_ty, return_ty);
+            let val = check(ctx, *val, scope, from_ty, return_ty, noreturn);
             let val = ctx.hir.add(val);
             let new_type_info = ctx.hir.types.info_from_unresolved(
                 new_ty,
@@ -331,15 +343,17 @@ pub fn check(
         &Expr::MemberAccess {
             left,
             name: name_span,
-        } => check_member_access(ctx, left, name_span, expr, scope, expected, return_ty),
+        } => check_member_access(
+            ctx, left, name_span, expr, scope, expected, return_ty, noreturn,
+        ),
         &Expr::Index { expr, idx, end: _ } => {
             let array_ty = ctx.hir.types.add(TypeInfo::Array {
                 element: expected,
                 count: None,
             });
-            let array = check(ctx, expr, scope, array_ty, return_ty);
+            let array = check(ctx, expr, scope, array_ty, return_ty, noreturn);
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
-            let index = check(ctx, idx, scope, index_ty, return_ty);
+            let index = check(ctx, idx, scope, index_ty, return_ty, noreturn);
             Node::ArrayIndex {
                 array: ctx.hir.add(array),
                 index: ctx.hir.add(index),
@@ -348,7 +362,7 @@ pub fn check(
         }
         &Expr::TupleIdx { left, idx, .. } => {
             let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
-            let tuple_value = check(ctx, left, scope, tuple_ty, return_ty);
+            let tuple_value = check(ctx, left, scope, tuple_ty, return_ty, noreturn);
             let elem_types = match ctx.hir.types[tuple_ty] {
                 TypeInfo::Tuple(ids) => ids,
                 TypeInfo::Invalid => return Node::Invalid,
@@ -383,7 +397,8 @@ pub fn check(
             Node::Return(ctx.hir.add(Node::Unit))
         }
         &Expr::Return { val, .. } => {
-            let val = check(ctx, val, scope, return_ty, return_ty);
+            let val = check(ctx, val, scope, return_ty, return_ty, noreturn);
+            *noreturn = true;
             Node::Return(ctx.hir.add(val))
         }
 
@@ -397,8 +412,8 @@ pub fn check(
                 ast[expr].span(ast)
             });
             let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
-            let cond = check(ctx, cond, scope, bool_ty, return_ty);
-            let then = check(ctx, then, scope, expected, return_ty);
+            let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
+            let then = check(ctx, then, scope, expected, return_ty, &mut false);
             Node::IfElse {
                 cond: ctx.hir.add(cond),
                 then: ctx.hir.add(then),
@@ -413,9 +428,14 @@ pub fn check(
             else_,
         } => {
             let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
-            let cond = check(ctx, cond, scope, bool_ty, return_ty);
-            let then = check(ctx, then, scope, expected, return_ty);
-            let else_ = check(ctx, else_, scope, expected, return_ty);
+            let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
+            let mut then_noreturn = false;
+            let then = check(ctx, then, scope, expected, return_ty, &mut then_noreturn);
+            let mut else_noreturn = false;
+            let else_ = check(ctx, else_, scope, expected, return_ty, &mut else_noreturn);
+            if then_noreturn && else_noreturn {
+                *noreturn = true;
+            }
             Node::IfElse {
                 cond: ctx.hir.add(cond),
                 then: ctx.hir.add(then),
@@ -433,7 +453,7 @@ pub fn check(
                 ast[expr].span(ast)
             });
             let pattern_ty = ctx.hir.types.add_unknown();
-            let value = check(ctx, value, scope, pattern_ty, return_ty);
+            let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
                 module: scope.module,
                 parent: Some(scope),
@@ -452,7 +472,7 @@ pub fn check(
                 // TODO: Error::ConditionIsAlwaysTrue
                 // maybe even defer this exhaustion to check for this warning in non-trivial case
             }
-            let then = check(ctx, then, &mut body_scope, expected, return_ty);
+            let then = check(ctx, then, &mut body_scope, expected, return_ty, &mut false);
             Node::IfPatElse {
                 pat: ctx.hir.add_pattern(pat),
                 val: ctx.hir.add(value),
@@ -469,7 +489,7 @@ pub fn check(
             else_,
         } => {
             let pattern_ty = ctx.hir.types.add_unknown();
-            let value = check(ctx, value, scope, pattern_ty, return_ty);
+            let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
                 module: scope.module,
                 parent: Some(scope),
@@ -490,8 +510,27 @@ pub fn check(
             }
             let pat = ctx.hir.add_pattern(pat);
             let val = ctx.hir.add(value);
-            let then = check(ctx, then, &mut body_scope, expected, return_ty);
-            let else_ = check(ctx, else_, &mut body_scope, expected, return_ty);
+            let mut then_noreturn = false;
+            let then = check(
+                ctx,
+                then,
+                &mut body_scope,
+                expected,
+                return_ty,
+                &mut then_noreturn,
+            );
+            let mut else_noreturn = false;
+            let else_ = check(
+                ctx,
+                else_,
+                &mut body_scope,
+                expected,
+                return_ty,
+                &mut else_noreturn,
+            );
+            if then_noreturn && else_noreturn {
+                *noreturn = true;
+            }
             Node::IfPatElse {
                 pat,
                 val,
@@ -507,12 +546,13 @@ pub fn check(
             branch_count,
         } => {
             let matched_ty = ctx.hir.types.add_unknown();
-            let value = check(ctx, val, scope, matched_ty, return_ty);
+            let value = check(ctx, val, scope, matched_ty, return_ty, noreturn);
             let value = ctx.hir.add(value);
             let mut vars = dmap::new();
             let mut exhaustion = Exhaustion::None;
             let patterns = ctx.hir.add_invalid_patterns(branch_count);
             let branches = ctx.hir.add_invalid_nodes(branch_count);
+            let mut all_branches_noreturn = true;
             for i in 0..branch_count {
                 vars.clear();
                 let pat = ExprId(extra_branches + 2 * i);
@@ -526,9 +566,23 @@ pub fn check(
                     static_scope: None,
                 };
                 let branch = ExprId(extra_branches + 2 * i + 1);
-                let branch = check(ctx, branch, &mut scope, expected, return_ty);
+                let mut branch_noreturn = false;
+                let branch = check(
+                    ctx,
+                    branch,
+                    &mut scope,
+                    expected,
+                    return_ty,
+                    &mut branch_noreturn,
+                );
+                if !branch_noreturn {
+                    all_branches_noreturn = false;
+                }
                 vars = scope.variables;
                 ctx.hir.modify_node(hir::NodeId(branches.index + i), branch);
+            }
+            if all_branches_noreturn {
+                *noreturn = true;
             }
             Node::Match {
                 value,
@@ -544,9 +598,9 @@ pub fn check(
             body,
         } => {
             let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
-            let cond = check(ctx, cond, scope, bool_ty, return_ty);
+            let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let body_ty = ctx.hir.types.add_unknown();
-            let body = check(ctx, body, scope, body_ty, return_ty);
+            let body = check(ctx, body, scope, body_ty, return_ty, &mut false);
             Node::While {
                 cond: ctx.hir.add(cond),
                 body: ctx.hir.add(body),
@@ -559,7 +613,7 @@ pub fn check(
             body,
         } => {
             let value_ty = ctx.hir.types.add_unknown();
-            let val = check(ctx, val, scope, value_ty, return_ty);
+            let val = check(ctx, val, scope, value_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
                 parent: Some(scope),
                 module: scope.module,
@@ -577,7 +631,7 @@ pub fn check(
             let pat = ctx.hir.add_pattern(pat);
             let val = ctx.hir.add(val);
             let body_ty = ctx.hir.types.add_unknown();
-            let body = check(ctx, body, &mut body_scope, body_ty, return_ty);
+            let body = check(ctx, body, &mut body_scope, body_ty, return_ty, &mut false);
             Node::WhilePat {
                 pat,
                 val,
@@ -585,7 +639,9 @@ pub fn check(
             }
         }
 
-        &Expr::FunctionCall(call) => check_call(ctx, &ast[call], expr, scope, expected, return_ty),
+        &Expr::FunctionCall(call) => {
+            check_call(ctx, &ast[call], expr, scope, expected, return_ty, noreturn)
+        }
 
         Expr::Asm { .. } => todo!("implement inline assembly properly"),
     }
@@ -660,6 +716,7 @@ fn check_enum_literal(
     span: TSpan,
     ident: TSpan,
     args: ExprExtra,
+    noreturn: &mut bool,
 ) -> Node {
     let name = &ctx.ast[ident];
     let res = ctx
@@ -683,7 +740,7 @@ fn check_enum_literal(
             ctx.hir
                 .modify_node(arg_node_iter.next().unwrap(), ordinal_node);
             for ((arg, ty), r) in args.into_iter().zip(arg_type_iter).zip(arg_node_iter) {
-                let arg_node = check(ctx, arg, scope, ty, return_ty);
+                let arg_node = check(ctx, arg, scope, ty, return_ty, noreturn);
                 ctx.hir.modify_node(r, arg_node);
             }
             Node::TupleLiteral {
@@ -701,7 +758,7 @@ fn check_enum_literal(
             // the expected type was invalid, still check the arguments against an unknown type
             for arg in args.into_iter() {
                 let ty = ctx.hir.types.add_unknown();
-                check(ctx, arg, scope, ty, return_ty);
+                check(ctx, arg, scope, ty, return_ty, noreturn);
             }
             return Node::Invalid;
         }
@@ -738,6 +795,7 @@ fn check_struct_def(
     call: &Call,
     scope: &mut LocalScope,
     return_ty: LocalTypeId,
+    noreturn: &mut bool,
 ) -> Node {
     if struct_def.fields.len() != call.args.count() {
         ctx.compiler.errors.emit_err(
@@ -759,7 +817,7 @@ fn check_struct_def(
     {
         let info_or_idx = ctx.type_from_resolved(field_ty, generics);
         ctx.hir.types.replace(type_id, info_or_idx);
-        let node = check(ctx, arg, scope, type_id, return_ty);
+        let node = check(ctx, arg, scope, type_id, return_ty, noreturn);
         ctx.hir.modify_node(node_id, node);
     }
     Node::TupleLiteral {
@@ -776,9 +834,10 @@ fn check_member_access(
     scope: &mut LocalScope,
     expected: LocalTypeId,
     return_ty: LocalTypeId,
+    noreturn: &mut bool,
 ) -> Node {
     let left_ty = ctx.hir.types.add_unknown();
-    let left_node = check(ctx, left, scope, left_ty, return_ty);
+    let left_node = check(ctx, left, scope, left_ty, return_ty, noreturn);
     let name = &ctx.ast.src()[name_span.range()];
     match ctx.hir.types[left_ty] {
         TypeInfo::TypeItem { ty } => {
@@ -1038,9 +1097,10 @@ fn check_call(
     scope: &mut LocalScope,
     expected: LocalTypeId,
     return_ty: LocalTypeId,
+    noreturn: &mut bool,
 ) -> Node {
     let called_ty = ctx.hir.types.add_unknown();
-    let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty);
+    let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => Node::Invalid,
         TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
@@ -1051,7 +1111,15 @@ fn check_call(
                 match &*def {
                     ResolvedTypeDef::Struct(struct_def) => {
                         ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
-                        check_struct_def(ctx, &struct_def, generics, call, scope, return_ty)
+                        check_struct_def(
+                            ctx,
+                            &struct_def,
+                            generics,
+                            call,
+                            scope,
+                            return_ty,
+                            noreturn,
+                        )
                     }
                     ResolvedTypeDef::Enum(_) => {
                         ctx.compiler
@@ -1075,7 +1143,7 @@ fn check_call(
         } => {
             let signature = Rc::clone(ctx.compiler.get_signature(module, function));
 
-            match check_call_signature(
+            let call_node = match check_call_signature(
                 ctx,
                 expr,
                 expected,
@@ -1090,7 +1158,7 @@ fn check_call(
                         .hir
                         .add_nodes((0..call.args.count).map(|_| Node::Invalid));
                     for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(args.iter()) {
-                        let node = check(ctx, arg, scope, ty, return_ty);
+                        let node = check(ctx, arg, scope, ty, return_ty, noreturn);
                         ctx.hir.modify_node(node_id, node);
                     }
 
@@ -1106,7 +1174,11 @@ fn check_call(
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
+            };
+            if signature.return_type == Type::Primitive(Primitive::Never) {
+                *noreturn = true;
             }
+            call_node
         }
         TypeInfo::MethodItem {
             module,
@@ -1133,7 +1205,7 @@ fn check_call(
                     let mut arg_iter = args.iter();
                     ctx.hir.modify_node(arg_iter.next().unwrap(), called_node);
                     for ((arg, ty), node_id) in call.args.zip(arg_types.iter()).zip(arg_iter) {
-                        let node = check(ctx, arg, scope, ty, return_ty);
+                        let node = check(ctx, arg, scope, ty, return_ty, noreturn);
                         ctx.hir.modify_node(node_id, node);
                     }
 
@@ -1183,7 +1255,7 @@ fn check_call(
                 },
             );
             for ((r, arg), ty) in elem_iter.zip(call.args).zip(arg_types.iter()) {
-                let node = check(ctx, arg, scope, ty, return_ty);
+                let node = check(ctx, arg, scope, ty, return_ty, noreturn);
                 ctx.hir.modify_node(r, node);
             }
             Node::TupleLiteral {

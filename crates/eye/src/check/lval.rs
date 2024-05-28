@@ -15,6 +15,7 @@ pub fn check(
     expr: ExprId,
     scope: &mut LocalScope,
     return_ty: LocalTypeId,
+    noreturn: &mut bool,
 ) -> (LValue, LocalTypeId) {
     match &ctx.ast[expr] {
         &Expr::Ident { span } => {
@@ -33,7 +34,7 @@ pub fn check(
         &Expr::UnOp(_, UnOp::Deref, inner) => {
             let pointee = ctx.hir.types.add_unknown();
             let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
-            let node = expr::check(ctx, inner, scope, pointer, return_ty);
+            let node = expr::check(ctx, inner, scope, pointer, return_ty, noreturn);
             (LValue::Deref(ctx.hir.add(node)), pointee)
         }
         &Expr::MemberAccess {
@@ -42,7 +43,7 @@ pub fn check(
         } => {
             let name = &ctx.ast.src()[name_span.range()];
             let left_ty = ctx.hir.types.add_unknown();
-            let left_node = expr::check(ctx, left, scope, left_ty, return_ty);
+            let left_node = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
             match ctx.hir.types[left_ty] {
                 TypeInfo::ModuleItem(id) => {
                     let def =

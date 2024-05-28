@@ -48,7 +48,14 @@ pub fn check(
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
     };
-    let root = expr::check(&mut check_ctx, expr, &mut scope, expected, expected);
+    let root = expr::check(
+        &mut check_ctx,
+        expr,
+        &mut scope,
+        expected,
+        expected,
+        &mut false,
+    );
     let (hir, types) = check_ctx.finish(root);
     (hir, types)
 }

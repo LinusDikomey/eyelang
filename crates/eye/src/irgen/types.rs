@@ -93,20 +93,21 @@ pub fn get_def(
     }
 }
 
+/// returns None on invalid type, should always be handled correctly
 pub fn get_from_info(
     compiler: &mut Compiler,
     types: &TypeTable,
     ir_types: &mut IrTypes,
     ty: TypeInfo,
     generics: TypeRefs,
-) -> IrType {
-    match ty {
+) -> Option<IrType> {
+    Some(match ty {
         TypeInfo::Primitive(p) => get_primitive(p),
         TypeInfo::Integer => IrType::I32,
         TypeInfo::Float => IrType::F32,
         TypeInfo::TypeDef(id, inner_generics) => {
             let inner_generics =
-                get_multiple_infos(compiler, types, ir_types, inner_generics, generics);
+                get_multiple_infos(compiler, types, ir_types, inner_generics, generics)?;
             get_def(compiler, ir_types, id, inner_generics)
         }
         TypeInfo::Pointer(_) => IrType::Ptr,
@@ -114,7 +115,7 @@ pub fn get_from_info(
             element,
             count: Some(count),
         } => {
-            let element = get_from_info(compiler, types, ir_types, types[element], generics);
+            let element = get_from_info(compiler, types, ir_types, types[element], generics)?;
             IrType::Array(ir_types.add(element), count)
         }
         TypeInfo::Enum(id) => {
@@ -123,7 +124,7 @@ pub fn get_from_info(
             for &variant in variants {
                 let variant = &types[variant];
                 let args =
-                    get_multiple_infos(compiler, types, ir_types, variant.args, TypeRefs::EMPTY);
+                    get_multiple_infos(compiler, types, ir_types, variant.args, TypeRefs::EMPTY)?;
                 let variant_layout = ir::type_layout(IrType::Tuple(args), ir_types);
                 accumulated_layout.accumulate_variant(variant_layout);
             }
@@ -132,7 +133,7 @@ pub fn get_from_info(
         TypeInfo::Tuple(members) => {
             let member_refs = ir_types.add_multiple((0..members.count).map(|_| IrType::Unit));
             for (ty, r) in members.iter().zip(member_refs.iter()) {
-                let ty = get_from_info(compiler, types, ir_types, types[ty], generics);
+                let ty = get_from_info(compiler, types, ir_types, types[ty], generics)?;
                 ir_types.replace(r, ty);
             }
             IrType::Tuple(member_refs)
@@ -148,8 +149,8 @@ pub fn get_from_info(
         | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }
         | TypeInfo::EnumVariantItem { .. }
-        | TypeInfo::Invalid => panic!("incomplete type during lowering to ir: {ty:?}"),
-    }
+        | TypeInfo::Invalid => return None,
+    })
 }
 
 pub fn get_multiple_infos(
@@ -158,13 +159,13 @@ pub fn get_multiple_infos(
     ir_types: &mut IrTypes,
     ids: LocalTypeIds,
     generics: TypeRefs,
-) -> TypeRefs {
+) -> Option<TypeRefs> {
     let refs = ir_types.add_multiple((0..ids.count).map(|_| IrType::Unit));
     for (ty, r) in ids.iter().zip(refs.iter()) {
-        let ty = get_from_info(compiler, types, ir_types, types[ty], generics);
+        let ty = get_from_info(compiler, types, ir_types, types[ty], generics)?;
         ir_types.replace(r, ty);
     }
-    refs
+    Some(refs)
 }
 
 pub fn int_from_variant_count(count: u32) -> IrType {
