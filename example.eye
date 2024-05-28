@@ -27,6 +27,6 @@ fruit_to_string :: fn(f Fruit) -> str:
     else "Banana"
 
 # traits aren't finished yet and aren't usable right now
-ToString :: trait {
-    to_string :: fn -> *i8
-}
+# ToString :: trait {
+#     to_string :: fn -> *i8
+# }

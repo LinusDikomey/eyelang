@@ -137,6 +137,8 @@ impl fmt::Display for RefVal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
+    pub const MISSING: Self = Self(u32::MAX);
+
     pub fn bytes(self) -> [u8; 4] {
         self.0.to_le_bytes()
     }

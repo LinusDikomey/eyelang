@@ -44,7 +44,7 @@ block_never :: fn -> i16 {
     x = "Also not in the IR"
 }
 
-match_never :: fn(x i64) -> str: match i8 x {
+match_never :: fn(x i64) -> str: match x as i8 {
     -128..20: "A",
     21: {
         x := 3

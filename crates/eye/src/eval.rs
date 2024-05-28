@@ -1,5 +1,5 @@
 use id::ModuleId;
-use types::Type;
+use types::{Primitive, Type};
 
 use crate::{
     error::Error,
@@ -7,7 +7,7 @@ use crate::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
     },
-    type_table::TypeTable,
+    type_table::{TypeInfo, TypeTable},
     Compiler, Def,
 };
 
@@ -16,6 +16,7 @@ pub enum ConstValue {
     /// represents an undefined value, for example when a global is not initialized
     Undefined,
     Unit,
+    Bool(bool),
     Int(u64),
     Float(f64),
 }
@@ -24,6 +25,7 @@ impl ConstValue {
         match self {
             Self::Undefined => print!("undefined"),
             Self::Unit => print!("()"),
+            Self::Bool(b) => print!("{b}"),
             Self::Int(n) => print!("{n}"),
             Self::Float(n) => print!("{n}"),
         }
@@ -95,6 +97,12 @@ pub fn def_expr(
                     let const_val = match val {
                         Val::Invalid => panic!("internal error during evaluation occured"),
                         Val::Unit => ConstValue::Unit,
+                        Val::Int(n)
+                            if matches!(types[expected], TypeInfo::Primitive(Primitive::Bool)) =>
+                        {
+                            debug_assert!(n < 2);
+                            ConstValue::Bool(n != 0)
+                        }
                         Val::Int(n) => ConstValue::Int(n),
                         Val::F32(n) => ConstValue::Float(n as f64),
                         Val::F64(n) => ConstValue::Float(n),

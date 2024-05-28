@@ -74,7 +74,7 @@ Vec3 :: struct {
 
 addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
 printVec3 :: fn(v Vec3) {
-    std.c.printf("Vec3[%d, %d, %d]\n".ptr, i32 v.x, i32 v.y, i32 v.z)
+    std.c.printf("Vec3[%d, %d, %d]\n".ptr, v.x as i32, v.y as i32, v.z as i32)
 }
 
 Transform :: struct {

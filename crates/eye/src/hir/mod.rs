@@ -9,7 +9,7 @@ use crate::{
         ast::{FunctionId, GlobalId},
         token::AssignType,
     },
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeTable, VariantId},
+    type_table::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable, VariantId},
     Compiler,
 };
 
@@ -38,13 +38,6 @@ impl HIR {
         let indent = || indent_n(indent_count);
         match &self[node] {
             Node::Invalid => eprint!("(invalid)"),
-            &Node::CheckPattern(pat, val) => {
-                eprint!("(is ");
-                self.dump(val, compiler, types, indent_count);
-                eprint!(" ");
-                self.dump_pattern(pat, compiler, types);
-                eprint!(")");
-            }
             Node::Block(ids) => {
                 eprintln!("(");
                 for id in ids.iter() {
@@ -265,7 +258,29 @@ impl HIR {
             } => {
                 eprint!("(if ");
                 self.dump(cond, compiler, types, indent_count);
-                eprintln!("");
+                eprintln!();
+                indent_n(indent_count + 1);
+                self.dump(then, compiler, types, indent_count + 1);
+                eprintln!();
+                indent_n(indent_count + 1);
+                self.dump(else_, compiler, types, indent_count + 1);
+                eprintln!();
+                indent();
+                eprint!("): ");
+                types.dump_type(compiler, resulting_ty);
+            }
+            &Node::IfPatElse {
+                pat,
+                val,
+                then,
+                else_,
+                resulting_ty,
+            } => {
+                eprint!("(if-pat ");
+                self.dump_pattern(pat, compiler, types);
+                eprint!(" ");
+                self.dump(val, compiler, types, indent_count);
+                eprintln!();
                 indent_n(indent_count + 1);
                 self.dump(then, compiler, types, indent_count + 1);
                 eprintln!();
@@ -281,23 +296,34 @@ impl HIR {
                 branch_index,
                 pattern_index,
                 branch_count,
+                resulting_ty,
             } => {
                 eprint!("(match ");
                 self.dump(value, compiler, types, indent_count);
                 for i in 0..branch_count {
                     eprintln!();
-                    indent();
+                    indent_n(indent_count + 1);
                     let pattern = PatternId(pattern_index + i);
                     let branch = NodeId(branch_index + i);
                     self.dump_pattern(pattern, compiler, types);
                     eprint!(" ");
                     self.dump(branch, compiler, types, indent_count + 1);
                 }
-                eprint!("\n)")
+                eprint!("\n): ");
+                types.dump_type(compiler, resulting_ty);
             }
             &Node::While { cond, body } => {
                 eprint!("(while ");
                 self.dump(cond, compiler, types, indent_count);
+                eprint!(" ");
+                self.dump(body, compiler, types, indent_count);
+                eprint!(")");
+            }
+            &Node::WhilePat { pat, val, body } => {
+                eprint!("(while ");
+                self.dump_pattern(pat, compiler, types);
+                eprint!(" ");
+                self.dump(val, compiler, types, indent_count);
                 eprint!(" ");
                 self.dump(body, compiler, types, indent_count);
                 eprint!(")");
@@ -383,6 +409,27 @@ impl HIR {
                 eprint!("{}", min_max.1);
                 if inclusive {
                     eprint!(" inclusive");
+                }
+                eprint!(")");
+            }
+            Pattern::EnumVariant {
+                ordinal,
+                types: enum_types,
+                args,
+            } => {
+                eprint!("(enum-variant {ordinal:?}: ");
+                types.dump_type(compiler, LocalTypeId(enum_types));
+                for (arg, ty) in args.iter().zip(
+                    LocalTypeIds {
+                        idx: enum_types + 1,
+                        count: args.count,
+                    }
+                    .iter(),
+                ) {
+                    eprint!(" ");
+                    self.dump_pattern(arg, compiler, types);
+                    eprint!(": ");
+                    types.dump_type(compiler, ty);
                 }
                 eprint!(")");
             }
@@ -486,20 +533,14 @@ pub struct PatternIds {
 }
 impl PatternIds {
     pub fn iter(self) -> impl Iterator<Item = PatternId> {
-        (self.index..self.count).map(PatternId)
+        (self.index..self.index + self.count).map(PatternId)
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum Node {
     Invalid,
-
-    /// used for places where patterns lead to conditional code.
-    /// Checks the pattern against the value.
-    CheckPattern(PatternId, NodeId),
-
     Block(NodeIds),
-
     Unit,
     IntLiteral {
         val: u128,
@@ -570,14 +611,27 @@ pub enum Node {
         else_: NodeId,
         resulting_ty: LocalTypeId,
     },
+    IfPatElse {
+        pat: PatternId,
+        val: NodeId,
+        then: NodeId,
+        else_: NodeId,
+        resulting_ty: LocalTypeId,
+    },
     Match {
         value: NodeId,
         branch_index: u32,
         pattern_index: u32,
         branch_count: u32,
+        resulting_ty: LocalTypeId,
     },
     While {
         cond: NodeId,
+        body: NodeId,
+    },
+    WhilePat {
+        pat: PatternId,
+        val: NodeId,
         body: NodeId,
     },
     Call {
@@ -616,6 +670,12 @@ pub enum Pattern {
         ty: LocalTypeId,
         min_max_signs: (bool, bool),
         inclusive: bool,
+    },
+    EnumVariant {
+        ordinal: OrdinalType,
+        /// always one more than args because it contains the ordinal type first
+        types: u32,
+        args: PatternIds,
     },
 }
 
@@ -775,6 +835,10 @@ impl HIRBuilder {
             index: start as _,
             count: count as _,
         }
+    }
+
+    pub fn add_invalid_patterns(&mut self, count: u32) -> PatternIds {
+        self.add_patterns((0..count).map(|_| Pattern::Invalid))
     }
 
     pub fn add_cast(&mut self, cast: Cast) -> CastId {

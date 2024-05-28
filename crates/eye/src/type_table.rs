@@ -90,7 +90,7 @@ impl TypeTable {
         debug_assert!(args.count != 0, "enum args should contain ordinal type");
         debug_assert!(
             matches!(
-                self.types[args.start as usize],
+                self.types[args.idx as usize],
                 TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)
             ),
             "ordinal should not be filled in yet"
@@ -98,7 +98,7 @@ impl TypeTable {
         let variants = &mut self.enums[id.idx()].variants;
         if let Some(&first) = variants.first() {
             let ordinal_ty = int_ty_from_variant_count((variants.len() + 1) as u32);
-            let idx = self.variants[first.0 as usize].args.start;
+            let idx = self.variants[first.0 as usize].args.idx;
             // update the ordinal type because it could have changed with the increased variant
             // count
             self.types[idx as usize] = TypeInfoOrIdx::TypeInfo(ordinal_ty);
@@ -107,7 +107,7 @@ impl TypeTable {
         } else {
             // we are adding the first variant so we can fill in the ordinal type into the first
             // arg (as unit for now since only one variant is present)
-            self.types[args.start as usize] =
+            self.types[args.idx as usize] =
                 TypeInfoOrIdx::TypeInfo(TypeInfo::Primitive(Primitive::Unit));
         }
         let ordinal = variants.len() as u32;
@@ -146,7 +146,7 @@ impl TypeTable {
             .extend(infos.into_iter().map(TypeInfoOrIdx::TypeInfo));
         let count = self.types.len() - start;
         LocalTypeIds {
-            start: start as _,
+            idx: start as _,
             count: count as _,
         }
     }
@@ -159,7 +159,7 @@ impl TypeTable {
         self.types.extend(infos.into_iter());
         let count = self.types.len() - start;
         LocalTypeIds {
-            start: start as _,
+            idx: start as _,
             count: count as _,
         }
     }
@@ -169,7 +169,7 @@ impl TypeTable {
         self.types.extend(
             std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(count as usize),
         );
-        LocalTypeIds { start, count }
+        LocalTypeIds { idx: start, count }
     }
 
     pub fn replace(&mut self, id: LocalTypeId, info_or_idx: impl Into<TypeInfoOrIdx>) {
@@ -324,7 +324,7 @@ impl TypeTable {
             }
             types::UnresolvedType::Tuple(elems, _) => {
                 let ids = LocalTypeIds {
-                    start: self.types.len() as _,
+                    idx: self.types.len() as _,
                     count: elems.len() as _,
                 };
                 self.types.extend(
@@ -430,6 +430,94 @@ impl TypeTable {
     ) {
         if let Err((a, b)) = self.try_specify_resolved(id, resolved, generics, compiler) {
             self.mismatched_type_error(compiler, a, b, span());
+        }
+    }
+
+    pub fn specify_enum_literal(
+        &mut self,
+        expected: LocalTypeId,
+        name: &str,
+        arg_count: u32,
+        compiler: &mut Compiler,
+    ) -> Result<(OrdinalType, LocalTypeIds), Option<Error>> {
+        // Do the type checking manually instead of using `specify`.
+        // This allows skipping construction of unneeded enum variant representations.
+        match self[expected] {
+            TypeInfo::Invalid => {
+                return Err(None);
+            }
+            TypeInfo::Enum(id) => {
+                let variants = self.get_enum_variants(id);
+                if let Some(variant) = variants
+                    .iter()
+                    .copied()
+                    .find(|&variant| (&*self[variant].name == name))
+                {
+                    let arg_types = self[variant].args;
+                    Ok((OrdinalType::Inferred(variant), arg_types))
+                } else {
+                    let arg_types = self.add_multiple_unknown(arg_count + 1);
+                    let variant = self.append_enum_variant(id, name.into(), arg_types);
+                    Ok((OrdinalType::Inferred(variant), arg_types))
+                }
+            }
+            TypeInfo::Unknown => {
+                let arg_types = self.add_multiple_unknown(arg_count + 1);
+                let enum_id = self.add_enum_type();
+                let variant = self.append_enum_variant(enum_id, name.into(), arg_types);
+                self.replace(expected, TypeInfo::Enum(enum_id));
+                Ok((OrdinalType::Inferred(variant), arg_types))
+            }
+            TypeInfo::TypeDef(id, generics) => {
+                let def = Rc::clone(&compiler.get_resolved_type_def(id).def);
+                if let ResolvedTypeDef::Enum(enum_) = &*def {
+                    let variant = enum_.variants.iter().zip(0..).find_map(
+                        |((variant_name, arg_types), i)| {
+                            (variant_name == name).then_some((i, &*arg_types))
+                        },
+                    );
+                    if let Some((variant_index, arg_types)) = variant {
+                        if arg_types.len() != arg_count as usize {
+                            Err(Some(Error::InvalidArgCount {
+                                expected: arg_types.len() as _,
+                                varargs: false,
+                                found: arg_count,
+                            }))
+                        } else {
+                            let arg_type_ids =
+                                self.add_multiple_unknown(arg_types.len() as u32 + 1);
+                            let mut arg_type_iter = arg_type_ids.iter();
+                            self.replace(
+                                arg_type_iter.next().unwrap(),
+                                int_ty_from_variant_count(enum_.variants.len() as u32),
+                            );
+                            for (r, ty) in arg_type_ids.iter().zip(arg_types.iter()) {
+                                let ty = self.from_generic_resolved(compiler, ty, generics);
+                                self.replace(r, ty);
+                            }
+
+                            Ok((OrdinalType::Known(variant_index), arg_type_ids))
+                        }
+                    } else {
+                        Err(Some(Error::NonexistantEnumVariant))
+                    }
+                } else {
+                    let mut expected_str = String::new();
+                    self.type_to_string(compiler, self[expected], &mut expected_str);
+                    Err(Some(Error::MismatchedType {
+                        expected: expected_str,
+                        found: format!("enum variant \"{name}\""),
+                    }))
+                }
+            }
+            _ => {
+                let mut expected_str = String::new();
+                self.type_to_string(compiler, self[expected], &mut expected_str);
+                Err(Some(Error::MismatchedType {
+                    expected: expected_str,
+                    found: format!("enum variant \"{name}\""),
+                }))
+            }
         }
     }
 
@@ -797,18 +885,18 @@ fn unify(
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocalTypeIds {
-    start: u32,
+    pub idx: u32,
     pub count: u32,
 }
 impl LocalTypeIds {
-    pub const EMPTY: Self = Self { start: 0, count: 0 };
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
 
     pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
-        (self.start..self.start + self.count).map(LocalTypeId)
+        (self.idx..self.idx + self.count).map(LocalTypeId)
     }
 
     pub fn nth(self, i: u32) -> Option<LocalTypeId> {
-        (i < self.count).then_some(LocalTypeId(self.start + i))
+        (i < self.count).then_some(LocalTypeId(self.idx + i))
     }
 }
 
@@ -850,6 +938,11 @@ pub enum TypeInfo {
     Generic(u8),
     Invalid,
 }
+impl TypeInfo {
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, Self::Invalid)
+    }
+}
 impl From<Primitive> for TypeInfo {
     fn from(value: Primitive) -> Self {
         TypeInfo::Primitive(value)
@@ -869,4 +962,10 @@ pub struct InferredEnumVariant {
     pub name: Box<str>,
     pub ordinal: u32,
     pub args: LocalTypeIds,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OrdinalType {
+    Inferred(VariantId),
+    Known(u32),
 }

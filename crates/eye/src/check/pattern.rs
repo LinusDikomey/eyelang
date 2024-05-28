@@ -134,6 +134,46 @@ pub fn check(
                 Pattern::Invalid
             }
         }
+        &Expr::EnumLiteral { span, ident, args } => {
+            let name = &ctx.ast[ident];
+            let res = ctx
+                .hir
+                .types
+                .specify_enum_literal(expected, &name, args.count, ctx.compiler);
+            match res {
+                Ok((ordinal, arg_types)) => {
+                    debug_assert_eq!(arg_types.count, args.count + 1);
+                    let arg_patterns = ctx.hir.add_invalid_patterns(args.count);
+                    for ((arg_ty, arg), r) in
+                        arg_types.iter().skip(1).zip(args).zip(arg_patterns.iter())
+                    {
+                        let mut arg_exhaustion = Exhaustion::None;
+                        let pat = check(ctx, variables, &mut arg_exhaustion, arg, arg_ty);
+                        ctx.hir.modify_pattern(r, pat);
+                        // TODO: enum argument exhaustion
+                    }
+                    Pattern::EnumVariant {
+                        ordinal,
+                        types: arg_types.idx,
+                        args: arg_patterns,
+                    }
+                }
+                Err(err) => {
+                    ctx.invalidate(expected);
+                    if let Some(err) = err {
+                        ctx.compiler
+                            .errors
+                            .emit_err(err.at_span(span.in_mod(ctx.module)));
+                    }
+                    for arg in args {
+                        let mut arg_exhaustion = Exhaustion::None;
+                        let arg_ty = ctx.hir.types.add_unknown();
+                        check(ctx, variables, &mut arg_exhaustion, arg, arg_ty);
+                    }
+                    Pattern::Invalid
+                }
+            }
+        }
         /*
         &Expr::Tuple(span, members) => {
             let member_types = ctx.hir.types.add_multiple_unknown(members.count);

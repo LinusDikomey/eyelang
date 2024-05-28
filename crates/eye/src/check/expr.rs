@@ -13,7 +13,7 @@ use crate::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
     },
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, VariantId},
+    type_table::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo},
 };
 
 use super::{exhaust::Exhaustion, lval, pattern, Ctx};
@@ -45,6 +45,10 @@ pub fn check(
                     check(ctx, item, &mut scope, unknown, return_ty)
                 })
                 .collect::<Vec<_>>();
+            // TODO: check noreturn here and only specify unit type if the block returns
+            /* ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
+                ast[expr].span(ast)
+            }); */
             Node::Block(ctx.hir.add_nodes(items))
         }
         &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty),
@@ -264,6 +268,7 @@ pub fn check(
                     Node::Comparison(l, r, cmp)
                 }
                 Operator::Equals | Operator::NotEquals => {
+                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
                     let compared = ctx.hir.types.add_unknown();
                     let l = check(ctx, l, scope, compared, return_ty);
                     let r = check(ctx, r, scope, compared, return_ty);
@@ -277,6 +282,7 @@ pub fn check(
                     Node::Comparison(l, r, cmp)
                 }
                 Operator::LT | Operator::GT | Operator::LE | Operator::GE => {
+                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
                     // FIXME: this will have to be bound by type like Ord
                     let compared = ctx.hir.types.add_unknown();
                     let l = check(ctx, l, scope, compared, return_ty);
@@ -441,10 +447,10 @@ pub fn check(
                 // TODO: Error::ConditionIsAlwaysTrue
                 // maybe even defer this exhaustion to check for this warning in non-trivial case
             }
-            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(value));
             let then = check(ctx, then, &mut body_scope, expected, return_ty);
-            Node::IfElse {
-                cond: ctx.hir.add(cond),
+            Node::IfPatElse {
+                pat: ctx.hir.add_pattern(pat),
+                val: ctx.hir.add(value),
                 then: ctx.hir.add(then),
                 else_: ctx.hir.add(Node::Unit),
                 resulting_ty: expected,
@@ -477,11 +483,13 @@ pub fn check(
                 // TODO: Error::ConditionIsAlwaysTrue
                 // maybe even defer this exhaustion to check for this warning in non-trivial case
             }
-            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(value));
+            let pat = ctx.hir.add_pattern(pat);
+            let val = ctx.hir.add(value);
             let then = check(ctx, then, &mut body_scope, expected, return_ty);
             let else_ = check(ctx, else_, &mut body_scope, expected, return_ty);
-            Node::IfElse {
-                cond: ctx.hir.add(cond),
+            Node::IfPatElse {
+                pat,
+                val,
                 then: ctx.hir.add(then),
                 else_: ctx.hir.add(else_),
                 resulting_ty: expected,
@@ -498,9 +506,7 @@ pub fn check(
             let value = ctx.hir.add(value);
             let mut vars = dmap::new();
             let mut exhaustion = Exhaustion::None;
-            let patterns = ctx
-                .hir
-                .add_patterns((0..branch_count).map(|_| hir::Pattern::Invalid));
+            let patterns = ctx.hir.add_invalid_patterns(branch_count);
             let branches = ctx.hir.add_invalid_nodes(branch_count);
             for i in 0..branch_count {
                 vars.clear();
@@ -524,6 +530,7 @@ pub fn check(
                 branch_index: branches.index,
                 pattern_index: patterns.index,
                 branch_count,
+                resulting_ty: expected,
             }
         }
         &Expr::While {
@@ -562,11 +569,13 @@ pub fn check(
                 pat,
                 value_ty,
             );
-            let cond = Node::CheckPattern(ctx.hir.add_pattern(pat), ctx.hir.add(val));
+            let pat = ctx.hir.add_pattern(pat);
+            let val = ctx.hir.add(val);
             let body_ty = ctx.hir.types.add_unknown();
             let body = check(ctx, body, &mut body_scope, body_ty, return_ty);
-            Node::While {
-                cond: ctx.hir.add(cond),
+            Node::WhilePat {
+                pat,
+                val,
                 body: ctx.hir.add(body),
             }
         }
@@ -617,6 +626,9 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
                 ConstValue::Unit => {
                     ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
                 }
+                ConstValue::Bool(_) => {
+                    ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |_| span)
+                }
                 ConstValue::Int(_) => {
                     ctx.specify(expected, TypeInfo::Integer, |_| span);
                 }
@@ -644,102 +656,11 @@ fn check_enum_literal(
     ident: TSpan,
     args: ExprExtra,
 ) -> Node {
-    // Do the type checking manually instead of using `specify`.
-    // This allows skipping construction of unneeded enum variant representations.
-
     let name = &ctx.ast[ident];
-
-    enum OrdinalType {
-        Inferred(VariantId),
-        Known(u32),
-    }
-    let res =
-        match ctx.hir.types[expected] {
-            TypeInfo::Invalid => {
-                for arg in args.into_iter() {
-                    let ty = ctx.hir.types.add_unknown();
-                    check(ctx, arg, scope, ty, return_ty);
-                }
-                return Node::Invalid;
-            }
-            TypeInfo::Enum(id) => {
-                let variants = ctx.hir.types.get_enum_variants(id);
-                if let Some(variant) = variants
-                    .iter()
-                    .copied()
-                    .find(|&variant| (&*ctx.hir.types[variant].name == name))
-                {
-                    let arg_types = ctx.hir.types[variant].args;
-                    Ok((OrdinalType::Inferred(variant), arg_types))
-                } else {
-                    let arg_types = ctx.hir.types.add_multiple_unknown(args.count + 1);
-                    let variant = ctx
-                        .hir
-                        .types
-                        .append_enum_variant(id, name.into(), arg_types);
-                    Ok((OrdinalType::Inferred(variant), arg_types))
-                }
-            }
-            TypeInfo::Unknown => {
-                let arg_types = ctx.hir.types.add_multiple_unknown(args.count + 1);
-                let enum_id = ctx.hir.types.add_enum_type();
-                let variant = ctx
-                    .hir
-                    .types
-                    .append_enum_variant(enum_id, name.into(), arg_types);
-                ctx.hir.types.replace(expected, TypeInfo::Enum(enum_id));
-                Ok((OrdinalType::Inferred(variant), arg_types))
-            }
-            TypeInfo::TypeDef(id, generics) => {
-                let def = Rc::clone(&ctx.compiler.get_resolved_type_def(id).def);
-                if let ResolvedTypeDef::Enum(enum_) = &*def {
-                    let variant = enum_.variants.iter().zip(0..).find_map(
-                        |((variant_name, arg_types), i)| {
-                            (variant_name == name).then_some((i, &*arg_types))
-                        },
-                    );
-                    if let Some((variant_index, arg_types)) = variant {
-                        if arg_types.len() != args.count as usize {
-                            Err(Error::InvalidArgCount {
-                                expected: arg_types.len() as _,
-                                varargs: false,
-                                found: args.count,
-                            }
-                            .at_span(span.in_mod(ctx.module)))
-                        } else {
-                            let arg_type_ids = ctx
-                                .hir
-                                .types
-                                .add_multiple_unknown(arg_types.len() as u32 + 1);
-                            let mut arg_type_iter = arg_type_ids.iter();
-                            ctx.hir.types.replace(
-                                arg_type_iter.next().unwrap(),
-                                int_ty_from_variant_count(enum_.variants.len() as u32),
-                            );
-                            for (r, ty) in arg_type_ids.iter().zip(arg_types.iter()) {
-                                let ty = ctx.type_from_resolved(ty, generics);
-                                ctx.hir.types.replace(r, ty);
-                            }
-
-                            Ok((OrdinalType::Known(variant_index), arg_type_ids))
-                        }
-                    } else {
-                        Err(Error::NonexistantEnumVariant.at_span(ident.in_mod(ctx.module)))
-                    }
-                } else {
-                    Err(Error::MismatchedType {
-                        expected: ctx.type_to_string(ctx.hir.types[expected]),
-                        found: "an enum variant".to_owned(),
-                    }
-                    .at_span(span.in_mod(ctx.module)))
-                }
-            }
-            _ => Err(Error::MismatchedType {
-                expected: ctx.type_to_string(ctx.hir.types[expected]),
-                found: "an enum variant".to_owned(),
-            }
-            .at_span(span.in_mod(ctx.module))),
-        };
+    let res = ctx
+        .hir
+        .types
+        .specify_enum_literal(expected, name, args.count, ctx.compiler);
     match res {
         Ok((variant_index, arg_type_ids)) => {
             debug_assert_eq!(arg_type_ids.count, args.count + 1);
@@ -767,8 +688,17 @@ fn check_enum_literal(
         }
         Err(err) => {
             ctx.invalidate(expected);
-            ctx.compiler.errors.emit_err(err);
-            Node::Invalid
+            if let Some(err) = err {
+                ctx.compiler
+                    .errors
+                    .emit_err(err.at_span(span.in_mod(ctx.module)));
+            }
+            // the expected type was invalid, still check the arguments against an unknown type
+            for arg in args.into_iter() {
+                let ty = ctx.hir.types.add_unknown();
+                check(ctx, arg, scope, ty, return_ty);
+            }
+            return Node::Invalid;
         }
     }
 }

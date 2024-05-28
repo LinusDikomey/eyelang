@@ -174,8 +174,8 @@ impl<'a> IrBuilder<'a> {
         );
 
         #[cfg(debug_assertions)]
-        for pos in &self.blocks {
-            assert_ne!(*pos, u32::MAX, "block wasn't initialized");
+        for (pos, i) in self.blocks.iter().copied().zip(0..) {
+            assert_ne!(pos, u32::MAX, "block {} wasn't initialized", BlockIndex(i));
         }
 
         FunctionIr {
@@ -197,12 +197,17 @@ impl<'a> IrBuilder<'a> {
         self.current_block_terminated = true;
         let (tag, data) = match terminator {
             Terminator::Ret(val) => (Tag::Ret, Data { un_op: val }),
-            Terminator::Goto(block) => (Tag::Goto, Data { block }),
+            Terminator::Goto(block) => {
+                debug_assert!(block != BlockIndex::MISSING);
+                (Tag::Goto, Data { block })
+            }
             Terminator::Branch {
                 cond,
                 on_true,
                 on_false,
             } => {
+                debug_assert!(on_true != BlockIndex::MISSING);
+                debug_assert!(on_false != BlockIndex::MISSING);
                 let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
                 self.extra_data(&on_false.0.to_le_bytes());
                 (

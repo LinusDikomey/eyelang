@@ -196,8 +196,8 @@ unsafe fn build_func(
                         LLVMBuildRetVoid(builder)
                     }
                 } else {
-                    let r = get_ref(&instructions, data.un_op);
-                    if let Some(r) = r {
+                    let (r, ty) = get_ref_and_type(&instructions, data.un_op);
+                    if let Some(r) = r.and_then(|r| (!matches!(ty, IrType::Unit)).then_some(r)) {
                         LLVMBuildRet(builder, r)
                     } else {
                         LLVMBuildRetVoid(builder)

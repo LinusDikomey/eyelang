@@ -7,14 +7,14 @@ use ::types::{Primitive, Type};
 use id::ModuleId;
 use ir::builder::{BinOp, Terminator};
 use ir::{builder::IrBuilder, IrType, Ref};
-use ir::{RefVal, TypeRefs};
+use ir::{BlockIndex, RefVal, TypeRefs};
 
 use crate::compiler::FunctionToGenerate;
 use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::type_table::LocalTypeIds;
+use crate::type_table::{LocalTypeId, LocalTypeIds, OrdinalType};
 use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
@@ -192,15 +192,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
     );
     let value = match &ctx.hir[node] {
         Node::Invalid => build_crash_point(ctx, noreturn),
-
-        &Node::CheckPattern(pat, value) => {
-            let value = lower(ctx, value, noreturn);
-            if *noreturn {
-                return ValueOrPlace::Value(Ref::UNDEF);
-            }
-            lower_pattern(ctx, pat, value, noreturn)
-        }
-
         Node::Block(items) => {
             for item in items.iter() {
                 lower(ctx, item, noreturn);
@@ -210,7 +201,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             }
             Ref::UNIT
         }
-
         Node::Unit => Ref::UNIT,
         &Node::IntLiteral { val, ty } => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
@@ -300,7 +290,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
         &Node::DeclareWithVal { pattern, val } => {
             let val = lower(ctx, val, noreturn);
             if !*noreturn {
-                lower_pattern(ctx, pattern, val, noreturn);
+                lower_pattern(ctx, pattern, val, BlockIndex::MISSING, noreturn);
             }
             Ref::UNIT
         }
@@ -352,6 +342,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             let const_val = &ctx.compiler.const_values[id.idx()];
             match const_val {
                 ConstValue::Unit => Ref::UNIT,
+                ConstValue::Bool(true) => Ref::val(RefVal::True),
+                ConstValue::Bool(false) => Ref::val(RefVal::False),
                 &ConstValue::Int(num) => {
                     let ty = ctx.types[ty];
                     match ty {
@@ -391,7 +383,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             if *noreturn {
                 return ValueOrPlace::Value(Ref::UNDEF);
             }
-            ctx.builder.build_neg(value, IrType::U1)
+            ctx.builder.build_not(value, IrType::U1)
         }
         &Node::AddressOf { inner, value_ty } => {
             let value = lower_expr(ctx, inner, noreturn);
@@ -560,56 +552,105 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             }
             let then_block = ctx.builder.create_block();
             let else_block = ctx.builder.create_block();
-            // after_block is a closure that creates the block lazily and returns it
-            let mut after_block = {
-                let mut after_block = None;
-                move |ctx: &mut Ctx| {
-                    after_block.unwrap_or_else(|| {
-                        let block = ctx.builder.create_block();
-                        after_block = Some(block);
-                        block
-                    })
-                }
-            };
             ctx.builder.terminate_block(Terminator::Branch {
                 cond,
                 on_true: then_block,
                 on_false: else_block,
             });
-            let mut check_branch =
-                |ctx: &mut Ctx, value: NodeId| -> Option<(ir::BlockIndex, Ref)> {
-                    let mut noreturn = false;
-                    let val = lower(ctx, value, &mut noreturn);
-                    (!noreturn).then(|| {
-                        let block = ctx.builder.current_block();
-                        let after_block = after_block(ctx);
-                        ctx.builder.terminate_block(Terminator::Goto(after_block));
-                        (block, val)
-                    })
+            lower_if_else_branches(
+                ctx,
+                noreturn,
+                then,
+                else_,
+                then_block,
+                else_block,
+                resulting_ty,
+            )
+        }
+        &Node::IfPatElse {
+            pat,
+            val,
+            then,
+            else_,
+            resulting_ty,
+        } => {
+            let val = lower(ctx, val, noreturn);
+            if *noreturn {
+                return ValueOrPlace::Value(Ref::UNDEF);
+            }
+            let then_block = ctx.builder.create_block();
+            let else_block = ctx.builder.create_block();
+            lower_pattern(ctx, pat, val, else_block, noreturn);
+            if *noreturn {
+                return ValueOrPlace::Value(Ref::UNDEF);
+            }
+            lower_if_else_branches(
+                ctx,
+                noreturn,
+                then,
+                else_,
+                then_block,
+                else_block,
+                resulting_ty,
+            )
+        }
+        &Node::Match {
+            value,
+            branch_index,
+            pattern_index,
+            branch_count,
+            resulting_ty,
+        } => {
+            let value = lower(ctx, value, noreturn);
+            if *noreturn {
+                return ValueOrPlace::Value(Ref::UNDEF);
+            }
+            let mut after_block = None;
+            // PERF: better with block args
+            let mut resulting_values = Vec::new();
+            let mut next_block;
+            for i in 0..branch_count {
+                let is_last = i + 1 == branch_count;
+                let pattern = PatternId(pattern_index + i);
+                let branch = NodeId(branch_index + i);
+                let mut pattern_noreturn = false;
+                next_block = if is_last {
+                    BlockIndex::MISSING
+                } else {
+                    ctx.builder.create_block()
                 };
-            ctx.builder.begin_block(then_block);
-            let then_val = check_branch(ctx, then);
-            ctx.builder.begin_block(else_block);
-            let else_val = check_branch(ctx, else_);
-            match (then_val, else_val) {
-                (Some(t), Some(f)) => {
-                    let after_block = after_block(ctx);
-                    ctx.builder.begin_block(after_block);
-                    let ty = ctx.get_type(ctx.types[resulting_ty]);
-                    ctx.builder.build_phi([t, f], ty)
+                lower_pattern(ctx, pattern, value, next_block, &mut pattern_noreturn);
+                if pattern_noreturn {
+                    if i == 0 {
+                        *noreturn = true;
+                        return ValueOrPlace::Value(Ref::UNDEF);
+                    }
                 }
-                (Some((_, val)), None) | (None, Some((_, val))) => {
-                    let after_block = after_block(ctx);
-                    ctx.builder.begin_block(after_block);
-                    val
-                }
-                (None, None) => {
-                    *noreturn = true;
-                    Ref::UNDEF
+                let mut branch_noreturn = false;
+                let val = lower(ctx, branch, &mut branch_noreturn);
+                if !branch_noreturn {
+                    resulting_values.push((ctx.builder.current_block(), val));
+                    let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
+                    ctx.builder.terminate_block(Terminator::Goto(after));
+                    if is_last {
+                        ctx.builder.begin_block(after);
+                    } else {
+                        ctx.builder.begin_block(next_block);
+                    }
                 }
             }
+            if resulting_values.is_empty() {
+                *noreturn = true;
+                Ref::UNDEF
+            } else {
+                if ctx.types[resulting_ty].is_invalid() {
+                    build_crash_point(ctx, noreturn);
+                    return ValueOrPlace::Value(Ref::UNDEF);
+                }
+                let ty = ctx.get_type(ctx.types[resulting_ty]);
+                ctx.builder.build_phi(resulting_values, ty)
+            }
         }
-        Node::Match { .. } => todo!("lower match"),
         &Node::While { cond, body } => {
             let cond_block = ctx.builder.create_block();
             ctx.builder.terminate_block(Terminator::Goto(cond_block));
@@ -634,12 +675,34 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId, noreturn: &mut bool) -> ValueOrPlace 
             ctx.builder.begin_block(after_block);
             Ref::UNIT
         }
+        &Node::WhilePat { pat, val, body } => {
+            let loop_start = ctx.builder.create_block();
+            let after = ctx.builder.create_block();
+            ctx.builder.terminate_block(Terminator::Goto(loop_start));
+            ctx.builder.begin_block(loop_start);
+            let val = lower(ctx, val, noreturn);
+            if *noreturn {
+                return ValueOrPlace::Value(Ref::UNDEF);
+            }
+            lower_pattern(ctx, pat, val, after, noreturn);
+            if *noreturn {
+                return ValueOrPlace::Value(Ref::UNDEF);
+            }
+            let mut body_noreturn = false;
+            lower(ctx, body, &mut body_noreturn);
+            if !body_noreturn {
+                ctx.builder.terminate_block(Terminator::Goto(loop_start));
+            }
+            ctx.builder.begin_block(after);
+            Ref::UNIT
+        }
         &Node::Call {
             function,
             generics: call_generics,
             args,
             return_ty,
         } => {
+            // TODO: noreturn functions?
             let mut arg_refs = Vec::with_capacity(args.iter().count());
             for arg in args.iter() {
                 let arg = lower(ctx, arg, noreturn);
@@ -692,9 +755,31 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId, noreturn: &mut bool) -> Option<Ref>
     })
 }
 
-fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut bool) -> Ref {
+/// Lower a pattern, jumping to the on_mismatch block if the pattern doesn't match.
+/// When on_mismatch is set to BlockIndex::MISSING, all patterns are assumed to always match
+fn lower_pattern(
+    ctx: &mut Ctx,
+    pattern: PatternId,
+    value: Ref,
+    on_mismatch: BlockIndex,
+    noreturn: &mut bool,
+) {
+    let branch_bool = |ctx: &mut Ctx, cond: Ref| {
+        if on_mismatch == BlockIndex::MISSING {
+            return;
+        }
+        let on_match = ctx.builder.create_block();
+        ctx.builder.terminate_block(Terminator::Branch {
+            cond,
+            on_true: on_match,
+            on_false: on_mismatch,
+        });
+        ctx.builder.begin_block(on_match);
+    };
     match ctx.hir[pattern] {
-        Pattern::Invalid => build_crash_point(ctx, noreturn),
+        Pattern::Invalid => {
+            build_crash_point(ctx, noreturn);
+        }
         Pattern::Variable(id) => {
             let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
             let ty = ctx.get_type(var_ty);
@@ -702,9 +787,8 @@ fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut b
             let var = ctx.builder.build_decl(ty);
             ctx.vars[id.idx()] = (var, ty);
             ctx.builder.build_store(var, value);
-            Ref::val(RefVal::True)
         }
-        Pattern::Ignore => Ref::val(RefVal::True),
+        Pattern::Ignore => {}
         Pattern::Tuple(_) => todo!(),
         Pattern::Int(sign, val, ty) => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
@@ -713,11 +797,27 @@ fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut b
             let ty = types::get_primitive(p);
             debug_assert!(p.is_int());
             let pattern_value = int_pat(&mut ctx.builder, sign, val, ty);
-            ctx.builder
-                .build_bin_op(BinOp::Eq, value, pattern_value, ty)
+            let cond = ctx
+                .builder
+                .build_bin_op(BinOp::Eq, value, pattern_value, ty);
+            branch_bool(ctx, cond);
         }
-        Pattern::Bool(true) => value,
-        Pattern::Bool(false) => ctx.builder.build_not(value, ir::IrType::U1),
+        Pattern::Bool(b) => {
+            if on_mismatch == BlockIndex::MISSING {
+                return;
+            }
+            let on_match = ctx.builder.create_block();
+            let (on_true, on_false) = if b {
+                (on_match, on_mismatch)
+            } else {
+                (on_mismatch, on_match)
+            };
+            ctx.builder.terminate_block(Terminator::Branch {
+                cond: value,
+                on_true,
+                on_false,
+            });
+        }
         Pattern::Range {
             min_max: (min, max),
             ty,
@@ -733,14 +833,69 @@ fn lower_pattern(ctx: &mut Ctx, pattern: PatternId, value: Ref, noreturn: &mut b
             let left = ctx
                 .builder
                 .build_bin_op(ir::builder::BinOp::GE, value, min, ty);
+            branch_bool(ctx, left);
             let right_op = if inclusive {
                 ir::builder::BinOp::LE
             } else {
                 ir::builder::BinOp::LT
             };
             let right = ctx.builder.build_bin_op(right_op, value, max, ty);
-            ctx.builder
-                .build_bin_op(ir::builder::BinOp::And, left, right, ty)
+            branch_bool(ctx, right);
+        }
+        Pattern::EnumVariant {
+            ordinal,
+            types,
+            args,
+        } => {
+            let ir_types = ctx.get_multiple_types(LocalTypeIds {
+                idx: types,
+                count: args.count + 1,
+            });
+            let tuple_ty = IrType::Tuple(ir_types);
+            // HACK: right now the value is always stored when checking with an enum variant. In
+            // Rust, all patterns get passed a pointer to check their value, which would probably
+            // be better. Pointer is needed right now to compare ordinal and variants
+            // (implicitly casting the types on load)
+            let var = ctx.builder.build_decl(tuple_ty);
+            ctx.builder.build_store(var, value);
+            let ordinal_ty = LocalTypeId(types);
+            let arg_types = LocalTypeIds {
+                idx: types + 1,
+                count: args.count,
+            };
+            match ctx.types[ordinal_ty] {
+                TypeInfo::Invalid => {
+                    build_crash_point(ctx, noreturn);
+                }
+                TypeInfo::Primitive(Primitive::Unit) => {}
+                TypeInfo::Primitive(p) => {
+                    let int_ty = p.as_int().unwrap();
+                    let ordinal_ty = get_primitive(int_ty.into());
+                    let actual_ordinal = ctx.builder.build_load(var, ordinal_ty);
+                    let ordinal_value = match ordinal {
+                        OrdinalType::Known(val) => val,
+                        OrdinalType::Inferred(variant) => ctx.types[variant].ordinal,
+                    };
+                    let expected = ctx.builder.build_int(ordinal_value as u64, ordinal_ty);
+                    let ordinal_matches =
+                        ctx.builder
+                            .build_bin_op(BinOp::Eq, actual_ordinal, expected, IrType::U1);
+                    branch_bool(ctx, ordinal_matches);
+                }
+                _ => unreachable!(),
+            }
+            if args.count == 0 {
+                return;
+            }
+            for ((arg, i), ty) in args.iter().zip(1..).zip(arg_types.iter()) {
+                let ty = ctx.get_type(ctx.types[ty]);
+                let arg_ptr = ctx.builder.build_member_ptr(var, i, ir_types);
+                let arg_value = ctx.builder.build_load(arg_ptr, ty);
+                lower_pattern(ctx, arg, arg_value, on_mismatch, noreturn);
+                if *noreturn {
+                    return;
+                }
+            }
         }
     }
 }
@@ -809,4 +964,68 @@ fn build_arithmetic(
         "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits"
     );
     ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
+}
+
+fn lower_if_else_branches(
+    ctx: &mut Ctx,
+    noreturn: &mut bool,
+    then: NodeId,
+    else_: NodeId,
+    then_block: ir::BlockIndex,
+    else_block: ir::BlockIndex,
+    resulting_ty: LocalTypeId,
+) -> Ref {
+    // after_block is a closure that creates the block lazily and returns it
+    let else_is_trival = matches!(ctx.hir[else_], Node::Unit);
+    let mut after_block = {
+        let mut after_block = else_is_trival.then_some(else_block);
+        move |ctx: &mut Ctx| {
+            after_block.unwrap_or_else(|| {
+                let block = ctx.builder.create_block();
+                after_block = Some(block);
+                block
+            })
+        }
+    };
+    let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<(ir::BlockIndex, Ref)> {
+        let mut noreturn = false;
+        let val = lower(ctx, value, &mut noreturn);
+        (!noreturn).then(|| {
+            let block = ctx.builder.current_block();
+            let after_block = after_block(ctx);
+            ctx.builder.terminate_block(Terminator::Goto(after_block));
+            (block, val)
+        })
+    };
+    ctx.builder.begin_block(then_block);
+    let then_val = check_branch(ctx, then);
+    if else_is_trival {
+        if then_val.is_none() {
+            *noreturn = true;
+            ctx.builder.begin_block(else_block);
+            return Ref::UNDEF;
+        }
+        // else block effectively just becomes the after block in this case
+        ctx.builder.begin_block(else_block);
+        return Ref::UNIT;
+    }
+    ctx.builder.begin_block(else_block);
+    let else_val = check_branch(ctx, else_);
+    match (then_val, else_val) {
+        (Some(t), Some(f)) => {
+            let after_block = after_block(ctx);
+            ctx.builder.begin_block(after_block);
+            let ty = ctx.get_type(ctx.types[resulting_ty]);
+            ctx.builder.build_phi([t, f], ty)
+        }
+        (Some((_, val)), None) | (None, Some((_, val))) => {
+            let after_block = after_block(ctx);
+            ctx.builder.begin_block(after_block);
+            val
+        }
+        (None, None) => {
+            *noreturn = true;
+            Ref::UNDEF
+        }
+    }
 }

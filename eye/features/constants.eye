@@ -18,7 +18,7 @@ main :: fn {
     x: i32 = X
     y: u64 = X
     z: i16 = NEGATIVE_ONE
-    std.c.printf("%d, %d, %d, %d\n".ptr, x, y, i64 z, CALC)
+    std.c.printf("%d, %d, %d, %d\n".ptr, x, y, z as i64, CALC)
 
     A :: 1 < 2
     B :: 1 > 2
@@ -27,5 +27,5 @@ main :: fn {
         std.c.printf("Invalid constant values: %d, %d\n".ptr, A, B)
     }
 
-    std.c.printf("%.1f, %.1f\n".ptr, f64 PI, f64 PI_SQUARED)
+    std.c.printf("%.1f, %.1f\n".ptr, PI as f64, PI_SQUARED as f64)
 }

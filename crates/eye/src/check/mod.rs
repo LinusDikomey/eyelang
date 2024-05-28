@@ -123,12 +123,6 @@ impl<'a> Ctx<'a> {
         hir_types
     }
 
-    fn type_to_string(&self, ty: TypeInfo) -> String {
-        let mut s = String::new();
-        self.hir.types.type_to_string(&self.compiler, ty, &mut s);
-        s
-    }
-
     fn auto_ref_deref(
         &mut self,
         mut pointer_count: u32,
