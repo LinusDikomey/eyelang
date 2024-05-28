@@ -9,7 +9,7 @@ use ir::builder::{BinOp, Terminator};
 use ir::{builder::IrBuilder, IrType, Ref};
 use ir::{BlockIndex, RefVal, TypeRefs};
 
-use crate::compiler::FunctionToGenerate;
+use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
@@ -449,13 +449,25 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 CastType::EnumToInt { .. } => todo!("cast enums to integers, might be removed"),
             }
         }
-        &Node::Comparison(l, r, cmp) => {
+        &Node::Comparison {
+            l,
+            r,
+            cmp,
+            compared,
+        } => {
             let l = lower(ctx, l)?;
             let r = lower(ctx, r)?;
             use crate::hir::Comparison;
+            let mut is_equality = false;
             let op = match cmp {
-                Comparison::Eq => BinOp::Eq,
-                Comparison::NE => BinOp::NE,
+                Comparison::Eq => {
+                    is_equality = true;
+                    BinOp::Eq
+                }
+                Comparison::NE => {
+                    is_equality = true;
+                    BinOp::NE
+                }
                 Comparison::LT => BinOp::LT,
                 Comparison::GT => BinOp::GT,
                 Comparison::LE => BinOp::LE,
@@ -463,6 +475,29 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 Comparison::And => BinOp::And,
                 Comparison::Or => BinOp::Or,
             };
+            if is_equality {
+                match ctx.types[compared] {
+                    TypeInfo::Invalid => crash_point!(ctx),
+                    TypeInfo::Primitive(_) => {}
+                    TypeInfo::TypeDef(id, generics) => {
+                        let str_ty = builtins::get_str(ctx.compiler);
+                        if id == str_ty {
+                            debug_assert!(generics.count == 0);
+                            let string_eq = builtins::get_str_eq(ctx.compiler);
+                            let string_eq = ctx.get_ir_id(string_eq.0, string_eq.1, Vec::new());
+                            let eq = ctx.builder.build_call(string_eq, [l, r], IrType::U1);
+                            return Ok(ValueOrPlace::Value(if cmp == Comparison::NE {
+                                ctx.builder.build_not(eq, IrType::U1)
+                            } else {
+                                eq
+                            }));
+                        } else {
+                            panic!("invalid type for comparison, will change with traits");
+                        }
+                    }
+                    _ => panic!("invalid type for comparison, will change with traits"),
+                }
+            }
             ctx.builder.build_bin_op(op, l, r, IrType::U1)
         }
         &Node::Arithmetic(l, r, op, ty) => {
@@ -709,7 +744,7 @@ fn lower_pattern(
         });
         ctx.builder.begin_block(on_match);
     };
-    match ctx.hir[pattern] {
+    match &ctx.hir[pattern] {
         Pattern::Invalid => crash_point!(ctx),
         Pattern::Variable(id) => {
             let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
@@ -721,7 +756,7 @@ fn lower_pattern(
         }
         Pattern::Ignore => {}
         Pattern::Tuple(_) => todo!(),
-        Pattern::Int(sign, val, ty) => {
+        &Pattern::Int(sign, val, ty) => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 panic!("integer type expected")
             };
@@ -733,7 +768,7 @@ fn lower_pattern(
                 .build_bin_op(BinOp::Eq, value, pattern_value, ty);
             branch_bool(ctx, cond);
         }
-        Pattern::Bool(b) => {
+        &Pattern::Bool(b) => {
             if on_mismatch == BlockIndex::MISSING {
                 return Ok(());
             }
@@ -749,7 +784,17 @@ fn lower_pattern(
                 on_false,
             });
         }
-        Pattern::Range {
+        Pattern::String(s) => {
+            let str_eq = builtins::get_str_eq(ctx.compiler);
+            let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new());
+            let (expected, str_ty) = lower_string_literal(&mut ctx.builder, s);
+            let expected = ctx.builder.build_load(expected, str_ty);
+            let matches = ctx
+                .builder
+                .build_call(str_eq, [value, expected], IrType::U1);
+            branch_bool(ctx, matches);
+        }
+        &Pattern::Range {
             min_max: (min, max),
             ty,
             min_max_signs: (min_sign, max_sign),
@@ -773,7 +818,7 @@ fn lower_pattern(
             let right = ctx.builder.build_bin_op(right_op, value, max, ty);
             branch_bool(ctx, right);
         }
-        Pattern::EnumVariant {
+        &Pattern::EnumVariant {
             ordinal,
             types,
             args,

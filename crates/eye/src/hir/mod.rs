@@ -202,7 +202,12 @@ impl HIR {
                 eprint!(" ");
                 self.dump(cast.val, compiler, types, indent_count);
             }
-            &Node::Comparison(l, r, cmp) => {
+            &Node::Comparison {
+                l,
+                r,
+                cmp,
+                compared: _,
+            } => {
                 let cmp = match cmp {
                     Comparison::Eq => "==",
                     Comparison::NE => "!=",
@@ -384,7 +389,7 @@ impl HIR {
     }
 
     fn dump_pattern(&self, pattern: PatternId, compiler: &Compiler, types: &TypeTable) {
-        match self[pattern] {
+        match &self[pattern] {
             Pattern::Invalid => eprint!("<invalid>"),
             Pattern::Variable(id) => {
                 eprint!("(var {}): ", id.0);
@@ -402,7 +407,7 @@ impl HIR {
                 }
                 eprint!(")");
             }
-            Pattern::Int(signed, unsigned_val, ty) => {
+            &Pattern::Int(signed, unsigned_val, ty) => {
                 eprint!("(int ");
                 if signed {
                     eprint!("-");
@@ -411,7 +416,8 @@ impl HIR {
                 types.dump_type(compiler, ty);
             }
             Pattern::Bool(b) => eprint!("{b}"),
-            Pattern::Range {
+            Pattern::String(s) => eprint!("(string {s:?})"),
+            &Pattern::Range {
                 min_max,
                 ty: _,
                 min_max_signs,
@@ -430,7 +436,7 @@ impl HIR {
                 }
                 eprint!(")");
             }
-            Pattern::EnumVariant {
+            &Pattern::EnumVariant {
                 ordinal,
                 types: enum_types,
                 args,
@@ -578,7 +584,7 @@ pub enum Node {
         elems: NodeIds,
         elem_types: LocalTypeIds,
     },
-    StringLiteral(String),
+    StringLiteral(Box<str>),
     EnumLiteral {
         // PERF(size): length has to match anyways, could only store it once
         elems: NodeIds,
@@ -614,7 +620,12 @@ pub enum Node {
     },
 
     Cast(CastId),
-    Comparison(NodeId, NodeId, Comparison),
+    Comparison {
+        l: NodeId,
+        r: NodeId,
+        cmp: Comparison,
+        compared: LocalTypeId,
+    },
     Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
 
     Element {
@@ -690,6 +701,7 @@ pub enum Pattern {
     Tuple(PatternIds),
     Int(bool, u128, LocalTypeId),
     Bool(bool),
+    String(Box<str>),
     Range {
         min_max: (u128, u128),
         ty: LocalTypeId,
@@ -723,7 +735,7 @@ pub enum CastType {
     EnumToInt { from: LocalTypeId, to: IntType },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparison {
     Eq,
     NE,

@@ -96,7 +96,7 @@ pub fn check(
             Node::BoolLiteral(val)
         }
         &Expr::StringLiteral(span) => {
-            let str = get_string_literal(ctx.ast.src(), span);
+            let str = super::get_string_literal(ctx.ast.src(), span);
             let str_ty = builtins::get_str(ctx.compiler);
             ctx.specify(
                 expected,
@@ -277,7 +277,12 @@ pub fn check(
                     } else {
                         Comparison::And
                     };
-                    Node::Comparison(l, r, cmp)
+                    Node::Comparison {
+                        l,
+                        r,
+                        cmp,
+                        compared: expected,
+                    }
                 }
                 Operator::Equals | Operator::NotEquals => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
@@ -291,7 +296,12 @@ pub fn check(
                     } else {
                         Comparison::NE
                     };
-                    Node::Comparison(l, r, cmp)
+                    Node::Comparison {
+                        l,
+                        r,
+                        cmp,
+                        compared,
+                    }
                 }
                 Operator::LT | Operator::GT | Operator::LE | Operator::GE => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
@@ -308,7 +318,12 @@ pub fn check(
                         Operator::GE => Comparison::GE,
                         _ => unreachable!(),
                     };
-                    Node::Comparison(l, r, cmp)
+                    Node::Comparison {
+                        l,
+                        r,
+                        cmp,
+                        compared,
+                    }
                 }
                 Operator::Range | Operator::RangeExclusive => {
                     todo!("range types not implemented yet")
@@ -1379,15 +1394,6 @@ fn check_call_signature(
 
     ctx.specify_resolved(expected, return_type, generics, |ast| ast[expr].span(ast));
     Ok(arg_types)
-}
-
-fn get_string_literal(src: &str, span: TSpan) -> String {
-    src[span.start as usize + 1..span.end as usize]
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-        .replace("\\r", "\r")
-        .replace("\\0", "\0")
-        .replace("\\\"", "\"")
 }
 
 pub fn int_ty_from_variant_count(count: u32) -> TypeInfo {

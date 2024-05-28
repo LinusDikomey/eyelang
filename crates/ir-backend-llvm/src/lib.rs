@@ -1,6 +1,5 @@
 use std::{
     ffi::{CStr, CString, NulError},
-    fmt::write,
     path::Path,
     ptr,
 };

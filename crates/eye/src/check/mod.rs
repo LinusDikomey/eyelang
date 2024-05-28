@@ -210,3 +210,13 @@ pub fn verify_main_signature(
         }
     }
 }
+
+fn get_string_literal(src: &str, span: TSpan) -> Box<str> {
+    src[span.start as usize + 1..span.end as usize]
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+        .replace("\\0", "\0")
+        .replace("\\\"", "\"")
+        .into_boxed_str()
+}

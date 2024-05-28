@@ -3,14 +3,14 @@ use types::Primitive;
 
 use crate::{
     check::exhaust,
-    compiler::VarId,
+    compiler::{builtins, VarId},
     error::Error,
     hir::Pattern,
     parser::{
         ast::{Expr, ExprId, UnOp},
         token::{IntLiteral, Operator},
     },
-    type_table::{LocalTypeId, TypeInfo},
+    type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
 use super::{exhaust::Exhaustion, Ctx};
@@ -33,7 +33,16 @@ pub fn check(
             exhaustion.exhaust_int(exhaust::SignedInt(lit.val, false));
             Pattern::Int(false, lit.val, expected)
         }
-        Expr::FloatLiteral(_) => todo!("float patterns"),
+        &Expr::StringLiteral(span) => {
+            let str = super::get_string_literal(ctx.ast.src(), span);
+            let str_type = builtins::get_str(ctx.compiler);
+            ctx.specify(
+                expected,
+                TypeInfo::TypeDef(str_type, LocalTypeIds::EMPTY),
+                |_| span,
+            );
+            Pattern::String(str)
+        }
         &Expr::UnOp(_, UnOp::Neg, inner) => {
             match ctx.ast[inner] {
                 Expr::IntLiteral(span) => {
