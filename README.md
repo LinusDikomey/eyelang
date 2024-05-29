@@ -50,7 +50,7 @@ main :: fn {
 ### Constants
 ```rust
 # this constant doesn't have a specific integer type
-A :: 40 + 2
+A :: 42
 
 main :: fn {
     std.c.printf("%d\n".ptr, A) # prints 42

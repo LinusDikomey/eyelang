@@ -58,9 +58,8 @@ pub unsafe fn add_global(
     };
     let name = CString::new(name.to_owned()).map_err(|nul| Error::NulByte(nul))?;
     let global = LLVMAddGlobal(llvm_module, ty, name.as_ptr());
-    if let Some(val) = const_val(value, ty) {
-        LLVMSetInitializer(global, val);
-    }
+    let val = const_val(value, ty).unwrap_or_else(|| LLVMGetUndef(ty));
+    LLVMSetInitializer(global, val);
     Ok(global)
 }
 

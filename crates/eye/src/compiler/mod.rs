@@ -736,7 +736,7 @@ impl Compiler {
             Resolvable::Unresolved => {
                 parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
-                let val = if let Some(val) = global.val {
+                let (val, ty) = if let Some(val) = global.val {
                     let const_value = match eval::def_expr(
                         self,
                         module,
@@ -754,7 +754,8 @@ impl Compiler {
                             ConstValue::Undefined
                         }
                     };
-                    match const_value.check_with_type(module, global.scope, self, &global.ty) {
+                    let value = const_value.check_with_type(module, global.scope, self, &global.ty);
+                    let val = match value {
                         Ok(None) => const_value,
                         Ok(Some(value)) => value,
                         Err(found) => {
@@ -769,11 +770,15 @@ impl Compiler {
                             );
                             ConstValue::Undefined
                         }
-                    }
+                    };
+                    let ty = val.ty();
+                    (val, ty)
                 } else {
-                    ConstValue::Undefined
+                    (
+                        ConstValue::Undefined,
+                        self.resolve_type(&global.ty, module, global.scope),
+                    )
                 };
-                let ty = val.ty();
                 self.modules[module.idx()]
                     .ast
                     .as_mut()

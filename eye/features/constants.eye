@@ -2,7 +2,7 @@
 # a constant without a specific integer type
 X :: 42
 
-NEGATIVE_ONE :: -1
+ONE :: 1
 
 # simple calculation
 CALC :: 3 + 3 * 9 + (12 % 8) - (5 / 2)
@@ -17,7 +17,7 @@ main :: fn {
     # constant can be used as any integer type
     x: i32 = X
     y: u64 = X
-    z: i16 = NEGATIVE_ONE
+    z: i16 = ONE
     std.c.printf("%d, %d, %d, %d\n".ptr, x, y, z as i64, CALC)
 
     A :: 1 < 2

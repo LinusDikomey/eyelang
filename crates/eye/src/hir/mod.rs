@@ -129,7 +129,7 @@ impl HIR {
                     AssignType::DivAssign => "-div",
                     AssignType::ModAssign => "-mod",
                 };
-                eprint!("({op} ");
+                eprint!("(assign{op} ");
                 self.dump_lvalue(lval, compiler, types, indent_count);
                 eprint!(": ");
                 types.dump_type(compiler, ty);
