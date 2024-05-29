@@ -10,6 +10,7 @@ fn main() {
     let module = Module {
         name: "main_module".to_owned(),
         funcs: vec![build_mul(), build_extern_printf()],
+        globals: vec![],
     };
     eprintln!("Module:\n{module}");
     let mut backend = ir_backend_llvm::Backend::new();

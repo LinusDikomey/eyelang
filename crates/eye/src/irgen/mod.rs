@@ -1,5 +1,6 @@
+pub mod const_value;
 mod entry_point;
-mod types;
+pub mod types;
 
 pub use entry_point::entry_point;
 
@@ -170,6 +171,31 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> ir::GlobalId {
+        let parsed = self.compiler.get_module_ast_and_symbols(module);
+        if let Some(global) = parsed.instances.globals[id.idx()] {
+            global
+        } else {
+            let parsed = self.compiler.get_module_ast_and_symbols(module);
+            let name = String::from(&*parsed.ast[id].name);
+            let (ty, value) = self.compiler.get_checked_global(module, id);
+            let ty = ty.clone();
+            let value = const_value::translate(value);
+            let mut types = ir::IrTypes::new();
+            let ty = types::get(&mut self.compiler, &mut types, &ty, ir::TypeRefs::EMPTY);
+            let global_id = ir::GlobalId(self.compiler.ir_module.globals.len() as _);
+            self.compiler
+                .ir_module
+                .globals
+                .push((name, types, ty, value));
+            self.compiler
+                .get_module_ast_and_symbols(module)
+                .instances
+                .globals[id.idx()] = Some(global_id);
+            global_id
+        }
+    }
+
     fn get_type(&mut self, ty: TypeInfo) -> Result<IrType> {
         types::get_from_info(
             self.compiler,
@@ -323,6 +349,16 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 value_ty: ctx.vars[id.idx()].1,
             });
         }
+        &Node::Global(module, id, ty) => {
+            let id = ctx.get_ir_global(module, id);
+            let global = ctx.builder.build_global(id, IrType::Ptr);
+            let ty = ctx.get_type(ctx.types[ty])?;
+            let ty = ctx.builder.types.add(ty);
+            return Ok(ValueOrPlace::Place {
+                ptr: global,
+                value_ty: ty,
+            });
+        }
         &Node::Assign(lval, val, assign_ty, ty) => {
             let lval = lower_lval(ctx, lval)?;
             let val = lower(ctx, val)?;
@@ -361,7 +397,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ConstValue::Unit => Ref::UNIT,
                 ConstValue::Bool(true) => Ref::val(RefVal::True),
                 ConstValue::Bool(false) => Ref::val(RefVal::False),
-                &ConstValue::Int(num) => {
+                &ConstValue::Int(num, _) => {
                     let ty = ctx.types[ty];
                     match ty {
                         TypeInfo::Primitive(p) => {
@@ -372,7 +408,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                         _ => unreachable!(),
                     }
                 }
-                &ConstValue::Float(num) => {
+                &ConstValue::Float(num, _) => {
                     let ty = ctx.types[ty];
                     match ty {
                         TypeInfo::Primitive(p) => {
@@ -478,7 +514,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             if is_equality {
                 match ctx.types[compared] {
                     TypeInfo::Invalid => crash_point!(ctx),
-                    TypeInfo::Primitive(_) => {}
                     TypeInfo::TypeDef(id, generics) => {
                         let str_ty = builtins::get_str(ctx.compiler);
                         if id == str_ty {
@@ -495,7 +530,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                             panic!("invalid type for comparison, will change with traits");
                         }
                     }
-                    _ => panic!("invalid type for comparison, will change with traits"),
+                    // let all other types fall through, they might be invalid but that will be
+                    // dealt with by traits in the future
+                    _ => {}
                 }
             }
             ctx.builder.build_bin_op(op, l, r, IrType::U1)
@@ -710,7 +747,10 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Option<Ref>> {
         LValue::Invalid => crash_point!(ctx),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
         LValue::Ignore => return Ok(None),
-        LValue::Global(_, _) => todo!("handle ir for globals"),
+        LValue::Global(module, id) => {
+            let id = ctx.get_ir_global(module, id);
+            ctx.builder.build_global(id, IrType::Ptr)
+        }
         LValue::Deref(pointer) => lower(ctx, pointer)?,
         LValue::Member {
             ptr,

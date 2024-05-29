@@ -74,9 +74,9 @@ str :: struct {
     }
 
     parse :: fn(this str) -> i64 {
-        ASCII_ZERO :: 48
-        ASCII_NINE :: ASCII_ZERO + 9
-        ASCII_MINUS :: 45
+        ASCII_ZERO: u8 : 48
+        ASCII_NINE: u8 : ASCII_ZERO + 9
+        ASCII_MINUS: u8 : 45
 
         negate := false
         x := 0

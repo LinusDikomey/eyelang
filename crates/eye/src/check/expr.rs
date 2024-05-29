@@ -706,10 +706,20 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
                 ConstValue::Bool(_) => {
                     ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |_| span)
                 }
-                ConstValue::Int(_) => {
-                    ctx.specify(expected, TypeInfo::Integer, |_| span);
+                ConstValue::Int(_, ty) => {
+                    ctx.specify(
+                        expected,
+                        ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into())),
+                        |_| span,
+                    );
                 }
-                ConstValue::Float(_) => ctx.specify(expected, TypeInfo::Float, |_| span),
+                ConstValue::Float(_, ty) => {
+                    ctx.specify(
+                        expected,
+                        ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
+                        |_| span,
+                    );
+                }
             }
             Node::Const {
                 id: const_val,
@@ -720,7 +730,13 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             ctx.specify(expected, TypeInfo::ModuleItem(id), |_| span);
             Node::Invalid
         }
-        Def::Global(_, _) => todo!("globals"),
+        Def::Global(module, id) => {
+            let (ty, _) = ctx.compiler.get_checked_global(module, id);
+            // PERF: cloning type
+            let ty = ty.clone();
+            ctx.specify_resolved(expected, &ty, LocalTypeIds::EMPTY, |_| span);
+            Node::Global(module, id, expected)
+        }
     }
 }
 

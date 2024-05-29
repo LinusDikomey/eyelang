@@ -305,6 +305,7 @@ pub enum Item {
     Definition {
         name: String,
         name_span: TSpan,
+        annotated_ty: UnresolvedType,
         value: ExprId,
     },
     Use(IdentPath),

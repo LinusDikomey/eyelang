@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::Primitive;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -12,6 +14,11 @@ pub enum IntType {
     U32,
     U64,
     U128,
+}
+impl fmt::Display for IntType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Primitive::from(*self).fmt(f)
+    }
 }
 impl From<IntType> for Primitive {
     fn from(i: IntType) -> Self {

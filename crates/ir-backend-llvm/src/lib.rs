@@ -18,7 +18,7 @@ mod translate;
 pub enum Error {
     InvalidTarget(String),
     InvalidOutFile,
-    FunctionNameNulByte(NulError),
+    NulByte(NulError),
     EmitFailed(String),
 }
 
@@ -68,12 +68,20 @@ impl Backend {
             .iter()
             .map(|func| unsafe { translate::add_function(self.context, llvm_module, func) })
             .collect::<Result<Vec<_>, _>>()?;
+        let llvm_globals = module
+            .globals
+            .iter()
+            .map(|(name, types, ty, value)| unsafe {
+                translate::add_global(self.context, llvm_module, name, types, *ty, value)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         for (func, (llvm_func, _)) in module.funcs.iter().zip(llvm_funcs.iter().copied()) {
             unsafe {
                 translate::function(
                     self.context,
                     &llvm_funcs,
+                    &llvm_globals,
                     llvm_func,
                     builder,
                     func,

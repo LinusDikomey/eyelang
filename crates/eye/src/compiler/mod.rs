@@ -5,7 +5,7 @@ use std::{collections::VecDeque, path::PathBuf, rc::Rc};
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, ProjectId, TypeId};
 use span::{IdentPath, Span, TSpan};
-use types::{Type, UnresolvedType};
+use types::{Primitive, Type, UnresolvedType};
 
 use crate::{
     check,
@@ -42,6 +42,7 @@ impl Compiler {
             ir_module: ir::Module {
                 name: "main_module".to_owned(),
                 funcs: Vec::new(),
+                globals: Vec::new(),
             },
             errors: Errors::new(),
             builtins: Builtins::default(),
@@ -243,7 +244,7 @@ impl Compiler {
             self.errors.append(errors);
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
-            let instances = IrFunctionInstances::new(ast.function_count());
+            let instances = IrInstances::new(ast.function_count(), ast.global_count());
             module.ast = Some(ParsedModule {
                 ast: Rc::new(ast),
                 child_modules,
@@ -301,10 +302,9 @@ impl Compiler {
         };
         let def = match def {
             ast::Definition::Expr { value, ty } => {
-                assert!(matches!(ty, UnresolvedType::Infer(_)), "TODO: respect type");
                 let value = *value;
                 // TODO: cache results
-                eval::def_expr(self, module, scope, &ast, value, name)
+                eval::def_expr(self, module, scope, &ast, value, name, &ty)
             }
             &ast::Definition::Path(path) => self.resolve_path(module, scope, path),
             ast::Definition::Global(id) => Def::Global(module, *id),
@@ -436,7 +436,45 @@ impl Compiler {
                     .collect();
                 Type::Tuple(elems)
             }
-            _ => todo!("resolve type {ty:?}"),
+            UnresolvedType::Infer(span) => {
+                self.errors
+                    .emit_err(Error::InferredTypeNotAllowedHere.at_span(span.in_mod(module)));
+                Type::Invalid
+            }
+        }
+    }
+
+    pub fn unresolved_primitive(
+        &mut self,
+        ty: &UnresolvedType,
+        module: ModuleId,
+        scope: ScopeId,
+    ) -> Result<Option<Primitive>, ()> {
+        match ty {
+            &UnresolvedType::Primitive { ty, .. } => Ok(Some(ty)),
+            &UnresolvedType::Unresolved(path, None) => {
+                match self.resolve_path(module, scope, path) {
+                    Def::Invalid => Err(()), // TODO: handle this seperately
+                    Def::Type(Type::Primitive(p)) => Ok(Some(p)),
+                    _ => Err(()),
+                }
+            }
+            UnresolvedType::Infer(_) => Ok(None),
+            _ => Err(()),
+        }
+    }
+
+    pub fn unresolved_matches_primitive(
+        &mut self,
+        ty: &UnresolvedType,
+        primitive: Primitive,
+        module: ModuleId,
+        scope: ScopeId,
+    ) -> bool {
+        match self.unresolved_primitive(ty, module, scope) {
+            Ok(None) => true,
+            Ok(Some(p)) => p == primitive,
+            Err(()) => false,
         }
     }
 
@@ -698,10 +736,16 @@ impl Compiler {
             Resolvable::Unresolved => {
                 parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
-                let ty = self.resolve_type(&global.ty, module, global.scope);
                 let val = if let Some(val) = global.val {
-                    match eval::def_expr(self, module, global.scope, &ast, val, &global.name) {
-                        // probably should just store id instead of cloning the value
+                    let const_value = match eval::def_expr(
+                        self,
+                        module,
+                        global.scope,
+                        &ast,
+                        val,
+                        &global.name,
+                        &global.ty,
+                    ) {
                         Def::ConstValue(id) => self.const_values[id.idx()].clone(),
                         _ => {
                             let error =
@@ -709,10 +753,27 @@ impl Compiler {
                             self.errors.emit_err(error);
                             ConstValue::Undefined
                         }
+                    };
+                    match const_value.check_with_type(module, global.scope, self, &global.ty) {
+                        Ok(None) => const_value,
+                        Ok(Some(value)) => value,
+                        Err(found) => {
+                            let mut expected = String::new();
+                            global.ty.to_string(&mut expected, ast.src());
+                            self.errors.emit_err(
+                                Error::MismatchedType {
+                                    expected,
+                                    found: found.to_owned(),
+                                }
+                                .at_span(ast[val].span(&ast).in_mod(module)),
+                            );
+                            ConstValue::Undefined
+                        }
                     }
                 } else {
                     ConstValue::Undefined
                 };
+                let ty = val.ty();
                 self.modules[module.idx()]
                     .ast
                     .as_mut()
@@ -742,12 +803,8 @@ impl Compiler {
                             self.resolve_path(module, scope, path);
                         }
                         ast::Definition::Expr { value, ty } => {
-                            assert!(
-                                matches!(ty, UnresolvedType::Infer(_)),
-                                "TODO: def type annotations"
-                            );
                             // TODO: cache results
-                            eval::def_expr(self, module, scope, &ast, *value, name);
+                            eval::def_expr(self, module, scope, &ast, *value, name, ty);
                         }
                         &ast::Definition::Module(id) => {
                             // when checking std, each module still gets a reference to std. To
@@ -1082,6 +1139,38 @@ pub enum Def {
     Global(ModuleId, GlobalId),
 }
 impl Def {
+    /// returns a potentially changed Def if the type matches and "found" string on type mismatch
+    pub fn check_with_type(
+        self,
+        module: ModuleId,
+        scope: ScopeId,
+        compiler: &mut Compiler,
+        ty: &UnresolvedType,
+    ) -> Result<Def, &'static str> {
+        match self {
+            Def::Invalid => Ok(Def::Invalid),
+            Def::Function(_, _) | Def::Module(_) => match ty {
+                UnresolvedType::Infer(_) => Ok(self),
+                _ => Err("a function"),
+            },
+            Def::Type(_) => {
+                return compiler
+                    .unresolved_matches_primitive(ty, Primitive::Type, module, scope)
+                    .then_some(self)
+                    .ok_or("type")
+            }
+            Def::ConstValue(const_val_id) => {
+                // PERF: cloning ConstValue but it might be fine
+                let const_val = compiler.const_values[const_val_id.idx()].clone();
+                match const_val.check_with_type(module, scope, compiler, ty)? {
+                    None => Ok(self),
+                    Some(new_val) => Ok(Def::ConstValue(compiler.add_const_value(new_val))),
+                }
+            }
+            Def::Global(_, _) => todo!("handle globals in constants"),
+        }
+    }
+
     pub fn dump(&self, compiler: &Compiler) {
         match self {
             Self::Invalid => print!("<invalid>"),
@@ -1146,7 +1235,7 @@ pub struct ParsedModule {
     pub ast: Rc<Ast>,
     pub child_modules: Vec<ModuleId>,
     pub symbols: ModuleSymbols,
-    pub instances: IrFunctionInstances,
+    pub instances: IrInstances,
 }
 
 #[derive(Debug)]
@@ -1282,13 +1371,15 @@ impl CheckedFunction {
     }
 }
 
-pub struct IrFunctionInstances {
+pub struct IrInstances {
     functions: Vec<FunctionInstances>,
+    pub globals: Vec<Option<ir::GlobalId>>,
 }
-impl IrFunctionInstances {
-    pub fn new(function_count: usize) -> Self {
+impl IrInstances {
+    pub fn new(function_count: usize, global_count: usize) -> Self {
         Self {
             functions: vec![FunctionInstances(dmap::new()); function_count],
+            globals: vec![None; global_count],
         }
     }
 

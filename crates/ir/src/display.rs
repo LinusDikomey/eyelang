@@ -218,6 +218,7 @@ fn display_data(
         match inst.tag.union_data_type() {
             DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int),
             DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
+            DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global),
             DataVariant::Block => cwrite!(f, "{}", inst.data.block),
             DataVariant::MemberPtr => {
                 let (ptr, extra_start) = inst.data.ref_int;

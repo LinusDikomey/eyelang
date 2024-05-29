@@ -1,9 +1,16 @@
+use core::fmt;
+
 use crate::Primitive;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum FloatType {
     F32,
     F64,
+}
+impl fmt::Display for FloatType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Primitive::from(*self).fmt(f)
+    }
 }
 impl From<FloatType> for Primitive {
     fn from(f: FloatType) -> Self {

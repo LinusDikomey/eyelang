@@ -154,6 +154,7 @@ unsafe fn eval_internal(
             }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
             super::Tag::Param => params[inst.data.int32 as usize],
+            super::Tag::Global => todo!("handle globals in const eval"),
             super::Tag::Uninit => Val::Invalid,
             super::Tag::Int => Val::Int(inst.data.int),
             super::Tag::LargeInt => {
@@ -223,7 +224,7 @@ unsafe fn eval_internal(
                 let _string = ir.extra[inst.data.extra_len.0 as usize
                     ..(inst.data.extra_len.0 + inst.data.extra_len.1) as usize]
                     .to_vec();
-                todo!()
+                todo!("evaluate strings")
             }
             super::Tag::Call => todo!("implement calls in ir evaluation"),
             super::Tag::Neg => match get_ref(&values, inst.data.un_op) {

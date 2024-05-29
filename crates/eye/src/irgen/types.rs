@@ -201,6 +201,10 @@ pub fn get_primitive(p: types::Primitive) -> IrType {
 }
 
 pub fn type_from_layout(ir_types: &mut IrTypes, layout: ir::Layout) -> IrType {
+    if layout.size == 0 {
+        debug_assert_eq!(layout.align.get(), 1);
+        return IrType::Unit;
+    }
     let base_type = match layout.align.get() {
         1 => IrType::U8,
         2 => IrType::U16,

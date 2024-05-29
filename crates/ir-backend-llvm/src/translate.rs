@@ -1,18 +1,19 @@
 use std::{ffi::CString, io::Write, ptr};
 
-use ir::{IrType, IrTypes, TypeRefs};
+use ir::{ConstValue, IrType, IrTypes, TypeRefs};
 use llvm_sys::{
     core::{
-        self, LLVMAddFunction, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca, LLVMBuildAnd,
-        LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue, LLVMBuildFAdd,
-        LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem, LLVMBuildFSub,
-        LLVMBuildGlobalStringPtr, LLVMBuildICmp, LLVMBuildInBoundsGEP2, LLVMBuildIntCast2,
-        LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi,
-        LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub,
-        LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
+        self, LLVMAddFunction, LLVMAddGlobal, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca,
+        LLVMBuildAnd, LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue,
+        LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem,
+        LLVMBuildFSub, LLVMBuildGlobalStringPtr, LLVMBuildICmp, LLVMBuildInBoundsGEP2,
+        LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
+        LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
+        LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
         LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
         LLVMInt32TypeInContext, LLVMInt8TypeInContext, LLVMPointerTypeInContext,
-        LLVMPositionBuilderAtEnd, LLVMPrintValueToString, LLVMVoidTypeInContext,
+        LLVMPositionBuilderAtEnd, LLVMPrintValueToString, LLVMSetInitializer,
+        LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -39,22 +40,43 @@ pub unsafe fn add_function(
         llvm_bool(function.varargs),
     );
 
-    let name =
-        CString::new(function.name.clone()).map_err(|nul| Error::FunctionNameNulByte(nul))?;
+    let name = CString::new(function.name.clone()).map_err(|nul| Error::NulByte(nul))?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
     Ok((llvm_func, llvm_func_ty))
+}
+
+pub unsafe fn add_global(
+    ctx: LLVMContextRef,
+    llvm_module: LLVMModuleRef,
+    name: &str,
+    types: &IrTypes,
+    ty: IrType,
+    value: &ConstValue,
+) -> Result<LLVMValueRef, Error> {
+    let Some(ty) = llvm_ty(ctx, ty, &types) else {
+        return Ok(ptr::null_mut());
+    };
+    let name = CString::new(name.to_owned()).map_err(|nul| Error::NulByte(nul))?;
+    let global = LLVMAddGlobal(llvm_module, ty, name.as_ptr());
+    if let Some(val) = const_val(value, ty) {
+        LLVMSetInitializer(global, val);
+    }
+    Ok(global)
 }
 
 pub unsafe fn function(
     ctx: LLVMContextRef,
     llvm_funcs: &[(LLVMValueRef, LLVMTypeRef)],
+    globals: &[LLVMValueRef],
     llvm_func: LLVMValueRef,
     builder: LLVMBuilderRef,
     function: &ir::Function,
     log: bool,
 ) -> Result<(), Error> {
     if let Some(ir) = &function.ir {
-        build_func(function, llvm_funcs, ir, ctx, builder, llvm_func, log);
+        build_func(
+            function, llvm_funcs, globals, ir, ctx, builder, llvm_func, log,
+        );
     }
     Ok(())
 }
@@ -99,17 +121,16 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LL
 unsafe fn build_func(
     func: &ir::Function,
     llvm_funcs: &[(LLVMValueRef, LLVMTypeRef)],
+    globals: &[LLVMValueRef],
     ir: &ir::FunctionIr,
     ctx: LLVMContextRef,
     builder: LLVMBuilderRef,
     llvm_func: LLVMValueRef,
     log: bool,
-    /*
-    types: &mut [TypeInstance],
-    funcs: &[(LLVMValueRef, LLVMTypeRef)],
-    globals: &[LLVMValueRef],
-    */
 ) {
+    if log {
+        println!("Translating function {} to LLVM IR", func.name);
+    }
     let blocks: Vec<_> = (0..ir.blocks.len())
         .map(|_| core::LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE))
         .collect();
@@ -211,6 +232,7 @@ unsafe fn build_func(
                     ptr::null_mut()
                 }
             }
+            ir::Tag::Global => globals[data.global.0 as usize],
             ir::Tag::Uninit => table_ty(inst.ty).map_or(ptr::null_mut(), |ty| LLVMGetUndef(ty)),
             ir::Tag::Int => LLVMConstInt(table_ty(ty).unwrap(), data.int, FALSE),
             ir::Tag::LargeInt => {
@@ -438,10 +460,12 @@ unsafe fn build_func(
                 let offset = ir::offset_in_tuple(elem_types, elem_idx, &func.types);
 
                 let i8_ty = LLVMInt8TypeInContext(ctx);
-                // it's a pointer, we can always unwrap
-                let llvm_ptr = get_ref(&instructions, ptr).unwrap();
-                let mut offset = LLVMConstInt(LLVMInt32TypeInContext(ctx), offset, FALSE);
-                LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
+                if let Some(llvm_ptr) = get_ref(&instructions, ptr) {
+                    let mut offset = LLVMConstInt(LLVMInt32TypeInContext(ctx), offset, FALSE);
+                    LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
+                } else {
+                    ptr::null_mut()
+                }
             }
             ir::Tag::MemberValue => {
                 let (ptr, idx) = data.ref_int;
@@ -643,6 +667,14 @@ unsafe fn build_func(
         }
         instructions.push(val);
     }
+}
+
+unsafe fn const_val(val: &ir::ConstValue, ty: LLVMTypeRef) -> Option<LLVMValueRef> {
+    Some(match val {
+        ConstValue::Undefined | ConstValue::Unit => return None,
+        &ConstValue::Int(int) => LLVMConstInt(ty, int as u64, FALSE),
+        &ConstValue::Float(val) => LLVMConstReal(ty, val),
+    })
 }
 
 fn val_str(val: LLVMValueRef) -> CString {

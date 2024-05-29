@@ -1,4 +1,4 @@
-use crate::{BlockIndex, Data, FunctionIr, Instruction, Ref, Tag, TypeRefs};
+use crate::{BlockIndex, Data, FunctionIr, GlobalId, Instruction, Ref, Tag, TypeRefs};
 
 use super::{
     ir_types::{IrType, IrTypes, TypeRef},
@@ -315,11 +315,9 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { un_op: val }, Tag::Not, ty)
     }
 
-    /*
     pub fn build_global(&mut self, global: GlobalId, ptr_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { global_symbol: global }, Tag::Global, ptr_ty)
+        self.add(Data { global }, Tag::Global, ptr_ty)
     }
-    */
 
     pub fn build_bin_op(&mut self, bin_op: BinOp, l: Ref, r: Ref, ty: impl Into<IdxOrTy>) -> Ref {
         let tag = match bin_op {

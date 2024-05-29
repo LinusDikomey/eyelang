@@ -9,7 +9,69 @@ pub enum UnresolvedType {
     Pointer(Box<(UnresolvedType, u32)>),
     Array(Box<(UnresolvedType, Option<u32>, TSpan)>),
     Tuple(Vec<UnresolvedType>, TSpan),
-    Infer(u32),
+    Infer(TSpan),
+}
+impl UnresolvedType {
+    pub fn to_string(&self, s: &mut String, src: &str) {
+        match self {
+            &UnresolvedType::Primitive { ty, .. } => s.push_str(ty.into()),
+            UnresolvedType::Unresolved(path, generics) => {
+                let (root, segments, last) = path.segments(src);
+                if root.is_some() {
+                    s.push_str("root");
+                }
+                let mut prev = root.is_some();
+                for (segment, _) in segments {
+                    if prev {
+                        s.push('.');
+                    }
+                    s.push_str(segment);
+                    prev = true;
+                }
+                if let Some((last, _)) = last {
+                    if prev {
+                        s.push('.');
+                    }
+                    s.push_str(last);
+                }
+                if let Some((generics, _)) = generics {
+                    s.push('[');
+                    for (i, ty) in generics.iter().enumerate() {
+                        if i != 0 {
+                            s.push_str(", ");
+                            ty.to_string(s, src);
+                        }
+                    }
+                    s.push(']');
+                }
+            }
+            UnresolvedType::Pointer(pointee) => {
+                s.push('*');
+                pointee.0.to_string(s, src);
+            }
+            UnresolvedType::Array(b) => {
+                s.push('[');
+                b.0.to_string(s, src);
+                s.push_str("; ");
+                use core::fmt::Write;
+                match b.1 {
+                    Some(count) => write!(s, "{count}]").unwrap(),
+                    None => s.push_str("_]"),
+                }
+            }
+            UnresolvedType::Tuple(types, _) => {
+                s.push('(');
+                for (i, ty) in types.iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ")
+                    }
+                    ty.to_string(s, src);
+                }
+                s.push(')');
+            }
+            UnresolvedType::Infer(_) => s.push('_'),
+        }
+    }
 }
 impl UnresolvedType {
     pub fn span(&self) -> TSpan {
@@ -17,7 +79,7 @@ impl UnresolvedType {
             &UnresolvedType::Primitive { ty, span_start } => {
                 TSpan::with_len(span_start, ty.token_len())
             }
-            UnresolvedType::Tuple(_, span) => *span,
+            UnresolvedType::Tuple(_, span) | UnresolvedType::Infer(span) => *span,
             UnresolvedType::Unresolved(path, generics) => generics.as_ref().map_or_else(
                 || path.span(),
                 |generics| TSpan::new(path.span().start, generics.1.end),
@@ -27,7 +89,6 @@ impl UnresolvedType {
                 let (inner, start) = &**ptr;
                 TSpan::new(*start, inner.span().end)
             }
-            UnresolvedType::Infer(s) => TSpan::new(*s, *s),
         }
     }
 }

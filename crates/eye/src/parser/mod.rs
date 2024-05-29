@@ -149,6 +149,7 @@ impl<'a> Parser<'a> {
                 Item::Definition {
                     name,
                     name_span,
+                    annotated_ty,
                     value,
                 } => {
                     if let &Expr::Function { id } = self.ast.get_expr(value) {
@@ -159,7 +160,7 @@ impl<'a> Parser<'a> {
                         name,
                         Definition::Expr {
                             value,
-                            ty: UnresolvedType::Infer(0),
+                            ty: annotated_ty,
                         },
                     );
                     if let Some(_) = prev {
@@ -322,7 +323,7 @@ impl<'a> Parser<'a> {
                 match self.toks.peek().map(|t| t.ty) {
                     // Struct definition, constant or enum
                     Some(TokenType::DoubleColon) => {
-                        self.toks.step_assert(TokenType::DoubleColon);
+                        let double_colon = self.toks.step_assert(TokenType::DoubleColon);
 
                         /*
                         let def = if let Some(struct_tok) =
@@ -357,13 +358,14 @@ impl<'a> Parser<'a> {
                         Item::Definition {
                             name: name.to_owned(),
                             name_span: ident_span,
+                            annotated_ty: UnresolvedType::Infer(double_colon.span()),
                             value,
                         }
                     }
                     // Variable or constant declaration with explicit type
                     Some(TokenType::Colon) => {
                         self.toks.step_assert(TokenType::Colon);
-                        let ty = self.parse_type()?;
+                        let annotated_ty = self.parse_type()?;
                         if self.toks.step_if(TokenType::Equals).is_some() {
                             // typed variable with initial value
                             let pat = self.ast.expr(Expr::Ident { span: ident_span });
@@ -371,7 +373,7 @@ impl<'a> Parser<'a> {
                             let val = self.ast.expr(val);
                             Item::Expr(Expr::DeclareWithVal {
                                 pat,
-                                annotated_ty: ty,
+                                annotated_ty,
                                 val,
                             })
                         } else if self.toks.step_if(TokenType::Colon).is_some() {
@@ -380,26 +382,24 @@ impl<'a> Parser<'a> {
                             Item::Definition {
                                 name: name.to_owned(),
                                 name_span: ident_span,
+                                annotated_ty,
                                 value: self.ast.expr(value),
                             }
                         } else {
                             // typed variable without initial value
                             let pat = self.ast.expr(Expr::Ident { span: ident_span });
-                            Item::Expr(Expr::Declare {
-                                pat,
-                                annotated_ty: ty,
-                            })
+                            Item::Expr(Expr::Declare { pat, annotated_ty })
                         }
                     }
                     // Variable declaration with inferred type
                     Some(TokenType::Declare) => {
-                        let decl_start = self.toks.step_assert(TokenType::Declare).start;
+                        let decl = self.toks.step_assert(TokenType::Declare);
                         let pat = self.ast.expr(Expr::Ident { span: ident_span });
                         let val = self.parse_expr(scope)?;
 
                         Item::Expr(Expr::DeclareWithVal {
                             pat,
-                            annotated_ty: UnresolvedType::Infer(decl_start),
+                            annotated_ty: UnresolvedType::Infer(decl.span()),
                             val: self.ast.expr(val),
                         })
                     }
@@ -762,7 +762,7 @@ impl<'a> Parser<'a> {
             let val = self.parse_expr(scope)?;
             Expr::DeclareWithVal {
                 pat: self.ast.expr(expr),
-                annotated_ty: UnresolvedType::Infer(declare.start),
+                annotated_ty: UnresolvedType::Infer(declare.span()),
                 val: self.ast.expr(val),
             }
         } else {
@@ -1223,7 +1223,7 @@ impl<'a> Parser<'a> {
             TokenType::Bang => {
                 Ok(UnresolvedType::Primitive { ty: Primitive::Never, span_start: type_tok.start })
             },
-            TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.start))
+            TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.span()))
         )
     }
 

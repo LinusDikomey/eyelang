@@ -5,7 +5,7 @@ use crate::{
     TypeRefs,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Layout {
     pub size: u64,
     pub align: NonZeroU64,

@@ -2,6 +2,8 @@ use std::fmt;
 
 use color_format::cwrite;
 
+use crate::GlobalId;
+
 use super::{ir_types::TypeRef, BlockIndex, Ref};
 
 #[derive(Debug, Clone, Copy)]
@@ -21,6 +23,9 @@ pub enum Tag {
 
     /// Get a function parameter. Type has to match the signature
     Param,
+
+    /// get a pointer to a global
+    Global,
 
     /// decide on the value depending on previously visited block
     Phi,
@@ -104,6 +109,7 @@ impl Tag {
         use DataVariant as V;
         match self {
             Tag::BlockBegin | Tag::Param => V::Int32,
+            Tag::Global => V::Global,
             Tag::Uninit => V::None,
             Tag::Ret
             | Tag::Load
@@ -183,6 +189,7 @@ pub union Data {
     pub asm: (u32, u16, u16),
     pub none: (),
     pub block: BlockIndex,
+    pub global: GlobalId,
 }
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -195,6 +202,7 @@ pub enum DataVariant {
     Int,
     Int32,
     LargeInt,
+    Global,
     TypeTableIdx,
     Block,
     MemberPtr,

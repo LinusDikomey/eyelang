@@ -8,11 +8,13 @@ use std::{
 pub mod builder;
 pub mod display;
 
+mod const_value;
 mod eval;
 mod instruction;
 mod ir_types;
 mod layout;
 
+pub use const_value::ConstValue;
 pub use eval::{eval, Error, Val, BACKWARDS_JUMP_LIMIT};
 pub use instruction::{Data, Instruction, Tag};
 pub use ir_types::{IrType, IrTypes, TypeRef, TypeRefs};
@@ -28,8 +30,14 @@ impl FunctionId {
         Self(u64::from_le_bytes(bytes))
     }
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct GlobalId(u64);
+pub struct GlobalId(pub u64);
+impl fmt::Display for GlobalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        cwrite!(f, "#m<global {}>", self.0)
+    }
+}
 
 #[derive(Debug)]
 pub struct Function {
@@ -51,7 +59,7 @@ pub struct FunctionIr {
 pub struct Module {
     pub name: String,
     pub funcs: Vec<Function>,
-    //pub globals: Vec<(String, Type, Option<ConstVal>)>,
+    pub globals: Vec<(String, IrTypes, IrType, ConstValue)>,
 }
 impl Index<FunctionId> for Module {
     type Output = Function;

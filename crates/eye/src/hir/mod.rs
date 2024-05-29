@@ -116,6 +116,10 @@ impl HIR {
                 eprint!(")");
             }
             Node::Variable(id) => eprint!("(var {})", id.0),
+            &Node::Global(module, id, ty) => {
+                eprint!("(global {}:{}): ", module.0, id.0);
+                types.dump_type(compiler, ty);
+            }
             &Node::Assign(lval, val, assign_ty, ty) => {
                 let op = match assign_ty {
                     AssignType::Assign => "",
@@ -613,6 +617,7 @@ pub enum Node {
         val: NodeId,
     },
     Variable(VarId),
+    Global(ModuleId, GlobalId, LocalTypeId),
     Assign(LValueId, NodeId, AssignType, LocalTypeId),
 
     Const {
