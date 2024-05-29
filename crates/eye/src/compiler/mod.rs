@@ -1,6 +1,10 @@
 pub mod builtins;
 
-use std::{collections::VecDeque, path::PathBuf, rc::Rc};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, ProjectId, TypeId};
@@ -235,12 +239,6 @@ impl Compiler {
             // TODO: handle errors, don't just create them here and ignore them
             let mut errors = Errors::new();
             let ast = parser::parse(source, &mut errors, module_id, definitions);
-            let ast = ast.unwrap_or_else(|| {
-                todo!(
-                    "keep compiling after parsing errors {}: {errors:?}",
-                    self.modules[module_id.idx()].path.display()
-                );
-            });
             self.errors.append(errors);
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
@@ -1013,6 +1011,7 @@ impl Compiler {
 
     /// prints all errors, consuming them and returns true if any fatal errors were present
     pub fn print_errors(&mut self) -> bool {
+        let working_directory = std::env::current_dir().ok();
         use color_format::cprintln;
         let errors = std::mem::replace(&mut self.errors, Errors::new());
         let mut print = |error: &CompileError| {
@@ -1024,7 +1023,13 @@ impl Compiler {
                 );
             } else {
                 let ast = self.get_module_ast(error.span.module).clone();
-                let path = &self.modules[error.span.module.idx()].path;
+                let mut path: &Path = &self.modules[error.span.module.idx()].path;
+                let relative = working_directory
+                    .as_ref()
+                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
+                if let Some(relative) = &relative {
+                    path = relative;
+                }
                 crate::error::print(
                     &error.err,
                     TSpan::new(error.span.start, error.span.end),

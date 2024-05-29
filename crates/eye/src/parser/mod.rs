@@ -31,8 +31,8 @@ pub fn parse(
     errors: &mut Errors,
     module: ModuleId,
     definitions: DHashMap<String, Definition>,
-) -> Option<ast::Ast> {
-    let tokens = lexer::lex(&source, errors, module)?;
+) -> ast::Ast {
+    let tokens = lexer::lex(&source, errors, module);
     let mut ast_builder = ast::AstBuilder::new();
     let mut parser = Parser {
         src: &source,
@@ -41,10 +41,16 @@ pub fn parse(
     };
 
     match parser.parse_module(definitions) {
-        Ok(scope) => Some(ast_builder.finish_with_top_level_scope(source, scope)),
+        Ok(scope) => ast_builder.finish_with_top_level_scope(source, scope),
         Err(err) => {
             errors.emit_err(err);
-            None
+            let scope = ast_builder.scope(ast::Scope {
+                parent: None,
+                definitions: dmap::new(),
+                impls: Vec::new(),
+                span: TSpan::new(0, source.len() as _),
+            });
+            ast_builder.finish_with_top_level_scope(source, scope)
         }
     }
 }

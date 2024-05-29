@@ -15,20 +15,20 @@ pub fn get(
     ir_types: &mut IrTypes,
     ty: &Type,
     generics: TypeRefs,
-) -> IrType {
-    match ty {
+) -> Option<IrType> {
+    Some(match ty {
         Type::Primitive(p) => get_primitive(*p),
         &Type::Generic(i) => ir_types[generics.nth(i.into())],
-        Type::Invalid => todo!("whole function is invalid"),
+        Type::Invalid => return None,
         Type::Pointer(_) => IrType::Ptr,
         Type::Array(b) => {
             let (elem, size) = &**b;
-            let elem = get(compiler, ir_types, elem, generics);
+            let elem = get(compiler, ir_types, elem, generics)?;
             let elem = ir_types.add(elem);
             IrType::Array(elem, *size)
         }
         Type::TraitSelf => todo!(),
-        Type::Tuple(elems) => IrType::Tuple(get_multiple(compiler, ir_types, elems, generics)),
+        Type::Tuple(elems) => IrType::Tuple(get_multiple(compiler, ir_types, elems, generics)?),
         Type::DefId {
             id,
             generics: def_generics,
@@ -36,11 +36,11 @@ pub fn get(
             let def_generics = def_generics
                 .as_ref()
                 .expect("TODO: handle missing generics"); // TODO
-            let def_generics = get_multiple(compiler, ir_types, def_generics, generics);
-            get_def(compiler, ir_types, *id, def_generics)
+            let def_generics = get_multiple(compiler, ir_types, def_generics, generics)?;
+            get_def(compiler, ir_types, *id, def_generics)?
         }
         Type::LocalEnum(_) => todo!("local enums"),
-    }
+    })
 }
 
 pub fn get_multiple(
@@ -48,13 +48,13 @@ pub fn get_multiple(
     ir_types: &mut IrTypes,
     types: &[Type],
     generics: TypeRefs,
-) -> ir::TypeRefs {
+) -> Option<ir::TypeRefs> {
     let refs = ir_types.add_multiple(types.iter().map(|_| IrType::Unit));
     for (elem, ty) in types.iter().zip(refs.iter()) {
-        let elem = get(compiler, ir_types, elem, generics);
+        let elem = get(compiler, ir_types, elem, generics)?;
         ir_types.replace(ty, elem);
     }
-    refs
+    Some(refs)
 }
 
 pub fn get_def(
@@ -62,14 +62,14 @@ pub fn get_def(
     ir_types: &mut IrTypes,
     def: TypeId,
     generics: TypeRefs,
-) -> IrType {
+) -> Option<IrType> {
     let resolved = compiler.get_resolved_type_def(def);
     let def = Rc::clone(&resolved.def);
-    match &*def {
+    Some(match &*def {
         ResolvedTypeDef::Struct(def) => {
             let elems = ir_types.add_multiple((0..def.fields.len()).map(|_| IrType::Unit));
             for ((_, field), r) in def.fields.iter().zip(elems.iter()) {
-                let ty = get(compiler, ir_types, field, generics);
+                let ty = get(compiler, ir_types, field, generics)?;
                 ir_types.replace(r, ty)
             }
             IrType::Tuple(elems)
@@ -82,7 +82,7 @@ pub fn get_def(
                 let mut elem_iter = elems.iter();
                 ir_types.replace(elem_iter.next().unwrap(), ordinal_type);
                 for (arg, r) in args.iter().zip(elem_iter) {
-                    let elem = get(compiler, ir_types, arg, generics);
+                    let elem = get(compiler, ir_types, arg, generics)?;
                     ir_types.replace(r, elem);
                 }
                 let variant_layout = ir::type_layout(IrType::Tuple(elems), ir_types);
@@ -90,7 +90,7 @@ pub fn get_def(
             }
             type_from_layout(ir_types, accumulated_layout)
         }
-    }
+    })
 }
 
 /// returns None on invalid type, should always be handled correctly
@@ -108,7 +108,7 @@ pub fn get_from_info(
         TypeInfo::TypeDef(id, inner_generics) => {
             let inner_generics =
                 get_multiple_infos(compiler, types, ir_types, inner_generics, generics)?;
-            get_def(compiler, ir_types, id, inner_generics)
+            get_def(compiler, ir_types, id, inner_generics)?
         }
         TypeInfo::Pointer(_) => IrType::Ptr,
         TypeInfo::Array {

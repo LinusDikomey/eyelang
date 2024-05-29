@@ -31,7 +31,8 @@ pub fn lower_function(
     generics: &[Type],
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
-    let generic_ir_types = types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY);
+    let generic_ir_types =
+        types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY).unwrap();
     // TODO: figure out what to do when params/return_type are Invalid. We can no longer generate a
     // valid signature
     let params = types::get_multiple_infos(
@@ -138,7 +139,14 @@ impl<'a> Ctx<'a> {
         module: ModuleId,
         id: ast::FunctionId,
         generics: Vec<Type>,
-    ) -> ir::FunctionId {
+    ) -> Option<ir::FunctionId> {
+        // check that none of the types is invalid, we never wan't to generate an instance for an
+        // invalid type. The caller should build a crash point in that case.
+        for ty in &generics {
+            if matches!(ty, Type::Invalid) {
+                return None;
+            }
+        }
         self.compiler.get_hir(module, id);
         let instances = &mut self.compiler.modules[module.idx()]
             .ast
@@ -148,7 +156,7 @@ impl<'a> Ctx<'a> {
 
         let potential_id = ir::FunctionId(self.compiler.ir_module.funcs.len() as _);
 
-        match instances.get_or_insert(id, &generics, potential_id) {
+        Some(match instances.get_or_insert(id, &generics, potential_id) {
             Some(id) => id,
             None => {
                 // FIXME: just adding a dummy function right now, stupid solution and might cause issues
@@ -168,13 +176,13 @@ impl<'a> Ctx<'a> {
                 });
                 potential_id
             }
-        }
+        })
     }
 
-    fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> ir::GlobalId {
+    fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> Option<ir::GlobalId> {
         let parsed = self.compiler.get_module_ast_and_symbols(module);
         if let Some(global) = parsed.instances.globals[id.idx()] {
-            global
+            Some(global)
         } else {
             let parsed = self.compiler.get_module_ast_and_symbols(module);
             let name = String::from(&*parsed.ast[id].name);
@@ -182,7 +190,7 @@ impl<'a> Ctx<'a> {
             let ty = ty.clone();
             let value = const_value::translate(value);
             let mut types = ir::IrTypes::new();
-            let ty = types::get(&mut self.compiler, &mut types, &ty, ir::TypeRefs::EMPTY);
+            let ty = types::get(&mut self.compiler, &mut types, &ty, ir::TypeRefs::EMPTY)?;
             let global_id = ir::GlobalId(self.compiler.ir_module.globals.len() as _);
             self.compiler
                 .ir_module
@@ -192,7 +200,7 @@ impl<'a> Ctx<'a> {
                 .get_module_ast_and_symbols(module)
                 .instances
                 .globals[id.idx()] = Some(global_id);
-            global_id
+            Some(global_id)
         }
     }
 
@@ -350,7 +358,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             });
         }
         &Node::Global(module, id, ty) => {
-            let id = ctx.get_ir_global(module, id);
+            let Some(id) = ctx.get_ir_global(module, id) else {
+                crash_point!(ctx)
+            };
             let global = ctx.builder.build_global(id, IrType::Ptr);
             let ty = ctx.get_type(ctx.types[ty])?;
             let ty = ctx.builder.types.add(ty);
@@ -519,7 +529,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                         if id == str_ty {
                             debug_assert!(generics.count == 0);
                             let string_eq = builtins::get_str_eq(ctx.compiler);
-                            let string_eq = ctx.get_ir_id(string_eq.0, string_eq.1, Vec::new());
+                            let Some(string_eq) =
+                                ctx.get_ir_id(string_eq.0, string_eq.1, Vec::new())
+                            else {
+                                crash_point!(ctx);
+                            };
                             let eq = ctx.builder.build_call(string_eq, [l, r], IrType::U1);
                             return Ok(ValueOrPlace::Value(if cmp == Comparison::NE {
                                 ctx.builder.build_not(eq, IrType::U1)
@@ -719,7 +733,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .iter()
                 .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
                 .collect();
-            let func = ctx.get_ir_id(function.0, function.1, call_generics);
+            let Some(func) = ctx.get_ir_id(function.0, function.1, call_generics) else {
+                crash_point!(ctx)
+            };
             let return_ty = ctx.get_type(ctx.types[return_ty])?;
             let res = ctx.builder.build_call(func, arg_refs, return_ty);
             if noreturn {
@@ -748,7 +764,9 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Option<Ref>> {
         LValue::Variable(id) => ctx.vars[id.idx()].0,
         LValue::Ignore => return Ok(None),
         LValue::Global(module, id) => {
-            let id = ctx.get_ir_global(module, id);
+            let Some(id) = ctx.get_ir_global(module, id) else {
+                crash_point!(ctx)
+            };
             ctx.builder.build_global(id, IrType::Ptr)
         }
         LValue::Deref(pointer) => lower(ctx, pointer)?,
@@ -837,7 +855,8 @@ fn lower_pattern(
         }
         Pattern::String(s) => {
             let str_eq = builtins::get_str_eq(ctx.compiler);
-            let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new());
+            // can unwrap here because we don't pass invalid generics
+            let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new()).unwrap();
             let (expected, str_ty) = lower_string_literal(&mut ctx.builder, s);
             let expected = ctx.builder.build_load(expected, str_ty);
             let matches = ctx

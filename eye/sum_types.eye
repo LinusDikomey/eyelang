@@ -9,8 +9,8 @@ main :: fn {
 
     assert(eq(l.get(0), .None))
     assert(eq(l.get(1), .Some(5)))
-    std.c.printf("%d\n".ptr, l.get(2))
     assert(eq(l.get(2), .Some(3)))
+    println("Success")
 }
 
 eq :: fn[T](a Option[T], b Option[T]) -> bool: match a {

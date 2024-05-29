@@ -2,24 +2,22 @@ use super::token::{Token, TokenType};
 use crate::error::{Error, Errors};
 use id::ModuleId;
 
-pub fn lex(src: &str, errors: &mut Errors, module: ModuleId) -> Option<Vec<Token>> {
+pub fn lex(mut src: &str, errors: &mut Errors, module: ModuleId) -> Vec<Token> {
     if src.len() > u32::MAX as usize {
         errors.emit(Error::FileSizeExceeeded, 0, 0, module);
-        return None;
+        src = &src[..u32::MAX as usize];
     }
 
     let chars = src.char_indices().map(|(i, c)| (i as u32, c)).collect();
-    Some(
-        Lexer {
-            src,
-            chars,
-            index: 0,
-            tokens: Vec::new(),
-            module,
-            newline: true,
-        }
-        .parse(errors),
-    )
+    Lexer {
+        src,
+        chars,
+        index: 0,
+        tokens: Vec::new(),
+        module,
+        newline: true,
+    }
+    .parse(errors)
 }
 
 struct Lexer<'a> {

@@ -456,7 +456,11 @@ impl TypeTable {
     ) -> Result<(OrdinalType, LocalTypeIds), Option<Error>> {
         // Do the type checking manually instead of using `specify`.
         // This allows skipping construction of unneeded enum variant representations.
-        match self[expected] {
+        let mut idx = expected;
+        while let TypeInfoOrIdx::Idx(next) = self.types[idx.idx()] {
+            idx = next;
+        }
+        match self[idx] {
             TypeInfo::Invalid => {
                 return Err(None);
             }
@@ -479,7 +483,7 @@ impl TypeTable {
                 let arg_types = self.add_multiple_unknown(arg_count + 1);
                 let enum_id = self.add_enum_type();
                 let variant = self.append_enum_variant(enum_id, name.into(), arg_types);
-                self.replace(expected, TypeInfo::Enum(enum_id));
+                self.replace(idx, TypeInfo::Enum(enum_id));
                 Ok((OrdinalType::Inferred(variant), arg_types))
             }
             TypeInfo::TypeDef(id, generics) => {

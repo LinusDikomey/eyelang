@@ -19,3 +19,4 @@ clap = { version = "4.4.13", features = ["derive"] }
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }
+pathdiff = "0.2.1"
