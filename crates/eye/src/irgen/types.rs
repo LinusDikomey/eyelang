@@ -27,7 +27,6 @@ pub fn get(
             let elem = ir_types.add(elem);
             IrType::Array(elem, *size)
         }
-        Type::TraitSelf => todo!(),
         Type::Tuple(elems) => IrType::Tuple(get_multiple(compiler, ir_types, elems, generics)?),
         Type::DefId {
             id,
@@ -140,7 +139,9 @@ pub fn get_from_info(
         }
         TypeInfo::Generic(id) => ir_types[generics.nth(id.into())],
         TypeInfo::Unknown
+        | TypeInfo::UnknownSatisfying(_, _)
         | TypeInfo::TypeItem { .. }
+        | TypeInfo::TraitItem { .. }
         | TypeInfo::Array {
             element: _,
             count: None,
@@ -148,6 +149,7 @@ pub fn get_from_info(
         | TypeInfo::FunctionItem { .. }
         | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }
+        | TypeInfo::TraitMethodItem { .. }
         | TypeInfo::EnumVariantItem { .. }
         | TypeInfo::Invalid => return None,
     })

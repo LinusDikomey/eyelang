@@ -6,7 +6,7 @@ use types::{FloatType, IntType, Primitive};
 use crate::{
     compiler::VarId,
     parser::{
-        ast::{FunctionId, GlobalId},
+        ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
     },
     type_table::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable, VariantId},
@@ -335,7 +335,9 @@ impl HIR {
                     eprint!(" ");
                     self.dump(branch, compiler, types, indent_count + 1);
                 }
-                eprint!("\n): ");
+                eprintln!();
+                indent();
+                eprint!("): ");
                 types.dump_type(compiler, resulting_ty);
             }
             &Node::While { cond, body } => {
@@ -369,11 +371,30 @@ impl HIR {
                     }
                     types.dump_type(compiler, generic);
                 }
-                eprint!(") ");
+                eprint!(")");
                 for (i, arg) in args.iter().enumerate() {
-                    if i != 0 {
-                        eprint!(" ");
-                    }
+                    eprint!(" ");
+                    self.dump(arg, compiler, types, indent_count);
+                }
+                eprint!("): ");
+                types.dump_type(compiler, return_ty);
+            }
+            &Node::TraitCall {
+                trait_id,
+                method_index,
+                self_ty,
+                args,
+                return_ty,
+                noreturn: _,
+            } => {
+                eprint!(
+                    "(call-trait-method <trait {}:{} as ",
+                    trait_id.0 .0, trait_id.1 .0
+                );
+                types.dump_type(compiler, self_ty);
+                eprint!(">.{method_index}");
+                for arg in args.iter() {
+                    eprint!(" ");
                     self.dump(arg, compiler, types, indent_count);
                 }
                 eprint!("): ");
@@ -689,6 +710,14 @@ pub enum Node {
     Call {
         function: (ModuleId, FunctionId),
         generics: LocalTypeIds,
+        args: NodeIds,
+        return_ty: LocalTypeId,
+        noreturn: bool,
+    },
+    TraitCall {
+        trait_id: (ModuleId, TraitId),
+        method_index: u16,
+        self_ty: LocalTypeId,
         args: NodeIds,
         return_ty: LocalTypeId,
         noreturn: bool,

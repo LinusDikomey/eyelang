@@ -20,7 +20,7 @@ use crate::{
 use self::{
     ast::{
         Definition, Expr, ExprId, Function, GenericDef, Global, Item, ScopeId, TraitDefinition,
-        TraitImpl, UnOp,
+        UnOp,
     },
     reader::{match_or_unexpected_value, Delimit},
     token::{Keyword, Operator, TokenType},
@@ -47,7 +47,6 @@ pub fn parse(
             let scope = ast_builder.scope(ast::Scope {
                 parent: None,
                 definitions: dmap::new(),
-                impls: Vec::new(),
                 span: TSpan::new(0, source.len() as _),
             });
             ast_builder.finish_with_top_level_scope(source, scope)
@@ -144,7 +143,6 @@ impl<'a> Parser<'a> {
         let mut scope = ast::Scope {
             parent,
             definitions,
-            impls: Vec::new(),
             span: TSpan::MISSING, // span will be updated at the end of this function
         };
 
@@ -181,9 +179,6 @@ impl<'a> Parser<'a> {
                     let (_, _, name) = path.segments(self.src);
                     let name = name.map_or("root", |(name, _)| name).to_owned();
                     scope.definitions.insert(name, Definition::Path(path));
-                }
-                Item::Impl(impl_) => {
-                    scope.impls.push(impl_);
                 }
                 Item::Expr(r) => {
                     let span = Span {
@@ -316,49 +311,15 @@ impl<'a> Parser<'a> {
                 let path = self.parse_path()?;
                 Item::Use(path)
             }
-            // Trait implementation
-            TokenType::Keyword(Keyword::Impl) => {
-                let impl_tok = self.toks.step_assert(TokenType::Keyword(Keyword::Impl));
-                Item::Impl(self.parse_trait_impl(impl_tok, scope)?)
-            }
-            // either a struct, constant or a variable
+            // either a variable or constant definition or just an identifier
             TokenType::Ident => {
                 let ident = self.toks.step_assert(TokenType::Ident);
                 let ident_span = ident.span();
                 let name = ident.get_val(self.src);
                 match self.toks.peek().map(|t| t.ty) {
-                    // Struct definition, constant or enum
+                    // constant definition
                     Some(TokenType::DoubleColon) => {
                         let double_colon = self.toks.step_assert(TokenType::DoubleColon);
-
-                        /*
-                        let def = if let Some(struct_tok) =
-                            self.toks.step_if(TokenType::Keyword(Keyword::Struct))
-                        {
-                            let def = self.struct_definition(name, struct_tok)?;
-                            Definition::Type(self.ast.add_type(TypeDef::Struct(def)))
-                        } else if self
-                            .toks
-                            .step_if(TokenType::Keyword(Keyword::Enum))
-                            .is_some()
-                        {
-                            let def = self.enum_definition(name.to_owned())?;
-                            Definition::Type(self.ast.add_type(TypeDef::Enum(def)))
-                        } else if let Some(trait_tok) =
-                            self.toks.step_if(TokenType::Keyword(Keyword::Trait))
-                        {
-                            let def = self.parse_trait_def(trait_tok)?;
-                            Definition::Trait(self.ast.add_trait(def))
-                        } else {
-                            let mut counts = Counts::new();
-                            let val = self.parse_expr(&mut counts)?;
-                            Definition::Const {
-                                ty: UnresolvedType::Infer(0),
-                                val,
-                                counts,
-                            }
-                        };
-                        */
                         let value = self.parse_expr(scope)?;
                         let value = self.ast.expr(value);
                         Item::Definition {
@@ -447,7 +408,7 @@ impl<'a> Parser<'a> {
         scope: ScopeId,
     ) -> ParseResult<ast::StructDefinition> {
         debug_assert_eq!(struct_tok.ty, TokenType::Keyword(Keyword::Struct));
-        let generics = self.parse_optional_generics()?;
+        let generics = self.parse_optional_generics(Vec::new())?;
 
         let scope = {
             let scope = ast::Scope::from_generics(scope, self.src, &generics, TSpan::MISSING);
@@ -495,7 +456,7 @@ impl<'a> Parser<'a> {
         scope: ScopeId,
     ) -> ParseResult<ast::EnumDefinition> {
         debug_assert_eq!(enum_tok.ty, TokenType::Keyword(Keyword::Enum));
-        let generics = self.parse_optional_generics()?;
+        let generics = self.parse_optional_generics(Vec::new())?;
 
         let scope = {
             let scope = ast::Scope::from_generics(scope, self.src, &generics, TSpan::MISSING);
@@ -570,17 +531,12 @@ impl<'a> Parser<'a> {
         fn_tok: Token,
         scope: ScopeId,
         associated_name: TSpan,
-        mut inherited_generics: Vec<GenericDef>,
+        inherited_generics: Vec<GenericDef>,
     ) -> ParseResult<Function> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
         let mut end = fn_tok.end;
-        let generics = self.parse_optional_generics()?;
-
-        // PERF: could avoid one or two heap allocations every time by passing a vec to
-        // parse_optional_generics
-        inherited_generics.extend(generics);
-        let generics = inherited_generics;
+        let generics = self.parse_optional_generics(inherited_generics)?;
 
         let mut params = Vec::new();
         let mut varargs = false;
@@ -659,13 +615,19 @@ impl<'a> Parser<'a> {
         scope: ScopeId,
     ) -> ParseResult<TraitDefinition> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
-        let generics = self.parse_optional_generics()?;
+        let self_generic = GenericDef {
+            name: TSpan::MISSING,
+            requirements: Vec::new(),
+        };
+        let generics = self.parse_optional_generics(vec![self_generic])?;
+        let scope = ast::Scope::from_generics(scope, self.src, &generics, TSpan::MISSING);
+        let scope = self.ast.scope(scope);
         self.toks.step_expect(TokenType::LBrace)?;
-        let mut functions = dmap::new();
-        loop {
+        let mut functions = Vec::new();
+        let end = loop {
             let next = self.toks.step()?;
             match_or_unexpected! {next, self.toks.module,
-                TokenType::RBrace = TokenType::RBrace => break,
+                TokenType::RBrace = TokenType::RBrace => break next.end,
                 TokenType::Ident = TokenType::Ident => {
                     let name = next.get_val(self.src).to_owned();
                     let name_span = next.span();
@@ -680,34 +642,49 @@ impl<'a> Parser<'a> {
                             self.attach_func_body(&mut func, body);
                         }
                     }
-                    let previous = functions.insert(name, (name_span, func));
-                    if previous.is_some() {
-                        return Err(CompileError::new(
-                            Error::DuplicateDefinition,
-                            name_span.in_mod(self.toks.module)
-                        ))
+                    functions.push((name, func));
+                }
+            }
+        };
+        let mut impls = Vec::new();
+        if self
+            .toks
+            .step_if(TokenType::Keyword(Keyword::For))
+            .is_some()
+        {
+            self.toks.step_expect(TokenType::LBrace)?;
+            loop {
+                let next = self.toks.step()?;
+                match_or_unexpected! {next, self.toks.module,
+                    TokenType::RBrace = TokenType::RBrace => break,
+                    TokenType::Keyword(Keyword::Impl) = TokenType::Keyword(Keyword::Impl) => {
+                        let generics = self.parse_optional_generics(generics.to_vec())?;
+                        let ty = self.parse_type()?;
+                        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+                        let functions = self.parse_trait_impl_body(lbrace, scope)?;
+                        impls.push((generics, ty, functions));
                     }
                 }
             }
         }
+        let span = TSpan::new(trait_tok.start, end);
+        self.ast.get_scope_mut(scope).span = span;
 
         Ok(TraitDefinition {
             generics,
+            scope,
             functions,
+            impls,
         })
     }
 
-    fn parse_trait_impl(&mut self, impl_tok: Token, scope: ScopeId) -> ParseResult<TraitImpl> {
-        debug_assert_eq!(impl_tok.ty, TokenType::Keyword(Keyword::Impl));
-        let impl_generics = self.parse_optional_generics()?;
-        let trait_path = self.parse_path()?;
-        let trait_generics = self.parse_optional_generic_instance()?;
-        self.toks.step_expect(TokenType::Keyword(Keyword::For))?;
-        let ty = self.parse_type()?;
-
+    fn parse_trait_impl_body(
+        &mut self,
+        lbrace: Token,
+        scope: ScopeId,
+    ) -> ParseResult<DHashMap<String, ast::FunctionId>> {
+        debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut functions = dmap::new();
-
-        self.toks.step_expect(TokenType::LBrace)?;
         self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?;
             let name_span = name.span();
@@ -726,14 +703,7 @@ impl<'a> Parser<'a> {
             }
             Ok(Delimit::OptionalIfNewLine)
         })?;
-        Ok(TraitImpl {
-            impl_generics,
-            trait_path,
-            trait_generics,
-            ty,
-            functions,
-            impl_keyword_start: impl_tok.start,
-        })
+        Ok(functions)
     }
 
     fn parse_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr> {
@@ -800,6 +770,11 @@ impl<'a> Parser<'a> {
                 let enum_def = self.enum_definition(first, scope)?;
                 let id = self.ast.type_def(ast::TypeDef::Enum(enum_def));
                 Expr::Type { id }
+            },
+            TokenType::Keyword(Keyword::Trait) => {
+                let trait_def = self.parse_trait_def(first, scope)?;
+                let id = self.ast.trait_def(trait_def);
+                Expr::Trait { id }
             },
             TokenType::LBrace => {
                 let block = self.parse_block_from_lbrace(first, scope)?;
@@ -1233,11 +1208,14 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_optional_generics(&mut self) -> ParseResult<Box<[GenericDef]>> {
+    fn parse_optional_generics(
+        &mut self,
+        inherited: Vec<GenericDef>,
+    ) -> ParseResult<Box<[GenericDef]>> {
         if !self.toks.step_if(TokenType::LBracket).is_some() {
-            return Ok(Box::new([]));
+            return Ok(inherited.into_boxed_slice());
         }
-        let mut generics = Vec::new();
+        let mut generics = inherited;
         self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?.span();
             let mut requirements = Vec::new();

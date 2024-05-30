@@ -191,6 +191,7 @@ pub fn def_expr(
             };
             Def::Type(Type::DefId { id, generics: None })
         }
+        &Expr::Trait { id } => Def::Trait(module, id),
         &Expr::Primitive { primitive, .. } => Def::Type(Type::Primitive(primitive)),
         _ => {
             let mut types = TypeTable::new();

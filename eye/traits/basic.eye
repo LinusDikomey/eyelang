@@ -10,17 +10,18 @@ main :: fn {
 
 TypeName :: trait {
     type_name :: fn -> str
-}
-impl TypeName for i32 {
-    type_name :: fn -> str: "i32"
+} for {
+    impl i32 {
+        type_name :: fn -> str: "i32"
+    }
+    impl MyStruct {
+        type_name :: fn -> str: "MyStruct"
+    }
+    impl MyEnum {
+        type_name :: fn -> str: "MyEnum"
+    }
 }
 
 MyStruct :: struct { }
-impl TypeName for MyStruct {
-    type_name :: fn -> str: "MyStruct"
-}
 
 MyEnum :: enum { }
-impl TypeName for MyEnum {
-    type_name :: fn -> str: "MyEnum"
-}

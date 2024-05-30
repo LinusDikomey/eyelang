@@ -17,8 +17,6 @@ pub enum Type {
     /// a local enum that will only be created from inference
     LocalEnum(Box<[Box<[Type]>]>),
     /// Self type (only used in trait definitions)
-    #[allow(dead_code)] // FIXME: remove this allow when it's used
-    TraitSelf,
     Invalid,
 }
 impl Type {
@@ -104,7 +102,6 @@ impl Type {
                     })
                     .collect(),
             ),
-            Type::TraitSelf => unreachable!(),
             Type::Invalid => Type::Invalid,
         }
     }
@@ -152,7 +149,6 @@ impl fmt::Display for Type {
             }
             Type::Generic(i) => write!(f, "<generic #{i}>"),
             Type::LocalEnum(_) => write!(f, "LocalEnum: TODO: write"),
-            Type::TraitSelf => write!(f, "Self"),
             Type::Invalid => write!(f, "<invalid>"),
         }
     }

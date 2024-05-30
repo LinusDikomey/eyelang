@@ -496,32 +496,7 @@ impl Compiler {
             Resolvable::Unresolved => {
                 let ast = parsed.ast.clone();
                 let function = &ast[id];
-                let scope = function.scope;
-                let generics = function
-                    .generics
-                    .iter()
-                    .map(|def| ast[def.name].to_owned())
-                    .collect();
-
-                let args = function
-                    .params
-                    .clone()
-                    .into_iter()
-                    .map(|(name_span, ty)| {
-                        (
-                            ast[name_span].to_owned(),
-                            self.resolve_type(&ty, module, scope),
-                        )
-                    })
-                    .collect();
-                let return_type = self.resolve_type(&function.return_type, module, scope);
-                let signature = Signature {
-                    args,
-                    varargs: function.varargs,
-                    return_type,
-                    generics,
-                    span: function.signature_span,
-                };
+                let signature = self.check_signature(function, module, &ast);
                 self.modules[module.idx()]
                     .ast
                     .as_mut()
@@ -529,6 +504,91 @@ impl Compiler {
                     .symbols
                     .function_signatures[id.idx()]
                 .put(Rc::new(signature))
+            }
+        }
+    }
+
+    fn check_signature(
+        &mut self,
+        function: &ast::Function,
+        module: ModuleId,
+        ast: &Ast,
+    ) -> Signature {
+        let scope = function.scope;
+        let generics = function
+            .generics
+            .iter()
+            .map(|def| def.name(ast.src()).to_owned())
+            .collect();
+
+        let args = function
+            .params
+            .clone()
+            .into_iter()
+            .map(|(name_span, ty)| {
+                (
+                    ast[name_span].to_owned(),
+                    self.resolve_type(&ty, module, scope),
+                )
+            })
+            .collect();
+        let return_type = self.resolve_type(&function.return_type, module, scope);
+        Signature {
+            args,
+            varargs: function.varargs,
+            return_type,
+            generics,
+            span: function.signature_span,
+        }
+    }
+
+    /// returns None when the trait can't be resolved, an error was already emitted in that case
+    pub fn get_checked_trait(
+        &mut self,
+        module: ModuleId,
+        id: ast::TraitId,
+    ) -> Option<&Rc<CheckedTrait>> {
+        let parsed = self.get_module_ast_and_symbols(module);
+        match &parsed.symbols.traits[id.idx()] {
+            Resolvable::Resolved(_) => {
+                // borrowing bullshit
+                let Resolvable::Resolved(checked) =
+                    &self.get_module_ast_and_symbols(module).symbols.traits[id.idx()]
+                else {
+                    unreachable!()
+                };
+                Some(checked)
+            }
+            Resolvable::Resolving => {
+                let span = parsed.ast[id].span(parsed.ast.scopes()).in_mod(module);
+                self.errors
+                    .emit_err(Error::RecursiveDefinition.at_span(span));
+                None
+            }
+            Resolvable::Unresolved => {
+                let ast = Rc::clone(&parsed.ast);
+                let def = &ast[id];
+                // don't include self type in generic count
+                let generics = def.generics.len() as u8 - 1;
+                let mut functions_by_name = dmap::with_capacity(def.functions.len());
+                let functions = def
+                    .functions
+                    .iter()
+                    .zip(0..)
+                    .map(|((name, function), function_index)| {
+                        functions_by_name.insert(name.clone(), function_index);
+                        self.check_signature(function, module, &ast)
+                    })
+                    .collect();
+                Some(
+                    self.get_module_ast_and_symbols(module).symbols.traits[id.idx()].put(Rc::new(
+                        CheckedTrait {
+                            generics,
+                            functions,
+                            functions_by_name,
+                        },
+                    )),
+                )
             }
         }
     }
@@ -1144,6 +1204,7 @@ pub enum Def {
     Invalid,
     Function(ModuleId, ast::FunctionId),
     Type(Type),
+    Trait(ModuleId, ast::TraitId),
     ConstValue(ConstValueId),
     Module(ModuleId),
     Global(ModuleId, GlobalId),
@@ -1169,6 +1230,10 @@ impl Def {
                     .then_some(self)
                     .ok_or("type")
             }
+            Def::Trait(_, _) => match ty {
+                UnresolvedType::Infer(_) => Ok(self),
+                _ => Err("a trait"),
+            },
             Def::ConstValue(const_val_id) => {
                 // PERF: cloning ConstValue but it might be fine
                 let const_val = compiler.const_values[const_val_id.idx()].clone();
@@ -1186,6 +1251,7 @@ impl Def {
             Self::Invalid => print!("<invalid>"),
             Self::Function(module, id) => print!("Function({}, {})", module.idx(), id.idx()),
             Self::Type(ty) => print!("Type({:?})", ty),
+            Self::Trait(module, id) => print!("Trait({}, {})", module.idx(), id.idx()),
             Self::ConstValue(value) => compiler.const_values[value.idx()].dump(),
             Self::Module(id) => print!("Module({})", id.idx()),
             Self::Global(module, id) => print!("Global({}, {})", module.idx(), id.idx()),
@@ -1200,6 +1266,10 @@ impl Def {
                 Some(ast[ast[id].scope].span.in_mod(module))
             }
             Self::Type(_ty) => todo!("spans of types"),
+            &Self::Trait(module, id) => {
+                let ast = compiler.get_module_ast(module);
+                Some(ast[ast[id].scope].span.in_mod(module))
+            }
             Self::ConstValue(_id) => todo!("spans of const values"),
             // maybe better to show reference to module
             &Self::Module(id) => Some(TSpan::MISSING.in_mod(id)),
@@ -1331,6 +1401,7 @@ pub struct ModuleSymbols {
     pub functions: Vec<Resolvable<Rc<CheckedFunction>>>,
     pub types: Vec<Option<TypeId>>,
     pub globals: Vec<Resolvable<(Type, ConstValue)>>,
+    pub traits: Vec<Resolvable<Rc<CheckedTrait>>>,
 }
 impl ModuleSymbols {
     fn empty(ast: &Ast) -> Self {
@@ -1343,6 +1414,9 @@ impl ModuleSymbols {
                 .collect(),
             types: vec![None; ast.type_count()],
             globals: (0..ast.global_count())
+                .map(|_| Resolvable::Unresolved)
+                .collect(),
+            traits: (0..ast.trait_count())
                 .map(|_| Resolvable::Unresolved)
                 .collect(),
         }
@@ -1379,6 +1453,13 @@ impl CheckedFunction {
         }
         eprintln!("\nEND HIR\n");
     }
+}
+
+#[derive(Debug)]
+pub struct CheckedTrait {
+    pub generics: u8,
+    pub functions: Vec<Signature>,
+    pub functions_by_name: DHashMap<String, u16>,
 }
 
 pub struct IrInstances {

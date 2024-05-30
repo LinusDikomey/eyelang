@@ -229,7 +229,7 @@ impl TraitDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("trait {\n");
         let child = c.child();
-        for (name, (_, func)) in &self.functions {
+        for (name, func) in &self.functions {
             c.write_start(name.as_str());
             c.write_add(" :: ");
             func.repr(&child, true);
@@ -246,6 +246,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.ast()[id].repr(c, false);
             }
             &Self::Type { id } => c.ast()[id].repr(c),
+            &Self::Trait { id } => c.ast()[id].repr(c),
             Self::Block { items, scope } => {
                 c.write_add("{\n");
                 let child = c.child();

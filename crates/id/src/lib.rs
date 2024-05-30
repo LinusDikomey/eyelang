@@ -25,4 +25,3 @@ impl Default for ProjectId {
 id!(ModuleId);
 id!(TypeId);
 id!(ConstValueId);
-id!(TraitId);

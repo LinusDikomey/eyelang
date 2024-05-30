@@ -15,6 +15,7 @@ id::id!(ExprId);
 id::id!(CallId);
 id::id!(FunctionId);
 id::id!(TypeId);
+id::id!(TraitId);
 id::id!(GlobalId);
 id::id!(IdentId);
 id::id!(MemberAccessId);
@@ -29,6 +30,7 @@ pub struct Ast {
     calls: Vec<Call>,
     functions: Vec<Function>,
     types: Vec<TypeDef>,
+    traits: Vec<TraitDefinition>,
     globals: Vec<Global>,
 }
 impl Ast {
@@ -38,6 +40,10 @@ impl Ast {
 
     pub fn scope_ids(&self) -> impl Iterator<Item = ScopeId> {
         (0..self.scopes.len()).map(|i| ScopeId(i as _))
+    }
+
+    pub fn scopes(&self) -> &[Scope] {
+        &self.scopes
     }
 
     pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> {
@@ -71,6 +77,10 @@ impl Ast {
 
     pub fn global_count(&self) -> usize {
         self.globals.len()
+    }
+
+    pub fn trait_count(&self) -> usize {
+        self.traits.len()
     }
 }
 impl Index<TSpan> for Ast {
@@ -118,6 +128,13 @@ impl Index<TypeId> for Ast {
         &self.types[index.idx()]
     }
 }
+impl Index<TraitId> for Ast {
+    type Output = TraitDefinition;
+
+    fn index(&self, index: TraitId) -> &Self::Output {
+        &self.traits[index.idx()]
+    }
+}
 impl Index<GlobalId> for Ast {
     type Output = Global;
     fn index(&self, index: GlobalId) -> &Self::Output {
@@ -131,6 +148,7 @@ pub struct AstBuilder {
     calls: Vec<Call>,
     functions: Vec<Function>,
     types: Vec<TypeDef>,
+    traits: Vec<TraitDefinition>,
     globals: Vec<Global>,
 }
 impl AstBuilder {
@@ -141,6 +159,7 @@ impl AstBuilder {
             calls: Vec::new(),
             functions: Vec::new(),
             types: Vec::new(),
+            traits: Vec::new(),
             globals: Vec::new(),
         }
     }
@@ -189,6 +208,12 @@ impl AstBuilder {
         id
     }
 
+    pub fn trait_def(&mut self, trait_def: TraitDefinition) -> TraitId {
+        let id = TraitId(self.traits.len() as _);
+        self.traits.push(trait_def);
+        id
+    }
+
     pub fn global(&mut self, global: Global) -> GlobalId {
         let id = GlobalId(self.globals.len() as _);
         self.globals.push(global);
@@ -208,6 +233,7 @@ impl AstBuilder {
             calls: self.calls,
             functions: self.functions,
             types: self.types,
+            traits: self.traits,
             globals: self.globals,
         }
     }
@@ -241,7 +267,6 @@ impl TypeDef {
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub definitions: DHashMap<String, Definition>,
-    pub impls: Vec<TraitImpl>,
     pub span: TSpan,
 }
 impl Scope {
@@ -249,7 +274,6 @@ impl Scope {
         Self {
             parent: None,
             definitions: dmap::new(),
-            impls: Vec::new(),
             span: TSpan::MISSING,
         }
     }
@@ -260,14 +284,8 @@ impl Scope {
             definitions: generics
                 .iter()
                 .enumerate()
-                .map(|(i, generic)| {
-                    (
-                        src[generic.name.range()].to_owned(),
-                        Definition::Generic(i as u8),
-                    )
-                })
+                .map(|(i, generic)| (generic.name(src).to_owned(), Definition::Generic(i as u8)))
                 .collect(),
-            impls: Vec::new(),
             span,
         }
     }
@@ -309,7 +327,6 @@ pub enum Item {
         value: ExprId,
     },
     Use(IdentPath),
-    Impl(TraitImpl),
     Expr(Expr),
 }
 
@@ -369,7 +386,18 @@ impl EnumVariantDefinition {
 #[derive(Debug)]
 pub struct TraitDefinition {
     pub generics: Box<[GenericDef]>,
-    pub functions: DHashMap<String, (TSpan, Function)>,
+    pub scope: ScopeId,
+    pub functions: Vec<(String, Function)>,
+    pub impls: Vec<(
+        Box<[GenericDef]>,
+        UnresolvedType,
+        DHashMap<String, FunctionId>,
+    )>,
+}
+impl TraitDefinition {
+    pub fn span(&self, scopes: &[Scope]) -> TSpan {
+        scopes[self.scope.idx()].span
+    }
 }
 
 #[derive(Debug)]
@@ -383,7 +411,7 @@ pub struct Global {
 
 #[derive(Debug)]
 pub struct Function {
-    pub generics: Vec<GenericDef>,
+    pub generics: Box<[GenericDef]>,
     pub params: Vec<(TSpan, UnresolvedType)>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
@@ -395,8 +423,18 @@ pub struct Function {
 
 #[derive(Clone, Debug)]
 pub struct GenericDef {
-    pub name: TSpan,
+    /// missing span indicates that this is a `Self` type in a trait definition
+    pub(super) name: TSpan,
     pub requirements: Vec<IdentPath>,
+}
+impl GenericDef {
+    pub fn name<'s>(&self, src: &'s str) -> &'s str {
+        if self.name == TSpan::MISSING {
+            "Self"
+        } else {
+            &src[self.name.range()]
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +472,9 @@ pub enum Expr {
     },
     Type {
         id: TypeId,
+    },
+    Trait {
+        id: TraitId,
     },
 
     // ---------- variables and names ----------
@@ -545,6 +586,7 @@ impl Expr {
             &ast.exprs,
             &ast.functions,
             &ast.types,
+            &ast.traits,
             &ast.calls,
             &ast.scopes,
         )
@@ -555,6 +597,7 @@ impl Expr {
             &ast.exprs,
             &ast.functions,
             &ast.types,
+            &ast.traits,
             &ast.calls,
             &ast.scopes,
         )
@@ -565,12 +608,15 @@ impl Expr {
         exprs: &[Expr],
         functions: &[Function],
         types: &[TypeDef],
+        traits: &[TraitDefinition],
         calls: &[Call],
         scopes: &[Scope],
     ) -> TSpan {
         // shorthands for getting start and end position of an ExprId
-        let s = |r: &ExprId| exprs[r.idx()].start_inner(exprs, functions, types, calls, scopes);
-        let e = |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, calls, scopes);
+        let s =
+            |r: &ExprId| exprs[r.idx()].start_inner(exprs, functions, types, traits, calls, scopes);
+        let e =
+            |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, traits, calls, scopes);
 
         match self {
             Expr::StringLiteral(span)
@@ -586,6 +632,7 @@ impl Expr {
             Expr::Block { scope, .. } => scopes[scope.idx()].span,
             Expr::Function { id } => scopes[functions[id.idx()].scope.idx()].span,
             Expr::Type { id } => types[id.idx()].span(scopes),
+            Expr::Trait { id } => traits[id.idx()].span(scopes),
             Expr::Declare {
                 pat, annotated_ty, ..
             } => TSpan::new(s(pat), annotated_ty.span().end),
@@ -644,6 +691,7 @@ impl Expr {
             &ast.exprs,
             &ast.functions,
             &ast.types,
+            &ast.traits,
             &ast.calls,
             &ast.scopes,
         )
@@ -654,6 +702,7 @@ impl Expr {
             &ast.exprs,
             &ast.functions,
             &ast.types,
+            &ast.traits,
             &ast.calls,
             &ast.scopes,
         )
@@ -664,11 +713,12 @@ impl Expr {
         exprs: &[Expr],
         functions: &[Function],
         types: &[TypeDef],
+        traits: &[TraitDefinition],
         calls: &[Call],
         scopes: &[Scope],
     ) -> u32 {
         //TODO: more efficient implementation
-        self.span_inner(exprs, functions, types, calls, scopes)
+        self.span_inner(exprs, functions, types, traits, calls, scopes)
             .start
     }
 
@@ -677,11 +727,13 @@ impl Expr {
         exprs: &[Expr],
         functions: &[Function],
         types: &[TypeDef],
+        traits: &[TraitDefinition],
         calls: &[Call],
         scopes: &[Scope],
     ) -> u32 {
         //TODO: more efficient implementation
-        self.span_inner(exprs, functions, types, calls, scopes).end
+        self.span_inner(exprs, functions, types, traits, calls, scopes)
+            .end
     }
 }
 

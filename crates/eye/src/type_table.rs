@@ -278,7 +278,6 @@ impl TypeTable {
                 None => TypeInfo::Generic(i),
             },
             Type::LocalEnum(_) => todo!("local enum infos"),
-            Type::TraitSelf => todo!("trait self"),
         };
         TypeInfoOrIdx::TypeInfo(info)
     }
@@ -315,7 +314,8 @@ impl TypeTable {
                     Def::ConstValue(_)
                     | Def::Module(_)
                     | Def::Global(_, _)
-                    | Def::Function(_, _) => {
+                    | Def::Function(_, _)
+                    | Def::Trait(_, _) => {
                         compiler
                             .errors
                             .emit_err(Error::TypeExpected.at_span(path.span().in_mod(module)));
@@ -612,7 +612,7 @@ impl TypeTable {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
-            TypeInfo::Unknown => s.push_str("<unknown>"),
+            TypeInfo::Unknown | TypeInfo::UnknownSatisfying(_, _) => s.push_str("<unknown>"),
             TypeInfo::Primitive(p) => s.push_str(p.into()),
             TypeInfo::Integer => s.push_str("<integer>"),
             TypeInfo::Float => s.push_str("<float>"),
@@ -667,15 +667,11 @@ impl TypeTable {
                 self.type_to_string(compiler, self[ty], s);
                 s.push_str(")>");
             }
-            TypeInfo::FunctionItem { .. } => {
-                s.push_str("<function item>");
-            }
-            TypeInfo::ModuleItem(_) => {
-                s.push_str("<module item>");
-            }
-            TypeInfo::MethodItem { .. } => {
-                s.push_str("<method item>");
-            }
+            TypeInfo::TraitItem { .. } => s.push_str("<trait item>"),
+            TypeInfo::FunctionItem { .. } => s.push_str("<function item>"),
+            TypeInfo::ModuleItem(_) => s.push_str("<module item>"),
+            TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
+            TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
             TypeInfo::Generic(i) => write!(s, "<generic #{i}>").unwrap(),
             TypeInfo::Invalid => s.push_str("<invalid>"),
@@ -745,6 +741,12 @@ fn unify(
     use TypeInfo::*;
     Some(match (a, b) {
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
+        (t, UnknownSatisfying(module, trait_id)) | (UnknownSatisfying(module, trait_id), t) => {
+            match t {
+                TypeInfo::Unknown => UnknownSatisfying(module, trait_id),
+                _ => todo!("check trait bounds of {t:?}"),
+            }
+        }
         (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
         (Invalid, _) | (_, Invalid) => Invalid,
         (Integer, Integer) => Integer,
@@ -921,6 +923,8 @@ impl LocalTypeIds {
 #[derive(Debug, Clone, Copy)]
 pub enum TypeInfo {
     Unknown,
+    /// an unknown type that has to implement a trait
+    UnknownSatisfying(ModuleId, ast::TraitId),
     Primitive(Primitive),
     Integer,
     Float,
@@ -935,6 +939,10 @@ pub enum TypeInfo {
     TypeItem {
         ty: LocalTypeId,
     },
+    TraitItem {
+        module: ModuleId,
+        id: ast::TraitId,
+    },
     FunctionItem {
         module: ModuleId,
         function: ast::FunctionId,
@@ -945,6 +953,11 @@ pub enum TypeInfo {
         module: ModuleId,
         function: ast::FunctionId,
         generics: LocalTypeIds,
+    },
+    TraitMethodItem {
+        module: ModuleId,
+        trait_id: ast::TraitId,
+        method_index: u16,
     },
     EnumVariantItem {
         enum_type: TypeId,

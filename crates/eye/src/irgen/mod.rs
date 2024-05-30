@@ -644,6 +644,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             // PERF: better with block args
             let mut resulting_values = Vec::new();
             let mut next_block;
+            if branch_count == 0 {
+                // matching on an empty enum or something so we need to terminate the block
+                ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
+                return Err(NoReturn);
+            }
             for i in 0..branch_count {
                 let is_last = i + 1 == branch_count;
                 let pattern = PatternId(pattern_index + i);
@@ -743,6 +748,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 return Err(NoReturn);
             }
             res
+        }
+        &Node::TraitCall { .. } => {
+            //todo!("lower trait call")
+            Ref::UNDEF
         }
         &Node::TypeProperty(ty, property) => {
             let layout = ir::type_layout(ctx.get_type(ctx.types[ty])?, &ctx.builder.types);
