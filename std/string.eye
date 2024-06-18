@@ -12,7 +12,7 @@ str :: struct {
     len u64
 
     from_cstr :: fn(ptr *i8) -> str: str(ptr, len(ptr))
-    
+
     is_empty :: fn(this str) -> bool: this.len == 0
 
     eq :: fn(this str, other str) -> bool {
@@ -111,6 +111,11 @@ str :: struct {
         }
         ret this.slice(start, end)
     }
+
+    get :: fn(this str, index u64) -> Option[str] {
+        if index >= this.len: ret .None
+        ret .Some(str(ptr_add(this.ptr, index), 1))
+    }
 }
 
 NEWLINE: i8 : 10
@@ -126,8 +131,8 @@ Split :: struct {
 
     # Returns the next match and true or an empty string and false otherwise.
     # This will become an Option when sum types are ready.
-    next :: fn(this *Split) -> (bool, str) {
-        if this.string.len == 0: ret (false, "")
+    next :: fn(this *Split) -> Option[str] {
+        if this.string.len == 0: ret .None
         i := 0
         matched := 0
         while i < this.string.len {
@@ -136,7 +141,7 @@ Split :: struct {
                 if matched == this.pat.len {
                     s := this.string.slice(0, i+1-matched)
                     this.string = this.string.slice(i+1, this.string.len)
-                    ret (true, s)
+                    ret .Some(s)
                 }
             } else matched = 0
             i += 1
@@ -144,7 +149,7 @@ Split :: struct {
 
         s := this.string
         this.string = this.string.slice(this.string.len, this.string.len)
-        ret (true, s)
+        ret .Some(s)
     }
 }
 

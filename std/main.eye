@@ -74,6 +74,12 @@ panic :: fn(msg str) -> ! {
     c.exit(1)
 }
 
+assert :: fn(b bool, message str) {
+    if !b {
+        panic(message)
+    }
+}
+
 ## Adds an offset to the pointer and returns the offset pointer.
 ## The offset is element-wise, so the number of bytes added will be multiplied by the size of T.
 ptr_add :: fn[T](ptr *T, offset u64) -> *T: (ptr as u64 + offset * T.size) as *T

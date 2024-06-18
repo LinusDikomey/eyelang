@@ -26,6 +26,11 @@ Option :: enum[T] {
         .None: default
     }
 
+    expect :: fn(this Option[T], message str) -> T: match this {
+        .Some(value): value,
+        .None: panic(message)
+    }
+
     deref :: fn[V](this Option[*V]) -> Option[V]: match this {
         .Some(ptr): .Some(ptr^),
         .None: .None

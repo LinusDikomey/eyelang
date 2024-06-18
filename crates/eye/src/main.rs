@@ -21,7 +21,10 @@ mod parser;
 /// data structure for type inference
 mod type_table;
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::CString,
+    path::{Path, PathBuf},
+};
 
 use args::Backend;
 pub use compiler::Compiler;
@@ -47,6 +50,10 @@ pub enum MainError {
 
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
+    if let args::Cmd::ListTargets = args.cmd {
+        list_targets(args.backend);
+        return Ok(());
+    }
     let mut compiler = compiler::Compiler::new();
 
     let (name, path) = match &args.path {
@@ -159,15 +166,21 @@ fn main() -> Result<(), MainError> {
                     if args.log {
                         backend.enable_logging();
                     }
+                    let target = args.target.as_ref().map(|target| {
+                        CString::new(target.as_bytes()).expect("invalid target string")
+                    });
                     backend
                         .emit_module(
                             &compiler.ir_module,
                             args.backend_ir,
-                            None,
+                            target.as_ref().map(|s| s.as_c_str()),
                             Path::new(&obj_file),
                         )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
                 }
+            }
+            if args.emit_obj {
+                return Ok(());
             }
             #[cfg(not(target_os = "windows"))]
             let exe_file_extension = "";
@@ -191,7 +204,23 @@ fn main() -> Result<(), MainError> {
         }
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => todo!("reimplement lsp"),
+        args::Cmd::ListTargets => unreachable!(),
     }
 
     Ok(())
+}
+
+fn list_targets(backend: args::Backend) {
+    match backend {
+        Backend::C => todo!(),
+        #[cfg(feature = "llvm-backend")]
+        Backend::LLVM => {
+            let targets = ir_backend_llvm::list_targets();
+            println!("Available LLVM targets: (total: {})", targets.len());
+            for target in targets {
+                println!("\t{target}");
+            }
+        }
+        Backend::X86 => todo!(),
+    }
 }

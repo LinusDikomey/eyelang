@@ -560,7 +560,7 @@ impl<'a> Parser<'a> {
                     let ty = p.parse_type()?;
                     params.push((name_span, ty));
                 }
-                Ok(())
+                Ok(Delimit::OptionalIfNewLine)
             })?;
             end = rparen.end;
         }
@@ -962,7 +962,7 @@ impl<'a> Parser<'a> {
                     let end = self
                         .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
                             args.push(p.parse_expr(scope)?);
-                            Ok(())
+                            Ok(Delimit::OptionalIfNewLine)
                         })?
                         .end;
                     let called_expr = self.ast.expr(expr);

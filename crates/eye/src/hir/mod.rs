@@ -372,7 +372,7 @@ impl HIR {
                     types.dump_type(compiler, generic);
                 }
                 eprint!(")");
-                for (i, arg) in args.iter().enumerate() {
+                for arg in args.iter() {
                     eprint!(" ");
                     self.dump(arg, compiler, types, indent_count);
                 }

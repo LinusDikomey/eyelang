@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, CString, NulError},
+    ffi::{CStr, CString},
     path::Path,
     ptr,
 };
@@ -14,11 +14,13 @@ use llvm_sys as llvm;
 mod emit;
 mod translate;
 
+pub use emit::list_targets;
+
 #[derive(Debug)]
 pub enum Error {
     InvalidTarget(String),
     InvalidOutFile,
-    NulByte(NulError),
+    NulByte,
     EmitFailed(String),
 }
 

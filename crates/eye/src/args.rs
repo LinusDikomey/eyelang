@@ -12,6 +12,8 @@ pub enum Cmd {
     /// Only basic error highlighting is implemented right now.
     #[cfg(feature = "lsp")]
     Lsp,
+    /// lists all available targets for the selected backend
+    ListTargets,
 }
 impl Default for Cmd {
     fn default() -> Self {
@@ -92,7 +94,7 @@ pub struct Args {
     pub timings: bool,
 
     /// prints out all tokens after lexing.
-    #[clap(short, long)]
+    #[clap(long)]
     pub tokens: bool,
 
     /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
@@ -128,6 +130,10 @@ pub struct Args {
 
     #[clap(short, long, value_enum, default_value_t=Backend::default())]
     pub backend: Backend,
+
+    #[clap(short, long)]
+    /// The targeted backend to emit code for.
+    pub target: Option<String>,
 
     /// This will still try to build and run the program even if errors are present. Most errors
     /// will lead to a runtime crash when the corresponding code is encountered. No correctness is

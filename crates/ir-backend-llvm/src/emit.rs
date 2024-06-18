@@ -14,8 +14,12 @@ pub unsafe fn emit(
     let target_machine = unsafe {
         use llvm::target;
         target::LLVM_InitializeAllTargetInfos();
-        target::LLVM_InitializeNativeTarget();
-        target::LLVM_InitializeNativeAsmPrinter();
+        //target::LLVM_InitializeNativeTarget();
+        target::LLVM_InitializeAllTargets();
+        //target::LLVM_InitializeNativeAsmPrinter();
+        target::LLVM_InitializeAllAsmParsers();
+        target::LLVM_InitializeAllAsmPrinters();
+        target::LLVM_InitializeAllTargetMCs();
         let mut target = ptr::null_mut();
         if target_machine::LLVMGetTargetFromTriple(target_triple, &mut target, &mut error) != 0 {
             let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
@@ -49,4 +53,17 @@ pub unsafe fn emit(
         return Err(Error::EmitFailed(msg));
     }
     Ok(())
+}
+
+pub fn list_targets() -> Vec<String> {
+    use llvm_sys::{target, target_machine};
+    unsafe { target::LLVM_InitializeAllTargetInfos() };
+    let mut target = unsafe { target_machine::LLVMGetFirstTarget() };
+    let mut targets = Vec::new();
+    while !target.is_null() {
+        let s = unsafe { CStr::from_ptr(target_machine::LLVMGetTargetName(target)) };
+        targets.push(s.to_str().unwrap().to_owned());
+        target = unsafe { target_machine::LLVMGetNextTarget(target) };
+    }
+    targets
 }

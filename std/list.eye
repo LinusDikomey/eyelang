@@ -10,12 +10,21 @@ use root.c.memcpy
 new_cap :: fn(cap u64) -> u64: if cap == 0: 4 else cap * 2
 
 List :: struct[T] {
-    buf *T,
-    len u64,
-    cap u64,
+    buf *T
+    len u64
+    cap u64
 
-    new :: fn() -> List[T]: List(root.null(), 0, 0)
+    new :: fn -> List[T]: List(root.null(), 0, 0)
     with_capacity :: fn(cap u64) -> List[T]: List(malloc(cap * T.stride) as _, 0, cap)
+    fill :: fn(item T, count u64) -> List[T] {
+        buf := malloc(count * T.stride) as *T
+        i := 0
+        while i < count {
+            ptr_add(buf, i)^ = item
+            i += 1
+        }
+        ret List(buf, count, count)
+    }
 
     push :: fn(this *List[T], item T) {
         if this^.len < this^.cap {
@@ -42,6 +51,13 @@ List :: struct[T] {
             root.panic("List index out of bounds")
         }
         ret ptr_add(this^.buf, idx)^
+    }
+
+    get_ptr :: fn(this *List[T], idx u64) -> *T {
+        if this^.len <= idx {
+            root.panic("List index out of bounds")
+        }
+        ret ptr_add(this^.buf, idx)
     }
 
     printf_all :: fn(this *List[T], fmt *i8) {

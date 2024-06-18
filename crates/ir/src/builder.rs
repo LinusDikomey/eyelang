@@ -272,14 +272,17 @@ impl<'a> IrBuilder<'a> {
     }
 
     pub fn build_string(&mut self, string: &[u8], null_terminate: bool) -> Ref {
-        debug_assert!(string.len() <= u32::MAX as usize, "String is too long");
         let extra = self.extra_data(string);
-        if null_terminate {
+        let len = if null_terminate {
             self.extra_data(&[b'\0']);
-        }
+            string.len() + 1
+        } else {
+            string.len()
+        };
+        debug_assert!(len <= u32::MAX as usize, "String is too long");
         self.add(
             Data {
-                extra_len: (extra, string.len() as u32),
+                extra_len: (extra, len as u32),
             },
             Tag::String,
             IrType::Ptr,

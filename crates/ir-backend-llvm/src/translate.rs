@@ -39,8 +39,15 @@ pub unsafe fn add_function(
         params.len() as _,
         llvm_bool(function.varargs),
     );
-
-    let name = CString::new(function.name.clone()).map_err(|nul| Error::NulByte(nul))?;
+    let name = CString::from_vec_with_nul(
+        // HACK: temporary prefix until proper name mangling is implemented
+        if function.ir.is_some() && function.name != "main" && function.name != "_start" {
+            format!("__eye__{}\0", function.name).into_bytes()
+        } else {
+            format!("{}\0", function.name).into_bytes()
+        },
+    )
+    .map_err(|_| Error::NulByte)?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
     Ok((llvm_func, llvm_func_ty))
 }
@@ -56,7 +63,7 @@ pub unsafe fn add_global(
     let Some(ty) = llvm_ty(ctx, ty, &types) else {
         return Ok(ptr::null_mut());
     };
-    let name = CString::new(name.to_owned()).map_err(|nul| Error::NulByte(nul))?;
+    let name = CString::new(name.to_owned()).map_err(|_| Error::NulByte)?;
     let global = LLVMAddGlobal(llvm_module, ty, name.as_ptr());
     let val = const_val(value, ty).unwrap_or_else(|| LLVMGetUndef(ty));
     LLVMSetInitializer(global, val);
