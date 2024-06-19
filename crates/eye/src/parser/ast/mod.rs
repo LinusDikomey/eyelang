@@ -387,12 +387,8 @@ impl EnumVariantDefinition {
 pub struct TraitDefinition {
     pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
-    pub functions: Vec<(String, Function)>,
-    pub impls: Vec<(
-        Box<[GenericDef]>,
-        UnresolvedType,
-        DHashMap<String, FunctionId>,
-    )>,
+    pub functions: Vec<(TSpan, Function)>,
+    pub impls: Vec<(ScopeId, u8, UnresolvedType, Vec<(TSpan, FunctionId)>)>,
 }
 impl TraitDefinition {
     pub fn span(&self, scopes: &[Scope]) -> TSpan {
@@ -428,6 +424,15 @@ pub struct GenericDef {
     pub requirements: Vec<IdentPath>,
 }
 impl GenericDef {
+    pub fn span(&self) -> TSpan {
+        TSpan::new(
+            self.name.start,
+            self.requirements
+                .last()
+                .map_or(self.name.end, |path| path.span().end),
+        )
+    }
+
     pub fn name<'s>(&self, src: &'s str) -> &'s str {
         if self.name == TSpan::MISSING {
             "Self"

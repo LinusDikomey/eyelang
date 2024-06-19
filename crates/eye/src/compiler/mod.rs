@@ -21,7 +21,7 @@ use crate::{
         self,
         ast::{self, Ast, FunctionId, GlobalId, ScopeId},
     },
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfoOrIdx, TypeTable},
+    types::{traits, LocalTypeId, LocalTypeIds, TypeInfoOrIdx, TypeTable},
     MainError,
 };
 
@@ -571,13 +571,57 @@ impl Compiler {
                 // don't include self type in generic count
                 let generics = def.generics.len() as u8 - 1;
                 let mut functions_by_name = dmap::with_capacity(def.functions.len());
-                let functions = def
+                let functions: Vec<Signature> = def
                     .functions
                     .iter()
                     .zip(0..)
-                    .map(|((name, function), function_index)| {
-                        functions_by_name.insert(name.clone(), function_index);
+                    .map(|((name_span, function), function_index)| {
+                        let name = ast[*name_span].to_owned();
+                        let prev = functions_by_name.insert(name, function_index);
+                        if prev.is_some() {
+                            self.errors.emit_err(
+                                Error::DuplicateDefinition.at_span(name_span.in_mod(module)),
+                            );
+                        }
                         self.check_signature(function, module, &ast)
+                    })
+                    .collect();
+                let impls = def
+                    .impls
+                    .iter()
+                    .map(|(impl_generics, generic_count, impl_ty, impl_functions)| {
+                        let generic_count = *generic_count;
+                        // don't count the Self type as a generic
+                        let impl_ty = self.resolve_type(impl_ty, module, *impl_generics);
+                        let impl_ty = traits::ImplTree::from_type(&impl_ty, self);
+                        let mut functions = vec![ast::FunctionId(u32::MAX); functions.len()];
+                        for &(name_span, function) in impl_functions {
+                            let name = &ast[name_span];
+                            let Some(&function_idx) = functions_by_name.get(name) else {
+                                self.errors.emit_err(
+                                    Error::NotATraitMember {
+                                        trait_name: "TODO(trait_name)".to_owned(),
+                                        function: name.to_owned(),
+                                    }
+                                    .at_span(name_span.in_mod(module)),
+                                );
+                                continue;
+                            };
+                            if functions[function_idx as usize].0 != u32::MAX {
+                                self.errors.emit_err(
+                                    Error::DuplicateDefinition.at_span(name_span.in_mod(module)),
+                                );
+                                continue;
+                            }
+                            // TODO: check impl signature
+                            functions[function_idx as usize] = function;
+                        }
+                        traits::Impl {
+                            generic_count,
+                            impl_ty,
+                            impl_module: module,
+                            functions,
+                        }
                     })
                     .collect();
                 Some(
@@ -586,6 +630,7 @@ impl Compiler {
                             generics,
                             functions,
                             functions_by_name,
+                            impls,
                         },
                     )),
                 )
@@ -1460,6 +1505,7 @@ pub struct CheckedTrait {
     pub generics: u8,
     pub functions: Vec<Signature>,
     pub functions_by_name: DHashMap<String, u16>,
+    pub impls: Vec<traits::Impl>,
 }
 
 pub struct IrInstances {

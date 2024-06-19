@@ -13,7 +13,7 @@ use crate::{
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Node, HIR},
     parser::ast::{Ast, ExprId, ScopeId},
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
+    types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     Compiler,
 };
 

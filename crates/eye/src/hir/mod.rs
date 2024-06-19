@@ -9,7 +9,7 @@ use crate::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
     },
-    type_table::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable, VariantId},
+    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable, VariantId},
     Compiler,
 };
 

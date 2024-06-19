@@ -18,8 +18,8 @@ mod irgen;
 mod link;
 /// parse source code into an ast
 mod parser;
-/// data structure for type inference
-mod type_table;
+/// TypeTable data structure and logic for type inference/checking
+mod types;
 
 use std::{
     ffi::CString,

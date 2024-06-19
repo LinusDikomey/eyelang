@@ -13,7 +13,7 @@ use crate::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
     },
-    type_table::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 
 use super::{exhaust::Exhaustion, lval, pattern, Ctx};
@@ -1410,20 +1410,28 @@ fn check_call(
             };
             let checked_trait = Rc::clone(checked_trait);
             let signature = &checked_trait.functions[method_index as usize];
-            debug_assert!(
+            let generics = ctx
+                .hir
+                .types
+                .add_multiple_unknown(signature.generics.len() as _);
+            assert!(
                 signature.generics.len() >= checked_trait.generics as usize + 1,
                 "the method should at least have the trait's and the self type's generics {} >= {}",
                 signature.generics.len(),
                 checked_trait.generics + 1,
             );
-            let generics = ctx
-                .hir
-                .types
-                .add_multiple_unknown(signature.generics.len() as _);
+            let trait_generics = LocalTypeIds {
+                idx: generics.idx + 1,
+                count: checked_trait.generics as u32 + 1,
+            };
             let self_ty = generics.iter().next().unwrap();
-            ctx.hir
-                .types
-                .replace(self_ty, TypeInfo::UnknownSatisfying(trait_module, trait_id));
+            ctx.hir.types.replace(
+                self_ty,
+                TypeInfo::UnknownSatisfying {
+                    id: (trait_module, trait_id),
+                    generics: trait_generics,
+                },
+            );
             match check_call_signature(
                 ctx,
                 expr,

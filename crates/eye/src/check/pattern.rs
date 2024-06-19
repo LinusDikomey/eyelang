@@ -10,7 +10,7 @@ use crate::{
         ast::{Expr, ExprId, UnOp},
         token::{IntLiteral, Operator},
     },
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
+    types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
 use super::{exhaust::Exhaustion, Ctx};

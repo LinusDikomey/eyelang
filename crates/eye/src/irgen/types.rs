@@ -6,7 +6,7 @@ use types::Type;
 
 use crate::{
     compiler::ResolvedTypeDef,
-    type_table::{LocalTypeIds, TypeInfo, TypeTable},
+    types::{LocalTypeIds, TypeInfo, TypeTable},
     Compiler,
 };
 
@@ -139,7 +139,7 @@ pub fn get_from_info(
         }
         TypeInfo::Generic(id) => ir_types[generics.nth(id.into())],
         TypeInfo::Unknown
-        | TypeInfo::UnknownSatisfying(_, _)
+        | TypeInfo::UnknownSatisfying { .. }
         | TypeInfo::TypeItem { .. }
         | TypeInfo::TraitItem { .. }
         | TypeInfo::Array {

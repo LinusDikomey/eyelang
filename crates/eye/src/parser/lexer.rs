@@ -325,7 +325,7 @@ impl<'a> Lexer<'a> {
         if self.is_at_end() {
             return new_line;
         }
-        while let ' ' | '\r' | '\n' = self.current() {
+        while self.current().is_ascii_whitespace() {
             if self.current() == '\n' {
                 new_line = true;
             }

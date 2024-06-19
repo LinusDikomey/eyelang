@@ -229,8 +229,8 @@ impl TraitDefinition {
     fn repr<C: Representer>(&self, c: &C) {
         c.write_add("trait {\n");
         let child = c.child();
-        for (name, func) in &self.functions {
-            c.write_start(name.as_str());
+        for (name_span, func) in &self.functions {
+            c.write_start(c.src(*name_span));
             c.write_add(" :: ");
             func.repr(&child, true);
         }

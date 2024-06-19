@@ -15,12 +15,12 @@ use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::type_table::{LocalTypeId, LocalTypeIds, OrdinalType};
+use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
 use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
     hir::{NodeId, HIR},
-    type_table::{TypeInfo, TypeTable},
+    types::{TypeInfo, TypeTable},
 };
 
 pub fn lower_function(

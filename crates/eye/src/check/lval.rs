@@ -5,7 +5,7 @@ use crate::{
     error::Error,
     hir::{LValue, Node},
     parser::ast::{Expr, ExprId, UnOp},
-    type_table::{LocalTypeId, LocalTypeIds, TypeInfo},
+    types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
 use super::{expr, Ctx};

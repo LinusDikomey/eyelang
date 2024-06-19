@@ -1,7 +1,7 @@
 use crate::{
     error::Error,
     hir::CastType,
-    type_table::{LocalTypeId, TypeInfo, TypeTable},
+    types::{LocalTypeId, TypeInfo, TypeTable},
     Compiler,
 };
 

@@ -7,7 +7,7 @@ use crate::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
     },
-    type_table::{TypeInfo, TypeTable},
+    types::{TypeInfo, TypeTable},
     Compiler, Def,
 };
 

@@ -612,7 +612,7 @@ impl<'a> Parser<'a> {
     fn parse_trait_def(
         &mut self,
         trait_tok: Token,
-        scope: ScopeId,
+        parent_scope: ScopeId,
     ) -> ParseResult<TraitDefinition> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let self_generic = GenericDef {
@@ -620,7 +620,7 @@ impl<'a> Parser<'a> {
             requirements: Vec::new(),
         };
         let generics = self.parse_optional_generics(vec![self_generic])?;
-        let scope = ast::Scope::from_generics(scope, self.src, &generics, TSpan::MISSING);
+        let scope = ast::Scope::from_generics(parent_scope, self.src, &generics, TSpan::MISSING);
         let scope = self.ast.scope(scope);
         self.toks.step_expect(TokenType::LBrace)?;
         let mut functions = Vec::new();
@@ -629,7 +629,6 @@ impl<'a> Parser<'a> {
             match_or_unexpected! {next, self.toks.module,
                 TokenType::RBrace = TokenType::RBrace => break next.end,
                 TokenType::Ident = TokenType::Ident => {
-                    let name = next.get_val(self.src).to_owned();
                     let name_span = next.span();
                     self.toks.step_expect(TokenType::DoubleColon)?;
                     let fn_tok = self.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
@@ -642,7 +641,7 @@ impl<'a> Parser<'a> {
                             self.attach_func_body(&mut func, body);
                         }
                     }
-                    functions.push((name, func));
+                    functions.push((name_span, func));
                 }
             }
         };
@@ -658,11 +657,20 @@ impl<'a> Parser<'a> {
                 match_or_unexpected! {next, self.toks.module,
                     TokenType::RBrace = TokenType::RBrace => break,
                     TokenType::Keyword(Keyword::Impl) = TokenType::Keyword(Keyword::Impl) => {
+                        let start = next.start;
                         let generics = self.parse_optional_generics(generics.to_vec())?;
+                        let Ok(generic_count) = generics.len().try_into() else {
+                            let start = generics[0].span().start;
+                            let end = generics.last().unwrap().span().end;
+                            return Err(Error::TooManyGenerics(generics.len()).at_span(TSpan::new(start, end).in_mod(self.toks.module)));
+                        };
+                        let impl_scope = self.ast
+                            .scope(ast::Scope::from_generics(parent_scope, self.src, &generics, TSpan::MISSING));
                         let ty = self.parse_type()?;
                         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-                        let functions = self.parse_trait_impl_body(lbrace, scope)?;
-                        impls.push((generics, ty, functions));
+                        let (functions, end) = self.parse_trait_impl_body(lbrace, impl_scope)?;
+                        self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, end);
+                        impls.push((impl_scope, generic_count, ty, functions));
                     }
                 }
             }
@@ -682,28 +690,21 @@ impl<'a> Parser<'a> {
         &mut self,
         lbrace: Token,
         scope: ScopeId,
-    ) -> ParseResult<DHashMap<String, ast::FunctionId>> {
+    ) -> ParseResult<(Vec<(TSpan, ast::FunctionId)>, u32)> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
-        let mut functions = dmap::new();
-        self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let mut functions = Vec::new();
+        let last = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?;
             let name_span = name.span();
-            let name = name.get_val(p.src).to_owned();
             p.toks.step_expect(TokenType::DoubleColon)?;
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
             // TODO: figure out inherited generics here
             let func = p.parse_function_def(fn_tok, scope, name_span, Vec::new())?;
             let func_id = p.ast.function(func);
-            let previous = functions.insert(name, func_id);
-            if previous.is_some() {
-                return Err(CompileError::new(
-                    Error::DuplicateDefinition,
-                    name_span.in_mod(p.toks.module),
-                ));
-            }
+            functions.push((name_span, func_id));
             Ok(Delimit::OptionalIfNewLine)
         })?;
-        Ok(functions)
+        Ok((functions, last.end))
     }
 
     fn parse_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr> {

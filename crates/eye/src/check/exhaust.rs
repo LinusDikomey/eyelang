@@ -2,7 +2,7 @@ use dmap::DHashMap;
 use types::Primitive;
 
 use crate::{
-    type_table::{TypeInfo, TypeTable},
+    types::{TypeInfo, TypeTable},
     Compiler,
 };
 
