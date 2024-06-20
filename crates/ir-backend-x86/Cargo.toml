@@ -1,0 +1,7 @@
+[package]
+name = "ir-backend-x86"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ir = { version = "0.1.0", path = "../ir" }

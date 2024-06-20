@@ -8,6 +8,7 @@ members = [
     "crates/dmap",
     "crates/ir",
     "crates/ir-backend-llvm",
+    "crates/ir-backend-x86",
 ]
 default-members = ["crates/eye"]
 
