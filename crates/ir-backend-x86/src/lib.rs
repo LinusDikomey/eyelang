@@ -28,7 +28,7 @@ impl Backend {
         &self,
         module: &ir::Module,
         print_ir: bool,
-        target: Option<&CStr>,
+        target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
         assert!(target.is_none(), "todo: check target");
@@ -60,7 +60,7 @@ impl Backend {
 
         for func in &module.funcs {
             if let Some(ir) = &func.ir {
-                let mut mir = codegen::codegen(ir, &func.types);
+                let mut mir = codegen::codegen(ir, func, &func.types);
                 let offset = text_section.len() as u64;
                 if print_ir {
                     println!("mir for {}:\n{}\n", func.name, mir);

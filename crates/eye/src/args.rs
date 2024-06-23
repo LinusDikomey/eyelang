@@ -29,8 +29,9 @@ pub enum Backend {
     // Run with the llvm backend
     #[cfg(feature = "llvm-backend")]
     LLVM,
-    /// W.I.P.! Run with a self-implemented x86 backend. Will emit completely unoptimized code.
-    /// This backend is primarily used for fast compilations. It is mostly unfinished right now.
+    /// W.I.P.! Run with a self-implemented x86-64 backend. Will emit completely unoptimized code.
+    /// This backend is primarily used for fast compilations. It is VERY unfinished right now.
+    #[cfg(feature = "x86-backend")]
     X86,
 }
 impl fmt::Display for Backend {

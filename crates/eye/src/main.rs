@@ -22,6 +22,7 @@ mod parser;
 mod types;
 
 use std::{
+    env::args,
     ffi::CString,
     path::{Path, PathBuf},
 };
@@ -159,7 +160,21 @@ fn main() -> Result<(), MainError> {
             let obj_file = format!("eyebuild/{name}.o");
             match args.backend {
                 Backend::C => todo!("reimplement C backend"),
-                Backend::X86 => todo!("reimplement x86 backend"),
+                #[cfg(feature = "x86-backend")]
+                Backend::X86 => {
+                    let mut backend = ir_backend_x86::Backend::new();
+                    if args.log {
+                        backend.enable_logging();
+                    }
+                    backend
+                        .emit_module(
+                            &compiler.ir_module,
+                            args.backend_ir,
+                            args.target.as_ref().map(String::as_str),
+                            Path::new(&obj_file),
+                        )
+                        .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
+                }
                 #[cfg(feature = "llvm-backend")]
                 Backend::LLVM => {
                     let mut backend = ir_backend_llvm::Backend::new();

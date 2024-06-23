@@ -1,4 +1,6 @@
-use std::ops::Index;
+use std::{num::NonZeroU64, ops::Index};
+
+use crate::Layout;
 
 #[derive(Debug)]
 pub struct IrTypes {
@@ -27,60 +29,40 @@ impl IrTypes {
         self.types[idx.idx()] = ty;
     }
 
-    /*
-    #[allow(clippy::wrong_self_convention)]
-    pub fn from_resolved(&mut self, ty: &Type, on_generic: TypeRefs) -> IrType {
-        let add_tuple = |s: &mut IrTypes, elems: &[Type]| -> TypeRefs {
-            let idx = s.types.len() as u32;
-            s.types.extend((0..elems.len()).map(|_| IrType::Primitive(Primitive::Unit)));
-
-            for (i, ty) in elems.iter().enumerate() {
-                s.types[idx as usize + i] = s.from_resolved(ty, on_generic);
-            }
-            TypeRefs { idx, count: elems.len() as _ }
-        };
+    pub fn layout(&self, ty: IrType) -> Layout {
         match ty {
-            Type::Prim(p) => IrType::Primitive(*p),
-            Type::Id(id, generics) => {
-                let generic_idx = self.types.len() as u32;
-                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Never)).take(generics.len()));
-
-                for (i, ty) in generics.iter().enumerate() {
-                    self.types[generic_idx as usize + i] = self.from_resolved(ty, on_generic);
+            IrType::Unit | IrType::Const(_) | IrType::Array(_, 0) => Layout::EMPTY,
+            IrType::U1 | IrType::I8 | IrType::U8 => Layout {
+                size: 1,
+                align: NonZeroU64::new(1).unwrap(),
+            },
+            IrType::I16 | IrType::U16 => Layout {
+                size: 2,
+                align: NonZeroU64::new(2).unwrap(),
+            },
+            IrType::I32 | IrType::U32 | IrType::F32 => Layout {
+                size: 4,
+                align: NonZeroU64::new(4).unwrap(),
+            },
+            IrType::I64 | IrType::U64 | IrType::F64 => Layout {
+                size: 8,
+                align: NonZeroU64::new(8).unwrap(),
+            },
+            IrType::I128 | IrType::U128 => Layout {
+                size: 16,
+                align: NonZeroU64::new(16).unwrap(),
+            },
+            IrType::Ptr => Layout::PTR,
+            IrType::Array(elem, count) => Layout::array(self.layout(self[elem]), count as u64),
+            IrType::Tuple(elems) => {
+                let mut layout = Layout::EMPTY;
+                for elem in elems.iter() {
+                    layout.accumulate(self.layout(self[elem]));
                 }
-                IrType::Id(*id, TypeRefs { idx: generic_idx, count: generics.len() as _ })
+                layout
             }
-            Type::Pointer(inner) => {
-                let inner = self.from_resolved(inner, on_generic);
-                IrType::Ptr(self.add(inner))
-            }
-            Type::Array(b) => {
-                let elem_ty = self.from_resolved(&b.0, on_generic);
-                IrType::Array(self.add(elem_ty), b.1)
-            }
-            Type::Tuple(elems) => {
-                IrType::Tuple(add_tuple(self, elems))
-            }
-            Type::Generic(i) => IrType::Ref(on_generic.nth(*i as _)),
-            Type::LocalEnum(variants) => {
-                let idx = self.types.len() as u32;
-                self.types.extend(std::iter::repeat(IrType::Primitive(Primitive::Never)).take(variants.len()));
-
-                for (i, args) in variants.iter().enumerate() {
-                    self.types[idx as usize + i] = IrType::Tuple(add_tuple(self, args));
-                }
-
-                IrType::Enum(TypeRefs { idx, count: variants.len() as _ })
-            }
-            Type::TraitSelf => unreachable!(),
-            Type::Invalid => unreachable!("invalid 'Type' encountered during irgen"),
         }
     }
-
-    pub fn layout<'a, F: Fn(TypeId) -> &'a ResolvedTypeDef + Copy>(&'a self, ty: IrType, get_type: F) -> Layout {
-        ty.layout(self, get_type)
-    }
-    */
 }
 
 impl Index<TypeRef> for IrTypes {

@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["llvm-backend"]
+default = ["llvm-backend", "x86-backend"]
 llvm-backend = ["ir-backend-llvm"]
+x86-backend = ["ir-backend-x86"]
 lsp = []
 
 [dependencies]
@@ -19,4 +20,5 @@ clap = { version = "4.4.13", features = ["derive"] }
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }
+ir-backend-x86 = { path = "../ir-backend-x86", optional = true }
 pathdiff = "0.2.1"

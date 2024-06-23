@@ -24,9 +24,12 @@ fn build_add() -> Function {
 
     let x = builder.build_param(0, int_ty);
     let y = builder.build_param(1, int_ty);
-    let res = builder.build_bin_op(BinOp::Add, x, y, int_ty);
+    let stack_val = builder.build_decl(IrType::I32);
     let constant = builder.build_int(0x42, int_ty);
-    let res = builder.build_bin_op(BinOp::Add, res, constant, int_ty);
+    builder.build_store(stack_val, constant);
+    let res = builder.build_bin_op(BinOp::Add, x, y, int_ty);
+    let loaded = builder.build_load(stack_val, IrType::I32);
+    let res = builder.build_bin_op(BinOp::Add, res, loaded, int_ty);
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();

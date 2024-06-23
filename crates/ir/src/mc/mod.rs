@@ -12,12 +12,16 @@ use crate::FunctionId;
 pub struct MachineIR<I: Instruction> {
     pub insts: Vec<InstructionStorage<I>>,
     next_virtual: u64,
+    stack_slots: Vec<StackSlot>,
+    stack_offset: u64,
 }
 impl<I: Instruction> MachineIR<I> {
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
             next_virtual: 0,
+            stack_slots: Vec::new(),
+            stack_offset: 0,
         }
     }
 
@@ -51,6 +55,25 @@ impl<I: Instruction> MachineIR<I> {
 
     pub fn virtual_register_count(&self) -> usize {
         self.next_virtual as usize
+    }
+
+    /// creates a new stack slot and returns the slot's offset. On targets where the stack grows
+    /// down, the offset should be subtracted from the base pointer.
+    pub fn create_stack_slot(&mut self, layout: Layout) -> u64 {
+        if layout.size == 0 {
+            return 0;
+        }
+        let misalignment = self.stack_offset % layout.align.get();
+        if misalignment != 0 {
+            self.stack_offset += layout.align.get() - misalignment;
+        }
+        let offset = self.stack_offset;
+        self.stack_slots.push(StackSlot {
+            offset,
+            size: layout.size,
+        });
+        self.stack_offset += layout.size;
+        offset
     }
 }
 impl<I: Instruction> fmt::Display for MachineIR<I> {
@@ -219,7 +242,17 @@ impl<R: Register> Operand<R> {
         match self {
             Operand::Reg(r) => r.to_str().len(),
             Operand::VReg(n) => (u64::checked_ilog10(n.0).unwrap_or_default() + 2) as usize,
-            Operand::Imm(n) => (u64::checked_ilog10(n).unwrap_or_default() + 1) as usize,
+            Operand::Imm(n) => {
+                let n = n as i64;
+                let mut signed = false;
+                let n = if n < 0 {
+                    signed = true;
+                    n.checked_neg().map_or(i64::MAX as u64 + 1, |n| n as u64)
+                } else {
+                    n as u64
+                };
+                (u64::checked_ilog10(n).unwrap_or_default() + 1 + signed as u32) as usize
+            }
             Operand::Func(f) => (u64::checked_ilog10(f.0).unwrap_or_default() + 4) as usize,
             Operand::None => 0,
         }
@@ -230,7 +263,7 @@ impl<R: Register> fmt::Display for Operand<R> {
         match self {
             Operand::Reg(r) => write!(f, "{}", r.to_str()),
             Operand::VReg(n) => write!(f, "%{}", n.0),
-            Operand::Imm(value) => write!(f, "{value}"),
+            &Operand::Imm(value) => write!(f, "{}", value as i64),
             Operand::Func(func) => write!(f, "<#{}>", func.0),
             Operand::None => Ok(()),
         }
@@ -283,6 +316,11 @@ impl VReg {
     pub fn op<R: Register>(self) -> Operand<R> {
         Operand::VReg(self)
     }
+}
+
+pub struct StackSlot {
+    pub offset: u64,
+    pub size: u64,
 }
 
 #[macro_export]
@@ -391,7 +429,8 @@ macro_rules! registers {
             }
 
             fn decode(value: u32) -> Self {
-                assert!(value < $crate::mc::ident_count!($($($variant)*)*));
+                let count = $crate::mc::ident_count!($($($variant)*)*);
+                debug_assert!(value < count);
                 unsafe { std::mem::transmute(value as u8) }
             }
 
@@ -417,3 +456,4 @@ macro_rules! registers {
     };
 }
 pub use crate::registers;
+use crate::Layout;

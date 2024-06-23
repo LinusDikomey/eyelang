@@ -86,21 +86,36 @@ impl RegisterBits {
 ir::mc::inst! { Inst Register
     addrr32 Reg: DefUse, Reg: Use;
     addri32 Reg: DefUse, Imm: Use;
+    addrm32 Reg: DefUse, Reg: Use, Imm: Use;
     movrr32 Reg: Def, Reg: Use;
     movri32 Reg: Def, Imm: Use;
+    movrm32 Reg: Def, Reg: Use, Imm: Use;
+    movmi32 Reg: Use, Imm: Use, Imm: Use;
     call Func: Use; // TODO: clobbered and implicit regs, how to solve different number of args
+
+    // we differentiate between different return value sizes to properly model implicit register
+    // dependencies
+    ret0;
     ret32 !implicit eax;
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum MCValue {
+    /// this value doesn't have any runtime bits
     None,
+    /// value is undefined and can be assumed to be any value at runtime
     Undef,
+    /// an immediate (pointer-sized) constant value
     Imm(u64),
+    /// value is located in a register
     Register(MCReg),
+    /// represents a pointer to a value is located at a constant offset from an address in a register
+    IndirectPtr(MCReg, i64),
+    /// value is located at a constant offset from an address in a register
+    IndirectVal(MCReg, i64),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum MCReg {
     Register(Register),
     Virtual(VReg),
