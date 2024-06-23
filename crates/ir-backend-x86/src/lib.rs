@@ -4,6 +4,7 @@ use elf::{ElfObjectWriter, SectionHeader};
 
 mod codegen;
 mod elf;
+mod emit;
 mod machine_ir;
 
 #[derive(Debug)]
@@ -59,13 +60,17 @@ impl Backend {
 
         for func in &module.funcs {
             if let Some(ir) = &func.ir {
-                let mir = codegen::codegen(ir);
+                let mut mir = codegen::codegen(ir, &func.types);
                 let offset = text_section.len() as u64;
-                mir.write(&mut text_section);
-                let size = text_section.len() as u64 - offset;
                 if print_ir {
-                    println!("x86-64 mir for {}:\n{}\n", func.name, mir);
+                    println!("mir for {}:\n{}\n", func.name, mir);
                 }
+                ir::mc::regalloc(&mut mir);
+                if print_ir {
+                    println!("post-regalloc mir {}:\n{}\n", func.name, mir);
+                }
+                emit::write(&mir, &mut text_section);
+                let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
                 symtab.entry(elf::symtab::Entry {
                     name_index,

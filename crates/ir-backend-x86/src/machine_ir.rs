@@ -1,179 +1,95 @@
-use std::fmt;
+use std::{fmt, ops};
 
-use crate::elf::{self, ElfObjectWriter};
+use ir::mc::{Operand, Register as _, VReg};
 
-pub struct MachineIR {
-    insts: Vec<(Inst, [Operand; 4])>,
+ir::mc::registers! { Register RegisterBits
+        S8 => rax rbx rcx rdx rbp rsi rdi rsp;
+        S4 => eax ebx ecx edx ebp esi edi esp;
+        S2 =>  ax  bx  cx  dx  bp  si  di  sp;
+        S1 =>  ah  bh  ch  dh;
+        S1 =>  al  bl  cl  dl bpl sil dil spl;
+        S8 => r8  r9  r10  r11  r12  r13  r14  r15;
+        S4 => r8d r9d r10d r11d r12d r13d r14d r15d;
+        S2 => r8w r9w r10w r11w r12w r13w r14w r15w;
+        S1 => r8b r9b r10b r11b r12b r13b r14b r15b;
 }
-impl MachineIR {
-    pub fn new() -> Self {
-        Self { insts: Vec::new() }
-    }
-
-    pub fn inst<const N: usize>(&mut self, inst: Inst, operands: [Operand; N]) {
-        let mut all_operands = [Operand::None; 4];
-        all_operands[..operands.len()].copy_from_slice(&operands);
-        self.insts.push((inst, all_operands));
-    }
-
-    pub fn write(&self, text: &mut Vec<u8>) {
-        for (inst, operands) in &self.insts {
-            match inst {
-                Inst::addrr32 => {
-                    let [Operand::Register(a), Operand::Register(b), _, _] = operands else {
-                        panic!()
-                    };
-                    text.extend([0x03, 0b11_000_000 | a.encode() << 3 | b.encode()]);
-                }
-                Inst::movrr32 => {
-                    let [Operand::Register(a), Operand::Register(b), _, _] = operands else {
-                        panic!()
-                    };
-                    text.extend([0x89, 0b11_000_000 | a.encode() << 3 | b.encode()]);
-                }
-                Inst::ret => {
-                    text.push(0xc3);
-                }
-                _ => todo!(),
-            }
-        }
-    }
-}
-impl fmt::Display for MachineIR {
+impl fmt::Display for Register {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (inst, operands) in &self.insts {
-            write!(f, "  {}", inst.to_str())?;
-            for op in operands
-                .iter()
-                .copied()
-                .take_while(|&op| op != Operand::None)
-            {
-                write!(f, " {}", op)?;
-            }
-            writeln!(f)?;
-        }
-        Ok(())
+        write!(f, "{}", self.to_str())
     }
-}
-
-#[allow(non_camel_case_types)]
-pub enum Ops {
-    None,
-    r,
-    rr,
-    rrr,
-    rrrr,
-    ri,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Operand {
-    None,
-    Register(Register),
-    Memory, // TODO
-    Immediate(u64),
-}
-impl fmt::Display for Operand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::None => write!(f, "none"),
-            Self::Register(reg) => write!(f, "{}", reg.to_str()),
-            Self::Memory => write!(f, "TODO(memory)"),
-            Self::Immediate(imm) => write!(f, "{imm}"),
-        }
-    }
-}
-
-macro_rules! value_enum {
-    ($name: ident $($variant: ident)*) => {
-        #[rustfmt::skip]
-        #[allow(non_camel_case_types)]
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-        pub enum $name {
-            $($variant, )*
-        }
-
-        impl $name {
-            fn to_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => stringify!($variant),)*
-                }
-            }
-        }
-    };
-}
-value_enum! { Register
-        rax rcx rdx rbx rsp rbp rsi rdi
-        eax ecx edx ebx esp ebp esi edi
-        r8 r9 r10 r11 r12 r13 r14 r15
-        e8 e9 e10 e11 e12 e13 e14 e15
 }
 impl Register {
-    pub fn size(self) -> RegSize {
-        match self {
-            Self::rax
-            | Self::rcx
-            | Self::rdx
-            | Self::rbx
-            | Self::rsp
-            | Self::rbp
-            | Self::rsi
-            | Self::rdi
-            | Self::r8
-            | Self::r9
-            | Self::r10
-            | Self::r11
-            | Self::r12
-            | Self::r13
-            | Self::r14
-            | Self::r15 => RegSize::S8,
-            Self::eax
-            | Self::ecx
-            | Self::edx
-            | Self::ebx
-            | Self::esp
-            | Self::ebp
-            | Self::esi
-            | Self::edi
-            | Self::e8
-            | Self::e9
-            | Self::e10
-            | Self::e11
-            | Self::e12
-            | Self::e13
-            | Self::e14
-            | Self::e15 => RegSize::S4,
-        }
+    pub const fn bit(self) -> u16 {
+        use Register::*;
+        let bit_index = match self {
+            rax | eax | ax | ah | al => 0,
+            rbx | ebx | bx | bh | bl => 1,
+            rcx | ecx | cx | ch | cl => 2,
+            rdx | edx | dx | dh | dl => 3,
+            rbp | ebp | bp | bpl => 4,
+            rsi | esi | si | sil => 5,
+            rdi | edi | di | dil => 6,
+            rsp | esp | sp | spl => 7,
+            r8 | r8d | r8w | r8b => 8,
+            r9 | r9d | r9w | r9b => 9,
+            r10 | r10d | r10w | r10b => 10,
+            r11 | r11d | r11w | r11b => 11,
+            r12 | r12d | r12w | r12b => 12,
+            r13 | r13d | r13w | r13b => 13,
+            r14 | r14d | r14w | r14b => 14,
+            r15 | r15d | r15w | r15b => 15,
+        };
+        1 << bit_index
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct RegisterBits(u16);
+impl ops::Not for RegisterBits {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(!self.0)
+    }
+}
+impl ops::BitAnd for RegisterBits {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+impl RegisterBits {
+    const fn new() -> Self {
+        Self(0)
     }
 
-    pub fn encode(self) -> u8 {
-        match self {
-            Self::rax | Self::eax => 0b_000,
-            Self::rcx => 0b_001,
-            Self::rdx => 0b_010,
-            Self::rbx => 0b_011,
-            Self::esi => 0b_110,
-            Self::edi => 0b_111,
-            reg => todo!("encode {reg:?}"),
+    const fn all() -> Self {
+        Self(u16::MAX)
+    }
+
+    fn get(&self, r: Register) -> bool {
+        self.0 & r.bit() != 0
+    }
+
+    fn set(&mut self, r: Register, set: bool) {
+        let bit = r.bit();
+        if set {
+            self.0 |= bit;
+        } else {
+            self.0 &= !bit;
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RegSize {
-    S1,
-    S2,
-    S4,
-    S8,
-}
-
-value_enum! { Inst
-    addrr32
-    movrr32
-    movri32
-    call
-    cmp
-    ret
+ir::mc::inst! { Inst Register
+    addrr32 Reg: DefUse, Reg: Use;
+    addri32 Reg: DefUse, Imm: Use;
+    movrr32 Reg: Def, Reg: Use;
+    movri32 Reg: Def, Imm: Use;
+    call Func: Use; // TODO: clobbered and implicit regs, how to solve different number of args
+    ret32 !implicit eax;
 }
 
 #[derive(Clone, Copy)]
@@ -181,5 +97,19 @@ pub enum MCValue {
     None,
     Undef,
     Imm(u64),
+    Register(MCReg),
+}
+
+#[derive(Clone, Copy)]
+pub enum MCReg {
     Register(Register),
+    Virtual(VReg),
+}
+impl MCReg {
+    pub fn op(self) -> Operand<Register> {
+        match self {
+            MCReg::Register(r) => Operand::Reg(r),
+            MCReg::Virtual(r) => Operand::VReg(r),
+        }
+    }
 }

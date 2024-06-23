@@ -25,6 +25,8 @@ fn build_add() -> Function {
     let x = builder.build_param(0, int_ty);
     let y = builder.build_param(1, int_ty);
     let res = builder.build_bin_op(BinOp::Add, x, y, int_ty);
+    let constant = builder.build_int(0x42, int_ty);
+    let res = builder.build_bin_op(BinOp::Add, res, constant, int_ty);
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();

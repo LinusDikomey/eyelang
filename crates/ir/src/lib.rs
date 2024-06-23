@@ -13,6 +13,8 @@ mod eval;
 mod instruction;
 mod ir_types;
 mod layout;
+/// machine code ir representation that is generic over the ISA
+pub mod mc;
 
 pub use const_value::ConstValue;
 pub use eval::{eval, Error, Val, BACKWARDS_JUMP_LIMIT};
