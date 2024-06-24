@@ -1,4 +1,4 @@
-use std::{ffi::CStr, path::Path};
+use std::path::Path;
 
 use elf::{ElfObjectWriter, SectionHeader};
 

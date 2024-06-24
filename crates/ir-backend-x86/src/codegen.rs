@@ -40,7 +40,7 @@ pub fn codegen(
             ir::Tag::Decl => {
                 let layout = types.layout(types[unsafe { inst.data.ty }]);
                 let offset = -(mir.create_stack_slot(layout) as i64) - layout.size as i64;
-                MCValue::IndirectPtr(MCReg::Register(Register::rbp), offset)
+                MCValue::PtrOffset(MCReg::Register(Register::rbp), offset)
             }
             ir::Tag::Load => {
                 let ptr = get_ref(&values, unsafe { inst.data.un_op });
@@ -50,8 +50,8 @@ pub fn codegen(
                         MCValue::None => panic!(),
                         MCValue::Undef => MCValue::Undef,
                         MCValue::Imm(_) => todo!("load from addresses"),
-                        MCValue::Register(r) => MCValue::IndirectPtr(r, 0),
-                        MCValue::IndirectVal(r, offset) => {
+                        MCValue::Register(r) => MCValue::PtrOffset(r, 0),
+                        MCValue::Indirect(r, offset) => {
                             let loaded = mir.reg();
                             mir.inst(
                                 Inst::movrm32,
@@ -59,7 +59,7 @@ pub fn codegen(
                             );
                             MCValue::Register(MCReg::Virtual(loaded))
                         }
-                        MCValue::IndirectPtr(r, offset) => MCValue::IndirectVal(r, offset),
+                        MCValue::PtrOffset(r, offset) => MCValue::Indirect(r, offset),
                     },
                     ty => todo!("load value of type {ty:?}"),
                 }
@@ -71,17 +71,22 @@ pub fn codegen(
                 match val {
                     MCValue::None | MCValue::Undef => {}
                     MCValue::Imm(val) => match ptr {
-                        MCValue::IndirectPtr(ptr, off) => {
+                        MCValue::PtrOffset(ptr, off) => {
                             mir.inst(
                                 Inst::movmi32,
                                 [ptr.op(), Operand::Imm(off as u64), Operand::Imm(val)],
                             );
                         }
-                        _ => todo!("store into {ptr:?}"),
+                        _ => todo!("store imm into {ptr:?}"),
                     },
-                    MCValue::Register(_) => todo!(),
-                    MCValue::IndirectPtr(_, _) => todo!(),
-                    MCValue::IndirectVal(_, _) => todo!(),
+                    MCValue::Register(r) => match ptr {
+                        MCValue::PtrOffset(ptr, off) => {
+                            mir.inst(Inst::movmr32, [ptr.op(), Operand::Imm(off as u64), r.op()]);
+                        }
+                        _ => todo!("store register into {ptr:?}"),
+                    },
+                    MCValue::PtrOffset(_, _) => todo!(),
+                    MCValue::Indirect(_, _) => todo!(),
                 }
                 MCValue::None
             }
@@ -101,15 +106,27 @@ pub fn codegen(
                             mir.inst(Inst::addri32, [reg.op(), Operand::Imm(imm)]);
                             reg
                         }
-                        (MCValue::Register(reg), MCValue::IndirectVal(ptr, off))
-                        | (MCValue::IndirectVal(ptr, off), MCValue::Register(reg)) => {
+                        (MCValue::Register(reg), MCValue::Indirect(ptr, off))
+                        | (MCValue::Indirect(ptr, off), MCValue::Register(reg)) => {
                             mir.inst(
                                 Inst::addrm32,
                                 [reg.op(), ptr.op(), Operand::Imm(off as u64)],
                             );
                             reg
                         }
-                        _ => todo!(),
+                        (MCValue::Indirect(a, a_off), MCValue::Indirect(b, b_off)) => {
+                            let reg = mir.reg();
+                            mir.inst(
+                                Inst::movrm32,
+                                [reg.op(), a.op(), Operand::Imm(a_off as u64)],
+                            );
+                            mir.inst(
+                                Inst::addrm32,
+                                [reg.op(), b.op(), Operand::Imm(b_off as u64)],
+                            );
+                            MCReg::Virtual(reg)
+                        }
+                        _ => todo!("add {lhs:?}, {rhs:?}"),
                     },
                     _ => todo!("handle add of type {ty:?}"),
                 };
@@ -135,7 +152,7 @@ pub fn codegen(
                                     [Operand::Reg(Register::eax), Operand::Imm(imm)],
                                 );
                             }
-                            MCValue::IndirectVal(reg, offset) => mir.inst(
+                            MCValue::Indirect(reg, offset) => mir.inst(
                                 Inst::movrm32,
                                 [
                                     Operand::Reg(Register::eax),
@@ -143,7 +160,7 @@ pub fn codegen(
                                     Operand::Imm(offset as u64),
                                 ],
                             ),
-                            MCValue::IndirectPtr(_, _) => todo!("calculate ptr addr for ret"),
+                            MCValue::PtrOffset(_, _) => todo!("calculate ptr addr for ret"),
                             MCValue::None | MCValue::Undef => {}
                         }
                         mir.inst(Inst::ret32, []);

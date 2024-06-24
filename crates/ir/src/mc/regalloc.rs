@@ -1,5 +1,5 @@
 use super::{
-    decode_reg, Instruction, MachineIR, OpType, OpUsage, RegType, Register, DEAD_BIT, PHYSICAL_BIT,
+    decode_reg, Instruction, MachineIR, OpUsage, RegType, Register, DEAD_BIT, PHYSICAL_BIT,
 };
 
 struct Bitmap {

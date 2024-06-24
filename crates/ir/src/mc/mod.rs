@@ -109,7 +109,7 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                 if first {
                     first = false;
                     if usage == OpUsage::Use {
-                        write!(f, "{}", inst.inst.to_str())?;
+                        write!(f, "        {}", inst.inst.to_str())?;
                     } else {
                         write_op::<I>(f, op, 4)?;
                         write!(f, " = {}", inst.inst.to_str())?;

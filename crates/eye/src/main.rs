@@ -22,7 +22,6 @@ mod parser;
 mod types;
 
 use std::{
-    env::args,
     ffi::CString,
     path::{Path, PathBuf},
 };
@@ -134,11 +133,15 @@ fn main() -> Result<(), MainError> {
             Ok((main_module, main_id))
         })
         .transpose()?;
+
     if args.hir {
-        compiler.emit_project_hir(project, main);
+        compiler.print_project_hir(project);
     }
     if args.ir {
-        compiler.emit_project_ir(project, main);
+        // TODO: right now, backends just codegen all functions that are emitted so this causes
+        // functions to be emitted unnecessarily. Could maybe be solved by collecting a list of ir
+        // function ids required for compiling main and passing it to the backend.
+        compiler.emit_whole_project_ir(project);
         println!("Displaying IR:\n{}", &compiler.ir_module);
     }
     if compiler.print_errors() && !args.run_with_errors {
@@ -148,10 +151,12 @@ fn main() -> Result<(), MainError> {
     match args.cmd {
         args::Cmd::Check => {}
         args::Cmd::Build | args::Cmd::Run => {
-            compiler.emit_project_ir(project, main);
             if let Some(main) = main {
+                compiler.emit_ir_from_root(main);
                 // verification was already done so the error can be ignored here
                 _ = compiler.verify_main_and_add_entry_point(main);
+            } else {
+                compiler.emit_whole_project_ir(project);
             }
             if compiler.print_errors() && !args.run_with_errors {
                 return Err(MainError::ErrorsFound);
@@ -194,7 +199,7 @@ fn main() -> Result<(), MainError> {
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
                 }
             }
-            if args.emit_obj {
+            if args.emit_obj || args.lib {
                 return Ok(());
             }
             #[cfg(not(target_os = "windows"))]

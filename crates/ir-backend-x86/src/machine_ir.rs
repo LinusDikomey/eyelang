@@ -90,6 +90,7 @@ ir::mc::inst! { Inst Register
     movrr32 Reg: Def, Reg: Use;
     movri32 Reg: Def, Imm: Use;
     movrm32 Reg: Def, Reg: Use, Imm: Use;
+    movmr32 Reg: Use, Imm: Use, Reg: Use;
     movmi32 Reg: Use, Imm: Use, Imm: Use;
     call Func: Use; // TODO: clobbered and implicit regs, how to solve different number of args
 
@@ -109,10 +110,10 @@ pub enum MCValue {
     Imm(u64),
     /// value is located in a register
     Register(MCReg),
-    /// represents a pointer to a value is located at a constant offset from an address in a register
-    IndirectPtr(MCReg, i64),
+    /// represents a pointer offset from a register
+    PtrOffset(MCReg, i64),
     /// value is located at a constant offset from an address in a register
-    IndirectVal(MCReg, i64),
+    Indirect(MCReg, i64),
 }
 
 #[derive(Debug, Clone, Copy)]

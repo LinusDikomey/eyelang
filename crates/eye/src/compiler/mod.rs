@@ -1029,14 +1029,7 @@ impl Compiler {
         }
     }
 
-    pub fn emit_project_hir(
-        &mut self,
-        project: ProjectId,
-        main: Option<(ModuleId, FunctionId)>,
-    ) -> Vec<ir::FunctionId> {
-        let Some(main) = main else {
-            todo!("emitting libraries is not supported right now")
-        };
+    pub fn print_project_hir(&mut self, project: ProjectId) {
         let project = self.get_project(project);
         let mut module_queue = VecDeque::from([project.root_module]);
         while let Some(module) = module_queue.pop_front() {
@@ -1061,7 +1054,12 @@ impl Compiler {
                     .copied(),
             )
         }
-        let mut functions_to_emit = VecDeque::from([(main.0, main.1, vec![])]);
+    }
+
+    /// Emit project ir starting from a root function (for example the main function) while
+    /// generating all functions recursively that are called by that function
+    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
+        let mut functions_to_emit = VecDeque::from([(root.0, root.1, vec![])]);
         let mut finished_functions = Vec::new();
         while let Some((module, function, generics)) = functions_to_emit.pop_front() {
             let id = self.get_ir_function_id(module, function, generics);
@@ -1071,25 +1069,16 @@ impl Compiler {
         finished_functions
     }
 
-    /// Emit project ir. If main function is provided, all functions required by main will also be
-    /// returned. For library projects, main can be set to None and all public functions will be
-    /// emitted.
-    pub fn emit_project_ir(
-        &mut self,
-        _project: ProjectId,
-        main: Option<(ModuleId, FunctionId)>,
-    ) -> Vec<ir::FunctionId> {
-        let Some(main) = main else {
-            todo!("emitting libraries is not supported right now")
-        };
-        let mut functions_to_emit = VecDeque::from([(main.0, main.1, vec![])]);
-        let mut finished_functions = Vec::new();
-        while let Some((module, function, generics)) = functions_to_emit.pop_front() {
-            let id = self.get_ir_function_id(module, function, generics);
-            finished_functions.push(id);
+    /// Emit the ir for all top-level functions in a project and functions called by them.
+    pub fn emit_whole_project_ir(&mut self, project: ProjectId) {
+        let project = self.get_project(project);
+        let mut module_queue = VecDeque::from([project.root_module]);
+        while let Some(module) = module_queue.pop_front() {
+            let functions = self.get_module_ast(module).function_ids();
+            for function in functions {
+                self.emit_ir_from_root((module, function));
+            }
         }
-
-        finished_functions
     }
 
     pub fn verify_main_and_add_entry_point(

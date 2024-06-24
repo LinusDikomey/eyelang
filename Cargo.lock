@@ -142,6 +142,7 @@ dependencies = [
  "id",
  "ir",
  "ir-backend-llvm",
+ "ir-backend-x86",
  "pathdiff",
  "span",
  "types",

@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     check::expr::int_ty_from_variant_count,
     compiler::ResolvedTypeDef,
-    types::{traits, LocalTypeIds, TypeInfoOrIdx},
+    types::{traits, TypeInfoOrIdx},
     Compiler,
 };
 
