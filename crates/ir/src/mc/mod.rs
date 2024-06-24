@@ -1,5 +1,7 @@
+mod builder;
 mod regalloc;
 
+pub use builder::BlockBuilder;
 pub use regalloc::regalloc;
 
 use std::fmt;
@@ -10,7 +12,8 @@ use std::usize;
 use crate::FunctionId;
 
 pub struct MachineIR<I: Instruction> {
-    pub insts: Vec<InstructionStorage<I>>,
+    insts: Vec<InstructionStorage<I>>,
+    blocks: Vec<BlockInfo>,
     next_virtual: u64,
     stack_slots: Vec<StackSlot>,
     stack_offset: u64,
@@ -19,34 +22,52 @@ impl<I: Instruction> MachineIR<I> {
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
+            blocks: vec![BlockInfo {
+                start: 0,
+                len: 0,
+                successors: Vec::new(),
+            }],
             next_virtual: 0,
             stack_slots: Vec::new(),
             stack_offset: 0,
         }
     }
 
-    #[cfg_attr(debug_assertions, track_caller)]
-    /// appends an instruction to the MachineIR
-    pub fn inst<const N: usize>(&mut self, inst: I, operands: [Op<I::Register>; N]) {
-        #[cfg(debug_assertions)]
-        {
-            let expected = inst.ops();
-            let mut found = [OpType::None; 4];
-            found[..N].copy_from_slice(&operands.map(|op| op.op_type()));
-            if expected != found {
-                panic!("invalid operands to instruction {}", inst.to_str());
-            }
-        }
-        let mut all_operands = [0; 4];
-        all_operands[..operands.len()].copy_from_slice(&operands.map(|op| op.encode()));
-        self.insts.push(InstructionStorage {
-            inst,
-            ops: all_operands,
-            implicit_dead: I::Register::NO_BITS,
+    pub fn create_block(&mut self) -> MirBlock {
+        let block = MirBlock(self.blocks.len().try_into().expect("too many blocks"));
+        self.blocks.push(BlockInfo {
+            start: 0,
+            len: 0,
+            successors: Vec::new(),
         });
+        block
     }
 
-    pub fn replace_operand(&mut self, index: usize, operand_index: usize, op: Op<I::Register>) {
+    pub fn begin_block<'a>(&'a mut self, block: MirBlock) -> BlockBuilder<'a, I> {
+        let info = &mut self.blocks[block.0 as usize];
+        debug_assert!(
+            info.start == 0 && info.len == 0,
+            "block has already been created"
+        );
+        info.start = self.insts.len() as u32;
+        BlockBuilder { mir: self, block }
+    }
+
+    pub fn block_insts(&self, block: MirBlock) -> &[InstructionStorage<I>] {
+        let block = &self.blocks[block.0 as usize];
+        &self.insts[block.start as usize..block.start as usize + block.len as usize]
+    }
+
+    pub fn block_successors(&self, block: MirBlock) -> &[MirBlock] {
+        &self.blocks[block.0 as usize].successors
+    }
+
+    pub fn block_count(&self) -> u32 {
+        self.blocks.len() as _
+    }
+
+    pub fn replace_operand(&mut self, index: u32, operand_index: usize, op: Op<I::Register>) {
+        let index = index as usize;
         #[cfg(debug_assertions)]
         {
             let expected = self.insts[index].inst.ops()[operand_index];
@@ -117,52 +138,55 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             write!(f, " {dead}{}", op)?;
             Ok(())
         }
-        for inst in &self.insts {
-            write!(f, "  ")?;
-            let ops = inst
-                .ops
-                .iter()
-                .copied()
-                .zip(inst.inst.ops())
-                .take_while(|&(_, ty)| ty != OpType::None)
-                .zip(inst.inst.op_usage());
-            let mut first = true;
-            let mut add_comma = false;
-            for (op, usage) in ops {
-                if first {
-                    first = false;
-                    if usage == OpUsage::Use {
-                        write!(f, "        {}", inst.inst.to_str())?;
-                    } else {
-                        write_op::<I>(f, op, 4)?;
-                        write!(f, " = {}", inst.inst.to_str())?;
-                        if usage == OpUsage::Def {
-                            continue;
+        for (_, block) in self.blocks.iter().zip((0..).map(MirBlock)) {
+            writeln!(f, "  bb{}:", block.0)?;
+            for inst in self.block_insts(block) {
+                write!(f, "  ")?;
+                let ops = inst
+                    .ops
+                    .iter()
+                    .copied()
+                    .zip(inst.inst.ops())
+                    .take_while(|&(_, ty)| ty != OpType::None)
+                    .zip(inst.inst.op_usage());
+                let mut first = true;
+                let mut add_comma = false;
+                for (op, usage) in ops {
+                    if first {
+                        first = false;
+                        if usage == OpUsage::Use {
+                            write!(f, "        {}", inst.inst.to_str())?;
+                        } else {
+                            write_op::<I>(f, op, 4)?;
+                            write!(f, " = {}", inst.inst.to_str())?;
+                            if usage == OpUsage::Def {
+                                continue;
+                            }
                         }
                     }
+                    if add_comma {
+                        write!(f, ",")?;
+                    }
+                    add_comma = true;
+                    write_op::<I>(f, op, 4)?;
                 }
-                if add_comma {
-                    write!(f, ",")?;
+                if first {
+                    write!(f, "        {}", inst.inst.to_str())?;
                 }
-                add_comma = true;
-                write_op::<I>(f, op, 4)?;
-            }
-            if first {
-                write!(f, "        {}", inst.inst.to_str())?;
-            }
-            let implicit = inst.inst.implicit_uses();
-            if !implicit.is_empty() {
-                write!(f, " implicit")?;
-                for &reg in implicit {
-                    let dead = if reg.get_bit(&inst.implicit_dead) {
-                        "!"
-                    } else {
-                        ""
-                    };
-                    write!(f, " {dead}{}", reg.to_str())?;
+                let implicit = inst.inst.implicit_uses();
+                if !implicit.is_empty() {
+                    write!(f, " implicit")?;
+                    for &reg in implicit {
+                        let dead = if reg.get_bit(&inst.implicit_dead) {
+                            "!"
+                        } else {
+                            ""
+                        };
+                        write!(f, " {dead}{}", reg.to_str())?;
+                    }
                 }
+                writeln!(f)?;
             }
-            writeln!(f)?;
         }
         Ok(())
     }
@@ -196,12 +220,25 @@ impl<I: Instruction> InstructionStorage<I> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MirBlock(pub u32);
+impl MirBlock {
+    pub const ENTRY: Self = Self(0);
+}
+
+struct BlockInfo {
+    start: u32,
+    len: u32,
+    successors: Vec<MirBlock>,
+}
+
 pub trait Instruction: Copy {
     type Register: Register;
 
     fn to_str(self) -> &'static str;
     fn ops(self) -> [OpType; 4];
     fn op_usage(self) -> [OpUsage; 4];
+    fn implicit_defs(self) -> &'static [Self::Register];
     fn implicit_uses(self) -> &'static [Self::Register];
 }
 pub trait Register: 'static + Copy {
@@ -224,6 +261,7 @@ pub enum Op<R: Register> {
     Reg(R),
     VReg(VReg),
     Imm(u64),
+    Block(MirBlock),
     Func(FunctionId),
     None,
 }
@@ -232,6 +270,7 @@ impl<R: Register> Op<R> {
         match self {
             Self::Reg(_) | Self::VReg(_) => OpType::Reg,
             Self::Imm(_) => OpType::Imm,
+            Self::Block(_) => OpType::Block,
             Self::Func(_) => OpType::Func,
             Self::None => OpType::None,
         }
@@ -242,6 +281,7 @@ impl<R: Register> Op<R> {
             Self::Reg(r) => (1 << 63) | r.encode() as u64,
             &Self::VReg(r) => r.0,
             &Self::Imm(value) => value,
+            Self::Block(block) => block.0 as u64,
             Self::Func(id) => id.0,
             Self::None => 0,
         }
@@ -256,6 +296,7 @@ impl<R: Register> Op<R> {
             },
             OpType::Mem => todo!(),
             OpType::Imm => Self::Imm(value),
+            OpType::Block => Self::Block(MirBlock(value as u32)),
             OpType::Func => Self::Func(FunctionId(value)),
         }
     }
@@ -276,6 +317,7 @@ impl<R: Register> Op<R> {
                 };
                 (u64::checked_ilog10(n).unwrap_or_default() + 1 + signed as u32) as usize
             }
+            Op::Block(b) => (u32::checked_ilog10(b.0).unwrap_or_default() + 3) as usize,
             Op::Func(f) => (u64::checked_ilog10(f.0).unwrap_or_default() + 4) as usize,
             Op::None => 0,
         }
@@ -287,6 +329,7 @@ impl<R: Register> fmt::Display for Op<R> {
             Op::Reg(r) => write!(f, "{}", r.to_str()),
             Op::VReg(n) => write!(f, "%{}", n.0),
             &Op::Imm(value) => write!(f, "{}", value as i64),
+            Op::Block(b) => write!(f, "bb{}", b.0),
             Op::Func(func) => write!(f, "<#{}>", func.0),
             Op::None => Ok(()),
         }
@@ -314,6 +357,7 @@ pub enum OpType {
     Reg,
     Mem,
     Imm,
+    Block,
     Func,
 }
 
@@ -327,9 +371,10 @@ pub enum OpUsage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SizeClass {
     S1,
-    S2,
-    S4,
     S8,
+    S16,
+    S32,
+    S64,
 }
 
 #[repr(transparent)]
@@ -370,7 +415,7 @@ pub use crate::first_reg;
 
 #[macro_export]
 macro_rules! inst {
-    ($name: ident $register: ident $($variant: ident $($op: ident: $use_ty: ident ),* $(!implicit $($implicit_reg: ident)*)? ;)*) => {
+    ($name: ident $register: ident $($variant: ident $($op: ident: $use_ty: ident ),* $(!implicit_def $($implicit_def: ident)*)? $(!implicit $($implicit: ident)*)? ;)*) => {
         #[rustfmt::skip]
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -407,9 +452,15 @@ macro_rules! inst {
                 uses
             }
 
+            fn implicit_defs(self) -> &'static [$register] {
+                match self {
+                    $(Self::$variant => &[$($($register::$implicit_def,)*)?],)*
+                }
+            }
+
             fn implicit_uses(self) -> &'static [$register] {
                 match self {
-                    $(Self::$variant => &[$($($register::$implicit_reg,)*)?],)*
+                    $(Self::$variant => &[$($($register::$implicit,)*)?],)*
                 }
             }
         }

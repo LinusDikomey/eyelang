@@ -3,15 +3,16 @@ use std::{fmt, ops};
 use ir::mc::Register as _;
 
 ir::mc::registers! { Reg RegisterBits
-        S8 => rax rbx rcx rdx rbp rsi rdi rsp;
-        S4 => eax ebx ecx edx ebp esi edi esp;
-        S2 =>  ax  bx  cx  dx  bp  si  di  sp;
-        S1 =>  ah  bh  ch  dh;
-        S1 =>  al  bl  cl  dl bpl sil dil spl;
-        S8 => r8  r9  r10  r11  r12  r13  r14  r15;
-        S4 => r8d r9d r10d r11d r12d r13d r14d r15d;
-        S2 => r8w r9w r10w r11w r12w r13w r14w r15w;
-        S1 => r8b r9b r10b r11b r12b r13b r14b r15b;
+    S64 => rax rbx rcx rdx rbp rsi rdi rsp;
+    S32 => eax ebx ecx edx ebp esi edi esp;
+    S16 =>  ax  bx  cx  dx  bp  si  di  sp;
+    S8 =>  ah  bh  ch  dh;
+    S8 =>  al  bl  cl  dl bpl sil dil spl;
+    S64 => r8  r9  r10  r11  r12  r13  r14  r15;
+    S32 => r8d r9d r10d r11d r12d r13d r14d r15d;
+    S16 => r8w r9w r10w r11w r12w r13w r14w r15w;
+    S8 => r8b r9b r10b r11b r12b r13b r14b r15b;
+    S1 => eflags;
 }
 impl fmt::Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -19,7 +20,7 @@ impl fmt::Display for Reg {
     }
 }
 impl Reg {
-    pub const fn bit(self) -> u16 {
+    pub const fn bit(self) -> u32 {
         use Reg::*;
         let bit_index = match self {
             rax | eax | ax | ah | al => 0,
@@ -38,6 +39,7 @@ impl Reg {
             r13 | r13d | r13w | r13b => 13,
             r14 | r14d | r14w | r14b => 14,
             r15 | r15d | r15w | r15b => 15,
+            eflags => 16,
         };
         1 << bit_index
     }
@@ -45,7 +47,7 @@ impl Reg {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct RegisterBits(u16);
+pub struct RegisterBits(u32);
 impl ops::Not for RegisterBits {
     type Output = Self;
 
@@ -66,7 +68,7 @@ impl RegisterBits {
     }
 
     const fn all() -> Self {
-        Self(u16::MAX)
+        Self(0x0001FFFF)
     }
 
     fn get(&self, r: Reg) -> bool {
@@ -108,4 +110,17 @@ ir::mc::inst! { Inst Reg
     // dependencies
     ret0;
     ret32 !implicit eax;
+
+    cmpri8  Reg: Use, Imm: Use !implicit_def eflags;
+    cmprr32 Reg: Use, Reg: Use !implicit_def eflags;
+    cmpri32 Reg: Use, Imm: Use !implicit_def eflags;
+    jmp Block: Use;
+    je Block: Use !implicit eflags;
+
+    setz8  Reg: Def !implicit eflags;
+    setnz8 Reg: Def !implicit eflags;
+    setl8  Reg: Def !implicit eflags;
+    setle8 Reg: Def !implicit eflags;
+    setg8  Reg: Def !implicit eflags;
+    setge8 Reg: Def !implicit eflags;
 }

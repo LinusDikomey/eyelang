@@ -57,6 +57,33 @@ pub struct FunctionIr {
     pub extra: Vec<u8>,
     pub blocks: Vec<u32>,
 }
+impl FunctionIr {
+    pub fn get_ref_ty(&self, r: Ref, types: &IrTypes) -> IrType {
+        match r.into_val() {
+            Some(RefVal::True | RefVal::False) => IrType::U1,
+            Some(RefVal::Unit) => IrType::Unit,
+            Some(RefVal::Undef) => todo!(), // maybe remove undef because it's untyped
+            None => types[self.inst[r.into_ref().unwrap() as usize].ty],
+        }
+    }
+
+    pub fn get_block<'a>(
+        &'a self,
+        block: BlockIndex,
+    ) -> impl 'a + Iterator<Item = (usize, Instruction)> {
+        let start = self.blocks[block.idx() as usize] as usize + 1;
+        (start..).into_iter().zip(
+            self.inst[start..]
+                .iter()
+                .copied()
+                .take_while(|inst| inst.tag != Tag::BlockBegin),
+        )
+    }
+
+    pub fn blocks<'a>(&'a self) -> impl 'a + Iterator<Item = BlockIndex> {
+        self.blocks.iter().map(|&id| BlockIndex(id))
+    }
+}
 
 pub struct Module {
     pub name: String,
@@ -147,6 +174,7 @@ impl fmt::Display for RefVal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
+    pub const ENTRY: Self = Self(0);
     pub const MISSING: Self = Self(u32::MAX);
 
     pub fn bytes(self) -> [u8; 4] {

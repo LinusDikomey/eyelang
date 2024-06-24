@@ -67,7 +67,7 @@ impl Backend {
                 }
                 ir::mc::regalloc(&mut mir);
                 if print_ir {
-                    println!("post-regalloc mir {}:\n{}\n", func.name, mir);
+                    println!("mir for {}: (post-regalloc)\n{}\n", func.name, mir);
                 }
                 emit::write(&mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;

@@ -76,6 +76,9 @@ fn analyze_liveness<I: Instruction>(
                 reg.set_bit(&mut inst.implicit_dead, true);
             }
         }
+        for &reg in inst.inst.implicit_defs() {
+            reg.set_bit(&mut live_regs, true);
+        }
     }
     intersecting_precolored
 }
@@ -99,7 +102,7 @@ fn perform_regalloc<I: Instruction>(
                         // TODO: spilling
                         let occupied = intersecing_precolored[r.0 as usize];
                         let avail = free & !occupied;
-                        let chosen_reg = I::Register::allocate_reg(avail, super::SizeClass::S4)
+                        let chosen_reg = I::Register::allocate_reg(avail, super::SizeClass::S32)
                             .expect("register allocation failed, TODO: spilling");
                         chosen_reg.set_bit(&mut free, false);
                         chosen[r.0 as usize] = chosen_reg;
