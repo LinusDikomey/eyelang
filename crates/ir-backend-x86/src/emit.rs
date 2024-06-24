@@ -1,28 +1,30 @@
-use ir::mc::{MachineIR, OpType, Operand};
+use ir::mc::{MachineIR, Op, OpType};
 
-use crate::machine_ir::{Inst, Register};
+use crate::isa::{Inst, Reg};
 
 pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
     #[cold]
-    fn op_error(expected: &'static str, found: Operand<Register>) -> ! {
+    fn op_error(expected: &'static str, found: Op<Reg>) -> ! {
         panic!("invalid instruction operand, expected {expected} but found value {found:?}")
     }
-    for inst in &ir.insts {
-        let r = |a: u64| {
-            let a = Operand::decode(a, OpType::Reg);
-            let Operand::Reg(a) = a else {
-                op_error("Register", a)
-            };
-            a
-        };
-        let m = |a: u64, b: u64| {
-            let a = Operand::decode(a, OpType::Reg);
-            let Operand::Reg(a) = a else {
-                op_error("Register", a)
-            };
-            (a, OffsetClass::from_imm(b as i64))
-        };
 
+    fn r(a: u64) -> Reg {
+        let a = Op::decode(a, OpType::Reg);
+        let Op::Reg(a) = a else {
+            op_error("Register", a)
+        };
+        a
+    }
+
+    fn m(a: u64, b: u64) -> (Reg, OffsetClass) {
+        let a = Op::decode(a, OpType::Reg);
+        let Op::Reg(a) = a else {
+            op_error("Register", a)
+        };
+        (a, OffsetClass::from_imm(b as i64))
+    }
+
+    for inst in &ir.insts {
         let rr = || (r(inst.ops[0]), r(inst.ops[1]));
         let ri = || (r(inst.ops[0]), inst.ops[1]);
         let rm = || (r(inst.ops[0]), m(inst.ops[1], inst.ops[2]));
@@ -47,22 +49,37 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 text.extend([0x03, modrm.modrm]);
                 off.write(text);
             }
-            Inst::addri32 => {
+            Inst::addri32 | Inst::addri64 => {
+                let wide = inst.inst == Inst::addri64;
                 let (a, b) = ri();
-                let modrm = encode_modrm_ri(a, false);
+                let modrm = encode_modrm_ri(a, wide);
                 if modrm.rex != 0 {
                     text.push(modrm.rex);
                 }
                 if b <= u8::MAX as u64 {
                     text.extend([0x83, modrm.modrm, b as u8]);
                 } else {
-                    todo!("handle larger immediate values")
+                    todo!("handle larger imm values");
                 }
             }
-            Inst::movrr32 => {
+            Inst::subri64 => {
+                let (a, b) = ri();
+                let modrm = encode_modrm_ri(a, true);
+                if modrm.rex != 0 {
+                    text.push(modrm.rex);
+                }
+                let o = 5;
+                if let Ok(b8) = b.try_into() {
+                    text.extend([0x83, modrm.modrm | o << 3, b8]);
+                } else {
+                    todo!("handle larger imm values");
+                }
+            }
+            Inst::movrr32 | Inst::movrr64 => {
+                let wide = inst.inst == Inst::movrr64;
                 let (a, b) = rr();
                 if a != b {
-                    let modrm = encode_modrm_rr(a, b, false);
+                    let modrm = encode_modrm_rr(a, b, wide);
                     if modrm.rex != 0 {
                         text.push(modrm.rex);
                     }
@@ -79,8 +96,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     let [b0, b1, b2, b3] = (b as u32).to_le_bytes();
                     let (r, b) = encode_modrm_reg(a);
                     if b {
-                        // REX byte
-                        text.push(0b0100_0001);
+                        text.push(REX | REX_B);
                     }
                     text.extend([0xB8 + r, modrm.modrm, b0, b1, b2, b3]);
                 } else {
@@ -120,12 +136,34 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 text.extend(imm32.expect("immediate too large").to_le_bytes());
             }
             Inst::call => todo!(),
+            Inst::push64 => {
+                let r = r(inst.ops[0]);
+                let (r, b) = encode_modrm_reg(r);
+                if b {
+                    text.push(REX | REX_B);
+                }
+                text.push(0x50 + r);
+            }
+            Inst::pop64 => {
+                let r = r(inst.ops[0]);
+                let (r, b) = encode_modrm_reg(r);
+                if b {
+                    text.push(REX | REX_B);
+                }
+                text.push(0x58 + r);
+            }
             Inst::ret0 | Inst::ret32 => {
                 text.push(0xc3);
             }
         }
     }
 }
+
+const REX: u8 = 0b0100_0001;
+const REX_B: u8 = 1 << 0;
+const REX_X: u8 = 1 << 1;
+const REX_R: u8 = 1 << 2;
+const REX_W: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy)]
 enum OffsetClass {
@@ -166,8 +204,8 @@ struct Modrm {
     modrm: u8,
 }
 #[rustfmt::skip]
-fn encode_modrm_reg(r: Register) -> (u8, bool) {
-    use Register::*;
+fn encode_modrm_reg(r: Reg) -> (u8, bool) {
+    use Reg::*;
     let mut b = false;
 
     let modrm = match r {
@@ -192,7 +230,7 @@ fn encode_modrm_reg(r: Register) -> (u8, bool) {
     (modrm, b)
 }
 
-fn encode_modrm_rr(reg_a: Register, reg_b: Register, wide: bool) -> Modrm {
+fn encode_modrm_rr(reg_a: Reg, reg_b: Reg, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_modrm_reg(reg_a);
     let (modrm_b, b) = encode_modrm_reg(reg_b);
     let rex = if wide || r || b {
@@ -206,7 +244,7 @@ fn encode_modrm_rr(reg_a: Register, reg_b: Register, wide: bool) -> Modrm {
     }
 }
 
-fn encode_modrm_rm(reg_val: Register, reg_ptr: Register, off: OffsetClass, wide: bool) -> Modrm {
+fn encode_modrm_rm(reg_val: Reg, reg_ptr: Reg, off: OffsetClass, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_modrm_reg(reg_val);
     let (modrm_b, b) = encode_modrm_reg(reg_ptr);
     let rex = if wide || r || b {
@@ -220,7 +258,7 @@ fn encode_modrm_rm(reg_val: Register, reg_ptr: Register, off: OffsetClass, wide:
     }
 }
 
-fn encode_modrm_mr(reg_ptr: Register, off: OffsetClass, reg_val: Register, wide: bool) -> Modrm {
+fn encode_modrm_mr(reg_ptr: Reg, off: OffsetClass, reg_val: Reg, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_modrm_reg(reg_ptr);
     let (modrm_b, b) = encode_modrm_reg(reg_val);
     let rex = if wide || r || b {
@@ -234,7 +272,7 @@ fn encode_modrm_mr(reg_ptr: Register, off: OffsetClass, reg_val: Register, wide:
     }
 }
 
-fn encode_modrm_ri(reg: Register, wide: bool) -> Modrm {
+fn encode_modrm_ri(reg: Reg, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_modrm_reg(reg);
     let rex = if wide || r {
         0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2)

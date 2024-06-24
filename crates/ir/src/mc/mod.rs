@@ -26,7 +26,8 @@ impl<I: Instruction> MachineIR<I> {
     }
 
     #[cfg_attr(debug_assertions, track_caller)]
-    pub fn inst<const N: usize>(&mut self, inst: I, operands: [Operand<I::Register>; N]) {
+    /// appends an instruction to the MachineIR
+    pub fn inst<const N: usize>(&mut self, inst: I, operands: [Op<I::Register>; N]) {
         #[cfg(debug_assertions)]
         {
             let expected = inst.ops();
@@ -43,6 +44,23 @@ impl<I: Instruction> MachineIR<I> {
             ops: all_operands,
             implicit_dead: I::Register::NO_BITS,
         });
+    }
+
+    pub fn replace_operand(&mut self, index: usize, operand_index: usize, op: Op<I::Register>) {
+        #[cfg(debug_assertions)]
+        {
+            let expected = self.insts[index].inst.ops()[operand_index];
+            if expected != op.op_type() {
+                panic!(
+                    "replaced instruction operand {operand_index} of {} \
+                    with invalid type {:?}, expected {:?}",
+                    self.insts[index].inst.to_str(),
+                    op.op_type(),
+                    expected
+                );
+            }
+        }
+        self.insts[index].ops[operand_index] = op.encode();
     }
 
     /// creates a fresh virtual register
@@ -75,6 +93,11 @@ impl<I: Instruction> MachineIR<I> {
         self.stack_offset += layout.size;
         offset
     }
+
+    /// gets the current offset of the stack required for storing all created stack slots
+    pub fn stack_offset(&self) -> u64 {
+        self.stack_offset
+    }
 }
 impl<I: Instruction> fmt::Display for MachineIR<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -83,8 +106,8 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             (op_value, ty): (u64, OpType),
             pad_to: usize,
         ) -> fmt::Result {
-            let op = Operand::<I::Register>::decode(op_value, ty);
-            let dead = matches!(op, Operand::Reg(_) | Operand::VReg(_)) && op_value & DEAD_BIT != 0;
+            let op = Op::<I::Register>::decode(op_value, ty);
+            let dead = matches!(op, Op::Reg(_) | Op::VReg(_)) && op_value & DEAD_BIT != 0;
             let dead = if dead { "!" } else { "" };
             let len = op.printed_len() + dead.len();
             let padding = pad_to.saturating_sub(len);
@@ -152,14 +175,14 @@ pub struct InstructionStorage<I: Instruction> {
     pub implicit_dead: <I::Register as Register>::RegisterBits,
 }
 impl<I: Instruction> InstructionStorage<I> {
-    pub fn decode_ops(&self) -> impl Iterator<Item = (Operand<I::Register>, OpUsage)> {
+    pub fn decode_ops(&self) -> impl Iterator<Item = (Op<I::Register>, OpUsage)> {
         self.inst
             .ops()
             .into_iter()
             .take_while(|&op| op != OpType::None)
             .zip(self.ops)
             .zip(self.inst.op_usage())
-            .map(|((ty, val), usage)| (Operand::<I::Register>::decode(val, ty), usage))
+            .map(|((ty, val), usage)| (Op::<I::Register>::decode(val, ty), usage))
     }
 
     pub fn reg_ops_mut(&mut self) -> impl Iterator<Item = (&mut u64, OpUsage)> {
@@ -197,14 +220,14 @@ pub trait Register: 'static + Copy {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Operand<R: Register> {
+pub enum Op<R: Register> {
     Reg(R),
     VReg(VReg),
     Imm(u64),
     Func(FunctionId),
     None,
 }
-impl<R: Register> Operand<R> {
+impl<R: Register> Op<R> {
     pub fn op_type(&self) -> OpType {
         match self {
             Self::Reg(_) | Self::VReg(_) => OpType::Reg,
@@ -240,9 +263,9 @@ impl<R: Register> Operand<R> {
     /// Get the number of characters the fmt::Display implementation will print. Used for padding.
     pub fn printed_len(self) -> usize {
         match self {
-            Operand::Reg(r) => r.to_str().len(),
-            Operand::VReg(n) => (u64::checked_ilog10(n.0).unwrap_or_default() + 2) as usize,
-            Operand::Imm(n) => {
+            Op::Reg(r) => r.to_str().len(),
+            Op::VReg(n) => (u64::checked_ilog10(n.0).unwrap_or_default() + 2) as usize,
+            Op::Imm(n) => {
                 let n = n as i64;
                 let mut signed = false;
                 let n = if n < 0 {
@@ -253,19 +276,19 @@ impl<R: Register> Operand<R> {
                 };
                 (u64::checked_ilog10(n).unwrap_or_default() + 1 + signed as u32) as usize
             }
-            Operand::Func(f) => (u64::checked_ilog10(f.0).unwrap_or_default() + 4) as usize,
-            Operand::None => 0,
+            Op::Func(f) => (u64::checked_ilog10(f.0).unwrap_or_default() + 4) as usize,
+            Op::None => 0,
         }
     }
 }
-impl<R: Register> fmt::Display for Operand<R> {
+impl<R: Register> fmt::Display for Op<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Operand::Reg(r) => write!(f, "{}", r.to_str()),
-            Operand::VReg(n) => write!(f, "%{}", n.0),
-            &Operand::Imm(value) => write!(f, "{}", value as i64),
-            Operand::Func(func) => write!(f, "<#{}>", func.0),
-            Operand::None => Ok(()),
+            Op::Reg(r) => write!(f, "{}", r.to_str()),
+            Op::VReg(n) => write!(f, "%{}", n.0),
+            &Op::Imm(value) => write!(f, "{}", value as i64),
+            Op::Func(func) => write!(f, "<#{}>", func.0),
+            Op::None => Ok(()),
         }
     }
 }
@@ -285,7 +308,7 @@ pub fn decode_reg<R: Register>(r: u64) -> RegType<R> {
 pub const PHYSICAL_BIT: u64 = 1 << 63;
 pub const DEAD_BIT: u64 = 1 << 62;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
     None,
     Reg,
@@ -313,8 +336,8 @@ pub enum SizeClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VReg(u64);
 impl VReg {
-    pub fn op<R: Register>(self) -> Operand<R> {
-        Operand::VReg(self)
+    pub fn op<R: Register>(self) -> Op<R> {
+        Op::VReg(self)
     }
 }
 

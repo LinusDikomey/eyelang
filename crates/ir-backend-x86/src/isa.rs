@@ -1,8 +1,8 @@
 use std::{fmt, ops};
 
-use ir::mc::{Operand, Register as _, VReg};
+use ir::mc::Register as _;
 
-ir::mc::registers! { Register RegisterBits
+ir::mc::registers! { Reg RegisterBits
         S8 => rax rbx rcx rdx rbp rsi rdi rsp;
         S4 => eax ebx ecx edx ebp esi edi esp;
         S2 =>  ax  bx  cx  dx  bp  si  di  sp;
@@ -13,14 +13,14 @@ ir::mc::registers! { Register RegisterBits
         S2 => r8w r9w r10w r11w r12w r13w r14w r15w;
         S1 => r8b r9b r10b r11b r12b r13b r14b r15b;
 }
-impl fmt::Display for Register {
+impl fmt::Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
-impl Register {
+impl Reg {
     pub const fn bit(self) -> u16 {
-        use Register::*;
+        use Reg::*;
         let bit_index = match self {
             rax | eax | ax | ah | al => 0,
             rbx | ebx | bx | bh | bl => 1,
@@ -69,11 +69,11 @@ impl RegisterBits {
         Self(u16::MAX)
     }
 
-    fn get(&self, r: Register) -> bool {
+    fn get(&self, r: Reg) -> bool {
         self.0 & r.bit() != 0
     }
 
-    fn set(&mut self, r: Register, set: bool) {
+    fn set(&mut self, r: Reg, set: bool) {
         let bit = r.bit();
         if set {
             self.0 |= bit;
@@ -83,49 +83,29 @@ impl RegisterBits {
     }
 }
 
-ir::mc::inst! { Inst Register
+ir::mc::inst! { Inst Reg
     addrr32 Reg: DefUse, Reg: Use;
     addri32 Reg: DefUse, Imm: Use;
+    addri64 Reg: DefUse, Imm: Use;
     addrm32 Reg: DefUse, Reg: Use, Imm: Use;
+
+    subri64 Reg: DefUse, Imm: Use;
+
     movrr32 Reg: Def, Reg: Use;
+    movrr64 Reg: Def, Reg: Use;
+
     movri32 Reg: Def, Imm: Use;
     movrm32 Reg: Def, Reg: Use, Imm: Use;
     movmr32 Reg: Use, Imm: Use, Reg: Use;
     movmi32 Reg: Use, Imm: Use, Imm: Use;
+
+
     call Func: Use; // TODO: clobbered and implicit regs, how to solve different number of args
+    push64 Reg: Use;
+    pop64 Reg: Def;
 
     // we differentiate between different return value sizes to properly model implicit register
     // dependencies
     ret0;
     ret32 !implicit eax;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MCValue {
-    /// this value doesn't have any runtime bits
-    None,
-    /// value is undefined and can be assumed to be any value at runtime
-    Undef,
-    /// an immediate (pointer-sized) constant value
-    Imm(u64),
-    /// value is located in a register
-    Register(MCReg),
-    /// represents a pointer offset from a register
-    PtrOffset(MCReg, i64),
-    /// value is located at a constant offset from an address in a register
-    Indirect(MCReg, i64),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MCReg {
-    Register(Register),
-    Virtual(VReg),
-}
-impl MCReg {
-    pub fn op(self) -> Operand<Register> {
-        match self {
-            MCReg::Register(r) => Operand::Reg(r),
-            MCReg::Virtual(r) => Operand::VReg(r),
-        }
-    }
 }

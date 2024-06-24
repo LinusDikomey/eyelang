@@ -5,7 +5,7 @@ use elf::{ElfObjectWriter, SectionHeader};
 mod codegen;
 mod elf;
 mod emit;
-mod machine_ir;
+mod isa;
 
 #[derive(Debug)]
 pub enum Error {
