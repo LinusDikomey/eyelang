@@ -8,12 +8,14 @@ use std::{
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
+#[allow(unused)]
 pub enum Format {
     B32 = 1,
     B64 = 2,
 }
 
 #[repr(u8)]
+#[allow(unused)]
 pub enum Endianness {
     Little = 1,
     Big = 2,
@@ -25,6 +27,7 @@ pub enum Abi {
 }
 
 #[derive(Clone, Copy)]
+#[allow(unused)]
 pub enum ObjectFileType {
     Unknown,
     Relocatable,

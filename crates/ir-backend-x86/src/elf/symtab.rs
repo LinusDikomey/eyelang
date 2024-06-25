@@ -65,6 +65,7 @@ pub struct Entry {
 }
 
 #[repr(u8)]
+#[allow(unused)]
 pub enum Bind {
     Local = 0x00,
     Global = 0x01,
@@ -73,6 +74,7 @@ pub enum Bind {
 }
 
 #[repr(u8)]
+#[allow(unused)]
 pub enum Type {
     None = 0x00,
     Object = 0x01,
@@ -85,6 +87,7 @@ pub enum Type {
 }
 
 #[repr(u8)]
+#[allow(unused)]
 pub enum Visibility {
     Default = 0x00,
     Internal = 0x01,

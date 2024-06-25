@@ -86,10 +86,10 @@ impl RegisterBits {
 }
 
 ir::mc::inst! { Inst Reg
-    addrr32 Reg: DefUse, Reg: Use;
-    addri32 Reg: DefUse, Imm: Use;
-    addri64 Reg: DefUse, Imm: Use;
-    addrm32 Reg: DefUse, Reg: Use, Imm: Use;
+    addrr32 Reg: DefUse, Reg: Use           !implicit_def eflags;
+    addri32 Reg: DefUse, Imm: Use           !implicit_def eflags;
+    addri64 Reg: DefUse, Imm: Use           !implicit_def eflags;
+    addrm32 Reg: DefUse, Reg: Use, Imm: Use !implicit_def eflags;
 
     subri64 Reg: DefUse, Imm: Use;
 
@@ -102,9 +102,9 @@ ir::mc::inst! { Inst Reg
     movmi32 Reg: Use, Imm: Use, Imm: Use;
 
 
-    call Func: Use; // TODO: clobbered and implicit regs, how to solve different number of args
-    push64 Reg: Use;
-    pop64 Reg: Def;
+    call    Fun: Use; // TODO: clobbered and implicit regs, how to solve different number of args
+    push64  Reg: Use;
+    pop64   Reg: Def;
 
     // we differentiate between different return value sizes to properly model implicit register
     // dependencies
@@ -114,8 +114,8 @@ ir::mc::inst! { Inst Reg
     cmpri8  Reg: Use, Imm: Use !implicit_def eflags;
     cmprr32 Reg: Use, Reg: Use !implicit_def eflags;
     cmpri32 Reg: Use, Imm: Use !implicit_def eflags;
-    jmp Block: Use;
-    je Block: Use !implicit eflags;
+    jmp Blk: Use;
+    je Blk: Use !implicit eflags;
 
     setz8  Reg: Def !implicit eflags;
     setnz8 Reg: Def !implicit eflags;

@@ -249,7 +249,6 @@ impl Impl {
         impl_generics: LocalTypeIds,
         types: &mut TypeTable,
     ) -> TypeInfoOrIdx {
-        dbg!(types[trait_generics.nth(0).unwrap()]);
         assert_eq!(trait_generics.count, 1, "TODO: handle generic traits");
         self.impl_ty.instantiate(impl_generics, types)
     }

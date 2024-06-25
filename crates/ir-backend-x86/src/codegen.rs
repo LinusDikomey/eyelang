@@ -39,7 +39,7 @@ impl<'a> Gen<'a> {
                     .get(param_idx as usize)
                     .expect("TODO: more than 6 args");
                 let reg = builder.reg();
-                builder.inst(Inst::movrr32, [reg.op(), Op::Reg(abi_reg)]);
+                builder.inst(Inst::Copy, [reg.op(), Op::Reg(abi_reg)]);
                 MCValue::Register(MCReg::Virtual(reg))
             }
             Tag::Int => MCValue::Imm(unsafe { inst.data.int }),
@@ -132,7 +132,7 @@ impl<'a> Gen<'a> {
                 };
 
                 let v = builder.reg();
-                builder.inst(Inst::movrr32, [Op::VReg(v), changed_reg.op()]);
+                builder.inst(Inst::Copy, [Op::VReg(v), changed_reg.op()]);
                 MCValue::Register(MCReg::Virtual(v))
             }
             Tag::Ret => {
@@ -147,10 +147,10 @@ impl<'a> Gen<'a> {
                         match val {
                             MCValue::Register(MCReg::Register(Reg::eax)) => {}
                             MCValue::Register(reg) => {
-                                builder.inst(Inst::movrr32, [Op::Reg(Reg::eax), reg.op()]);
+                                builder.inst(Inst::Copy, [Op::Reg(Reg::eax), reg.op()]);
                             }
                             MCValue::Imm(imm) => {
-                                builder.inst(Inst::movri32, [Op::Reg(Reg::eax), Op::Imm(imm)]);
+                                builder.inst(Inst::Copy, [Op::Reg(Reg::eax), Op::Imm(imm)]);
                             }
                             MCValue::Indirect(reg, offset) => builder.inst(
                                 Inst::movrm32,
@@ -328,11 +328,6 @@ enum MCValue {
     PtrOffset(MCReg, i64),
     /// value is located at a constant offset from an address in a register
     Indirect(MCReg, i64),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum EFlagsBit {
-    LT,
 }
 
 #[derive(Debug, Clone, Copy)]

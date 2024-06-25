@@ -147,7 +147,7 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                     .iter()
                     .copied()
                     .zip(inst.inst.ops())
-                    .take_while(|&(_, ty)| ty != OpType::None)
+                    .take_while(|&(_, ty)| ty != OpType::Non)
                     .zip(inst.inst.op_usage());
                 let mut first = true;
                 let mut add_comma = false;
@@ -203,7 +203,7 @@ impl<I: Instruction> InstructionStorage<I> {
         self.inst
             .ops()
             .into_iter()
-            .take_while(|&op| op != OpType::None)
+            .take_while(|&op| op != OpType::Non)
             .zip(self.ops)
             .zip(self.inst.op_usage())
             .map(|((ty, val), usage)| (Op::<I::Register>::decode(val, ty), usage))
@@ -213,7 +213,7 @@ impl<I: Instruction> InstructionStorage<I> {
         self.inst
             .ops()
             .into_iter()
-            .take_while(|&op| op != OpType::None)
+            .take_while(|&op| op != OpType::Non)
             .zip(self.ops.iter_mut())
             .zip(self.inst.op_usage())
             .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
@@ -240,6 +240,7 @@ pub trait Instruction: Copy {
     fn op_usage(self) -> [OpUsage; 4];
     fn implicit_defs(self) -> &'static [Self::Register];
     fn implicit_uses(self) -> &'static [Self::Register];
+    fn is_copy(self) -> bool;
 }
 pub trait Register: 'static + Copy {
     const DEFAULT: Self;
@@ -270,9 +271,9 @@ impl<R: Register> Op<R> {
         match self {
             Self::Reg(_) | Self::VReg(_) => OpType::Reg,
             Self::Imm(_) => OpType::Imm,
-            Self::Block(_) => OpType::Block,
-            Self::Func(_) => OpType::Func,
-            Self::None => OpType::None,
+            Self::Block(_) => OpType::Blk,
+            Self::Func(_) => OpType::Fun,
+            Self::None => OpType::Non,
         }
     }
 
@@ -289,15 +290,15 @@ impl<R: Register> Op<R> {
 
     pub fn decode(value: u64, ty: OpType) -> Self {
         match ty {
-            OpType::None => Self::None,
+            OpType::Non => Self::None,
             OpType::Reg => match decode_reg(value) {
                 RegType::Reg(r) => Self::Reg(r),
                 RegType::Virtual(v) => Self::VReg(v),
             },
             OpType::Mem => todo!(),
             OpType::Imm => Self::Imm(value),
-            OpType::Block => Self::Block(MirBlock(value as u32)),
-            OpType::Func => Self::Func(FunctionId(value)),
+            OpType::Blk => Self::Block(MirBlock(value as u32)),
+            OpType::Fun => Self::Func(FunctionId(value)),
         }
     }
 
@@ -353,12 +354,12 @@ pub const DEAD_BIT: u64 = 1 << 62;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
-    None,
+    Non,
     Reg,
     Mem,
     Imm,
-    Block,
-    Func,
+    Blk,
+    Fun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,6 +421,10 @@ macro_rules! inst {
         #[allow(non_camel_case_types)]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
         pub enum $name {
+            /// special meta-instruction that all ISAs contain. It represents a copy of an
+            /// arbitrary register to another. Use this instead of specific mov instructions to
+            /// make the register allocator aware of potential elidable copies
+            Copy = 0,
             $($variant, )*
         }
 
@@ -428,24 +433,25 @@ macro_rules! inst {
 
             fn to_str(self) -> &'static str {
                 match self {
+                    Self::Copy => "copy",
                     $(Self::$variant => stringify!($variant),)*
                 }
             }
 
             fn ops(self) -> [$crate::mc::OpType; 4] {
-                let mut ops = [$crate::mc::OpType::None; 4];
+                let mut ops = [$crate::mc::OpType::Non; 4];
                 let inst_ops: &[$crate::mc::OpType] = match self {
+                    Self::Copy => &[$crate::mc::OpType::Reg, $crate::mc::OpType::Reg],
                     $(Self::$variant => &[$($crate::mc::OpType::$op,)*],)*
                 };
-                for (p, op) in ops.iter_mut().zip(inst_ops) {
-                    *p = *op;
-                }
+                ops[..inst_ops.len()].copy_from_slice(inst_ops);
                 ops
             }
 
             fn op_usage(self) -> [$crate::mc::OpUsage; 4] {
                 let mut uses = [$crate::mc::OpUsage::Def; 4];
                 let inst_uses: &[$crate::mc::OpUsage] = match self {
+                    Self::Copy => &[$crate::mc::OpUsage::Def, $crate::mc::OpUsage::Use],
                     $(Self::$variant => &[$($crate::mc::OpUsage::$use_ty),*],)*
                 };
                 uses[..inst_uses.len()].copy_from_slice(inst_uses);
@@ -454,14 +460,20 @@ macro_rules! inst {
 
             fn implicit_defs(self) -> &'static [$register] {
                 match self {
+                    Self::Copy => &[],
                     $(Self::$variant => &[$($($register::$implicit_def,)*)?],)*
                 }
             }
 
             fn implicit_uses(self) -> &'static [$register] {
                 match self {
+                    Self::Copy => &[],
                     $(Self::$variant => &[$($($register::$implicit,)*)?],)*
                 }
+            }
+
+            fn is_copy(self) -> bool {
+                self == Self::Copy
             }
         }
     };

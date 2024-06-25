@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, hint::unreachable_unchecked};
 
-use ir::mc::{MachineIR, MirBlock, Op, OpType};
+use ir::mc::{MachineIR, MirBlock, Op, OpType, SizeClass};
 
 use crate::isa::{Inst, Reg};
 
@@ -39,7 +39,6 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             continue;
         }
         *offset = Some((text.len() - start) as u32);
-        println!("{:?} -> {:?}", block, ir.block_successors(block));
         block_queue.extend(ir.block_successors(block));
 
         for inst in ir.block_insts(block) {
@@ -51,6 +50,24 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             let b = || MirBlock(inst.ops[0] as u32);
 
             match inst.inst {
+                Inst::Copy => {
+                    let (a, b) = rr();
+                    if a != b {
+                        match a.size() {
+                            ir::mc::SizeClass::S1 => todo!(),
+                            ir::mc::SizeClass::S8 => todo!(),
+                            ir::mc::SizeClass::S16 => todo!(),
+                            SizeClass::S32 | SizeClass::S64 => {
+                                let wide = a.size() == SizeClass::S64;
+                                let modrm = encode_modrm_rr(a, b, wide);
+                                if modrm.rex != 0 {
+                                    text.push(modrm.rex);
+                                }
+                                text.extend([0x89, modrm.modrm]);
+                            }
+                        }
+                    }
+                }
                 Inst::addrr32 => {
                     let (a, b) = rr();
                     let modrm = encode_modrm_rr(a, b, false);
@@ -71,6 +88,9 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 Inst::addri32 | Inst::addri64 => {
                     let wide = inst.inst == Inst::addri64;
                     let (a, b) = ri();
+                    if b == 0 {
+                        continue;
+                    }
                     let modrm = encode_modrm_ri(a, wide);
                     if modrm.rex != 0 {
                         text.push(modrm.rex);
@@ -83,6 +103,9 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 }
                 Inst::subri64 => {
                     let (a, b) = ri();
+                    if b == 0 {
+                        continue;
+                    }
                     let modrm = encode_modrm_ri(a, true);
                     if modrm.rex != 0 {
                         text.push(modrm.rex);
@@ -182,7 +205,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     }
                     let imm8: Result<i8, _> = imm.try_into();
                     let o = 7;
-                    text.extend([0x80, dbg!((0b11 << 6) | r | o << 3), imm8.unwrap() as u8]);
+                    text.extend([0x80, (0b11 << 6) | r | o << 3, imm8.unwrap() as u8]);
                 }
                 Inst::cmprr32 => {
                     let (a, b) = rr();
@@ -292,9 +315,9 @@ fn emit_jmp(
 
 const REX: u8 = 0b0100_0001;
 const REX_B: u8 = 1 << 0;
-const REX_X: u8 = 1 << 1;
-const REX_R: u8 = 1 << 2;
-const REX_W: u8 = 1 << 3;
+//const REX_X: u8 = 1 << 1;
+//const REX_R: u8 = 1 << 2;
+//const REX_W: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy)]
 enum OffsetClass {
