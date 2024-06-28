@@ -35,6 +35,22 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         });
     }
 
+    /// create a phi instruction given the phi operands ordered by the predecessor block
+    pub fn build_phi(
+        &mut self,
+        phi_inst: I,
+        args: impl IntoIterator<Item = Op<I::Register>>,
+    ) -> VReg {
+        let r = self.reg();
+        // TODO
+        self.mir.insts.push(InstructionStorage {
+            inst: phi_inst,
+            ops: [Op::<I::Register>::VReg(r).encode(), 0, 0, 0],
+            implicit_dead: I::Register::NO_BITS,
+        });
+        r
+    }
+
     pub fn register_successor(&mut self, successor: MirBlock) {
         self.mir.blocks[self.block.0 as usize]
             .successors

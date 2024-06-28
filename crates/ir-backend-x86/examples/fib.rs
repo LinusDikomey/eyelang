@@ -13,7 +13,7 @@ fn main() {
     let mut backend = ir_backend_x86::Backend::new();
     backend.enable_logging();
     backend
-        .emit_module(&module, true, None, std::path::Path::new("out.o"))
+        .emit_module(&module, true, None, std::path::Path::new("fib.o"))
         .expect("Backend failed");
 }
 

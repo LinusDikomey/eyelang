@@ -1,4 +1,5 @@
 #![feature(variant_count)]
+
 use color_format::*;
 use std::{
     collections::BTreeMap,
@@ -187,6 +188,17 @@ impl fmt::Display for RefVal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockIndex(u32);
+impl block_graph::Block for BlockIndex {
+    const ENTRY: Self = Self::ENTRY;
+
+    fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
 impl BlockIndex {
     pub const ENTRY: Self = Self(0);
     pub const MISSING: Self = Self(u32::MAX);
@@ -199,6 +211,11 @@ impl BlockIndex {
     }
     pub fn idx(self) -> u32 {
         self.0
+    }
+}
+impl From<u32> for BlockIndex {
+    fn from(value: u32) -> Self {
+        Self(value)
     }
 }
 impl fmt::Display for BlockIndex {

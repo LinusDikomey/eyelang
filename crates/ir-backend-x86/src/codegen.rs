@@ -30,6 +30,7 @@ impl<'a> Gen<'a> {
         inst: ir::Instruction,
         builder: &mut BlockBuilder<Inst>,
         values: &[MCValue],
+        extra: &[u8],
     ) -> MCValue {
         match inst.tag {
             Tag::Param => {
@@ -41,6 +42,15 @@ impl<'a> Gen<'a> {
                 let reg = builder.reg();
                 builder.inst(Inst::Copy, [reg.op(), Op::Reg(abi_reg)]);
                 MCValue::Register(MCReg::Virtual(reg))
+            }
+            Tag::Phi => {
+                let mut phi_args: Vec<(MirBlock, MCValue)> = inst
+                    .data
+                    .phi(extra)
+                    .map(|(block, r)| (self.get_queue_block(builder, block), get_ref(values, r)))
+                    .collect();
+                phi_args.sort_by_key(|(block, _)| *block);
+                MCValue::Register(MCReg::Virtual(builder.build_phi(Inst::Phi, phi_args)))
             }
             Tag::Int => MCValue::Imm(unsafe { inst.data.int }),
             Tag::Decl => {
@@ -304,7 +314,7 @@ pub fn codegen(
             *gen.block_map[block.idx() as usize].get_or_insert_with(|| mir.create_block());
         let mut builder = mir.begin_block(mir_block);
         for (i, inst) in body.get_block(block) {
-            values[i as usize] = gen.gen_inst(inst, &mut builder, &values);
+            values[i as usize] = gen.gen_inst(inst, &mut builder, &values, &body.extra);
         }
     }
 

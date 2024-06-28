@@ -241,7 +241,10 @@ impl Data {
         unsafe { self.ref_int }
     }
 
-    pub fn phi<'a>(&self, extra: &'a [u8]) -> impl 'a + Iterator<Item = (BlockIndex, Ref)> {
+    pub fn phi<'a>(
+        &self,
+        extra: &'a [u8],
+    ) -> impl 'a + ExactSizeIterator<Item = (BlockIndex, Ref)> {
         let (offset, n) = unsafe { self.extra_len };
         (0..n).map(move |i| {
             let c = offset as usize + i as usize * 8;

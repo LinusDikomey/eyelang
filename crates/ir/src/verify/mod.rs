@@ -31,13 +31,20 @@ pub fn function(function: &Function) {
                     );
                 }
                 Tag::Phi => {
-                    for (phi_block, r) in inst.data.phi(&ir.extra) {
+                    let args = inst.data.phi(&ir.extra);
+                    let arg_count = args.len();
+                    for (phi_block, r) in args {
                         assert!(dom_tree.preceeds(block, phi_block));
                         if let Some(r_index) = r.into_ref() {
                             assert!(dom_tree
                                 .block_dominates(phi_block, ir.get_block_from_index(r_index)));
                         }
                     }
+                    assert_eq!(
+                        arg_count,
+                        dom_tree.pred_count(block),
+                        "Phi doesn't contain all pred blocks"
+                    );
                 }
                 _ => unreachable!(),
             }

@@ -1,31 +1,87 @@
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet, hash::Hash};
 
-use crate::{Bitmap, BlockIndex, FunctionIr, Ref, Tag};
+use crate::{
+    mc::{MachineIR, MirBlock},
+    Bitmap, BlockIndex, FunctionIr, Ref, Tag,
+};
 
-pub struct BlockGraph {
-    dominators: Box<[HashSet<BlockIndex>]>,
-    preds: Box<[HashSet<BlockIndex>]>,
-    postorder: Vec<BlockIndex>,
+pub trait Block: Copy + Hash + Eq {
+    const ENTRY: Self;
+
+    fn from_raw(value: u32) -> Self;
+    fn idx(self) -> usize;
 }
-impl BlockGraph {
-    pub fn calculate(ir: &FunctionIr) -> Self {
-        let full_dominators: HashSet<_> = ir.blocks().collect();
+
+pub trait Blocks {
+    type Block: Block;
+
+    fn block_count(&self) -> u32;
+    fn successors(&self, block: Self::Block) -> Cow<[Self::Block]>;
+}
+impl Blocks for FunctionIr {
+    type Block = BlockIndex;
+
+    fn block_count(&self) -> u32 {
+        self.blocks().len() as u32
+    }
+
+    fn successors(&self, block: BlockIndex) -> Cow<[BlockIndex]> {
+        // PERF: maybe return a SmallVec or something to prevent many heap allocations.
+        // Alternatively could just track successors (and maybe predecessors) in IR to be able to
+        // retrieve them easily.
+        let (_, terminator) = self.get_block(block).last().expect("empty block found");
+        match terminator.tag {
+            Tag::Goto => {
+                let next = unsafe { terminator.data.block };
+                vec![next].into()
+            }
+            Tag::Branch => {
+                let (_, a, b) = terminator.data.branch(&self.extra);
+                vec![a, b].into()
+            }
+            Tag::Ret => Cow::Borrowed(&[]),
+            tag => panic!("block {block:?} doesn't have a terminator, found {tag:?} instead"),
+        }
+    }
+}
+impl<I: crate::mc::Instruction> Blocks for MachineIR<I> {
+    type Block = MirBlock;
+
+    fn successors(&self, block: Self::Block) -> Cow<[Self::Block]> {
+        Cow::Borrowed(self.block_successors(block))
+    }
+
+    fn block_count(&self) -> u32 {
+        self.block_count()
+    }
+}
+
+pub struct BlockGraph<B: Blocks> {
+    dominators: Box<[HashSet<B::Block>]>,
+    preds: Box<[HashSet<B::Block>]>,
+    postorder: Vec<B::Block>,
+}
+impl<B: Blocks> BlockGraph<B> {
+    pub fn calculate(ir: &B) -> Self {
+        let full_dominators: HashSet<_> = (0..ir.block_count()).map(B::Block::from_raw).collect();
         let (postorder, preds) = calculate_postorder_and_preds(ir);
 
-        let mut dominators: Box<[_]> = ir.blocks().map(|_| full_dominators.clone()).collect();
+        let mut dominators: Box<[_]> = (0..ir.block_count())
+            .map(|_| full_dominators.clone())
+            .collect();
 
         loop {
             let mut changed = false;
 
             for &block in postorder.iter().rev() {
-                let mut new_set = preds[block.0 as usize]
+                let mut new_set = preds[block.idx()]
                     .iter()
-                    .map(|p| dominators[p.0 as usize].clone())
+                    .map(|p| dominators[p.idx()].clone())
                     .reduce(|a, b| &a & &b)
                     .unwrap_or_default();
                 new_set.insert(block);
-                if new_set.len() != dominators[block.0 as usize].len() {
-                    dominators[block.0 as usize] = new_set;
+                if new_set.len() != dominators[block.idx()].len() {
+                    dominators[block.idx()] = new_set;
                     changed = true;
                 }
             }
@@ -42,6 +98,23 @@ impl BlockGraph {
         }
     }
 
+    pub fn block_dominates(&self, dominated: B::Block, dominating: B::Block) -> bool {
+        self.dominators[dominated.idx()].contains(&dominating)
+    }
+
+    pub fn pred_count(&self, block: B::Block) -> usize {
+        self.preds[block.idx()].len()
+    }
+
+    pub fn preceeds(&self, block: B::Block, pred: B::Block) -> bool {
+        self.preds[block.idx()].contains(&pred)
+    }
+
+    pub fn postorder(&self) -> &[B::Block] {
+        &self.postorder
+    }
+}
+impl BlockGraph<FunctionIr> {
     pub fn dominates(&self, ir: &FunctionIr, i: u32, dominating: Ref) -> bool {
         let Some(dominating_index) = dominating.into_ref() else {
             // values are always fine
@@ -52,59 +125,29 @@ impl BlockGraph {
             ir.get_block_from_index(dominating_index),
         )
     }
-
-    pub fn block_dominates(&self, dominated: BlockIndex, dominating: BlockIndex) -> bool {
-        self.dominators[dominated.0 as usize].contains(&dominating)
-    }
-
-    pub fn preceeds(&self, block: BlockIndex, pred: BlockIndex) -> bool {
-        self.preds[block.0 as usize].contains(&pred)
-    }
-
-    pub fn postorder(&self) -> &[BlockIndex] {
-        &self.postorder
-    }
 }
 
-// PERF: maybe return a SmallVec or something to prevent many heap allocations. Alternatively could
-// just track successors (and maybe predecessors) in IR to be able to retrieve them easily.
-fn successors(ir: &FunctionIr, block: BlockIndex) -> Vec<BlockIndex> {
-    let (_, terminator) = ir.get_block(block).last().expect("empty block found");
-    match terminator.tag {
-        Tag::Goto => {
-            let next = unsafe { terminator.data.block };
-            vec![next]
-        }
-        Tag::Branch => {
-            let (_, a, b) = terminator.data.branch(&ir.extra);
-            vec![a, b]
-        }
-        Tag::Ret => vec![],
-        tag => panic!("block {block:?} doesn't have a terminator, found {tag:?} instead"),
-    }
-}
-
-fn calculate_postorder_and_preds(ir: &FunctionIr) -> (Vec<BlockIndex>, Box<[HashSet<BlockIndex>]>) {
+fn calculate_postorder_and_preds<B: Blocks>(ir: &B) -> (Vec<B::Block>, Box<[HashSet<B::Block>]>) {
     enum Event {
         Enter,
         Exit,
     }
-    let mut stack = vec![(Event::Enter, BlockIndex::ENTRY)];
+    let mut stack = vec![(Event::Enter, B::Block::ENTRY)];
     let mut postorder = vec![];
-    let mut preds = vec![HashSet::new(); ir.blocks().len()].into_boxed_slice();
-    let mut seen = Bitmap::new(ir.blocks().len());
+    let mut preds = vec![HashSet::new(); ir.block_count() as usize].into_boxed_slice();
+    let mut seen = Bitmap::new(ir.block_count() as usize);
 
     while let Some((event, block)) = stack.pop() {
         match event {
             Event::Enter => {
                 stack.push((Event::Exit, block));
-                let succs = successors(ir, block);
-                for &succ in &succs {
+                let succs = ir.successors(block);
+                for &succ in succs.iter() {
                     preds[succ.idx() as usize].insert(block);
                 }
                 // successors are reversed to improve some heuristics, for example this will make a
                 // reverse postorder traversal visit the true branch first which is often better
-                stack.extend(succs.into_iter().rev().filter_map(|block| {
+                stack.extend(succs.iter().rev().filter_map(|&block| {
                     (!seen.get(block.idx() as usize)).then(|| {
                         seen.set(block.idx() as usize, true);
                         (Event::Enter, block)

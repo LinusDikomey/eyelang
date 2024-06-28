@@ -13,6 +13,7 @@ use crate::FunctionId;
 
 pub struct MachineIR<I: Instruction> {
     insts: Vec<InstructionStorage<I>>,
+    extra_ops: Vec<Op<I::Register>>,
     blocks: Vec<BlockInfo>,
     next_virtual: u64,
     stack_slots: Vec<StackSlot>,
@@ -22,6 +23,7 @@ impl<I: Instruction> MachineIR<I> {
     pub fn new() -> Self {
         Self {
             insts: Vec::new(),
+            extra_ops: Vec::new(),
             blocks: vec![BlockInfo {
                 start: 0,
                 len: 0,
@@ -56,6 +58,11 @@ impl<I: Instruction> MachineIR<I> {
     pub fn block_insts(&self, block: MirBlock) -> &[InstructionStorage<I>] {
         let block = &self.blocks[block.0 as usize];
         &self.insts[block.start as usize..block.start as usize + block.len as usize]
+    }
+
+    pub fn block_insts_mut(&mut self, block: MirBlock) -> &mut [InstructionStorage<I>] {
+        let block = &self.blocks[block.0 as usize];
+        &mut self.insts[block.start as usize..block.start as usize + block.len as usize]
     }
 
     pub fn block_successors(&self, block: MirBlock) -> &[MirBlock] {
@@ -138,8 +145,15 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             write!(f, " {dead}{}", op)?;
             Ok(())
         }
-        for (_, block) in self.blocks.iter().zip((0..).map(MirBlock)) {
+        for (info, block) in self.blocks.iter().zip((0..).map(MirBlock)) {
             writeln!(f, "  bb{}:", block.0)?;
+            if !info.successors.is_empty() {
+                write!(f, "   successors:")?;
+                for &succ in &info.successors {
+                    write!(f, " bb{}", succ.0)?;
+                }
+                writeln!(f)?;
+            }
             for inst in self.block_insts(block) {
                 write!(f, "  ")?;
                 let ops = inst
@@ -220,10 +234,26 @@ impl<I: Instruction> InstructionStorage<I> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MirBlock(pub u32);
+impl crate::block_graph::Block for MirBlock {
+    const ENTRY: Self = Self::ENTRY;
+
+    fn from_raw(value: u32) -> Self {
+        Self(value)
+    }
+
+    fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
 impl MirBlock {
     pub const ENTRY: Self = Self(0);
+}
+impl From<u32> for MirBlock {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
 }
 
 struct BlockInfo {
@@ -241,6 +271,7 @@ pub trait Instruction: Copy {
     fn implicit_defs(self) -> &'static [Self::Register];
     fn implicit_uses(self) -> &'static [Self::Register];
     fn is_copy(self) -> bool;
+    fn is_phi(self) -> bool;
 }
 pub trait Register: 'static + Copy {
     const DEFAULT: Self;
@@ -425,6 +456,7 @@ macro_rules! inst {
             /// arbitrary register to another. Use this instead of specific mov instructions to
             /// make the register allocator aware of potential elidable copies
             Copy = 0,
+            Phi = 1,
             $($variant, )*
         }
 
@@ -434,6 +466,7 @@ macro_rules! inst {
             fn to_str(self) -> &'static str {
                 match self {
                     Self::Copy => "copy",
+                    Self::Phi => "phi",
                     $(Self::$variant => stringify!($variant),)*
                 }
             }
@@ -442,6 +475,7 @@ macro_rules! inst {
                 let mut ops = [$crate::mc::OpType::Non; 4];
                 let inst_ops: &[$crate::mc::OpType] = match self {
                     Self::Copy => &[$crate::mc::OpType::Reg, $crate::mc::OpType::Reg],
+                    Self::Phi => &[$crate::mc::OpType::Reg],
                     $(Self::$variant => &[$($crate::mc::OpType::$op,)*],)*
                 };
                 ops[..inst_ops.len()].copy_from_slice(inst_ops);
@@ -452,6 +486,7 @@ macro_rules! inst {
                 let mut uses = [$crate::mc::OpUsage::Def; 4];
                 let inst_uses: &[$crate::mc::OpUsage] = match self {
                     Self::Copy => &[$crate::mc::OpUsage::Def, $crate::mc::OpUsage::Use],
+                    Self::Phi => &[$crate::mc::OpUsage::Def],
                     $(Self::$variant => &[$($crate::mc::OpUsage::$use_ty),*],)*
                 };
                 uses[..inst_uses.len()].copy_from_slice(inst_uses);
@@ -460,20 +495,24 @@ macro_rules! inst {
 
             fn implicit_defs(self) -> &'static [$register] {
                 match self {
-                    Self::Copy => &[],
+                    Self::Copy | Self::Phi => &[],
                     $(Self::$variant => &[$($($register::$implicit_def,)*)?],)*
                 }
             }
 
             fn implicit_uses(self) -> &'static [$register] {
                 match self {
-                    Self::Copy => &[],
+                    Self::Copy | Self::Phi => &[],
                     $(Self::$variant => &[$($($register::$implicit,)*)?],)*
                 }
             }
 
             fn is_copy(self) -> bool {
                 self == Self::Copy
+            }
+
+            fn is_phi(self) -> bool {
+                self == Self::Phi
             }
         }
     };
