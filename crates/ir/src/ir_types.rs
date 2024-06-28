@@ -63,6 +63,50 @@ impl IrTypes {
             }
         }
     }
+
+    pub fn are_equal(&self, a: IrType, b: IrType) -> bool {
+        match a {
+            IrType::Unit => matches!(b, IrType::Unit),
+            IrType::I8 => matches!(b, IrType::I8),
+            IrType::I16 => matches!(b, IrType::I16),
+            IrType::I32 => matches!(b, IrType::I32),
+            IrType::I64 => matches!(b, IrType::I64),
+            IrType::I128 => matches!(b, IrType::I128),
+            IrType::U8 => matches!(b, IrType::U8),
+            IrType::U16 => matches!(b, IrType::U16),
+            IrType::U32 => matches!(b, IrType::U32),
+            IrType::U64 => matches!(b, IrType::U64),
+            IrType::U128 => matches!(b, IrType::U128),
+            IrType::F32 => matches!(b, IrType::F32),
+            IrType::F64 => matches!(b, IrType::F64),
+            IrType::U1 => matches!(b, IrType::U1),
+            IrType::Ptr => matches!(b, IrType::Ptr),
+            IrType::Array(elem_a, size_a) => {
+                let IrType::Array(elem_b, size_b) = b else {
+                    return false;
+                };
+                if size_a != size_b {
+                    return false;
+                }
+                return self.are_equal(self[elem_a], self[elem_b]);
+            }
+            IrType::Tuple(a) => {
+                let IrType::Tuple(b) = b else { return false };
+                if a.count != b.count {
+                    return false;
+                }
+                a.iter()
+                    .zip(b.iter())
+                    .all(|(a, b)| self.are_equal(self[a], self[b]))
+            }
+            IrType::Const(a) => {
+                let IrType::Const(b) = b else {
+                    return false;
+                };
+                a == b
+            }
+        }
+    }
 }
 
 impl Index<TypeRef> for IrTypes {
@@ -129,7 +173,7 @@ impl IrType {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConstIrType {
     Int,
     Float,

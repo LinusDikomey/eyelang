@@ -58,10 +58,14 @@ pub fn lower_function(
         let mut builder = ir::builder::IrBuilder::new(&mut types);
         let mut vars = vec![(Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
 
-        for (i, ty) in params.iter().enumerate() {
+        let param_refs: Vec<Ref> = params
+            .iter()
+            .zip(0..)
+            .map(|(ty, i)| builder.build_param(i, ty))
+            .collect();
+        for (i, (r, ty)) in param_refs.iter().copied().zip(params.iter()).enumerate() {
             vars[i] = (builder.build_decl(ty), ty);
-            let param_val = builder.build_param(i as u32, ty);
-            builder.build_store(vars[i].0, param_val);
+            builder.build_store(vars[i].0, r);
         }
 
         lower_hir(
@@ -192,10 +196,12 @@ impl<'a> Ctx<'a> {
             let mut types = ir::IrTypes::new();
             let ty = types::get(&mut self.compiler, &mut types, &ty, ir::TypeRefs::EMPTY)?;
             let global_id = ir::GlobalId(self.compiler.ir_module.globals.len() as _);
-            self.compiler
-                .ir_module
-                .globals
-                .push((name, types, ty, value));
+            self.compiler.ir_module.globals.push(ir::Global {
+                name,
+                types,
+                ty,
+                value,
+            });
             self.compiler
                 .get_module_ast_and_symbols(module)
                 .instances

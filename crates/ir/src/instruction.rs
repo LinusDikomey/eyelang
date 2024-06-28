@@ -18,9 +18,6 @@ pub struct Instruction {
 #[repr(u8)]
 #[allow(unused)] // FIXME: these instructions should be cleaned up if they still aren't used
 pub enum Tag {
-    /// special tag that marks the beginning of a new block, this might not be needed in the future
-    BlockBegin,
-
     /// Get a function parameter. Type has to match the signature
     Param,
 
@@ -108,7 +105,7 @@ impl Tag {
     pub fn union_data_type(self) -> DataVariant {
         use DataVariant as V;
         match self {
-            Tag::BlockBegin | Tag::Param => V::Int32,
+            Tag::Param => V::Int32,
             Tag::Global => V::Global,
             Tag::Uninit => V::None,
             Tag::Ret
@@ -158,7 +155,7 @@ impl Tag {
     pub fn is_usable(self) -> bool {
         !matches!(
             self,
-            Tag::BlockBegin | Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
+            Tag::Ret | Tag::Store | Tag::Goto | Tag::Branch | Tag::Asm
         )
     }
     pub fn is_terminator(self) -> bool {
@@ -175,6 +172,11 @@ impl fmt::Display for Tag {
 const _FORCE_DATA_SIZE: u64 = unsafe { std::mem::transmute(Data { int: 0 }) };
 
 #[derive(Clone, Copy)]
+/// Data is encoded "unsafely" in an untagged union so that the Tag can be split from the data for
+/// more efficient "SOA" data representation. In reality, this is all still safe since essentially
+/// only primitive integers are encoded in here and in the worst case, an invalid index is
+/// retrieved which shouldn't cause any unsafety. For this reason, safe getters for the variants
+/// are provided for easier access.
 pub union Data {
     pub int32: u32,
     pub int: u64,
@@ -190,6 +192,67 @@ pub union Data {
     pub none: (),
     pub block: BlockIndex,
     pub global: GlobalId,
+}
+impl Data {
+    pub fn int(self) -> u64 {
+        unsafe { self.int }
+    }
+
+    pub fn extra(self) -> u32 {
+        unsafe { self.extra }
+    }
+
+    pub fn extra_len(self) -> (u32, u32) {
+        unsafe { self.extra_len }
+    }
+
+    pub fn ty(self) -> TypeRef {
+        unsafe { self.ty }
+    }
+
+    pub fn float(self) -> f64 {
+        unsafe { self.float }
+    }
+
+    pub fn un_op(self) -> Ref {
+        unsafe { self.un_op }
+    }
+
+    pub fn bin_op(self) -> (Ref, Ref) {
+        unsafe { self.bin_op }
+    }
+
+    pub fn block(self) -> BlockIndex {
+        unsafe { self.block }
+    }
+
+    pub fn branch(&self, extra: &[u8]) -> (Ref, BlockIndex, BlockIndex) {
+        let (r, i) = unsafe { self.ref_int };
+        let mut bytes = [0; 4];
+        let i = i as usize;
+        bytes.copy_from_slice(&extra[i..i + 4]);
+        let a = BlockIndex::from_bytes(bytes);
+        bytes.copy_from_slice(&extra[i + 4..i + 8]);
+        let b = BlockIndex::from_bytes(bytes);
+        (r, a, b)
+    }
+
+    pub fn ref_int(self) -> (Ref, u32) {
+        unsafe { self.ref_int }
+    }
+
+    pub fn phi<'a>(&self, extra: &'a [u8]) -> impl 'a + Iterator<Item = (BlockIndex, Ref)> {
+        let (offset, n) = unsafe { self.extra_len };
+        (0..n).map(move |i| {
+            let c = offset as usize + i as usize * 8;
+            let mut b = [0; 4];
+            b.copy_from_slice(&extra[c..c + 4]);
+            let block = BlockIndex::from_bytes(b);
+            b.copy_from_slice(&extra[c + 4..c + 8]);
+            let r = Ref::from_bytes(b);
+            (block, r)
+        })
+    }
 }
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

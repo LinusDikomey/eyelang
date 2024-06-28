@@ -24,6 +24,7 @@ impl<'a> Gen<'a> {
         builder.inst(Inst::addri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
         builder.inst(Inst::pop64, [Op::Reg(Reg::rbp)]);
     }
+
     fn gen_inst(
         &mut self,
         inst: ir::Instruction,
@@ -31,7 +32,6 @@ impl<'a> Gen<'a> {
         values: &[MCValue],
     ) -> MCValue {
         match inst.tag {
-            Tag::BlockBegin => MCValue::None,
             Tag::Param => {
                 assert!(matches!(self.types[inst.ty], IrType::I32), "TODO");
                 let param_idx = unsafe { inst.data.int32 };
@@ -284,7 +284,7 @@ pub fn codegen(
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
 
-    let mut block_map = vec![None; body.blocks.len()].into_boxed_slice();
+    let mut block_map = vec![None; body.blocks().len()].into_boxed_slice();
 
     let mir_entry_block = builder.create_block();
     builder.register_successor(mir_entry_block);
@@ -304,7 +304,7 @@ pub fn codegen(
             *gen.block_map[block.idx() as usize].get_or_insert_with(|| mir.create_block());
         let mut builder = mir.begin_block(mir_block);
         for (i, inst) in body.get_block(block) {
-            values[i] = gen.gen_inst(inst, &mut builder, &values);
+            values[i as usize] = gen.gen_inst(inst, &mut builder, &values);
         }
     }
 

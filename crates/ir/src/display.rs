@@ -6,7 +6,7 @@ use crate::{ir_types::ConstIrType, FunctionId, TypeRef, TypeRefs};
 
 use super::{
     instruction::DataVariant, ir_types::IrTypes, Data, Function, FunctionIr, Instruction, Module,
-    Ref, Tag,
+    Ref,
 };
 
 #[derive(Clone, Copy)]
@@ -30,18 +30,16 @@ pub struct FunctionIrDisplay<'a> {
 }
 impl fmt::Display for FunctionIrDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, inst) in self.ir.inst.iter().enumerate() {
-            if inst.tag == Tag::BlockBegin {
-                //TODO: make this purple
-                cwriteln!(f, "  #m<block> #b!<b{}>:", unsafe { inst.data.int32 })?;
-                continue;
+        for block in self.ir.blocks() {
+            cwriteln!(f, "  #m<block> #b!<b{}>:", block.idx())?;
+            for (i, inst) in self.ir.get_block(block) {
+                if inst.used {
+                    cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
+                } else {
+                    write!(f, "           ")?;
+                }
+                cwriteln!(f, "{}", inst.display(&self.ir.extra, self.types, self.info))?;
             }
-            if inst.used {
-                cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
-            } else {
-                write!(f, "           ")?;
-            }
-            cwriteln!(f, "{}", inst.display(&self.ir.extra, self.types, self.info))?;
         }
         Ok(())
     }
@@ -302,13 +300,8 @@ fn display_data(
                 write_ref(f, inst.data.bin_op.1)
             }
             DataVariant::Branch => {
-                let i = inst.data.ref_int.1 as usize;
-                let mut bytes = [0; 4];
-                bytes.copy_from_slice(&extra[i..i + 4]);
-                let a = u32::from_le_bytes(bytes);
-                bytes.copy_from_slice(&extra[i + 4..i + 8]);
-                let b = u32::from_le_bytes(bytes);
-                write_ref(f, inst.data.ref_int.0)?;
+                let (r, a, b) = inst.data.branch(extra);
+                write_ref(f, r)?;
                 cwrite!(f, ", #b!<b{}> #g<or> #b!<b{}>", a, b)
             }
             DataVariant::RefInt => {

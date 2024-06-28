@@ -9,6 +9,7 @@ fn main() {
         funcs: vec![build_add()],
         globals: vec![],
     };
+    ir::verify::module(&module);
     eprintln!("Module:\n{module}");
     let mut backend = ir_backend_x86::Backend::new();
     backend.enable_logging();

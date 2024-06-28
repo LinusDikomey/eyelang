@@ -73,8 +73,15 @@ impl Backend {
         let llvm_globals = module
             .globals
             .iter()
-            .map(|(name, types, ty, value)| unsafe {
-                translate::add_global(self.context, llvm_module, name, types, *ty, value)
+            .map(|global| unsafe {
+                translate::add_global(
+                    self.context,
+                    llvm_module,
+                    &global.name,
+                    &global.types,
+                    global.ty,
+                    &global.value,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
 

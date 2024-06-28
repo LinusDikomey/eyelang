@@ -1,26 +1,51 @@
 #![feature(variant_count)]
 use color_format::*;
 use std::{
+    collections::BTreeMap,
     fmt,
     ops::{Index, IndexMut},
 };
 
 pub mod builder;
 pub mod display;
+/// machine code ir representation that is generic over the ISA
+pub mod mc;
+/// Verify that a module or function is correctly constructed.
+pub mod verify;
 
+mod bitmap;
+mod block_graph;
 mod const_value;
 mod eval;
 mod instruction;
 mod ir_types;
 mod layout;
-/// machine code ir representation that is generic over the ISA
-pub mod mc;
 
+pub use bitmap::Bitmap;
+pub use block_graph::BlockGraph;
 pub use const_value::ConstValue;
 pub use eval::{eval, Error, Val, BACKWARDS_JUMP_LIMIT};
 pub use instruction::{Data, Instruction, Tag};
 pub use ir_types::{IrType, IrTypes, TypeRef, TypeRefs};
 pub use layout::{offset_in_tuple, type_layout, Layout};
+
+pub struct Module {
+    pub name: String,
+    pub funcs: Vec<Function>,
+    pub globals: Vec<Global>,
+}
+impl Index<FunctionId> for Module {
+    type Output = Function;
+
+    fn index(&self, index: FunctionId) -> &Self::Output {
+        &self.funcs[index.0 as usize]
+    }
+}
+impl IndexMut<FunctionId> for Module {
+    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
+        &mut self.funcs[index.0 as usize]
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u64);
@@ -55,7 +80,8 @@ pub struct Function {
 pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
-    pub blocks: Vec<u32>,
+    blocks: Vec<(u32, u32)>,
+    block_indices: BTreeMap<u32, BlockIndex>,
 }
 impl FunctionIr {
     pub fn get_ref_ty(&self, r: Ref, types: &IrTypes) -> IrType {
@@ -70,37 +96,25 @@ impl FunctionIr {
     pub fn get_block<'a>(
         &'a self,
         block: BlockIndex,
-    ) -> impl 'a + Iterator<Item = (usize, Instruction)> {
-        let start = self.blocks[block.idx() as usize] as usize + 1;
-        (start..).into_iter().zip(
-            self.inst[start..]
-                .iter()
-                .copied()
-                .take_while(|inst| inst.tag != Tag::BlockBegin),
-        )
+    ) -> impl 'a + ExactSizeIterator<Item = (u32, Instruction)> {
+        let (start, len) = self.blocks[block.idx() as usize];
+        (start..start + len).map(|i| (i, self.inst[i as usize]))
     }
 
-    pub fn blocks<'a>(&'a self) -> impl 'a + Iterator<Item = BlockIndex> {
-        self.blocks.iter().map(|&id| BlockIndex(id))
+    pub fn get_block_from_index(&self, index: u32) -> BlockIndex {
+        *self.block_indices.range(..=index).next_back().unwrap().1
+    }
+
+    pub fn blocks<'a>(&'a self) -> impl 'a + ExactSizeIterator<Item = BlockIndex> {
+        (0..self.blocks.len() as _).map(BlockIndex)
     }
 }
 
-pub struct Module {
+pub struct Global {
     pub name: String,
-    pub funcs: Vec<Function>,
-    pub globals: Vec<(String, IrTypes, IrType, ConstValue)>,
-}
-impl Index<FunctionId> for Module {
-    type Output = Function;
-
-    fn index(&self, index: FunctionId) -> &Self::Output {
-        &self.funcs[index.0 as usize]
-    }
-}
-impl IndexMut<FunctionId> for Module {
-    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
-        &mut self.funcs[index.0 as usize]
-    }
+    pub types: IrTypes,
+    pub ty: IrType,
+    pub value: ConstValue,
 }
 
 const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;
@@ -171,7 +185,7 @@ impl fmt::Display for RefVal {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockIndex(u32);
 impl BlockIndex {
     pub const ENTRY: Self = Self(0);

@@ -1,5 +1,4 @@
-//! Example for using the ir crate. A function is constructed manually and evaluated.
-//! It is also debug printed.
+//! Example for using the ir crate. A function is constructed, printed, verified and evaluated.
 
 use ir::{
     builder::{BinOp, IrBuilder, Terminator},
@@ -53,12 +52,17 @@ fn main() {
         .as_ref()
         .unwrap()
         .display(Info { funcs: &[] }, &function.types);
+
+    ir::verify::function(&function);
+
     eprintln!("{display}");
     let value = ir::eval(&function.ir.as_ref().unwrap(), &function.types, &[]);
     eprintln!("Function evaluated to {value:?}");
 
     // another example: square function taking in parameters
     let mul = build_mul();
+    ir::verify::function(&mul);
+
     let display = mul
         .ir
         .as_ref()

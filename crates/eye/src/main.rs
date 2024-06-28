@@ -158,6 +158,9 @@ fn main() -> Result<(), MainError> {
             } else {
                 compiler.emit_whole_project_ir(project);
             }
+            #[cfg(debug_assertions)]
+            ir::verify::module(&compiler.ir_module);
+
             if compiler.print_errors() && !args.run_with_errors {
                 return Err(MainError::ErrorsFound);
             }

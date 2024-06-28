@@ -43,26 +43,19 @@ pub struct IrBuilder<'a> {
     current_block: u32,
     current_block_terminated: bool,
     next_block: u32,
-    pub blocks: Vec<u32>,
+    pub blocks: Vec<(u32, u32)>,
     pub extra: Vec<u8>,
     pub types: &'a mut IrTypes,
 }
 impl<'a> IrBuilder<'a> {
     pub fn new(types: &'a mut IrTypes) -> Self {
         Self {
-            inst: vec![Instruction {
-                data: Data {
-                    block: BlockIndex(0),
-                },
-                tag: Tag::BlockBegin,
-                ty: TypeRef::NONE,
-                used: false,
-            }],
+            inst: vec![],
             emit: true,
             current_block: 0,
             current_block_terminated: false,
             next_block: 1,
-            blocks: vec![0],
+            blocks: vec![(0, 0)],
             extra: Vec::new(),
             types,
         }
@@ -71,24 +64,10 @@ impl<'a> IrBuilder<'a> {
     /// Internal function to add an instruction. This will not add anything if `emit` is set to false.
     #[cfg_attr(debug_assertions, track_caller)]
     fn add_inst(&mut self, inst: Instruction) -> Ref {
+        assert!(!self.current_block_terminated);
+
         let idx = Ref::index(self.inst.len() as u32);
         if self.emit {
-            if inst.tag == Tag::BlockBegin {
-                debug_assert!(
-                    self.inst
-                        .last()
-                        .map_or(true, |last| last.tag.is_terminator()),
-                    "New block started without preceding terminator"
-                );
-            } else {
-                debug_assert!(
-                    self.inst
-                        .last()
-                        .map_or(true, |last| !last.tag.is_terminator()),
-                    "Instruction added after a terminator: instruction: {:?}",
-                    inst
-                );
-            }
             self.inst.push(inst);
         }
         idx
@@ -133,7 +112,7 @@ impl<'a> IrBuilder<'a> {
         let idx = BlockIndex(self.next_block);
         if self.emit {
             self.next_block += 1;
-            self.blocks.push(u32::MAX);
+            self.blocks.push((u32::MAX, 0));
         }
         idx
     }
@@ -149,17 +128,11 @@ impl<'a> IrBuilder<'a> {
             self.current_block_terminated = false;
             debug_assert_eq!(
                 self.blocks[idx.0 as usize],
-                u32::MAX,
+                (u32::MAX, 0),
                 "begin_block called twice on the same block"
             );
             let block_pos = self.inst.len() as u32;
-            self.blocks[idx.0 as usize] = block_pos;
-            self.add_inst(Instruction {
-                data: Data { block: idx },
-                tag: Tag::BlockBegin,
-                ty: TypeRef::NONE,
-                used: false,
-            });
+            self.blocks[idx.0 as usize] = (block_pos, 0);
         }
     }
 
@@ -174,14 +147,23 @@ impl<'a> IrBuilder<'a> {
         );
 
         #[cfg(debug_assertions)]
-        for (pos, i) in self.blocks.iter().copied().zip(0..) {
+        for ((pos, len), i) in self.blocks.iter().copied().zip(0..) {
             assert_ne!(pos, u32::MAX, "block {} wasn't initialized", BlockIndex(i));
+            assert_ne!(len, 0, "block {} is empty", BlockIndex(i));
         }
+
+        let block_indices = self
+            .blocks
+            .iter()
+            .map(|&(start, _)| start)
+            .zip((0..).map(BlockIndex))
+            .collect();
 
         FunctionIr {
             inst: self.inst,
             extra: self.extra,
             blocks: self.blocks,
+            block_indices,
         }
     }
 
@@ -190,11 +172,6 @@ impl<'a> IrBuilder<'a> {
     /// --------------------------------------------------------------
 
     pub fn terminate_block(&mut self, terminator: Terminator) {
-        debug_assert!(
-            !self.current_block_terminated,
-            "Tried to terminate block twice"
-        );
-        self.current_block_terminated = true;
         let (tag, data) = match terminator {
             Terminator::Ret(val) => (Tag::Ret, Data { un_op: val }),
             Terminator::Goto(block) => {
@@ -224,6 +201,11 @@ impl<'a> IrBuilder<'a> {
             ty: TypeRef::NONE,
             used: false,
         });
+        self.current_block_terminated = true;
+        let block_start = self.blocks[self.current_block as usize].0;
+        assert_eq!(self.blocks[self.current_block as usize].1, 0);
+        let len = (self.inst.len() - block_start as usize) as u32;
+        self.blocks[self.current_block as usize].1 = len;
     }
 
     pub fn build_param(&mut self, param_idx: u32, param_ty: impl Into<IdxOrTy>) -> Ref {

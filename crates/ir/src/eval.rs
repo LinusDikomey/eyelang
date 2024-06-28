@@ -147,11 +147,6 @@ unsafe fn eval_internal(
     let val = loop {
         let inst = ir.inst[pos as usize];
         let value = match inst.tag {
-            super::Tag::BlockBegin => {
-                previous_block = current_block;
-                current_block = inst.data.block;
-                Val::Invalid
-            }
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
             super::Tag::Param => params[inst.data.int32 as usize],
             super::Tag::Global => todo!("handle globals in const eval"),
@@ -351,7 +346,8 @@ unsafe fn eval_internal(
                 }
             }
             super::Tag::Goto => {
-                let target = ir.blocks[inst.data.int32 as usize];
+                let block = inst.data.block;
+                let target = ir.blocks[block.idx() as usize].0;
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -359,6 +355,8 @@ unsafe fn eval_internal(
                     }
                 }
                 pos = target;
+                previous_block = current_block;
+                current_block = block;
                 continue;
             }
             super::Tag::Branch => {
@@ -366,19 +364,16 @@ unsafe fn eval_internal(
                 let i = inst.data.ref_int.1 as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&ir.extra[i..i + 4]);
-                let a = u32::from_le_bytes(bytes);
+                let a = BlockIndex::from_bytes(bytes);
                 bytes.copy_from_slice(&ir.extra[i + 4..i + 8]);
-                let b = u32::from_le_bytes(bytes);
+                let b = BlockIndex::from_bytes(bytes);
                 let val = match val {
                     Val::Int(0) => false,
                     Val::Int(1) => true,
                     _ => panic!("bool value expected"),
                 };
-                let target = if val {
-                    ir.blocks[a as usize]
-                } else {
-                    ir.blocks[b as usize]
-                };
+                let block = if val { a } else { b };
+                let target = ir.blocks[block.idx() as usize].0;
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -386,6 +381,8 @@ unsafe fn eval_internal(
                     }
                 }
                 pos = target;
+                previous_block = current_block;
+                current_block = block;
                 continue;
             }
             super::Tag::Phi => {
