@@ -218,34 +218,20 @@ impl Data {
         unsafe { self.bin_op }
     }
 
-    pub fn goto<'a>(
-        self,
-        extra: &'a [u8],
-    ) -> (BlockIndex, impl 'a + ExactSizeIterator<Item = Ref>) {
-        let (i, n) = self.extra_len();
-        let i = i as usize;
-        let mut bytes = [0; 4];
-        bytes.copy_from_slice(&extra[i..i + 4]);
-        let block = BlockIndex::from_bytes(bytes);
-        (
-            block,
-            (0..n).map(move |x| {
-                let i = i + 4 + 4 * x as usize;
-                bytes.copy_from_slice(&extra[i..i + 4]);
-                Ref::from_bytes(bytes)
-            }),
-        )
+    pub fn goto(self) -> (BlockIndex, usize) {
+        let (block, extra_index) = unsafe { self.block_extra };
+        (block, extra_index as usize)
     }
 
-    pub fn branch(&self, extra: &[u8]) -> (Ref, BlockIndex, BlockIndex) {
-        let (r, i) = unsafe { self.ref_int };
+    pub fn branch(&self, extra: &[u8]) -> (Ref, BlockIndex, BlockIndex, usize) {
+        let (r, i) = self.ref_int();
         let mut bytes = [0; 4];
         let i = i as usize;
         bytes.copy_from_slice(&extra[i..i + 4]);
         let a = BlockIndex::from_bytes(bytes);
         bytes.copy_from_slice(&extra[i + 4..i + 8]);
         let b = BlockIndex::from_bytes(bytes);
-        (r, a, b)
+        (r, a, b, i + 8)
     }
 
     pub fn ref_int(self) -> (Ref, u32) {

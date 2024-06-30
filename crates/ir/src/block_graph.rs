@@ -32,11 +32,11 @@ impl Blocks for FunctionIr {
         let (_, terminator) = self.get_block(block).last().expect("empty block found");
         match terminator.tag {
             Tag::Goto => {
-                let (next, _) = terminator.data.goto(&self.extra);
+                let (next, _) = terminator.data.goto();
                 vec![next].into()
             }
             Tag::Branch => {
-                let (_, a, b) = terminator.data.branch(&self.extra);
+                let (_, a, b, _) = terminator.data.branch(&self.extra);
                 vec![a, b].into()
             }
             Tag::Ret => Cow::Borrowed(&[]),
@@ -108,6 +108,10 @@ impl<B: Blocks> BlockGraph<B> {
 
     pub fn preceeds(&self, block: B::Block, pred: B::Block) -> bool {
         self.preds[block.idx()].contains(&pred)
+    }
+
+    pub fn preds<'a>(&'a self, block: B::Block) -> impl 'a + Iterator<Item = B::Block> {
+        self.preds[block.idx()].iter().copied()
     }
 
     pub fn postorder(&self) -> &[B::Block] {

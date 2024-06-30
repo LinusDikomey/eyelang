@@ -142,6 +142,10 @@ impl BlockArgs {
         self.count == 0
     }
 
+    pub fn count(self) -> usize {
+        self.count as usize
+    }
+
     pub fn nth(&self, index: u32) -> Ref {
         assert!(
             index < self.count,
@@ -151,8 +155,8 @@ impl BlockArgs {
         Ref::index(self.start + index)
     }
 
-    pub fn iter(self) -> impl ExactSizeIterator<Item = Ref> {
-        (self.start..self.start + self.count).map(Ref::index)
+    pub fn iter(self) -> impl ExactSizeIterator<Item = u32> {
+        self.start..self.start + self.count
     }
 }
 

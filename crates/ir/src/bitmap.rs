@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct Bitmap {
     bits: Vec<u8>,
 }
@@ -5,6 +6,12 @@ impl Bitmap {
     pub fn new(size: usize) -> Self {
         Self {
             bits: vec![0; size.div_ceil(8)],
+        }
+    }
+
+    pub fn new_with_ones(size: usize) -> Self {
+        Self {
+            bits: vec![u8::MAX; size.div_ceil(8)],
         }
     }
 
@@ -28,5 +35,19 @@ impl Bitmap {
                 }
             }
         }
+    }
+
+    /// performs an in-place union operation with another bitmap (assumed to be of the same size)
+    /// and returns if any bits where changed
+    pub fn union_with(&mut self, other: &Bitmap) -> bool {
+        assert_eq!(self.bits.len(), other.bits.len());
+        let mut changed = false;
+        for (a, &b) in self.bits.iter_mut().zip(&other.bits) {
+            if *a != b {
+                changed = true;
+            }
+            *a &= b;
+        }
+        changed
     }
 }

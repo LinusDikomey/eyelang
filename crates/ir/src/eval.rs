@@ -347,21 +347,22 @@ unsafe fn eval_internal(
                 }
             }
             super::Tag::Goto => {
-                let (block, args) = inst.data.goto(&ir.extra);
-                let target = ir.blocks[block.idx() as usize].start;
-                if target <= pos {
+                let (target, extra_idx) = inst.data.goto();
+                let args = decode_block_args(ir, target, extra_idx);
+                let target_pos = ir.blocks[target.idx() as usize].start;
+                if target_pos <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
                         return Err(Error::InfiniteLoop);
                     }
                 }
                 let arg_count = args.len() as u32;
-                for (r, i) in args.zip(target - arg_count..target) {
+                for (r, i) in args.zip(target_pos - arg_count..target_pos) {
                     values[i as usize] = get_ref(&values, r);
                 }
-                pos = target;
+                pos = target_pos;
                 previous_block = current_block;
-                current_block = block;
+                current_block = target;
                 continue;
             }
             super::Tag::Branch => {
@@ -425,4 +426,18 @@ unsafe fn eval_internal(
         pos += 1;
     };
     Ok(val)
+}
+
+fn decode_block_args<'a>(
+    ir: &'a FunctionIr,
+    target: BlockIndex,
+    extra_idx: usize,
+) -> impl 'a + ExactSizeIterator<Item = Ref> {
+    let block_arg_count = ir.blocks[target.idx() as usize].arg_count;
+    let mut bytes = [0; 4];
+    (0..block_arg_count).map(move |i| {
+        let i = extra_idx + i as usize * 4;
+        bytes.copy_from_slice(&ir.extra[i..i + 4]);
+        Ref::from_bytes(bytes)
+    })
 }

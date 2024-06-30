@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, FunctionId, TypeRef, TypeRefs};
+use crate::{ir_types::ConstIrType, BlockInfo, FunctionId, TypeRef, TypeRefs};
 
 use super::{
     instruction::DataVariant, ir_types::IrTypes, Data, Function, FunctionIr, Instruction, Module,
@@ -39,7 +39,7 @@ impl fmt::Display for FunctionIrDisplay<'_> {
                     if i != 0 {
                         write!(f, ", ")?;
                     }
-                    write_ref(f, arg)?;
+                    write_ref(f, Ref::index(arg))?;
                 }
                 write!(f, ")")?;
             }
@@ -50,7 +50,11 @@ impl fmt::Display for FunctionIrDisplay<'_> {
                 } else {
                     write!(f, "           ")?;
                 }
-                cwriteln!(f, "{}", inst.display(&self.ir.extra, self.types, self.info))?;
+                cwriteln!(
+                    f,
+                    "{}",
+                    inst.display(&self.ir.extra, self.types, self.info, &self.ir.blocks)
+                )?;
             }
         }
         Ok(())
@@ -127,12 +131,14 @@ impl Instruction {
         extra: &'a [u8],
         types: &'a IrTypes,
         info: Info<'a>,
+        blocks: &'a [BlockInfo],
     ) -> InstructionDisplay<'a> {
         InstructionDisplay {
             inst: self,
             extra,
             types,
             info,
+            blocks,
         }
     }
 }
@@ -141,6 +147,7 @@ pub struct InstructionDisplay<'a> {
     extra: &'a [u8],
     types: &'a IrTypes,
     info: Info<'a>,
+    blocks: &'a [BlockInfo],
 }
 
 impl<'a> fmt::Display for InstructionDisplay<'a> {
@@ -150,9 +157,10 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
             extra,
             types,
             info,
+            blocks,
         } = self;
         write!(f, "{} ", inst.tag)?;
-        display_data(inst, f, extra, self.types, *info)?;
+        display_data(inst, f, extra, self.types, *info, blocks)?;
         if inst.ty.is_present() {
             match inst.tag {
                 _ => cwrite!(f, " :: ")?,
@@ -224,6 +232,7 @@ fn display_data(
     extra: &[u8],
     types: &IrTypes,
     info: Info,
+    blocks: &[BlockInfo],
 ) -> fmt::Result {
     unsafe {
         match inst.tag.union_data_type() {
@@ -231,15 +240,19 @@ fn display_data(
             DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
             DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global),
             DataVariant::Goto => {
-                let (block, args) = inst.data.goto(extra);
+                let (block, extra_idx) = inst.data.goto();
+                let arg_count = blocks[block.idx() as usize].arg_count;
                 cwrite!(f, "{}", block)?;
-                if args.len() != 0 {
+                let mut bytes = [0; 4];
+                if arg_count != 0 {
                     cwrite!(f, "(")?;
-                    for (i, arg) in args.enumerate() {
+                    for i in 0..arg_count {
                         if i != 0 {
                             cwrite!(f, ", ")?;
                         }
-                        write_ref(f, arg)?;
+                        let i = extra_idx + i as usize * 4;
+                        bytes.copy_from_slice(&extra[i..i + 4]);
+                        write_ref(f, Ref::from_bytes(bytes))?;
                     }
                     cwrite!(f, ")")?;
                 }
@@ -327,8 +340,9 @@ fn display_data(
                 write_ref(f, inst.data.bin_op.1)
             }
             DataVariant::Branch => {
-                let (r, a, b) = inst.data.branch(extra);
+                let (r, a, b, i) = inst.data.branch(extra);
                 write_ref(f, r)?;
+                // TODO: write block args
                 cwrite!(f, ", #b!<{}> #g<or> #b!<{}>", a, b)
             }
             DataVariant::RefInt => {

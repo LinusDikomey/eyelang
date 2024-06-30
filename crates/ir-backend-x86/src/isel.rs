@@ -218,37 +218,64 @@ impl<'a> Gen<'a> {
                 MCValue::Register(MCReg::Virtual(r))
             }
             Tag::Goto => {
-                let (block, args) = inst.data.goto(extra);
-                // TODO: block args
-                let mir_block = self.get_queue_block(builder, block);
+                let (target, extra_idx) = inst.data.goto();
+                self.copy_block_args(builder, values, target, extra_idx);
+                let mir_block = self.get_queue_block(builder, target);
+                dbg!(mir_block);
                 builder.inst(Inst::jmp, [Op::Block(mir_block)]);
                 builder.register_successor(mir_block);
                 MCValue::Undef
             }
             Tag::Branch => {
-                let (cond, extra_branches) = unsafe { inst.data.ref_int };
-                let i = extra_branches as usize;
-                let t = ir::BlockIndex::from_bytes(self.body.extra[i..i + 4].try_into().unwrap());
-                let f =
-                    ir::BlockIndex::from_bytes(self.body.extra[i + 4..i + 8].try_into().unwrap());
-                let t = self.get_queue_block(builder, t);
-                let f = self.get_queue_block(builder, f);
-                builder.register_successor(t);
-                builder.register_successor(f);
+                let (cond, t, f, i) = inst.data.branch(extra);
+                let mir_t = self.get_queue_block(builder, t);
+                let mir_f = self.get_queue_block(builder, f);
+                builder.register_successor(mir_t);
+                builder.register_successor(mir_f);
                 match get_ref(&values, cond) {
                     MCValue::Register(r) => {
                         builder.inst(Inst::cmpri8, [r.op(), Op::Imm(0)]);
-                        builder.inst(Inst::je, [Op::Block(f)]);
-                        builder.inst(Inst::jmp, [Op::Block(t)]);
                         // TODO: generate true block next, create false block label
                         // builder.inst(Inst::je, [Op::Block(f)]);
                     }
                     value => todo!("handle branch cond value {value:?}"),
                 }
+                self.copy_block_args(builder, values, t, i);
+                builder.inst(Inst::je, [Op::Block(mir_f)]);
+                let f_extra_idx = i + self.body.get_block_args(t).count() * 4;
+                self.copy_block_args(builder, values, f, f_extra_idx);
+                builder.inst(Inst::jmp, [Op::Block(mir_t)]);
                 MCValue::Undef
             }
             _ => todo!("implement ir instruction tag {:?} in x86 backend", inst.tag),
         }
+    }
+
+    fn copy_block_args(
+        &self,
+        builder: &mut BlockBuilder<Inst>,
+        values: &[MCValue],
+        target: BlockIndex,
+        extra_index: usize,
+    ) {
+        let t_count = self.body.get_block_args(target).count();
+        let mut bytes = [0; 4];
+        let t_to = self.body.get_block_args(target).iter().map(|arg| {
+            let MCValue::Register(MCReg::Virtual(v)) = values[arg as usize] else {
+                unreachable!()
+            };
+            v.op::<Reg>()
+        });
+        let t_from = (0..t_count).map(|arg_index| {
+            let i = extra_index + arg_index * 4;
+            bytes.copy_from_slice(&self.body.extra[i..i + 4]);
+            let r = ir::Ref::from_bytes(bytes);
+            let MCValue::Register(r) = get_ref(values, r) else {
+                todo!()
+            };
+            r.op()
+        });
+        builder.build_copyargs(Inst::Copyargs, t_to, t_from);
     }
 
     fn get_queue_block(&mut self, builder: &mut BlockBuilder<Inst>, block: BlockIndex) -> MirBlock {
@@ -293,8 +320,19 @@ pub fn codegen(
     };
 
     for block in gen.body.blocks() {
-        for arg in gen.body.get_block_args(block).iter() {
-            values[arg.into_ref().unwrap() as usize] = MCValue::Register(MCReg::Virtual(mir.reg()));
+        let args = gen.body.get_block_args(block);
+        if block == BlockIndex::ENTRY {
+            for (i, arg) in args.iter().enumerate() {
+                let vreg = builder.reg();
+                values[arg as usize] = MCValue::Register(MCReg::Virtual(vreg));
+                // TODO: handle this correctly with different arg sizes and more than 6 args.
+                let physical = ABI_PARAM_REGISTERS[i];
+                builder.inst(Inst::Copy, [vreg.op(), Op::Reg(physical)]);
+            }
+        } else {
+            for arg in args.iter() {
+                values[arg as usize] = MCValue::Register(MCReg::Virtual(builder.reg()));
+            }
         }
     }
 

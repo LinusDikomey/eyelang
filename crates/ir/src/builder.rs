@@ -196,14 +196,17 @@ impl<'a> IrBuilder<'a> {
             Terminator::Ret(val) => (Tag::Ret, Data { un_op: val }),
             Terminator::Goto(block, args) => {
                 debug_assert!(block != BlockIndex::MISSING);
-                let extra = self.extra_data(&block.bytes());
-                for arg in args {
+                let mut arg_iter = args.iter();
+                let extra = arg_iter
+                    .next()
+                    .map_or(0, |arg| self.extra_data(&arg.to_bytes()));
+                for arg in arg_iter {
                     self.extra_data(&arg.to_bytes());
                 }
                 (
                     Tag::Goto,
                     Data {
-                        extra_len: (extra, args.len() as _),
+                        block_extra: (block, extra),
                     },
                 )
             }
@@ -212,14 +215,14 @@ impl<'a> IrBuilder<'a> {
                 on_true,
                 on_false,
             } => {
+                // TODO: track number of block args
                 debug_assert!(on_true.0 != BlockIndex::MISSING);
                 debug_assert!(on_false.0 != BlockIndex::MISSING);
                 let branch_extra = self.extra_data(&on_true.0 .0.to_le_bytes());
+                self.extra_data(&on_false.0.bytes());
                 for arg in on_true.1 {
                     self.extra_data(&arg.to_bytes());
                 }
-                self.extra_data(&on_false.0.bytes());
-                self.extra_data(&(on_false.1.len() as u32).to_le_bytes());
                 for arg in on_false.1 {
                     self.extra_data(&arg.to_bytes());
                 }

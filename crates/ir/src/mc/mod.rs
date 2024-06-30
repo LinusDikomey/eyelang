@@ -60,9 +60,16 @@ impl<I: Instruction> MachineIR<I> {
         &self.insts[block.start as usize..block.start as usize + block.len as usize]
     }
 
-    pub fn block_insts_mut(&mut self, block: MirBlock) -> &mut [InstructionStorage<I>] {
+    /// returns all instructions for a given block as well as the extra_ops list
+    pub fn block_insts_mut(
+        &mut self,
+        block: MirBlock,
+    ) -> (&mut [InstructionStorage<I>], &mut [Op<I::Register>]) {
         let block = &self.blocks[block.0 as usize];
-        &mut self.insts[block.start as usize..block.start as usize + block.len as usize]
+        (
+            &mut self.insts[block.start as usize..block.start as usize + block.len as usize],
+            &mut self.extra_ops,
+        )
     }
 
     pub fn block_successors(&self, block: MirBlock) -> &[MirBlock] {
@@ -131,13 +138,14 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         const INST_PAD: usize = 8;
         const OP_PAD: usize = 4;
-        fn write_op<I: Instruction>(
+
+        fn write_decoded_op<R: Register>(
             f: &mut fmt::Formatter,
-            (op_value, ty): (u64, OpType),
+            op: Op<R>,
             pad_to: usize,
+            dead: bool,
         ) -> fmt::Result {
-            let op = Op::<I::Register>::decode(op_value, ty);
-            let dead = matches!(op, Op::Reg(_) | Op::VReg(_)) && op_value & DEAD_BIT != 0;
+            let dead = matches!(op, Op::Reg(_) | Op::VReg(_)) && dead;
             let dead = if dead { "!" } else { "" };
             let len = op.printed_len() + dead.len();
             let padding = pad_to.saturating_sub(len);
@@ -146,6 +154,16 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             }
             write!(f, " {dead}{}", op)?;
             Ok(())
+        }
+
+        fn write_op<R: Register>(
+            f: &mut fmt::Formatter,
+            (op_value, ty): (u64, OpType),
+            pad_to: usize,
+        ) -> fmt::Result {
+            let op = Op::<R>::decode(op_value, ty);
+            let dead = op_value & DEAD_BIT != 0;
+            write_decoded_op(f, op, pad_to, dead)
         }
 
         fn write_inst(f: &mut fmt::Formatter, inst: &str, start: bool) -> fmt::Result {
@@ -174,6 +192,17 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             }
             for inst in self.block_insts(block) {
                 write!(f, "  ")?;
+                if inst.inst.is_copyargs() {
+                    write!(f, "        copyargs ")?;
+                    let (to, from) = inst.decode_copyargs(&self.extra_ops);
+                    for (&to, &from) in to.iter().zip(from) {
+                        write_decoded_op(f, to, 0, false)?;
+                        write!(f, " =")?;
+                        write_decoded_op(f, from, 0, false)?;
+                    }
+                    writeln!(f)?;
+                    continue;
+                }
                 let ops = inst
                     .ops
                     .iter()
@@ -190,7 +219,7 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                         if usage == OpUsage::Use {
                             write_inst(f, inst.inst.to_str(), true)?;
                         } else {
-                            write_op::<I>(f, op, OP_PAD)?;
+                            write_op::<I::Register>(f, op, OP_PAD)?;
                             write_inst(f, inst.inst.to_str(), false)?;
                             if usage == OpUsage::Def {
                                 continue;
@@ -201,7 +230,7 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                         write!(f, ",")?;
                     }
                     add_comma = true;
-                    write_op::<I>(f, op, OP_PAD)?;
+                    write_op::<I::Register>(f, op, OP_PAD)?;
                     post_ops += 1;
                 }
                 if first {
@@ -255,6 +284,19 @@ impl<I: Instruction> InstructionStorage<I> {
             .zip(self.inst.op_usage())
             .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
     }
+
+    fn decode_copyargs<'a>(
+        &self,
+        extra_ops: &'a [Op<I::Register>],
+    ) -> (&'a [Op<I::Register>], &'a [Op<I::Register>]) {
+        debug_assert!(self.inst.is_copyargs());
+        let extra_idx = self.ops[0] as usize;
+        let count = self.ops[1] as usize;
+        (
+            &extra_ops[extra_idx..extra_idx + count],
+            &extra_ops[extra_idx + count..extra_idx + 2 * count],
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -294,7 +336,7 @@ pub trait Instruction: Copy {
     fn implicit_defs(self) -> &'static [Self::Register];
     fn implicit_uses(self) -> &'static [Self::Register];
     fn is_copy(self) -> bool;
-    fn is_phi(self) -> bool;
+    fn is_copyargs(self) -> bool;
 }
 pub trait Register: 'static + Copy {
     const DEFAULT: Self;
@@ -479,7 +521,10 @@ macro_rules! inst {
             /// arbitrary register to another. Use this instead of specific mov instructions to
             /// make the register allocator aware of potential elidable copies
             Copy = 0,
-            Phi = 1,
+            /// special meta-instruction that represents a list of parallel copies to copy
+            /// block arguments into the correct registers at the end of a block for the arguments
+            /// of a successor block
+            Copyargs = 1,
             $($variant, )*
         }
 
@@ -489,7 +534,7 @@ macro_rules! inst {
             fn to_str(self) -> &'static str {
                 match self {
                     Self::Copy => "copy",
-                    Self::Phi => "phi",
+                    Self::Copyargs => "copyargs",
                     $(Self::$variant => stringify!($variant),)*
                 }
             }
@@ -498,7 +543,7 @@ macro_rules! inst {
                 let mut ops = [$crate::mc::OpType::Non; 4];
                 let inst_ops: &[$crate::mc::OpType] = match self {
                     Self::Copy => &[$crate::mc::OpType::Reg, $crate::mc::OpType::Reg],
-                    Self::Phi => &[$crate::mc::OpType::Reg],
+                    Self::Copyargs => &[],
                     $(Self::$variant => &[$($crate::mc::OpType::$op,)*],)*
                 };
                 ops[..inst_ops.len()].copy_from_slice(inst_ops);
@@ -509,7 +554,7 @@ macro_rules! inst {
                 let mut uses = [$crate::mc::OpUsage::Def; 4];
                 let inst_uses: &[$crate::mc::OpUsage] = match self {
                     Self::Copy => &[$crate::mc::OpUsage::Def, $crate::mc::OpUsage::Use],
-                    Self::Phi => &[$crate::mc::OpUsage::Def],
+                    Self::Copyargs => &[],
                     $(Self::$variant => &[$($crate::mc::OpUsage::$use_ty),*],)*
                 };
                 uses[..inst_uses.len()].copy_from_slice(inst_uses);
@@ -518,14 +563,14 @@ macro_rules! inst {
 
             fn implicit_defs(self) -> &'static [$register] {
                 match self {
-                    Self::Copy | Self::Phi => &[],
+                    Self::Copy | Self::Copyargs => &[],
                     $(Self::$variant => &[$($($register::$implicit_def,)*)?],)*
                 }
             }
 
             fn implicit_uses(self) -> &'static [$register] {
                 match self {
-                    Self::Copy | Self::Phi => &[],
+                    Self::Copy | Self::Copyargs => &[],
                     $(Self::$variant => &[$($($register::$implicit,)*)?],)*
                 }
             }
@@ -534,8 +579,8 @@ macro_rules! inst {
                 self == Self::Copy
             }
 
-            fn is_phi(self) -> bool {
-                self == Self::Phi
+            fn is_copyargs(self) -> bool {
+                self == Self::Copyargs
             }
         }
     };

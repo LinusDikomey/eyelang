@@ -585,7 +585,7 @@ unsafe fn build_func(
                     }
                 }
                 ir::Tag::Goto => {
-                    let (block, args) = data.goto(&ir.extra);
+                    let (block, extra_idx) = data.goto();
                     // TODO: block args
                     if !queued_blocks[block.idx() as usize] {
                         queued_blocks[block.idx() as usize] = true;
@@ -594,7 +594,8 @@ unsafe fn build_func(
                     LLVMBuildBr(builder, blocks[block.idx() as usize])
                 }
                 ir::Tag::Branch => {
-                    let (r, a, b) = data.branch(&ir.extra);
+                    let (r, a, b, extra_idx) = data.branch(&ir.extra);
+                    // TODO block_args
                     let cond = get_ref(&instructions, r).unwrap();
                     if !queued_blocks[a.idx() as usize] {
                         queued_blocks[a.idx() as usize] = true;

@@ -60,7 +60,7 @@ pub fn lower_function(
 
         for (i, (r, ty)) in params.iter().zip(param_types.iter()).enumerate() {
             vars[i] = (builder.build_decl(ty), ty);
-            builder.build_store(vars[i].0, r);
+            builder.build_store(vars[i].0, Ref::index(r));
         }
 
         lower_hir(

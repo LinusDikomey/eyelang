@@ -1,46 +1,71 @@
-use crate::{Bitmap, BlockGraph};
+use std::collections::VecDeque;
+
+use crate::{block_graph::Block, Bitmap, BlockGraph};
 
 use super::{
-    decode_reg, Instruction, InstructionStorage, MachineIR, OpUsage, RegType, Register, DEAD_BIT,
-    PHYSICAL_BIT,
+    decode_reg, Instruction, InstructionStorage, MachineIR, Op, OpUsage, RegType, Register,
+    DEAD_BIT, PHYSICAL_BIT,
 };
 
 pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>) {
-    let intersecting_precolored = analyze_liveness(mir);
-    perform_regalloc(mir, &intersecting_precolored);
+    analyze_liveness(mir);
+    //perform_regalloc(mir);
 }
 
-fn analyze_liveness<I: Instruction>(
-    mir: &mut MachineIR<I>,
-) -> Vec<<I::Register as Register>::RegisterBits> {
-    let mut seen = Bitmap::new(mir.virtual_register_count());
-    let mut live_regs = I::Register::NO_BITS;
-    let mut intersecting_precolored = vec![I::Register::NO_BITS; mir.virtual_register_count()];
+fn analyze_liveness<I: Instruction>(mir: &mut MachineIR<I>) {
+    let graph = BlockGraph::calculate(mir);
+    let mut workqueue: VecDeque<_> = graph.postorder().iter().copied().collect();
+    let mut workqueue_set: Bitmap = Bitmap::new_with_ones(mir.block_count() as usize);
 
-    let tree = BlockGraph::calculate(mir);
+    let mut liveins: Box<[Bitmap]> = (0..mir.block_count())
+        .map(|_| Bitmap::new(mir.virtual_register_count()))
+        .collect();
+    let mut liveouts = liveins.clone();
 
-    for &block in tree.postorder().iter().rev() {
-        for inst in mir.block_insts_mut(block).iter_mut().rev() {
-            analyze_inst_liveness(
-                &mut seen,
-                &mut live_regs,
-                &mut intersecting_precolored,
-                inst,
-            )
+    while let Some(block) = workqueue.pop_front() {
+        workqueue_set.set(block.idx(), false);
+        // PERF: just reuse one bitmap in the future and copy over
+        let mut live = liveouts[block.idx()].clone();
+        let (block_insts, extra_ops) = mir.block_insts_mut(block);
+        for inst in block_insts.iter_mut().rev() {
+            // TODO: observe register classes
+            analyze_inst_liveness(&mut live, inst, extra_ops)
         }
+        for pred in graph.preds(block) {
+            if liveouts[pred.idx()].union_with(&live) {
+                if !workqueue_set.get(pred.idx()) {
+                    workqueue_set.set(pred.idx(), true);
+                    workqueue.push_back(pred);
+                }
+            }
+        }
+        liveins[block.idx()] = live;
     }
-    intersecting_precolored
 }
 
 fn analyze_inst_liveness<I: Instruction>(
-    seen: &mut Bitmap,
-    live_regs: &mut <I::Register as Register>::RegisterBits,
-    intersecting_precolored: &mut [<I::Register as Register>::RegisterBits],
+    live: &mut Bitmap,
+    //live_regs: &mut <I::Register as Register>::RegisterBits,
+    //intersecting_precolored: &mut [<I::Register as Register>::RegisterBits],
     inst: &mut InstructionStorage<I>,
+    extra_ops: &mut [Op<I::Register>],
 ) {
+    if inst.inst.is_copyargs() {
+        let (_to, from) = inst.decode_copyargs(extra_ops);
+        for op in from {
+            if let &Op::VReg(v) = op {
+                if !live.get(v.0 as usize) {
+                    live.set(v.0 as usize, true);
+                    // TODO: mark dead in extra_ops
+                }
+            }
+        }
+        return;
+    }
     for (reg, usage) in inst.reg_ops_mut() {
         match decode_reg::<I::Register>(*reg) {
-            RegType::Reg(r) => {
+            RegType::Reg(_) => {}
+            /*RegType::Reg(r) => {
                 if !r.get_bit(live_regs) {
                     *reg |= DEAD_BIT;
                 }
@@ -48,35 +73,35 @@ fn analyze_inst_liveness<I: Instruction>(
                     OpUsage::Def => r.set_bit(live_regs, false),
                     OpUsage::Use | OpUsage::DefUse => r.set_bit(live_regs, true),
                 }
-                seen.visit_set_bits(|vreg| {
+                live.visit_set_bits(|vreg| {
                     r.set_bit(&mut intersecting_precolored[vreg], true);
                 });
-            }
+            }*/
             RegType::Virtual(v) => {
-                if !seen.get(v.0 as usize) {
-                    seen.set(v.0 as usize, true);
+                if !live.get(v.0 as usize) {
+                    live.set(v.0 as usize, true);
                     *reg |= DEAD_BIT;
                 } else if usage == OpUsage::Def {
-                    seen.set(v.0 as usize, false);
+                    live.set(v.0 as usize, false);
                 }
             }
         }
     }
-    for &reg in inst.inst.implicit_uses() {
-        if !reg.get_bit(live_regs) {
-            reg.set_bit(live_regs, true);
-            reg.set_bit(&mut inst.implicit_dead, true);
+    /*
+        for &reg in inst.inst.implicit_uses() {
+            if !reg.get_bit(live_regs) {
+                reg.set_bit(live_regs, true);
+                reg.set_bit(&mut inst.implicit_dead, true);
+            }
         }
-    }
-    for &reg in inst.inst.implicit_defs() {
-        reg.set_bit(live_regs, true);
-    }
+        for &reg in inst.inst.implicit_defs() {
+            reg.set_bit(live_regs, true);
+        }
+    */
 }
 
-fn perform_regalloc<I: Instruction>(
-    mir: &mut MachineIR<I>,
-    intersecing_precolored: &[<I::Register as Register>::RegisterBits],
-) {
+/*
+fn perform_regalloc<I: Instruction>(mir: &mut MachineIR<I>) {
     let mut free = I::Register::ALL_BITS;
     let mut chosen = vec![I::Register::DEFAULT; mir.virtual_register_count()];
     for inst in &mut mir.insts {
@@ -153,3 +178,4 @@ fn perform_regalloc<I: Instruction>(
         }
     }
 }
+*/

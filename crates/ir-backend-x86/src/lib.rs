@@ -2,10 +2,10 @@ use std::path::Path;
 
 use elf::{ElfObjectWriter, SectionHeader};
 
-mod codegen;
 mod elf;
 mod emit;
 mod isa;
+mod isel;
 
 #[derive(Debug)]
 pub enum Error {
@@ -60,7 +60,7 @@ impl Backend {
 
         for func in &module.funcs {
             if let Some(ir) = &func.ir {
-                let mut mir = codegen::codegen(ir, func, &func.types);
+                let mut mir = isel::codegen(ir, func, &func.types);
                 let offset = text_section.len() as u64;
                 if print_ir {
                     println!("mir for {}:\n{}\n", func.name, mir);

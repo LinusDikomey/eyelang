@@ -36,18 +36,26 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
     }
 
     /// create a phi instruction given the phi operands ordered by the predecessor block
-    pub fn build_phi(
+    pub fn build_copyargs(
         &mut self,
-        phi_inst: I,
-        args: impl IntoIterator<Item = Op<I::Register>>,
+        copyarg_inst: I,
+        to: impl IntoIterator<Item = Op<I::Register>>,
+        from: impl IntoIterator<Item = Op<I::Register>>,
     ) -> VReg {
         let r = self.reg();
-        // TODO
-        self.mir.insts.push(InstructionStorage {
-            inst: phi_inst,
-            ops: [Op::<I::Register>::VReg(r).encode(), 0, 0, 0],
-            implicit_dead: I::Register::NO_BITS,
-        });
+        let extra_idx = self.mir.extra_ops.len();
+        self.mir.extra_ops.extend(to);
+        let count = self.mir.extra_ops.len() - extra_idx;
+        self.mir.extra_ops.extend(from);
+        debug_assert_eq!(count, self.mir.extra_ops.len() - count - extra_idx);
+        if count != 0 {
+            self.mir.blocks[self.block.0 as usize].len += 1;
+            self.mir.insts.push(InstructionStorage {
+                inst: copyarg_inst,
+                ops: [extra_idx as u64, count as u64, 0, 0],
+                implicit_dead: I::Register::NO_BITS,
+            });
+        }
         r
     }
 

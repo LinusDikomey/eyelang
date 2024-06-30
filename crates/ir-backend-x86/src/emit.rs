@@ -68,7 +68,9 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                         }
                     }
                 }
-                Inst::Phi => panic!("phi should be destructed at this stage"),
+                Inst::Copyargs => {
+                    todo!("argument copying")
+                }
                 Inst::addrr32 => {
                     let (a, b) = rr();
                     let modrm = encode_modrm_rr(a, b, false);
