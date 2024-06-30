@@ -3,18 +3,19 @@ use ir::{builder::Terminator, Function, IrType, Ref, RefVal, TypeRefs};
 #[test]
 #[should_panic(expected = "assertion failed: dom_tree.dominates")]
 fn non_dominating_use() {
+    let params = TypeRefs::EMPTY;
     let mut types = ir::IrTypes::new();
-    let mut builder = ir::builder::IrBuilder::new(&mut types);
+    let (mut builder, _args) = ir::builder::IrBuilder::new(&mut types, params);
     let block_a = builder.create_block();
     let block_b = builder.create_block();
     builder.terminate_block(Terminator::Branch {
         cond: Ref::val(RefVal::True),
-        on_true: block_a,
-        on_false: block_b,
+        on_true: (block_a, &[]),
+        on_false: (block_b, &[]),
     });
     builder.begin_block(block_a);
     let a = builder.build_int(10, IrType::I32);
-    builder.terminate_block(Terminator::Goto(block_b));
+    builder.terminate_block(Terminator::Goto(block_b, &[]));
 
     builder.begin_block(block_b);
     builder.build_neg(a, IrType::I32);
@@ -25,7 +26,7 @@ fn non_dominating_use() {
     let f = Function {
         name: "invalid_function".to_owned(),
         types,
-        params: TypeRefs::EMPTY,
+        params,
         varargs: false,
         return_type: IrType::Unit,
         ir: Some(ir),

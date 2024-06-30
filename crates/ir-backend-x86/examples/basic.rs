@@ -21,10 +21,11 @@ fn main() {
 fn build_add() -> Function {
     let mut types = IrTypes::new();
     let int_ty = types.add(IrType::I32);
-    let mut builder = IrBuilder::new(&mut types);
+    let param_types = types.add_multiple([types[int_ty], types[int_ty]]);
+    let (mut builder, params) = IrBuilder::new(&mut types, param_types);
+    let x = params.nth(0);
+    let y = params.nth(1);
 
-    let x = builder.build_param(0, int_ty);
-    let y = builder.build_param(1, int_ty);
     let stack_val = builder.build_decl(IrType::I32);
     let constant = builder.build_int(0x42, int_ty);
     builder.build_store(stack_val, constant);
@@ -34,12 +35,11 @@ fn build_add() -> Function {
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
-    let params = types.add_multiple([types[int_ty], types[int_ty]]);
     let return_type = types[int_ty];
     Function {
         name: "my_add".to_owned(),
         types,
-        params,
+        params: param_types,
         varargs: false,
         return_type,
         ir: Some(ir),

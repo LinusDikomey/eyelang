@@ -81,7 +81,9 @@ pub struct Function {
 pub struct FunctionIr {
     pub inst: Vec<Instruction>,
     pub extra: Vec<u8>,
-    blocks: Vec<(u32, u32)>,
+    blocks: Vec<BlockInfo>,
+    // Map of indices into the inst list for each start position, includes block argument
+    // instructions
     block_indices: BTreeMap<u32, BlockIndex>,
 }
 impl FunctionIr {
@@ -94,20 +96,63 @@ impl FunctionIr {
         }
     }
 
+    pub fn get_block_args(&self, block: BlockIndex) -> BlockArgs {
+        let info = &self.blocks[block.0 as usize];
+        BlockArgs {
+            start: info.start - info.arg_count,
+            count: info.arg_count,
+        }
+    }
+
     pub fn get_block<'a>(
         &'a self,
         block: BlockIndex,
     ) -> impl 'a + ExactSizeIterator<Item = (u32, Instruction)> {
-        let (start, len) = self.blocks[block.idx() as usize];
-        (start..start + len).map(|i| (i, self.inst[i as usize]))
+        let info = &self.blocks[block.idx() as usize];
+        (info.start..info.start + info.len).map(|i| (i, self.inst[i as usize]))
     }
 
     pub fn get_block_from_index(&self, index: u32) -> BlockIndex {
-        *self.block_indices.range(..=index).next_back().unwrap().1
+        *self
+            .block_indices
+            .range(..=index)
+            .next_back()
+            .unwrap_or_else(|| panic!("Block for index {index} not found"))
+            .1
     }
 
     pub fn blocks<'a>(&'a self) -> impl 'a + ExactSizeIterator<Item = BlockIndex> {
         (0..self.blocks.len() as _).map(BlockIndex)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockInfo {
+    arg_count: u32,
+    start: u32,
+    len: u32,
+}
+
+pub struct BlockArgs {
+    start: u32,
+    count: u32,
+}
+impl BlockArgs {
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn nth(&self, index: u32) -> Ref {
+        assert!(
+            index < self.count,
+            "Block arg {index} out of range, there are only {} args",
+            self.count
+        );
+        Ref::index(self.start + index)
+    }
+
+    pub fn iter(self) -> impl ExactSizeIterator<Item = Ref> {
+        (self.start..self.start + self.count).map(Ref::index)
     }
 }
 

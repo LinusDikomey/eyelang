@@ -129,6 +129,8 @@ impl<I: Instruction> MachineIR<I> {
 }
 impl<I: Instruction> fmt::Display for MachineIR<I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const INST_PAD: usize = 8;
+        const OP_PAD: usize = 4;
         fn write_op<I: Instruction>(
             f: &mut fmt::Formatter,
             (op_value, ty): (u64, OpType),
@@ -145,6 +147,22 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
             write!(f, " {dead}{}", op)?;
             Ok(())
         }
+
+        fn write_inst(f: &mut fmt::Formatter, inst: &str, start: bool) -> fmt::Result {
+            if start {
+                for _ in 0..OP_PAD + 4 {
+                    write!(f, " ")?;
+                }
+            } else {
+                write!(f, " = ")?;
+            }
+            write!(f, "{inst}")?;
+            for _ in 0..INST_PAD.saturating_sub(inst.len()) {
+                write!(f, " ")?;
+            }
+            Ok(())
+        }
+
         for (info, block) in self.blocks.iter().zip((0..).map(MirBlock)) {
             writeln!(f, "  bb{}:", block.0)?;
             if !info.successors.is_empty() {
@@ -165,14 +183,15 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                     .zip(inst.inst.op_usage());
                 let mut first = true;
                 let mut add_comma = false;
+                let mut post_ops = 0;
                 for (op, usage) in ops {
                     if first {
                         first = false;
                         if usage == OpUsage::Use {
-                            write!(f, "        {}", inst.inst.to_str())?;
+                            write_inst(f, inst.inst.to_str(), true)?;
                         } else {
-                            write_op::<I>(f, op, 4)?;
-                            write!(f, " = {}", inst.inst.to_str())?;
+                            write_op::<I>(f, op, OP_PAD)?;
+                            write_inst(f, inst.inst.to_str(), false)?;
                             if usage == OpUsage::Def {
                                 continue;
                             }
@@ -182,13 +201,17 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
                         write!(f, ",")?;
                     }
                     add_comma = true;
-                    write_op::<I>(f, op, 4)?;
+                    write_op::<I>(f, op, OP_PAD)?;
+                    post_ops += 1;
                 }
                 if first {
-                    write!(f, "        {}", inst.inst.to_str())?;
+                    write_inst(f, inst.inst.to_str(), true)?;
                 }
                 let implicit = inst.inst.implicit_uses();
                 if !implicit.is_empty() {
+                    for _ in 0..3usize.saturating_sub(post_ops) {
+                        write!(f, "     ")?;
+                    }
                     write!(f, " implicit")?;
                     for &reg in implicit {
                         let dead = if reg.get_bit(&inst.implicit_dead) {

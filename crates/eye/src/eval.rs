@@ -201,7 +201,7 @@ pub fn def_expr(
                 crate::check::check(compiler, ast, module, types, scope, [], expr, expected);
             let mut to_generate = Vec::new();
             let mut ir_types = ir::IrTypes::new();
-            let builder = ir::builder::IrBuilder::new(&mut ir_types);
+            let (builder, _) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
             let mut vars = vec![(ir::Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
             let ir = crate::irgen::lower_hir(
                 builder,

@@ -31,9 +31,21 @@ pub struct FunctionIrDisplay<'a> {
 impl fmt::Display for FunctionIrDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for block in self.ir.blocks() {
-            cwriteln!(f, "  #m<block> #b!<b{}>:", block.idx())?;
+            cwrite!(f, "  #m<block> #b!<b{}>", block.idx())?;
+            let args = self.ir.get_block_args(block);
+            if !args.is_empty() {
+                write!(f, "(")?;
+                for (i, arg) in args.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write_ref(f, arg)?;
+                }
+                write!(f, ")")?;
+            }
+            writeln!(f, ":")?;
             for (i, inst) in self.ir.get_block(block) {
-                if inst.used {
+                if inst.tag.is_usable() {
                     cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
                 } else {
                     write!(f, "           ")?;
@@ -198,6 +210,14 @@ fn display_type(
     cwrite!(f, "#m<{name}>")
 }
 
+fn write_ref(f: &mut fmt::Formatter<'_>, r: Ref) -> fmt::Result {
+    if let Some(val) = r.into_val() {
+        cwrite!(f, "#y<{}>", val)
+    } else {
+        cwrite!(f, "#c<%{}>", r.into_ref().unwrap())
+    }
+}
+
 fn display_data(
     inst: &Instruction,
     f: &mut fmt::Formatter<'_>,
@@ -205,19 +225,26 @@ fn display_data(
     types: &IrTypes,
     info: Info,
 ) -> fmt::Result {
-    let write_ref = |f: &mut fmt::Formatter<'_>, r: Ref| {
-        if let Some(val) = r.into_val() {
-            cwrite!(f, "#y<{}>", val)
-        } else {
-            cwrite!(f, "#c<%{}>", r.into_ref().unwrap())
-        }
-    };
     unsafe {
         match inst.tag.union_data_type() {
             DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int),
             DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
             DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global),
-            DataVariant::Block => cwrite!(f, "{}", inst.data.block),
+            DataVariant::Goto => {
+                let (block, args) = inst.data.goto(extra);
+                cwrite!(f, "{}", block)?;
+                if args.len() != 0 {
+                    cwrite!(f, "(")?;
+                    for (i, arg) in args.enumerate() {
+                        if i != 0 {
+                            cwrite!(f, ", ")?;
+                        }
+                        write_ref(f, arg)?;
+                    }
+                    cwrite!(f, ")")?;
+                }
+                Ok(())
+            }
             DataVariant::MemberPtr => {
                 let (ptr, extra_start) = inst.data.ref_int;
                 let i = extra_start as usize;
@@ -302,7 +329,7 @@ fn display_data(
             DataVariant::Branch => {
                 let (r, a, b) = inst.data.branch(extra);
                 write_ref(f, r)?;
-                cwrite!(f, ", #b!<b{}> #g<or> #b!<b{}>", a, b)
+                cwrite!(f, ", #b!<{}> #g<or> #b!<{}>", a, b)
             }
             DataVariant::RefInt => {
                 write_ref(f, inst.data.ref_int.0)?;

@@ -9,7 +9,7 @@ use types::{Primitive, Type};
 /// If the main returns unit, it will always return 0.
 pub fn entry_point(eye_main: FunctionId, main_return_ty: &Type) -> ir::Function {
     let mut types = IrTypes::new();
-    let mut builder = IrBuilder::new(&mut types);
+    let (mut builder, _params) = IrBuilder::new(&mut types, TypeRefs::EMPTY);
     //let extra = builder.extra_data(&eye_main.bytes());
 
     let main_return = match main_return_ty {

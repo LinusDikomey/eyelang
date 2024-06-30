@@ -12,47 +12,9 @@ pub fn function(function: &Function) {
     };
     let dom_tree = BlockGraph::calculate(ir);
     for block in ir.blocks() {
-        let mut block_insts = ir.get_block(block).peekable();
-        while let Some((_, inst)) =
-            block_insts.next_if(|(_, inst)| matches!(inst.tag, Tag::Param | Tag::Phi))
-        {
+        for (i, inst) in ir.get_block(block) {
             match inst.tag {
-                Tag::Param => {
-                    let param_index = unsafe { inst.data.int32 };
-                    if param_index >= function.params.count {
-                        panic!("Param index {param_index} is out of bounds, the function only has {} params", function.params.len());
-                    }
-                    let signature_type = function.params.nth(param_index);
-                    assert!(
-                        function
-                            .types
-                            .are_equal(function.types[signature_type], function.types[inst.ty]),
-                        "Mismatch between function type and Param type"
-                    );
-                }
-                Tag::Phi => {
-                    let args = inst.data.phi(&ir.extra);
-                    let arg_count = args.len();
-                    for (phi_block, r) in args {
-                        assert!(dom_tree.preceeds(block, phi_block));
-                        if let Some(r_index) = r.into_ref() {
-                            assert!(dom_tree
-                                .block_dominates(phi_block, ir.get_block_from_index(r_index)));
-                        }
-                    }
-                    assert_eq!(
-                        arg_count,
-                        dom_tree.pred_count(block),
-                        "Phi doesn't contain all pred blocks"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }
-        for (i, inst) in block_insts {
-            match inst.tag {
-                Tag::Param => panic!("Param should only be at the start of the block"),
-                Tag::Phi => panic!("Phi should only be at the start of the block"),
+                Tag::BlockArg => unreachable!("BlockArg shouldn't exist inside a block"),
                 Tag::Uninit => {}
                 Tag::Int => {
                     let value = inst.data.int();

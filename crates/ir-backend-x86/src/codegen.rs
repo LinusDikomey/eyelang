@@ -33,25 +33,7 @@ impl<'a> Gen<'a> {
         extra: &[u8],
     ) -> MCValue {
         match inst.tag {
-            Tag::Param => {
-                assert!(matches!(self.types[inst.ty], IrType::I32), "TODO");
-                let param_idx = unsafe { inst.data.int32 };
-                let abi_reg = *ABI_PARAM_REGISTERS
-                    .get(param_idx as usize)
-                    .expect("TODO: more than 6 args");
-                let reg = builder.reg();
-                builder.inst(Inst::Copy, [reg.op(), Op::Reg(abi_reg)]);
-                MCValue::Register(MCReg::Virtual(reg))
-            }
-            Tag::Phi => {
-                let mut phi_args: Vec<(MirBlock, MCValue)> = inst
-                    .data
-                    .phi(extra)
-                    .map(|(block, r)| (self.get_queue_block(builder, block), get_ref(values, r)))
-                    .collect();
-                phi_args.sort_by_key(|(block, _)| *block);
-                MCValue::Register(MCReg::Virtual(builder.build_phi(Inst::Phi, phi_args)))
-            }
+            Tag::BlockArg => unreachable!(),
             Tag::Int => MCValue::Imm(unsafe { inst.data.int }),
             Tag::Decl => {
                 let layout = self.types.layout(self.types[unsafe { inst.data.ty }]);
@@ -236,7 +218,8 @@ impl<'a> Gen<'a> {
                 MCValue::Register(MCReg::Virtual(r))
             }
             Tag::Goto => {
-                let block = unsafe { inst.data.block };
+                let (block, args) = inst.data.goto(extra);
+                // TODO: block args
                 let mir_block = self.get_queue_block(builder, block);
                 builder.inst(Inst::jmp, [Op::Block(mir_block)]);
                 builder.register_successor(mir_block);
@@ -308,6 +291,12 @@ pub fn codegen(
         block_queue: VecDeque::from([BlockIndex::ENTRY]),
         block_map,
     };
+
+    for block in gen.body.blocks() {
+        for arg in gen.body.get_block_args(block).iter() {
+            values[arg.into_ref().unwrap() as usize] = MCValue::Register(MCReg::Virtual(mir.reg()));
+        }
+    }
 
     while let Some(block) = gen.block_queue.pop_front() {
         let mir_block =

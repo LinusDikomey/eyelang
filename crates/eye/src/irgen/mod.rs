@@ -35,7 +35,7 @@ pub fn lower_function(
         types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY).unwrap();
     // TODO: figure out what to do when params/return_type are Invalid. We can no longer generate a
     // valid signature
-    let params = types::get_multiple_infos(
+    let param_types = types::get_multiple_infos(
         compiler,
         &checked.types,
         &mut types,
@@ -55,15 +55,10 @@ pub fn lower_function(
     .unwrap_or(IrType::Unit);
 
     let ir = checked.body.as_ref().map(|hir| {
-        let mut builder = ir::builder::IrBuilder::new(&mut types);
+        let (mut builder, params) = ir::builder::IrBuilder::new(&mut types, param_types);
         let mut vars = vec![(Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
 
-        let param_refs: Vec<Ref> = params
-            .iter()
-            .zip(0..)
-            .map(|(ty, i)| builder.build_param(i, ty))
-            .collect();
-        for (i, (r, ty)) in param_refs.iter().copied().zip(params.iter()).enumerate() {
+        for (i, (r, ty)) in params.iter().zip(param_types.iter()).enumerate() {
             vars[i] = (builder.build_decl(ty), ty);
             builder.build_store(vars[i].0, r);
         }
@@ -82,7 +77,7 @@ pub fn lower_function(
     ir::Function {
         name,
         types,
-        params,
+        params: param_types,
         return_type,
         varargs: checked.varargs,
         ir,
@@ -620,8 +615,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let else_block = ctx.builder.create_block();
             ctx.builder.terminate_block(Terminator::Branch {
                 cond,
-                on_true: then_block,
-                on_false: else_block,
+                on_true: (then_block, &[]),
+                on_false: (else_block, &[]),
             });
             ctx.builder.begin_block(then_block);
             lower_if_else_branches(ctx, then, else_, else_block, resulting_ty)?
@@ -647,9 +642,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         } => {
             let value = lower(ctx, value)?;
             let mut after_block = None;
-            // PERF: better with block args
-            let mut resulting_values = Vec::new();
+            let mut result_value_count: usize = 0;
             let mut next_block;
+            let mut result_value = None;
             if branch_count == 0 {
                 // matching on an empty enum or something so we need to terminate the block
                 ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
@@ -675,42 +670,42 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 }
                 let val = lower(ctx, branch);
                 if let Ok(val) = val {
-                    resulting_values.push((ctx.builder.current_block(), val));
+                    result_value_count += 1;
                     let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
-                    ctx.builder.terminate_block(Terminator::Goto(after));
+                    ctx.builder.terminate_block(Terminator::Goto(after, &[val]));
                 }
                 if is_last {
                     // after could still be none if all branches are noreturn, we don't have to
                     // create an after block at all in this case
                     if let Some(after) = after_block {
-                        ctx.builder.begin_block(after);
+                        let ty = ctx.get_type(ctx.types[resulting_ty])?;
+                        let types = ctx.builder.types.add_multiple([ty]);
+                        let args = ctx.builder.begin_block_with_args(after, types);
+                        result_value = Some(args.nth(0));
                     }
                 } else {
                     ctx.builder.begin_block(next_block);
                 }
             }
-            if resulting_values.is_empty() {
-                return Err(NoReturn);
-            } else {
-                let ty = ctx.get_type(ctx.types[resulting_ty])?;
-                ctx.builder.build_phi(resulting_values, ty)
-            }
+            result_value.ok_or(NoReturn)?
         }
         &Node::While { cond, body } => {
             let cond_block = ctx.builder.create_block();
-            ctx.builder.terminate_block(Terminator::Goto(cond_block));
+            ctx.builder
+                .terminate_block(Terminator::Goto(cond_block, &[]));
             ctx.builder.begin_block(cond_block);
             let cond = lower(ctx, cond)?;
             let body_block = ctx.builder.create_block();
             let after_block = ctx.builder.create_block();
             ctx.builder.terminate_block(Terminator::Branch {
                 cond,
-                on_true: body_block,
-                on_false: after_block,
+                on_true: (body_block, &[]),
+                on_false: (after_block, &[]),
             });
             ctx.builder.begin_block(body_block);
             if lower(ctx, body).is_ok() {
-                ctx.builder.terminate_block(Terminator::Goto(cond_block));
+                ctx.builder
+                    .terminate_block(Terminator::Goto(cond_block, &[]));
             }
             ctx.builder.begin_block(after_block);
             Ref::UNIT
@@ -718,12 +713,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::WhilePat { pat, val, body } => {
             let loop_start = ctx.builder.create_block();
             let after = ctx.builder.create_block();
-            ctx.builder.terminate_block(Terminator::Goto(loop_start));
+            ctx.builder
+                .terminate_block(Terminator::Goto(loop_start, &[]));
             ctx.builder.begin_block(loop_start);
             let val = lower(ctx, val)?;
             lower_pattern(ctx, pat, val, after)?;
             if lower(ctx, body).is_ok() {
-                ctx.builder.terminate_block(Terminator::Goto(loop_start));
+                ctx.builder
+                    .terminate_block(Terminator::Goto(loop_start, &[]));
             }
             ctx.builder.begin_block(after);
             Ref::UNIT
@@ -823,8 +820,8 @@ fn lower_pattern(
         let on_match = ctx.builder.create_block();
         ctx.builder.terminate_block(Terminator::Branch {
             cond,
-            on_true: on_match,
-            on_false: on_mismatch,
+            on_true: (on_match, &[]),
+            on_false: (on_mismatch, &[]),
         });
         ctx.builder.begin_block(on_match);
     };
@@ -864,8 +861,8 @@ fn lower_pattern(
             };
             ctx.builder.terminate_block(Terminator::Branch {
                 cond: value,
-                on_true,
-                on_false,
+                on_true: (on_true, &[]),
+                on_false: (on_false, &[]),
             });
         }
         Pattern::String(s) => {
@@ -1039,12 +1036,13 @@ fn lower_if_else_branches(
             })
         }
     };
-    let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<(ir::BlockIndex, Ref)> {
+    let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<ir::BlockIndex> {
         lower(ctx, value).ok().map(|val| {
             let block = ctx.builder.current_block();
             let after_block = after_block(ctx);
-            ctx.builder.terminate_block(Terminator::Goto(after_block));
-            (block, val)
+            ctx.builder
+                .terminate_block(Terminator::Goto(after_block, &[val]));
+            block
         })
     };
     let then_val = check_branch(ctx, then);
@@ -1054,17 +1052,13 @@ fn lower_if_else_branches(
     }
     let else_val = check_branch(ctx, else_);
     match (then_val, else_val) {
-        (Some(t), Some(f)) => {
-            let after_block = after_block(ctx);
-            ctx.builder.begin_block(after_block);
-            let ty = ctx.get_type(ctx.types[resulting_ty])?;
-            Ok(ctx.builder.build_phi([t, f], ty))
-        }
-        (Some((_, val)), None) | (None, Some((_, val))) => {
-            let after_block = after_block(ctx);
-            ctx.builder.begin_block(after_block);
-            Ok(val)
-        }
         (None, None) => Err(NoReturn),
+        _ => {
+            let after_block = after_block(ctx);
+            let ty = ctx.get_type(ctx.types[resulting_ty])?;
+            let types = ctx.builder.types.add_multiple([ty]);
+            let args = ctx.builder.begin_block_with_args(after_block, types);
+            Ok(args.nth(0))
+        }
     }
 }

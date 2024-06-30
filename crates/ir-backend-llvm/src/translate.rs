@@ -211,13 +211,9 @@ unsafe fn build_func(
                 print!("Generating %{i} = {:?} ->", inst);
                 std::io::stdout().flush().unwrap();
             }
-            let ir::Instruction {
-                tag,
-                data,
-                ty,
-                used: _,
-            } = inst;
+            let ir::Instruction { tag, data, ty } = inst;
             let val: LLVMValueRef = match tag {
+                ir::Tag::BlockArg => unreachable!(),
                 ir::Tag::Ret => {
                     let value = data.un_op;
                     if value == ir::Ref::UNDEF {
@@ -235,13 +231,6 @@ unsafe fn build_func(
                         } else {
                             LLVMBuildRetVoid(builder)
                         }
-                    }
-                }
-                ir::Tag::Param => {
-                    if let Some(_) = table_ty(func.params.nth(data.int32)) {
-                        LLVMGetParam(llvm_func, data.int32)
-                    } else {
-                        ptr::null_mut()
                     }
                 }
                 ir::Tag::Global => globals[data.global.0 as usize],
@@ -596,7 +585,8 @@ unsafe fn build_func(
                     }
                 }
                 ir::Tag::Goto => {
-                    let block = data.block();
+                    let (block, args) = data.goto(&ir.extra);
+                    // TODO: block args
                     if !queued_blocks[block.idx() as usize] {
                         queued_blocks[block.idx() as usize] = true;
                         block_queue.push_back(block);
@@ -622,6 +612,7 @@ unsafe fn build_func(
                         blocks[b.idx() as usize],
                     )
                 }
+                /*
                 ir::Tag::Phi => {
                     if let Some(ty) = table_ty(ty) {
                         let phi = LLVMBuildPhi(builder, ty, NONE);
@@ -639,6 +630,7 @@ unsafe fn build_func(
                         ptr::null_mut()
                     }
                 }
+                */
                 ir::Tag::IntToPtr => {
                     // no zero-sized integers so unwrapping is fine
                     let val = get_ref(&instructions, data.un_op).unwrap();

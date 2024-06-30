@@ -5,7 +5,7 @@ use crate::{
     Bitmap, BlockIndex, FunctionIr, Ref, Tag,
 };
 
-pub trait Block: Copy + Hash + Eq {
+pub trait Block: Copy + Hash + Eq + core::fmt::Debug {
     const ENTRY: Self;
 
     fn from_raw(value: u32) -> Self;
@@ -32,7 +32,7 @@ impl Blocks for FunctionIr {
         let (_, terminator) = self.get_block(block).last().expect("empty block found");
         match terminator.tag {
             Tag::Goto => {
-                let next = unsafe { terminator.data.block };
+                let (next, _) = terminator.data.goto(&self.extra);
                 vec![next].into()
             }
             Tag::Branch => {
@@ -133,9 +133,10 @@ fn calculate_postorder_and_preds<B: Blocks>(ir: &B) -> (Vec<B::Block>, Box<[Hash
         Exit,
     }
     let mut stack = vec![(Event::Enter, B::Block::ENTRY)];
-    let mut postorder = vec![];
+    let mut postorder = Vec::with_capacity(ir.block_count() as usize);
     let mut preds = vec![HashSet::new(); ir.block_count() as usize].into_boxed_slice();
     let mut seen = Bitmap::new(ir.block_count() as usize);
+    seen.set(0, true);
 
     while let Some((event, block)) = stack.pop() {
         match event {
@@ -145,9 +146,7 @@ fn calculate_postorder_and_preds<B: Blocks>(ir: &B) -> (Vec<B::Block>, Box<[Hash
                 for &succ in succs.iter() {
                     preds[succ.idx() as usize].insert(block);
                 }
-                // successors are reversed to improve some heuristics, for example this will make a
-                // reverse postorder traversal visit the true branch first which is often better
-                stack.extend(succs.iter().rev().filter_map(|&block| {
+                stack.extend(succs.iter().filter_map(|&block| {
                     (!seen.get(block.idx() as usize)).then(|| {
                         seen.set(block.idx() as usize, true);
                         (Event::Enter, block)

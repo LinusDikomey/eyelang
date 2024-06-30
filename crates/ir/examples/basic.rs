@@ -8,7 +8,7 @@ use ir::{
 
 fn main() {
     let mut types = IrTypes::new();
-    let mut builder = ir::builder::IrBuilder::new(&mut types);
+    let (mut builder, _params) = ir::builder::IrBuilder::new(&mut types, TypeRefs::EMPTY);
 
     let loop_body = builder.create_block();
     let end = builder.create_block();
@@ -21,7 +21,7 @@ fn main() {
     let three = builder.build_int(3, int_ty);
     builder.build_store(variable, three);
     let zero = builder.build_int(0, int_ty);
-    builder.terminate_block(Terminator::Goto(loop_body));
+    builder.terminate_block(Terminator::Goto(loop_body, &[]));
 
     builder.begin_block(loop_body);
     let loaded = builder.build_load(variable, int_ty);
@@ -30,8 +30,8 @@ fn main() {
     let is_zero = builder.build_bin_op(BinOp::Eq, new_value, zero, IrType::U1);
     builder.terminate_block(Terminator::Branch {
         cond: is_zero,
-        on_true: end,
-        on_false: loop_body,
+        on_true: (end, &[]),
+        on_false: (loop_body, &[]),
     });
 
     builder.begin_block(end);
@@ -77,19 +77,19 @@ fn main() {
 
 fn build_mul() -> Function {
     let mut types = IrTypes::new();
-    let params = types.add_multiple([IrType::I32; 2]);
-    let mut builder = IrBuilder::new(&mut types);
+    let param_types = types.add_multiple([IrType::I32; 2]);
+    let (mut builder, params) = IrBuilder::new(&mut types, param_types);
+    let x = params.nth(0);
+    let y = params.nth(1);
 
-    let x = builder.build_param(0, params.nth(0));
-    let y = builder.build_param(1, params.nth(1));
-    let res = builder.build_bin_op(BinOp::Mul, x, y, params.nth(0));
+    let res = builder.build_bin_op(BinOp::Mul, x, y, param_types.nth(0));
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
     Function {
         name: "mul".to_owned(),
         types,
-        params,
+        params: param_types,
         varargs: false,
         return_type: IrType::I32,
         ir: Some(ir),

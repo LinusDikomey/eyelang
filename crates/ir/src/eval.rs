@@ -80,6 +80,7 @@ unsafe fn eval_internal(
     stack: &mut StackMem,
 ) -> Result<Val, Error> {
     let mut values = vec![Val::Invalid; ir.inst.len()];
+    values[..params.len()].copy_from_slice(params);
 
     let get_ref_and_ty = |values: &[Val], r: Ref| -> (Val, IrType) {
         if let Some(r) = r.into_ref() {
@@ -148,7 +149,7 @@ unsafe fn eval_internal(
         let inst = ir.inst[pos as usize];
         let value = match inst.tag {
             super::Tag::Ret => break get_ref(&values, inst.data.un_op),
-            super::Tag::Param => params[inst.data.int32 as usize],
+            super::Tag::BlockArg => unreachable!("BlockArg should never exist inside a block"),
             super::Tag::Global => todo!("handle globals in const eval"),
             super::Tag::Uninit => Val::Invalid,
             super::Tag::Int => Val::Int(inst.data.int),
@@ -346,13 +347,17 @@ unsafe fn eval_internal(
                 }
             }
             super::Tag::Goto => {
-                let block = inst.data.block;
-                let target = ir.blocks[block.idx() as usize].0;
+                let (block, args) = inst.data.goto(&ir.extra);
+                let target = ir.blocks[block.idx() as usize].start;
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
                         return Err(Error::InfiniteLoop);
                     }
+                }
+                let arg_count = args.len() as u32;
+                for (r, i) in args.zip(target - arg_count..target) {
+                    values[i as usize] = get_ref(&values, r);
                 }
                 pos = target;
                 previous_block = current_block;
@@ -360,6 +365,9 @@ unsafe fn eval_internal(
                 continue;
             }
             super::Tag::Branch => {
+                let branch = inst.data.branch(&ir.extra);
+                todo!();
+                /*
                 let val = get_ref(&values, inst.data.ref_int.0);
                 let i = inst.data.ref_int.1 as usize;
                 let mut bytes = [0; 4];
@@ -373,7 +381,7 @@ unsafe fn eval_internal(
                     _ => panic!("bool value expected"),
                 };
                 let block = if val { a } else { b };
-                let target = ir.blocks[block.idx() as usize].0;
+                let target = ir.blocks[block.idx() as usize].start;
                 if target <= pos {
                     backwards_jumps += 1;
                     if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -384,7 +392,9 @@ unsafe fn eval_internal(
                 previous_block = current_block;
                 current_block = block;
                 continue;
+                */
             }
+            /*
             super::Tag::Phi => {
                 let mut val = None;
                 for i in 0..inst.data.extra_len.1 {
@@ -402,6 +412,7 @@ unsafe fn eval_internal(
                 }
                 val.expect("Invalid phi node: didn't go through any of the blocks")
             }
+            */
             super::Tag::IntToPtr => {
                 todo!("IntToPtr semantics, might have to be disallowed at compile time")
             }

@@ -23,22 +23,19 @@ fn main() {
 fn build_mul() -> Function {
     let mut types = IrTypes::new();
     let int_ty = types.add(IrType::I32);
-    let mut builder = IrBuilder::new(&mut types);
-
-    let x = builder.build_param(0, int_ty);
-    let y = builder.build_param(1, int_ty);
-    let res = builder.build_bin_op(BinOp::Mul, x, y, int_ty);
+    let param_types = types.add_multiple([types[int_ty], types[int_ty]]);
+    let (mut builder, params) = IrBuilder::new(&mut types, param_types);
+    let res = builder.build_bin_op(BinOp::Mul, params.nth(0), params.nth(1), int_ty);
     let s = builder.build_string("hello from eye ir!\n".as_bytes(), true);
     builder.build_call(ir::FunctionId::from_bytes(1u64.to_le_bytes()), [s], int_ty);
     builder.terminate_block(Terminator::Ret(res));
 
     let ir = builder.finish();
-    let params = types.add_multiple([types[int_ty], types[int_ty]]);
     let return_type = types[int_ty];
     Function {
         name: "mul".to_owned(),
         types,
-        params,
+        params: param_types,
         varargs: false,
         return_type,
         ir: Some(ir),

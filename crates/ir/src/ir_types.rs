@@ -207,6 +207,14 @@ pub struct TypeRefs {
     pub idx: u32,
     pub count: u32,
 }
+impl From<TypeRef> for TypeRefs {
+    fn from(value: TypeRef) -> Self {
+        Self {
+            idx: value.0,
+            count: 1,
+        }
+    }
+}
 impl TypeRefs {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
 

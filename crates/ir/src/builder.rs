@@ -1,4 +1,8 @@
-use crate::{BlockIndex, Data, FunctionIr, GlobalId, Instruction, Ref, Tag, TypeRefs};
+use std::ops::Index;
+
+use crate::{
+    BlockArgs, BlockIndex, BlockInfo, Data, FunctionIr, GlobalId, Instruction, Ref, Tag, TypeRefs,
+};
 
 use super::{
     ir_types::{IrType, IrTypes, TypeRef},
@@ -26,39 +30,55 @@ pub enum BinOp {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Terminator {
+pub enum Terminator<'a> {
     Ret(Ref),
-    Goto(BlockIndex),
+    Goto(BlockIndex, &'a [Ref]),
     Branch {
         cond: Ref,
-        on_true: BlockIndex,
-        on_false: BlockIndex,
+        on_true: (BlockIndex, &'a [Ref]),
+        on_false: (BlockIndex, &'a [Ref]),
     },
 }
 
 #[derive(Debug)]
 pub struct IrBuilder<'a> {
     pub inst: Vec<Instruction>,
-    pub emit: bool,
     current_block: u32,
     current_block_terminated: bool,
     next_block: u32,
-    pub blocks: Vec<(u32, u32)>,
+    blocks: Vec<BlockInfo>,
     pub extra: Vec<u8>,
     pub types: &'a mut IrTypes,
 }
 impl<'a> IrBuilder<'a> {
-    pub fn new(types: &'a mut IrTypes) -> Self {
-        Self {
-            inst: vec![],
-            emit: true,
-            current_block: 0,
-            current_block_terminated: false,
-            next_block: 1,
-            blocks: vec![(0, 0)],
-            extra: Vec::new(),
-            types,
-        }
+    pub fn new(types: &'a mut IrTypes, params: TypeRefs) -> (Self, BlockArgs) {
+        let inst = params
+            .iter()
+            .map(|ty| Instruction {
+                tag: Tag::BlockArg,
+                data: Data { none: () },
+                ty,
+            })
+            .collect();
+        (
+            Self {
+                inst,
+                current_block: 0,
+                current_block_terminated: false,
+                next_block: 1,
+                blocks: vec![BlockInfo {
+                    arg_count: params.count,
+                    start: params.count,
+                    len: 0,
+                }],
+                extra: Vec::new(),
+                types,
+            },
+            BlockArgs {
+                start: 0,
+                count: params.count,
+            },
+        )
     }
 
     /// Internal function to add an instruction. This will not add anything if `emit` is set to false.
@@ -67,38 +87,15 @@ impl<'a> IrBuilder<'a> {
         assert!(!self.current_block_terminated);
 
         let idx = Ref::index(self.inst.len() as u32);
-        if self.emit {
-            self.inst.push(inst);
-        }
+        self.inst.push(inst);
         idx
     }
 
-    #[must_use = "Use add_unused if the result of this instruction isn't needed."]
     #[cfg_attr(debug_assertions, track_caller)]
     fn add(&mut self, data: Data, tag: Tag, ty: impl Into<IdxOrTy>) -> Ref {
         debug_assert!(!self.current_block_terminated);
-        debug_assert!(
-            tag.is_usable(),
-            "The IR instruction {tag:?} doesn't have a usable result"
-        );
         let ty = self.ty(ty);
-        self.add_inst(Instruction {
-            data,
-            tag,
-            ty,
-            used: true,
-        })
-    }
-
-    #[cfg_attr(debug_assertions, track_caller)]
-    fn add_unused(&mut self, tag: Tag, data: Data) {
-        debug_assert!(!tag.is_usable());
-        self.add_inst(Instruction {
-            data,
-            tag,
-            ty: TypeRef::NONE,
-            used: false,
-        });
+        self.add_inst(Instruction { data, tag, ty })
     }
 
     fn extra_data(&mut self, bytes: &[u8]) -> u32 {
@@ -110,29 +107,53 @@ impl<'a> IrBuilder<'a> {
     #[must_use = "block has to be begun somewhere"]
     pub fn create_block(&mut self) -> BlockIndex {
         let idx = BlockIndex(self.next_block);
-        if self.emit {
-            self.next_block += 1;
-            self.blocks.push((u32::MAX, 0));
-        }
+        self.next_block += 1;
+        self.blocks.push(BlockInfo {
+            arg_count: 0,
+            start: 0,
+            len: 0,
+        });
         idx
     }
 
-    #[track_caller]
     pub fn begin_block(&mut self, idx: BlockIndex) {
-        if self.emit {
-            debug_assert!(
-                self.current_block_terminated,
-                "Can't begin next block without exiting previous one"
-            );
-            self.current_block = idx.0;
-            self.current_block_terminated = false;
-            debug_assert_eq!(
-                self.blocks[idx.0 as usize],
-                (u32::MAX, 0),
-                "begin_block called twice on the same block"
-            );
-            let block_pos = self.inst.len() as u32;
-            self.blocks[idx.0 as usize] = (block_pos, 0);
+        self.begin_block_with_args(idx, TypeRefs::EMPTY);
+    }
+
+    pub fn begin_block_with_args(&mut self, idx: BlockIndex, args: TypeRefs) -> BlockArgs {
+        debug_assert!(
+            self.current_block_terminated,
+            "Can't begin next block without exiting previous one"
+        );
+        self.current_block = idx.0;
+        self.current_block_terminated = false;
+        debug_assert_eq!(
+            self.blocks[idx.0 as usize],
+            BlockInfo {
+                arg_count: 0,
+                start: 0,
+                len: 0
+            },
+            "begin_block called twice on the same block"
+        );
+
+        let block_args_start = self.inst.len() as u32;
+        for arg in args.iter() {
+            self.inst.push(Instruction {
+                tag: Tag::BlockArg,
+                data: Data { none: {} },
+                ty: arg,
+            });
+        }
+        let block_pos = self.inst.len() as u32;
+        self.blocks[idx.0 as usize] = BlockInfo {
+            arg_count: args.count,
+            start: block_pos,
+            len: 0,
+        };
+        BlockArgs {
+            start: block_args_start,
+            count: args.count,
         }
     }
 
@@ -147,15 +168,14 @@ impl<'a> IrBuilder<'a> {
         );
 
         #[cfg(debug_assertions)]
-        for ((pos, len), i) in self.blocks.iter().copied().zip(0..) {
-            assert_ne!(pos, u32::MAX, "block {} wasn't initialized", BlockIndex(i));
-            assert_ne!(len, 0, "block {} is empty", BlockIndex(i));
+        for (info, i) in self.blocks.iter().copied().zip(0..) {
+            assert_ne!(info.len, 0, "block {} is empty", BlockIndex(i));
         }
 
         let block_indices = self
             .blocks
             .iter()
-            .map(|&(start, _)| start)
+            .map(|info| info.start - info.arg_count)
             .zip((0..).map(BlockIndex))
             .collect();
 
@@ -174,19 +194,35 @@ impl<'a> IrBuilder<'a> {
     pub fn terminate_block(&mut self, terminator: Terminator) {
         let (tag, data) = match terminator {
             Terminator::Ret(val) => (Tag::Ret, Data { un_op: val }),
-            Terminator::Goto(block) => {
+            Terminator::Goto(block, args) => {
                 debug_assert!(block != BlockIndex::MISSING);
-                (Tag::Goto, Data { block })
+                let extra = self.extra_data(&block.bytes());
+                for arg in args {
+                    self.extra_data(&arg.to_bytes());
+                }
+                (
+                    Tag::Goto,
+                    Data {
+                        extra_len: (extra, args.len() as _),
+                    },
+                )
             }
             Terminator::Branch {
                 cond,
                 on_true,
                 on_false,
             } => {
-                debug_assert!(on_true != BlockIndex::MISSING);
-                debug_assert!(on_false != BlockIndex::MISSING);
-                let branch_extra = self.extra_data(&on_true.0.to_le_bytes());
-                self.extra_data(&on_false.0.to_le_bytes());
+                debug_assert!(on_true.0 != BlockIndex::MISSING);
+                debug_assert!(on_false.0 != BlockIndex::MISSING);
+                let branch_extra = self.extra_data(&on_true.0 .0.to_le_bytes());
+                for arg in on_true.1 {
+                    self.extra_data(&arg.to_bytes());
+                }
+                self.extra_data(&on_false.0.bytes());
+                self.extra_data(&(on_false.1.len() as u32).to_le_bytes());
+                for arg in on_false.1 {
+                    self.extra_data(&arg.to_bytes());
+                }
                 (
                     Tag::Branch,
                     Data {
@@ -199,17 +235,12 @@ impl<'a> IrBuilder<'a> {
             data,
             tag,
             ty: TypeRef::NONE,
-            used: false,
         });
         self.current_block_terminated = true;
-        let block_start = self.blocks[self.current_block as usize].0;
-        assert_eq!(self.blocks[self.current_block as usize].1, 0);
+        let block_start = self.blocks[self.current_block as usize].start;
+        assert_eq!(self.blocks[self.current_block as usize].len, 0);
         let len = (self.inst.len() - block_start as usize) as u32;
-        self.blocks[self.current_block as usize].1 = len;
-    }
-
-    pub fn build_param(&mut self, param_idx: u32, param_ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { int32: param_idx }, Tag::Param, param_ty)
+        self.blocks[self.current_block as usize].len = len;
     }
 
     pub fn _build_uninit(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
@@ -250,7 +281,7 @@ impl<'a> IrBuilder<'a> {
     }
 
     pub fn build_store(&mut self, var: Ref, val: Ref) {
-        self.add_unused(Tag::Store, Data { bin_op: (var, val) });
+        self.add(Data { bin_op: (var, val) }, Tag::Store, TypeRef::NONE);
     }
 
     pub fn build_string(&mut self, string: &[u8], null_terminate: bool) -> Ref {
@@ -408,27 +439,6 @@ impl<'a> IrBuilder<'a> {
         self.add(Data { un_op: val }, Tag::PtrToInt, target_ty)
     }
 
-    pub fn build_phi(
-        &mut self,
-        branches: impl IntoIterator<Item = (BlockIndex, Ref)>,
-        expected: impl Into<IdxOrTy>,
-    ) -> Ref {
-        let extra = self.extra.len() as u32;
-        let mut branch_count = 0;
-        for (branch, r) in branches {
-            branch_count += 1;
-            self.extra_data(&branch.bytes());
-            self.extra_data(&r.to_bytes());
-        }
-        self.add(
-            Data {
-                extra_len: (extra, branch_count),
-            },
-            Tag::Phi,
-            expected,
-        )
-    }
-
     /// TODO: proper semantics for asm expressions
     pub fn _build_asm(&mut self, asm_str: &str, values: impl IntoIterator<Item = Ref>) {
         assert!(
@@ -445,11 +455,12 @@ impl<'a> IrBuilder<'a> {
             count <= u16::MAX as usize,
             "too many arguments for inline assembly"
         );
-        self.add_unused(
-            Tag::Asm,
+        self.add(
             Data {
                 asm: (extra, asm_str.len() as u16, count as u16),
             },
+            Tag::Asm,
+            TypeRef::NONE,
         );
     }
 }

@@ -5,7 +5,7 @@ use super::{
     PHYSICAL_BIT,
 };
 
-pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>, log: bool) {
+pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>) {
     let intersecting_precolored = analyze_liveness(mir);
     perform_regalloc(mir, &intersecting_precolored);
 }

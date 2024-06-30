@@ -11,21 +11,18 @@ pub struct Instruction {
     pub data: Data,
     pub tag: Tag,
     pub ty: TypeRef,
-    pub used: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 #[allow(unused)] // FIXME: these instructions should be cleaned up if they still aren't used
 pub enum Tag {
-    /// Get a function parameter. Type has to match the signature
-    Param,
-
     /// get a pointer to a global
     Global,
 
-    /// decide on the value depending on previously visited block
-    Phi,
+    /// Block arg pseudo-instruction to give each block arg a Ref. Will be inserted automatically
+    /// and should never be present inside the block itself.
+    BlockArg,
 
     // block terminators
     /// return from the current function
@@ -105,7 +102,7 @@ impl Tag {
     pub fn union_data_type(self) -> DataVariant {
         use DataVariant as V;
         match self {
-            Tag::Param => V::Int32,
+            Tag::BlockArg => unreachable!(),
             Tag::Global => V::Global,
             Tag::Uninit => V::None,
             Tag::Ret
@@ -142,9 +139,8 @@ impl Tag {
             | Tag::GE => V::BinOp,
 
             Tag::MemberValue => V::RefInt,
-            Tag::Goto => V::Block,
+            Tag::Goto => V::Goto,
             Tag::Branch => V::Branch,
-            Tag::Phi => V::ExtraBranchRefs,
             Tag::Asm => V::Asm,
             //Tag::EnumTag | Tag::EnumValueTag => UnOp,
             //Tag::EnumVariantMember | Tag::EnumValueVariantMember => VariantMember,
@@ -190,7 +186,7 @@ pub union Data {
     /// extra_index, length of string, amount of arguments
     pub asm: (u32, u16, u16),
     pub none: (),
-    pub block: BlockIndex,
+    pub block_extra: (BlockIndex, u32),
     pub global: GlobalId,
 }
 impl Data {
@@ -222,8 +218,23 @@ impl Data {
         unsafe { self.bin_op }
     }
 
-    pub fn block(self) -> BlockIndex {
-        unsafe { self.block }
+    pub fn goto<'a>(
+        self,
+        extra: &'a [u8],
+    ) -> (BlockIndex, impl 'a + ExactSizeIterator<Item = Ref>) {
+        let (i, n) = self.extra_len();
+        let i = i as usize;
+        let mut bytes = [0; 4];
+        bytes.copy_from_slice(&extra[i..i + 4]);
+        let block = BlockIndex::from_bytes(bytes);
+        (
+            block,
+            (0..n).map(move |x| {
+                let i = i + 4 + 4 * x as usize;
+                bytes.copy_from_slice(&extra[i..i + 4]);
+                Ref::from_bytes(bytes)
+            }),
+        )
     }
 
     pub fn branch(&self, extra: &[u8]) -> (Ref, BlockIndex, BlockIndex) {
@@ -270,7 +281,7 @@ pub enum DataVariant {
     LargeInt,
     Global,
     TypeTableIdx,
-    Block,
+    Goto,
     MemberPtr,
     ArrayIndex,
     Branch,
