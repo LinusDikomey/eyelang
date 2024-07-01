@@ -126,7 +126,7 @@ fn analyze_inst_liveness<I: Instruction>(
         }
     }
     for &reg in inst.inst.implicit_defs() {
-        reg.set_bit(live_precolored, true);
+        reg.set_bit(live_precolored, false);
     }
 }
 
@@ -212,11 +212,27 @@ fn perform_regalloc<I: Instruction>(
                     _ => {}
                 }
             }
-            for (reg, usage) in inst.reg_ops_mut() {
+            for (reg, _) in inst
+                .reg_ops_mut()
+                .filter(|&(_, usage)| usage != OpUsage::Def)
+            {
+                if let RegType::Virtual(r) = decode_reg::<I::Register>(*reg) {
+                    // Update Def/DefUse with the chosen register and set the free bit if it's dead.
+                    let dead = *reg & DEAD_BIT != 0;
+                    let chosen_reg = chosen[r.0 as usize];
+                    *reg = PHYSICAL_BIT | chosen_reg.encode() as u64;
+                    if dead {
+                        chosen_reg.set_bit(&mut free, true);
+                        // always preserve the dead bit
+                        *reg |= DEAD_BIT;
+                    }
+                }
+            }
+            for (reg, usage) in inst.reg_ops_mut().rev() {
                 let dead = *reg & DEAD_BIT != 0;
                 match decode_reg::<I::Register>(*reg) {
                     RegType::Reg(r) => {
-                        r.set_bit(&mut free, !dead);
+                        r.set_bit(&mut free, dead);
                     }
                     RegType::Virtual(r) => {
                         if usage == OpUsage::Def {
@@ -235,20 +251,6 @@ fn perform_regalloc<I: Instruction>(
                                 *reg |= DEAD_BIT;
                             }
                         }
-                    }
-                }
-            }
-            for (reg, _usage) in inst.reg_ops_mut() {
-                if let RegType::Virtual(r) = decode_reg::<I::Register>(*reg) {
-                    // All Defs where already replaced with physical registers so only DefUse and Use
-                    // remain. Update them with the chosen register and set the free bit if it's dead.
-                    let dead = *reg & DEAD_BIT != 0;
-                    let chosen_reg = chosen[r.0 as usize];
-                    *reg = PHYSICAL_BIT | chosen_reg.encode() as u64;
-                    if dead {
-                        chosen_reg.set_bit(&mut free, true);
-                        // always preserve the dead bit
-                        *reg |= DEAD_BIT;
                     }
                 }
             }

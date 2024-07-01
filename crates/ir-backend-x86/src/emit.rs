@@ -44,6 +44,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
         for inst in ir.block_insts(block) {
             let rr = || (r(inst.ops[0]), r(inst.ops[1]));
             let ri = || (r(inst.ops[0]), inst.ops[1]);
+            let rri = || (r(inst.ops[0]), r(inst.ops[1]), inst.ops[2]);
             let rm = || (r(inst.ops[0]), m(inst.ops[1], inst.ops[2]));
             let mr = || (m(inst.ops[0], inst.ops[1]), r(inst.ops[2]));
             let mi = || (m(inst.ops[0], inst.ops[1]), inst.ops[2]);
@@ -83,38 +84,15 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                         }
                     }
                 }
-                Inst::addrr32 => {
-                    let (a, b) = rr();
-                    let modrm = encode_modrm_rr(a, b, false);
-                    if modrm.rex != 0 {
-                        text.push(modrm.rex);
-                    }
-                    text.extend([0x01, modrm.modrm]);
-                }
-                Inst::addrm32 => {
-                    let (r, (ptr, off)) = rm();
-                    let modrm = encode_modrm_rm(r, ptr, off, false);
-                    if modrm.rex != 0 {
-                        text.push(modrm.rex);
-                    }
-                    text.extend([0x03, modrm.modrm]);
-                    off.write(text);
-                }
+                Inst::addrr32 => inst_rr(text, &[0x01], rr()),
+                Inst::addrm32 => inst_rm(text, &[0x03], rm()),
                 Inst::addri32 | Inst::addri64 => {
                     let wide = inst.inst == Inst::addri64;
-                    let (a, b) = ri();
-                    if b == 0 {
+                    let (r, i) = ri();
+                    if i == 0 {
                         continue;
                     }
-                    let modrm = encode_modrm_ri(a, wide);
-                    if modrm.rex != 0 {
-                        text.push(modrm.rex);
-                    }
-                    if b <= u8::MAX as u64 {
-                        text.extend([0x83, modrm.modrm, b as u8]);
-                    } else {
-                        todo!("handle larger imm values");
-                    }
+                    inst_ri(text, &[0x83], wide, 0, (r, i));
                 }
                 Inst::subrr32 => {
                     let (a, b) = rr();
@@ -124,20 +102,33 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     }
                     text.extend([0x29, modrm.modrm]);
                 }
-                Inst::subri64 => {
-                    let (a, b) = ri();
-                    if b == 0 {
+                Inst::subri32 | Inst::subri64 => {
+                    let wide = inst.inst == Inst::subri64;
+                    let (r, i) = ri();
+                    if i == 0 {
+                        continue;
+                    };
+                    inst_ri(text, &[0x83], wide, 5 << 3, (r, i));
+                }
+                Inst::imulrr32 => inst_rr(text, &[0x0F, 0xAF], swap(rr())),
+                Inst::imulrm32 => inst_rm(text, &[0x0F, 0xAF], rm()),
+                Inst::imulrri32 => {
+                    let (a, b, i) = rri();
+                    if i == 1 {
                         continue;
                     }
-                    let modrm = encode_modrm_ri(a, true);
+                    let modrm = encode_modrm_rr(b, a, false);
                     if modrm.rex != 0 {
                         text.push(modrm.rex);
                     }
-                    let o = 5;
-                    if let Ok(b8) = b.try_into() {
-                        text.extend([0x83, modrm.modrm | o << 3, b8]);
+                    let imm = i as i64;
+                    let imm8: Result<i8, _> = imm.try_into();
+                    if let Ok(imm8) = imm8 {
+                        text.extend([0x6B, modrm.modrm, imm8 as u8]);
                     } else {
-                        todo!("handle larger imm values");
+                        let imm32: i32 = imm.try_into().expect("TODO: mul with 64-bit imm");
+                        text.extend([0x69, modrm.modrm]);
+                        text.extend(imm32.to_le_bytes());
                     }
                 }
                 Inst::movrr32 | Inst::movrr64 => {
@@ -153,20 +144,13 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 }
                 Inst::movri32 => {
                     let (a, b) = ri();
-                    let modrm = encode_modrm_ri(a, false);
-                    if modrm.rex != 0 {
-                        text.push(modrm.rex);
+                    let imm32: i32 = b.try_into().unwrap();
+                    let [b0, b1, b2, b3] = imm32.to_le_bytes();
+                    let (r, b) = encode_modrm_reg(a);
+                    if b {
+                        text.push(REX | REX_B);
                     }
-                    if b <= u32::MAX as u64 {
-                        let [b0, b1, b2, b3] = (b as u32).to_le_bytes();
-                        let (r, b) = encode_modrm_reg(a);
-                        if b {
-                            text.push(REX | REX_B);
-                        }
-                        text.extend([0xB8 + r, modrm.modrm, b0, b1, b2, b3]);
-                    } else {
-                        todo!("handle larger immediate values")
-                    }
+                    text.extend([0xB8 + r, b0, b1, b2, b3]);
                 }
                 Inst::movrm32 => {
                     let (r, (ptr, off)) = rm();
@@ -302,6 +286,42 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             .unwrap();
         let i = start + offset_location as usize;
         text[i..i + 4].copy_from_slice(&offset.to_le_bytes());
+    }
+}
+
+fn swap<T>(t: (T, T)) -> (T, T) {
+    (t.1, t.0)
+}
+
+fn inst_rr(text: &mut Vec<u8>, opcode: &[u8], (a, b): (Reg, Reg)) {
+    let modrm = encode_modrm_rr(a, b, false);
+    if modrm.rex != 0 {
+        text.push(modrm.rex);
+    }
+    text.extend(opcode);
+    text.push(modrm.modrm);
+}
+
+fn inst_rm(text: &mut Vec<u8>, opcode: &[u8], (r, (ptr, off)): (Reg, (Reg, OffsetClass))) {
+    let modrm = encode_modrm_rm(r, ptr, off, false);
+    if modrm.rex != 0 {
+        text.push(modrm.rex);
+    }
+    text.extend(opcode);
+    text.push(modrm.modrm);
+    off.write(text);
+}
+
+fn inst_ri(text: &mut Vec<u8>, opcode: &[u8], wide: bool, modrm_bits: u8, (r, imm): (Reg, u64)) {
+    let modrm = encode_modrm_ri(r, wide);
+    if modrm.rex != 0 {
+        text.push(modrm.rex);
+    }
+    if let Ok(b8) = imm.try_into() {
+        text.extend(opcode);
+        text.extend([modrm.modrm | modrm_bits, b8]);
+    } else {
+        todo!("handle larger imm values");
     }
 }
 

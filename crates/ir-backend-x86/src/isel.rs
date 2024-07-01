@@ -1,12 +1,81 @@
 use ir::{
     mc::{BlockBuilder, MachineIR, MirBlock, Op, VReg, VRegs},
-    BlockGraph, BlockIndex, FunctionId, IrType, Tag,
+    BlockGraph, BlockIndex, FunctionId, IrType, Ref, Tag,
 };
 
 use crate::isa::{Inst, Reg};
 
 const ABI_PARAM_REGISTERS: [Reg; 6] = [Reg::edi, Reg::esi, Reg::edx, Reg::ecx, Reg::r8d, Reg::r9d];
 const ABI_RETURN_REGISTER: Reg = Reg::rax;
+
+pub fn codegen(
+    body: &ir::FunctionIr,
+    function: &ir::Function,
+    types: &ir::IrTypes,
+) -> MachineIR<Inst> {
+    let mut mir = MachineIR::new();
+    let mut builder = mir.begin_block(MirBlock::ENTRY);
+    let mut values = vec![MCValue::None; body.inst.len()];
+
+    builder.inst(Inst::push64, [Op::Reg(Reg::rbp)]);
+    builder.inst(Inst::movrr64, [Op::Reg(Reg::rbp), Op::Reg(Reg::rsp)]);
+    // This instruction's immediate operand will be updated at the end with the used stack space.
+    // In the future, the stack size might be known a priori when the IR tracks a list of stack
+    // slots.
+    let stack_setup_indices = vec![builder.next_inst_index()];
+    builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
+
+    let (mir_entry_block, entry_block_args) = builder.create_block(function.params.count);
+    builder.register_successor(mir_entry_block);
+    // TODO: handle args abi correctly with different arg sizes and more than 6 args.
+    builder.build_copyargs(
+        Inst::Copyargs,
+        entry_block_args.iter().map(|vreg| vreg.op()),
+        ABI_PARAM_REGISTERS
+            .iter()
+            .take(entry_block_args.iter().len())
+            .map(|&arg_phys_reg| Op::Reg(arg_phys_reg)),
+    );
+
+    let block_map = body
+        .blocks()
+        .map(|block| {
+            let args = body.get_block_args(block);
+            let (mir_block, mir_args) = if block == BlockIndex::ENTRY {
+                (mir_entry_block, entry_block_args)
+            } else {
+                builder.create_block(args.count() as u32)
+            };
+            for (arg, mir_arg) in args.iter().zip(mir_args.iter()) {
+                values[arg as usize] = MCValue::Register(MCReg::Virtual(mir_arg));
+                if block == BlockIndex::ENTRY {}
+            }
+            (mir_block, mir_args)
+        })
+        .collect();
+    let mut gen = Gen {
+        function,
+        body,
+        types,
+        stack_setup_indices,
+        block_map,
+    };
+
+    let graph = BlockGraph::calculate(gen.body);
+
+    for &block in graph.postorder().iter().rev() {
+        let mir_block = gen.block_map[block.idx() as usize].0;
+        let mut builder = mir.begin_block(mir_block);
+        for (i, inst) in body.get_block(block) {
+            values[i as usize] = gen.gen_inst(inst, &mut builder, &values, &body.extra);
+        }
+    }
+
+    for idx in gen.stack_setup_indices {
+        mir.replace_operand(idx, 1, Op::Imm(mir.stack_offset()));
+    }
+    mir
+}
 
 struct Gen<'a> {
     function: &'a ir::Function,
@@ -31,14 +100,14 @@ impl<'a> Gen<'a> {
     ) -> MCValue {
         match inst.tag {
             Tag::BlockArg => unreachable!(),
-            Tag::Int => MCValue::Imm(unsafe { inst.data.int }),
+            Tag::Int => MCValue::Imm(inst.data.int()),
             Tag::Decl => {
-                let layout = self.types.layout(self.types[unsafe { inst.data.ty }]);
+                let layout = self.types.layout(self.types[inst.data.ty()]);
                 let offset = -(builder.create_stack_slot(layout) as i64) - layout.size as i64;
                 MCValue::PtrOffset(MCReg::Register(Reg::rbp), offset)
             }
             Tag::Load => {
-                let ptr = get_ref(&values, unsafe { inst.data.un_op });
+                let ptr = get_ref(&values, inst.data.un_op());
                 match self.types[inst.ty] {
                     IrType::Unit => MCValue::None,
                     IrType::I32 => match ptr {
@@ -58,7 +127,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Tag::Store => {
-                let (ptr, val) = unsafe { inst.data.bin_op };
+                let (ptr, val) = inst.data.bin_op();
                 let ptr = get_ref(&values, ptr);
                 let val = get_ref(&values, val);
                 match val {
@@ -81,49 +150,30 @@ impl<'a> Gen<'a> {
                 }
                 MCValue::None
             }
-            Tag::Add => {
-                let ty = self.types[inst.ty];
-                let (lhs, rhs) = inst.data.bin_op();
-                let lhs = get_ref(&values, lhs);
-                let rhs = get_ref(&values, rhs);
-                let changed_reg = match ty {
-                    IrType::I32 => match (lhs, rhs) {
-                        (MCValue::Register(lhs), MCValue::Register(rhs)) => {
-                            builder.inst(Inst::addrr32, [lhs.op(), rhs.op()]);
-                            lhs
-                        }
-                        (MCValue::Register(reg), MCValue::Imm(imm))
-                        | (MCValue::Imm(imm), MCValue::Register(reg)) => {
-                            builder.inst(Inst::addri32, [reg.op(), Op::Imm(imm)]);
-                            reg
-                        }
-                        (MCValue::Register(reg), MCValue::Indirect(ptr, off))
-                        | (MCValue::Indirect(ptr, off), MCValue::Register(reg)) => {
-                            builder.inst(Inst::addrm32, [reg.op(), ptr.op(), Op::Imm(off as u64)]);
-                            reg
-                        }
-                        (MCValue::Indirect(a, a_off), other) => {
-                            let reg = builder.reg();
-                            builder.inst(Inst::movrm32, [reg.op(), a.op(), Op::Imm(a_off as u64)]);
-                            match other {
-                                MCValue::Indirect(b, b_off) => builder
-                                    .inst(Inst::addrm32, [reg.op(), b.op(), Op::Imm(b_off as u64)]),
-                                MCValue::Imm(imm) => {
-                                    builder.inst(Inst::addri32, [reg.op(), Op::Imm(imm)])
-                                }
-                                _ => unreachable!(),
-                            }
-                            MCReg::Virtual(reg)
-                        }
-                        _ => todo!("add {lhs:?}, {rhs:?}"),
-                    },
-                    _ => todo!("handle add of type {ty:?}"),
-                };
-
-                let v = builder.reg();
-                builder.inst(Inst::Copy, [Op::VReg(v), changed_reg.op()]);
-                MCValue::Register(MCReg::Virtual(v))
-            }
+            Tag::Add => self.bin_op_commutative(
+                builder,
+                values,
+                inst.data.bin_op(),
+                self.types[inst.ty],
+                BinOpInsts {
+                    rr: Inst::addrr32,
+                    ri: Inst::addri32,
+                    is_rri: false,
+                    rm: Inst::addrm32,
+                },
+            ),
+            Tag::Mul => self.bin_op_commutative(
+                builder,
+                values,
+                inst.data.bin_op(),
+                self.types[inst.ty],
+                BinOpInsts {
+                    rr: Inst::imulrr32,
+                    ri: Inst::imulrri32,
+                    is_rri: true,
+                    rm: Inst::imulrm32,
+                },
+            ),
             Tag::Sub => {
                 let ty = self.types[inst.ty];
                 let (lhs, rhs) = inst.data.bin_op();
@@ -143,7 +193,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Tag::Ret => {
-                let val = unsafe { inst.data.un_op };
+                let val = inst.data.un_op();
                 let val = get_ref(&values, val);
                 match self.function.return_type {
                     IrType::Unit => {
@@ -157,7 +207,7 @@ impl<'a> Gen<'a> {
                                 builder.inst(Inst::Copy, [Op::Reg(Reg::eax), reg.op()]);
                             }
                             MCValue::Imm(imm) => {
-                                builder.inst(Inst::Copy, [Op::Reg(Reg::eax), Op::Imm(imm)]);
+                                builder.inst(Inst::movri32, [Op::Reg(Reg::eax), Op::Imm(imm)]);
                             }
                             MCValue::Indirect(reg, offset) => builder.inst(
                                 Inst::movrm32,
@@ -174,7 +224,7 @@ impl<'a> Gen<'a> {
                 MCValue::None
             }
             Tag::Call => {
-                let (extra_start, arg_count) = unsafe { inst.data.extra_len };
+                let (extra_start, arg_count) = inst.data.extra_len();
                 let start = extra_start as usize;
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&self.body.extra[start..start + 8]);
@@ -197,7 +247,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE => {
-                let (a, b) = unsafe { inst.data.bin_op };
+                let (a, b) = inst.data.bin_op();
                 let ty = self.body.get_ref_ty(a, self.types);
                 let a = get_ref(&values, a);
                 let b = get_ref(&values, b);
@@ -291,75 +341,68 @@ impl<'a> Gen<'a> {
         });
         builder.build_copyargs(Inst::Copyargs, t_to, t_from);
     }
+
+    fn bin_op_commutative(
+        &mut self,
+        builder: &mut BlockBuilder<Inst>,
+        values: &[MCValue],
+        (lhs, rhs): (Ref, Ref),
+        ty: IrType,
+        insts32: BinOpInsts,
+    ) -> MCValue {
+        let lhs = get_ref(&values, lhs);
+        let rhs = get_ref(&values, rhs);
+        let changed_reg = match ty {
+            IrType::U32 | IrType::I32 => match (lhs, rhs) {
+                (MCValue::Undef, _) | (_, MCValue::Undef) => return MCValue::Undef,
+                (MCValue::Register(lhs), MCValue::Register(rhs)) => {
+                    builder.inst(insts32.rr, [lhs.op(), rhs.op()]);
+                    lhs
+                }
+                (MCValue::Register(reg), MCValue::Imm(imm))
+                | (MCValue::Imm(imm), MCValue::Register(reg)) => {
+                    if insts32.is_rri {
+                        let out = builder.reg();
+                        builder.inst(insts32.ri, [out.op(), reg.op(), Op::Imm(imm)]);
+                        MCReg::Virtual(out)
+                    } else {
+                        builder.inst(insts32.ri, [reg.op(), Op::Imm(imm)]);
+                        reg
+                    }
+                }
+                (MCValue::Register(reg), MCValue::Indirect(ptr, off))
+                | (MCValue::Indirect(ptr, off), MCValue::Register(reg)) => {
+                    builder.inst(insts32.rm, [reg.op(), ptr.op(), Op::Imm(off as u64)]);
+                    reg
+                }
+                (MCValue::Indirect(a, a_off), other) => {
+                    let reg = builder.reg();
+                    builder.inst(Inst::movrm32, [reg.op(), a.op(), Op::Imm(a_off as u64)]);
+                    match other {
+                        MCValue::Indirect(b, b_off) => {
+                            builder.inst(insts32.rm, [reg.op(), b.op(), Op::Imm(b_off as u64)])
+                        }
+                        MCValue::Imm(imm) => builder.inst(insts32.ri, [reg.op(), Op::Imm(imm)]),
+                        _ => unreachable!(),
+                    }
+                    MCReg::Virtual(reg)
+                }
+                _ => todo!("add {lhs:?}, {rhs:?}"),
+            },
+            _ => todo!("handle add of type {ty:?}"),
+        };
+
+        let v = builder.reg();
+        builder.inst(Inst::Copy, [Op::VReg(v), changed_reg.op()]);
+        MCValue::Register(MCReg::Virtual(v))
+    }
 }
 
-pub fn codegen(
-    body: &ir::FunctionIr,
-    function: &ir::Function,
-    types: &ir::IrTypes,
-) -> MachineIR<Inst> {
-    let mut mir = MachineIR::new();
-    let mut builder = mir.begin_block(MirBlock::ENTRY);
-    let mut values = vec![MCValue::None; body.inst.len()];
-
-    builder.inst(Inst::push64, [Op::Reg(Reg::rbp)]);
-    builder.inst(Inst::movrr64, [Op::Reg(Reg::rbp), Op::Reg(Reg::rsp)]);
-    // This instruction's immediate operand will be updated at the end with the used stack space.
-    // In the future, the stack size might be known a priori when the IR tracks a list of stack
-    // slots.
-    let stack_setup_indices = vec![builder.next_inst_index()];
-    builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
-
-    let (mir_entry_block, entry_block_args) = builder.create_block(function.params.count);
-    builder.register_successor(mir_entry_block);
-    // TODO: handle args abi correctly with different arg sizes and more than 6 args.
-    builder.build_copyargs(
-        Inst::Copyargs,
-        entry_block_args.iter().map(|vreg| vreg.op()),
-        ABI_PARAM_REGISTERS
-            .iter()
-            .take(entry_block_args.iter().len())
-            .map(|&arg_phys_reg| Op::Reg(arg_phys_reg)),
-    );
-
-    let block_map = body
-        .blocks()
-        .map(|block| {
-            let args = body.get_block_args(block);
-            let (mir_block, mir_args) = if block == BlockIndex::ENTRY {
-                (mir_entry_block, entry_block_args)
-            } else {
-                builder.create_block(args.count() as u32)
-            };
-            for (arg, mir_arg) in args.iter().zip(mir_args.iter()) {
-                values[arg as usize] = MCValue::Register(MCReg::Virtual(mir_arg));
-                if block == BlockIndex::ENTRY {}
-            }
-            (mir_block, mir_args)
-        })
-        .collect();
-    let mut gen = Gen {
-        function,
-        body,
-        types,
-        stack_setup_indices,
-        block_map,
-    };
-
-    let graph = BlockGraph::calculate(gen.body);
-
-    for &block in graph.postorder().iter().rev() {
-        let mir_block = gen.block_map[block.idx() as usize].0;
-        let mut builder = mir.begin_block(mir_block);
-        for (i, inst) in body.get_block(block) {
-            values[i as usize] = gen.gen_inst(inst, &mut builder, &values, &body.extra);
-        }
-    }
-
-    for idx in gen.stack_setup_indices {
-        mir.replace_operand(idx, 1, Op::Imm(mir.stack_offset()));
-    }
-    mir
+struct BinOpInsts {
+    rr: Inst,
+    ri: Inst,
+    is_rri: bool,
+    rm: Inst,
 }
 
 #[derive(Debug, Clone, Copy)]

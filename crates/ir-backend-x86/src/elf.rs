@@ -253,7 +253,7 @@ pub struct SectionHeaderFlags {
     pub strings: bool,
 }
 impl SectionHeaderFlags {
-    fn to_bytes32(self) -> [u8; 4] {
+    fn _to_bytes32(self) -> [u8; 4] {
         let mut bits: u32 = 0;
         if self.write {
             bits |= 1 << 0;

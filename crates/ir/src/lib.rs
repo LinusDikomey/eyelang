@@ -127,7 +127,7 @@ impl FunctionIr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BlockInfo {
+pub struct BlockInfo {
     arg_count: u32,
     start: u32,
     len: u32,

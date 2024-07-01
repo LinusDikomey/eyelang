@@ -22,8 +22,8 @@ fn build_diff() -> Function {
     let mut types = IrTypes::new();
     let int_ty = types.add(IrType::I32);
     let param_types = types.add_multiple([types[int_ty], types[int_ty]]);
+    let return_type = types[int_ty];
     let (mut builder, params) = IrBuilder::new(&mut types, param_types);
-
     let x = params.nth(0);
     let y = params.nth(1);
 
@@ -49,7 +49,6 @@ fn build_diff() -> Function {
     builder.terminate_block(Terminator::Ret(args.nth(0)));
 
     let ir = builder.finish();
-    let return_type = types[int_ty];
     Function {
         name: "diff".to_owned(),
         types,

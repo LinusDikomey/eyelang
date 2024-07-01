@@ -226,6 +226,28 @@ fn write_ref(f: &mut fmt::Formatter<'_>, r: Ref) -> fmt::Result {
     }
 }
 
+fn write_block_args(
+    f: &mut fmt::Formatter,
+    arg_count: u32,
+    extra: &[u8],
+    idx: usize,
+) -> fmt::Result {
+    let mut bytes = [0; 4];
+    if arg_count != 0 {
+        cwrite!(f, "(")?;
+        for i in 0..arg_count {
+            if i != 0 {
+                cwrite!(f, ", ")?;
+            }
+            let i = idx + i as usize * 4;
+            bytes.copy_from_slice(&extra[i..i + 4]);
+            write_ref(f, Ref::from_bytes(bytes))?;
+        }
+        cwrite!(f, ")")?;
+    }
+    Ok(())
+}
+
 fn display_data(
     inst: &Instruction,
     f: &mut fmt::Formatter<'_>,
@@ -239,25 +261,6 @@ fn display_data(
             DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int),
             DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
             DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global),
-            DataVariant::Goto => {
-                let (block, extra_idx) = inst.data.goto();
-                let arg_count = blocks[block.idx() as usize].arg_count;
-                cwrite!(f, "{}", block)?;
-                let mut bytes = [0; 4];
-                if arg_count != 0 {
-                    cwrite!(f, "(")?;
-                    for i in 0..arg_count {
-                        if i != 0 {
-                            cwrite!(f, ", ")?;
-                        }
-                        let i = extra_idx + i as usize * 4;
-                        bytes.copy_from_slice(&extra[i..i + 4]);
-                        write_ref(f, Ref::from_bytes(bytes))?;
-                    }
-                    cwrite!(f, ")")?;
-                }
-                Ok(())
-            }
             DataVariant::MemberPtr => {
                 let (ptr, extra_start) = inst.data.ref_int;
                 let i = extra_start as usize;
@@ -339,11 +342,23 @@ fn display_data(
                 write!(f, ", ")?;
                 write_ref(f, inst.data.bin_op.1)
             }
+            DataVariant::Goto => {
+                let (block, extra_idx) = inst.data.goto();
+                let arg_count = blocks[block.idx() as usize].arg_count;
+                cwrite!(f, "{}", block)?;
+                write_block_args(f, arg_count, &extra, extra_idx)
+            }
             DataVariant::Branch => {
                 let (r, a, b, i) = inst.data.branch(extra);
                 write_ref(f, r)?;
-                // TODO: write block args
-                cwrite!(f, ", #b!<{}> #g<or> #b!<{}>", a, b)
+                let a_count = blocks[a.idx() as usize].arg_count;
+                let b_count = blocks[b.idx() as usize].arg_count;
+                cwrite!(f, "#b!<{a}>")?;
+                write_block_args(f, a_count, extra, i)?;
+                cwrite!(f, " #g<or> ")?;
+                write_block_args(f, a_count, extra, i)?;
+                cwrite!(f, "#b!<{}>", b)?;
+                write_block_args(f, b_count, extra, i + a_count as usize * 4)
             }
             DataVariant::RefInt => {
                 write_ref(f, inst.data.ref_int.0)?;

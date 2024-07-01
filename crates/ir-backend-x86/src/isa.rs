@@ -86,13 +86,22 @@ impl RegisterBits {
 }
 
 ir::mc::inst! { Inst Reg
-    addrr32 Reg: DefUse, Reg: Use           !implicit_def eflags;
-    addri32 Reg: DefUse, Imm: Use           !implicit_def eflags;
-    addri64 Reg: DefUse, Imm: Use           !implicit_def eflags;
-    addrm32 Reg: DefUse, Reg: Use, Imm: Use !implicit_def eflags;
+    // add
+    addrr32 Reg: DefUse, Reg: Use               !implicit_def eflags;
+    addri32 Reg: DefUse, Imm: Use               !implicit_def eflags;
+    addrm32 Reg: DefUse, Reg: Use, Imm: Use     !implicit_def eflags;
 
-    subrr32 Reg: DefUse, Reg: Use           !implicit_def eflags;
-    subri64 Reg: DefUse, Imm: Use;
+    addri64 Reg: DefUse, Imm: Use               !implicit_def eflags;
+
+    // sub
+    subrr32 Reg: DefUse, Reg: Use               !implicit_def eflags;
+    subri32 Reg: DefUse, Reg: Use               !implicit_def eflags;
+    subri64 Reg: DefUse, Imm: Use               !implicit_def eflags;
+
+    // mul
+    imulrr32  Reg: DefUse, Reg: Use              !implicit_def eflags;
+    imulrri32 Reg: Def   , Reg: Use, Imm: Use    !implicit_def eflags;
+    imulrm32  Reg: DefUse, Reg: Use, Imm: Use    !implicit_def eflags;
 
     movrr32 Reg: Def, Reg: Use;
     movrr64 Reg: Def, Reg: Use;

@@ -642,7 +642,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         } => {
             let value = lower(ctx, value)?;
             let mut after_block = None;
-            let mut result_value_count: usize = 0;
             let mut next_block;
             let mut result_value = None;
             if branch_count == 0 {
@@ -670,7 +669,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 }
                 let val = lower(ctx, branch);
                 if let Ok(val) = val {
-                    result_value_count += 1;
                     let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
                     ctx.builder.terminate_block(Terminator::Goto(after, &[val]));
                 }

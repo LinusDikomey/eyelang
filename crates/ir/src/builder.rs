@@ -1,5 +1,3 @@
-use std::ops::Index;
-
 use crate::{
     BlockArgs, BlockIndex, BlockInfo, Data, FunctionIr, GlobalId, Instruction, Ref, Tag, TypeRefs,
 };

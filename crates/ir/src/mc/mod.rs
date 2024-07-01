@@ -305,11 +305,10 @@ impl<I: Instruction> InstructionStorage<I> {
             .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
     }
 
-    pub fn reg_ops_mut(&mut self) -> impl Iterator<Item = (&mut u64, OpUsage)> {
+    pub fn reg_ops_mut(&mut self) -> impl DoubleEndedIterator<Item = (&mut u64, OpUsage)> {
         self.inst
             .ops()
             .into_iter()
-            .take_while(|&op| op != OpType::Non)
             .zip(self.ops.iter_mut())
             .zip(self.inst.op_usage())
             .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
