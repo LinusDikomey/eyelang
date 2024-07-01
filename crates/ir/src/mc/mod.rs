@@ -9,13 +9,14 @@ use std::ops::BitAnd;
 use std::ops::Not;
 use std::usize;
 
+use crate::block_graph::Block;
 use crate::FunctionId;
 
 pub struct MachineIR<I: Instruction> {
     insts: Vec<InstructionStorage<I>>,
     extra_ops: Vec<Op<I::Register>>,
     blocks: Vec<BlockInfo>,
-    next_virtual: u64,
+    next_virtual: u32,
     stack_slots: Vec<StackSlot>,
     stack_offset: u64,
 }
@@ -28,6 +29,7 @@ impl<I: Instruction> MachineIR<I> {
                 start: 0,
                 len: 0,
                 successors: Vec::new(),
+                block_args: VRegs::EMPTY,
             }],
             next_virtual: 0,
             stack_slots: Vec::new(),
@@ -35,14 +37,21 @@ impl<I: Instruction> MachineIR<I> {
         }
     }
 
-    pub fn create_block(&mut self) -> MirBlock {
+    pub fn create_block(&mut self, block_arg_count: u32) -> (MirBlock, VRegs) {
         let block = MirBlock(self.blocks.len().try_into().expect("too many blocks"));
+        let start = self.next_virtual;
+        self.next_virtual += block_arg_count;
+        let block_args = VRegs {
+            start,
+            count: block_arg_count,
+        };
         self.blocks.push(BlockInfo {
             start: 0,
             len: 0,
             successors: Vec::new(),
+            block_args,
         });
-        block
+        (block, block_args)
     }
 
     pub fn begin_block<'a>(&'a mut self, block: MirBlock) -> BlockBuilder<'a, I> {
@@ -53,6 +62,10 @@ impl<I: Instruction> MachineIR<I> {
         );
         info.start = self.insts.len() as u32;
         BlockBuilder { mir: self, block }
+    }
+
+    pub fn blocks(&self) -> impl ExactSizeIterator<Item = MirBlock> {
+        (0..self.blocks.len() as _).map(MirBlock)
     }
 
     pub fn block_insts(&self, block: MirBlock) -> &[InstructionStorage<I>] {
@@ -74,6 +87,10 @@ impl<I: Instruction> MachineIR<I> {
 
     pub fn block_successors(&self, block: MirBlock) -> &[MirBlock] {
         &self.blocks[block.0 as usize].successors
+    }
+
+    pub fn block_args(&self, block: MirBlock) -> VRegs {
+        self.blocks[block.idx()].block_args
     }
 
     pub fn block_count(&self) -> u32 {
@@ -101,7 +118,6 @@ impl<I: Instruction> MachineIR<I> {
     /// creates a fresh virtual register
     pub fn reg(&mut self) -> VReg {
         let r = self.next_virtual;
-        assert!(r & (1 << 63) == 0, "too many virtual registers created");
         self.next_virtual += 1;
         VReg(r)
     }
@@ -275,6 +291,16 @@ impl<I: Instruction> InstructionStorage<I> {
             .map(|((ty, val), usage)| (Op::<I::Register>::decode(val, ty), usage))
     }
 
+    pub fn reg_ops(&self) -> impl Iterator<Item = (&u64, OpUsage)> {
+        self.inst
+            .ops()
+            .into_iter()
+            .take_while(|&op| op != OpType::Non)
+            .zip(self.ops.iter())
+            .zip(self.inst.op_usage())
+            .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
+    }
+
     pub fn reg_ops_mut(&mut self) -> impl Iterator<Item = (&mut u64, OpUsage)> {
         self.inst
             .ops()
@@ -296,6 +322,17 @@ impl<I: Instruction> InstructionStorage<I> {
             &extra_ops[extra_idx..extra_idx + count],
             &extra_ops[extra_idx + count..extra_idx + 2 * count],
         )
+    }
+
+    fn decode_copyargs_mut<'a>(
+        &self,
+        extra_ops: &'a mut [Op<I::Register>],
+    ) -> (&'a mut [Op<I::Register>], &'a mut [Op<I::Register>]) {
+        debug_assert!(self.inst.is_copyargs());
+        let extra_idx = self.ops[0] as usize;
+        let count = self.ops[1] as usize;
+        let extra = &mut extra_ops[extra_idx..extra_idx + 2 * count];
+        extra.split_at_mut(count)
     }
 }
 
@@ -325,6 +362,7 @@ struct BlockInfo {
     start: u32,
     len: u32,
     successors: Vec<MirBlock>,
+    block_args: VRegs,
 }
 
 pub trait Instruction: Copy {
@@ -376,7 +414,7 @@ impl<R: Register> Op<R> {
     pub fn encode(&self) -> u64 {
         match self {
             Self::Reg(r) => (1 << 63) | r.encode() as u64,
-            &Self::VReg(r) => r.0,
+            &Self::VReg(r) => r.0 as u64,
             &Self::Imm(value) => value,
             Self::Block(block) => block.0 as u64,
             Self::Func(id) => id.0,
@@ -402,7 +440,7 @@ impl<R: Register> Op<R> {
     pub fn printed_len(self) -> usize {
         match self {
             Op::Reg(r) => r.to_str().len(),
-            Op::VReg(n) => (u64::checked_ilog10(n.0).unwrap_or_default() + 2) as usize,
+            Op::VReg(n) => (u32::checked_ilog10(n.0).unwrap_or_default() + 2) as usize,
             Op::Imm(n) => {
                 let n = n as i64;
                 let mut signed = false;
@@ -441,7 +479,7 @@ pub fn decode_reg<R: Register>(r: u64) -> RegType<R> {
     if r & (1 << 63) != 0 {
         RegType::Reg(R::decode(r as u32))
     } else {
-        RegType::Virtual(VReg(r & !DEAD_BIT))
+        RegType::Virtual(VReg((r & !DEAD_BIT) as u32))
     }
 }
 
@@ -476,10 +514,23 @@ pub enum SizeClass {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VReg(u64);
+pub struct VReg(u32);
 impl VReg {
     pub fn op<R: Register>(self) -> Op<R> {
         Op::VReg(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VRegs {
+    start: u32,
+    count: u32,
+}
+impl VRegs {
+    pub const EMPTY: Self = Self { start: 0, count: 0 };
+
+    pub fn iter(self) -> impl ExactSizeIterator<Item = VReg> {
+        (self.start..self.start + self.count).map(VReg)
     }
 }
 

@@ -1,8 +1,6 @@
-use std::collections::VecDeque;
-
 use ir::{
-    mc::{BlockBuilder, MachineIR, MirBlock, Op, VReg},
-    BlockIndex, FunctionId, IrType, Tag,
+    mc::{BlockBuilder, MachineIR, MirBlock, Op, VReg, VRegs},
+    BlockGraph, BlockIndex, FunctionId, IrType, Tag,
 };
 
 use crate::isa::{Inst, Reg};
@@ -15,8 +13,7 @@ struct Gen<'a> {
     body: &'a ir::FunctionIr,
     types: &'a ir::IrTypes,
     stack_setup_indices: Vec<u32>,
-    block_queue: VecDeque<BlockIndex>,
-    block_map: Box<[Option<MirBlock>]>,
+    block_map: Box<[(MirBlock, VRegs)]>,
 }
 impl<'a> Gen<'a> {
     fn create_epilogue(&mut self, builder: &mut BlockBuilder<Inst>) {
@@ -220,7 +217,7 @@ impl<'a> Gen<'a> {
             Tag::Goto => {
                 let (target, extra_idx) = inst.data.goto();
                 self.copy_block_args(builder, values, target, extra_idx);
-                let mir_block = self.get_queue_block(builder, target);
+                let mir_block = self.block_map[target.idx() as usize].0;
                 dbg!(mir_block);
                 builder.inst(Inst::jmp, [Op::Block(mir_block)]);
                 builder.register_successor(mir_block);
@@ -228,8 +225,8 @@ impl<'a> Gen<'a> {
             }
             Tag::Branch => {
                 let (cond, t, f, i) = inst.data.branch(extra);
-                let mir_t = self.get_queue_block(builder, t);
-                let mir_f = self.get_queue_block(builder, f);
+                let mir_t = self.block_map[t.idx() as usize].0;
+                let mir_f = self.block_map[f.idx() as usize].0;
                 builder.register_successor(mir_t);
                 builder.register_successor(mir_f);
                 match get_ref(&values, cond) {
@@ -277,14 +274,6 @@ impl<'a> Gen<'a> {
         });
         builder.build_copyargs(Inst::Copyargs, t_to, t_from);
     }
-
-    fn get_queue_block(&mut self, builder: &mut BlockBuilder<Inst>, block: BlockIndex) -> MirBlock {
-        *self.block_map[block.idx() as usize].get_or_insert_with(|| {
-            let mir_block = builder.create_block();
-            self.block_queue.push_back(block);
-            mir_block
-        })
-    }
 }
 
 pub fn codegen(
@@ -304,41 +293,46 @@ pub fn codegen(
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
 
-    let mut block_map = vec![None; body.blocks().len()].into_boxed_slice();
-
-    let mir_entry_block = builder.create_block();
+    let (mir_entry_block, entry_block_args) = builder.create_block(function.params.count);
     builder.register_successor(mir_entry_block);
-    block_map[BlockIndex::ENTRY.idx() as usize] = Some(mir_entry_block);
+    // TODO: handle args abi correctly with different arg sizes and more than 6 args.
+    builder.build_copyargs(
+        Inst::Copyargs,
+        entry_block_args.iter().map(|vreg| vreg.op()),
+        ABI_PARAM_REGISTERS
+            .iter()
+            .take(entry_block_args.iter().len())
+            .map(|&arg_phys_reg| Op::Reg(arg_phys_reg)),
+    );
 
+    let block_map = body
+        .blocks()
+        .map(|block| {
+            let args = body.get_block_args(block);
+            let (mir_block, mir_args) = if block == BlockIndex::ENTRY {
+                (mir_entry_block, entry_block_args)
+            } else {
+                builder.create_block(args.count() as u32)
+            };
+            for (arg, mir_arg) in args.iter().zip(mir_args.iter()) {
+                values[arg as usize] = MCValue::Register(MCReg::Virtual(mir_arg));
+                if block == BlockIndex::ENTRY {}
+            }
+            (mir_block, mir_args)
+        })
+        .collect();
     let mut gen = Gen {
         function,
         body,
         types,
         stack_setup_indices,
-        block_queue: VecDeque::from([BlockIndex::ENTRY]),
         block_map,
     };
 
-    for block in gen.body.blocks() {
-        let args = gen.body.get_block_args(block);
-        if block == BlockIndex::ENTRY {
-            for (i, arg) in args.iter().enumerate() {
-                let vreg = builder.reg();
-                values[arg as usize] = MCValue::Register(MCReg::Virtual(vreg));
-                // TODO: handle this correctly with different arg sizes and more than 6 args.
-                let physical = ABI_PARAM_REGISTERS[i];
-                builder.inst(Inst::Copy, [vreg.op(), Op::Reg(physical)]);
-            }
-        } else {
-            for arg in args.iter() {
-                values[arg as usize] = MCValue::Register(MCReg::Virtual(builder.reg()));
-            }
-        }
-    }
+    let graph = BlockGraph::calculate(gen.body);
 
-    while let Some(block) = gen.block_queue.pop_front() {
-        let mir_block =
-            *gen.block_map[block.idx() as usize].get_or_insert_with(|| mir.create_block());
+    for &block in graph.postorder().iter().rev() {
+        let mir_block = gen.block_map[block.idx() as usize].0;
         let mut builder = mir.begin_block(mir_block);
         for (i, inst) in body.get_block(block) {
             values[i as usize] = gen.gen_inst(inst, &mut builder, &values, &body.extra);

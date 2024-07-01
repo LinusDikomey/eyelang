@@ -133,6 +133,7 @@ struct BlockInfo {
     len: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockArgs {
     start: u32,
     count: u32,

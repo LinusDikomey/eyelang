@@ -1,6 +1,6 @@
 use crate::Layout;
 
-use super::{MirBlock, OpType, Register, VReg};
+use super::{MirBlock, OpType, Register, VReg, VRegs};
 
 use super::{Instruction, InstructionStorage, MachineIR, Op};
 
@@ -74,7 +74,7 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         self.mir.create_stack_slot(layout)
     }
 
-    pub fn create_block(&mut self) -> MirBlock {
-        self.mir.create_block()
+    pub fn create_block(&mut self, block_arg_count: u32) -> (MirBlock, VRegs) {
+        self.mir.create_block(block_arg_count)
     }
 }
