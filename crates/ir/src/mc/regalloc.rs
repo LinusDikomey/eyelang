@@ -7,13 +7,22 @@ use super::{
     DEAD_BIT, PHYSICAL_BIT,
 };
 
-pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>) {
+pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>, log: bool) {
     let graph = BlockGraph::calculate(mir);
     let mut intersecting_precolored = vec![I::Register::NO_BITS; mir.virtual_register_count()];
     let mut liveins: Box<[Bitmap]> = (0..mir.block_count())
         .map(|_| Bitmap::new(mir.virtual_register_count()))
         .collect();
     analyze_liveness(mir, &graph, &mut liveins, &mut intersecting_precolored);
+    if log {
+        eprintln!("liveins:");
+        for (i, liveins) in liveins.iter().enumerate() {
+            eprint!("  bb{i}:");
+            liveins.visit_set_bits(|vreg| eprint!(" %{vreg}"));
+            eprintln!();
+        }
+        eprintln!();
+    }
     perform_regalloc(mir, &graph, &intersecting_precolored, &liveins);
 }
 
@@ -25,7 +34,6 @@ fn analyze_liveness<I: Instruction>(
 ) {
     let mut workqueue: VecDeque<_> = graph.postorder().iter().copied().collect();
     let mut workqueue_set: Bitmap = Bitmap::new_with_ones(mir.block_count() as usize);
-
     let mut liveouts = liveins.to_vec();
 
     while let Some(block) = workqueue.pop_front() {
@@ -72,7 +80,7 @@ fn analyze_inst_liveness<I: Instruction>(
     extra_ops: &mut [Op<I::Register>],
 ) {
     if inst.inst.is_copyargs() {
-        let (_to, from) = inst.decode_copyargs(extra_ops);
+        let (to, from) = inst.decode_copyargs(extra_ops);
         for op in from {
             if let &Op::VReg(v) = op {
                 if !live.get(v.0 as usize) {
@@ -80,6 +88,10 @@ fn analyze_inst_liveness<I: Instruction>(
                     // TODO: mark dead in extra_ops
                 }
             }
+        }
+        for op in to {
+            let Op::VReg(v) = op else { unreachable!() };
+            live.set(v.0 as usize, false);
         }
         return;
     }
@@ -144,13 +156,29 @@ fn perform_regalloc<I: Instruction>(
         liveins[block.idx()].visit_set_bits(|livein| {
             chosen[livein].set_bit(&mut free, false);
         });
+        for arg in mir.block_args(block).iter() {
+            chosen[arg.0 as usize].set_bit(&mut free, false);
+        }
         let (insts, extra_ops) = mir.block_insts_mut(block);
-        for inst in insts {
+        for (i, inst) in insts.iter_mut().enumerate() {
             if inst.inst.is_copyargs() {
                 let (to, from) = inst.decode_copyargs_mut(extra_ops);
-                for op in to.iter_mut().chain(from.iter_mut()) {
+                for op in to {
                     if let Op::VReg(vreg) = *op {
                         *op = Op::Reg(chosen[vreg.0 as usize]);
+                    }
+                }
+                for op in from {
+                    match *op {
+                        Op::VReg(vreg) => {
+                            let chosen = chosen[vreg.0 as usize];
+                            *op = Op::Reg(chosen);
+                            chosen.set_bit(&mut free, false);
+                        }
+                        Op::Reg(reg) => {
+                            reg.set_bit(&mut free, false);
+                        }
+                        _ => {}
                     }
                 }
                 continue;
@@ -164,7 +192,7 @@ fn perform_regalloc<I: Instruction>(
                             // theoretically not necessary but right now argument registers are not
                             // handled too well so this is needed
                             b.set_bit(&mut free, false);
-                            debug_assert!(!b.get_bit(&free),);
+                            debug_assert!(!b.get_bit(&free));
                             chosen[a.0 as usize] = b;
                             inst.ops[0] = PHYSICAL_BIT | b.encode() as u64;
                             continue;
@@ -173,7 +201,7 @@ fn perform_regalloc<I: Instruction>(
                     (RegType::Virtual(a), RegType::Virtual(b)) => {
                         let b_reg = chosen[b.0 as usize];
                         if !b_reg.get_bit(&intersecting_precolored[a.0 as usize]) {
-                            debug_assert_eq!(b_reg.get_bit(&mut free), false);
+                            debug_assert_eq!(b_reg.get_bit(&mut free), false, "{block:?}:{i}");
                             chosen[a.0 as usize] = b_reg;
                             let encoded = PHYSICAL_BIT | b_reg.encode() as u64;
                             inst.ops[0] = encoded;

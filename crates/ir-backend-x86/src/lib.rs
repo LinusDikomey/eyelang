@@ -65,7 +65,7 @@ impl Backend {
                 if print_ir {
                     println!("mir for {}:\n{}\n", func.name, mir);
                 }
-                ir::mc::regalloc(&mut mir);
+                ir::mc::regalloc(&mut mir, self.log);
                 if self.log {
                     println!("mir for {}: (post-regalloc)\n{}\n", func.name, mir);
                 }

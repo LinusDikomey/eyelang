@@ -52,24 +52,36 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             match inst.inst {
                 Inst::Copy => {
                     let (a, b) = rr();
-                    if a != b {
-                        match a.size() {
-                            ir::mc::SizeClass::S1 => todo!(),
-                            ir::mc::SizeClass::S8 => todo!(),
-                            ir::mc::SizeClass::S16 => todo!(),
-                            SizeClass::S32 | SizeClass::S64 => {
-                                let wide = a.size() == SizeClass::S64;
-                                let modrm = encode_modrm_rr(a, b, wide);
+                    copy_rr(text, a, b);
+                }
+                Inst::Copyargs => {
+                    // TODO: handle conflicting copies
+                    let (to, from) = inst.decode_copyargs(ir.extra_ops());
+                    for (&to, &from) in to.iter().zip(from) {
+                        let Op::Reg(to) = to else { unreachable!() };
+                        match from {
+                            Op::Reg(from) => copy_rr(text, to, from),
+                            Op::None => panic!(),
+                            Op::Imm(imm) => {
+                                let modrm = encode_modrm_ri(to, false);
                                 if modrm.rex != 0 {
                                     text.push(modrm.rex);
                                 }
-                                text.extend([0x89, modrm.modrm]);
+                                if imm <= u32::MAX as u64 {
+                                    let [b0, b1, b2, b3] = (imm as u32).to_le_bytes();
+                                    let (r, b) = encode_modrm_reg(to);
+                                    if b {
+                                        text.push(REX | REX_B);
+                                    }
+                                    text.extend([0xB8 + r, modrm.modrm, b0, b1, b2, b3]);
+                                } else {
+                                    todo!("handle larger immediate values")
+                                }
                             }
+                            Op::VReg(_) => unreachable!("vregs should be eliminated by regalloc"),
+                            Op::Func(_) | Op::Block(_) => unreachable!(),
                         }
                     }
-                }
-                Inst::Copyargs => {
-                    todo!("argument copying")
                 }
                 Inst::addrr32 => {
                     let (a, b) = rr();
@@ -103,6 +115,14 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     } else {
                         todo!("handle larger imm values");
                     }
+                }
+                Inst::subrr32 => {
+                    let (a, b) = rr();
+                    let modrm = encode_modrm_rr(a, b, false);
+                    if modrm.rex != 0 {
+                        text.push(modrm.rex);
+                    }
+                    text.extend([0x29, modrm.modrm]);
                 }
                 Inst::subri64 => {
                     let (a, b) = ri();
@@ -212,7 +232,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                 }
                 Inst::cmprr32 => {
                     let (a, b) = rr();
-                    let modrm = encode_modrm_rr(a, b, false);
+                    let modrm = encode_modrm_rr(b, a, false);
                     if modrm.rex != 0 {
                         text.push(REX);
                     }
@@ -282,6 +302,25 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             .unwrap();
         let i = start + offset_location as usize;
         text[i..i + 4].copy_from_slice(&offset.to_le_bytes());
+    }
+}
+
+fn copy_rr(text: &mut Vec<u8>, to: Reg, from: Reg) {
+    if to == from {
+        return;
+    }
+    match to.size() {
+        ir::mc::SizeClass::S1 => todo!(),
+        ir::mc::SizeClass::S8 => todo!(),
+        ir::mc::SizeClass::S16 => todo!(),
+        SizeClass::S32 | SizeClass::S64 => {
+            let wide = to.size() == SizeClass::S64;
+            let modrm = encode_modrm_rr(to, from, wide);
+            if modrm.rex != 0 {
+                text.push(modrm.rex);
+            }
+            text.extend([0x89, modrm.modrm]);
+        }
     }
 }
 

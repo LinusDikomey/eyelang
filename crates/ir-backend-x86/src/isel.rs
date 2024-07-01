@@ -83,7 +83,7 @@ impl<'a> Gen<'a> {
             }
             Tag::Add => {
                 let ty = self.types[inst.ty];
-                let (lhs, rhs) = unsafe { inst.data.bin_op };
+                let (lhs, rhs) = inst.data.bin_op();
                 let lhs = get_ref(&values, lhs);
                 let rhs = get_ref(&values, rhs);
                 let changed_reg = match ty {
@@ -123,6 +123,24 @@ impl<'a> Gen<'a> {
                 let v = builder.reg();
                 builder.inst(Inst::Copy, [Op::VReg(v), changed_reg.op()]);
                 MCValue::Register(MCReg::Virtual(v))
+            }
+            Tag::Sub => {
+                let ty = self.types[inst.ty];
+                let (lhs, rhs) = inst.data.bin_op();
+                let lhs = get_ref(&values, lhs);
+                let rhs = get_ref(&values, rhs);
+                match ty {
+                    IrType::I32 => match (lhs, rhs) {
+                        (MCValue::Register(lhs), MCValue::Register(rhs)) => {
+                            builder.inst(Inst::subrr32, [lhs.op(), rhs.op()]);
+                            let v = builder.reg();
+                            builder.inst(Inst::Copy, [Op::VReg(v), lhs.op()]);
+                            MCValue::Register(MCReg::Virtual(v))
+                        }
+                        _ => todo!("sub {lhs:?}, {rhs:?}"),
+                    },
+                    _ => todo!("handle sub of type {ty:?}"),
+                }
             }
             Tag::Ret => {
                 let val = unsafe { inst.data.un_op };
@@ -218,7 +236,6 @@ impl<'a> Gen<'a> {
                 let (target, extra_idx) = inst.data.goto();
                 self.copy_block_args(builder, values, target, extra_idx);
                 let mir_block = self.block_map[target.idx() as usize].0;
-                dbg!(mir_block);
                 builder.inst(Inst::jmp, [Op::Block(mir_block)]);
                 builder.register_successor(mir_block);
                 MCValue::Undef

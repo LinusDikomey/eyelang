@@ -73,6 +73,10 @@ impl<I: Instruction> MachineIR<I> {
         &self.insts[block.start as usize..block.start as usize + block.len as usize]
     }
 
+    pub fn extra_ops(&self) -> &[Op<I::Register>] {
+        &self.extra_ops
+    }
+
     /// returns all instructions for a given block as well as the extra_ops list
     pub fn block_insts_mut(
         &mut self,
@@ -311,7 +315,8 @@ impl<I: Instruction> InstructionStorage<I> {
             .filter_map(|((ty, v), usage)| (ty == OpType::Reg).then_some((v, usage)))
     }
 
-    fn decode_copyargs<'a>(
+    // decodes a Copyarg special instruction and returns (to, from), both of the same size.
+    pub fn decode_copyargs<'a>(
         &self,
         extra_ops: &'a [Op<I::Register>],
     ) -> (&'a [Op<I::Register>], &'a [Op<I::Register>]) {
@@ -324,7 +329,7 @@ impl<I: Instruction> InstructionStorage<I> {
         )
     }
 
-    fn decode_copyargs_mut<'a>(
+    pub fn decode_copyargs_mut<'a>(
         &self,
         extra_ops: &'a mut [Op<I::Register>],
     ) -> (&'a mut [Op<I::Register>], &'a mut [Op<I::Register>]) {
@@ -366,7 +371,7 @@ struct BlockInfo {
 }
 
 pub trait Instruction: Copy {
-    type Register: Register;
+    type Register: Register + std::fmt::Debug;
 
     fn to_str(self) -> &'static str;
     fn ops(self) -> [OpType; 4];

@@ -91,6 +91,7 @@ ir::mc::inst! { Inst Reg
     addri64 Reg: DefUse, Imm: Use           !implicit_def eflags;
     addrm32 Reg: DefUse, Reg: Use, Imm: Use !implicit_def eflags;
 
+    subrr32 Reg: DefUse, Reg: Use           !implicit_def eflags;
     subri64 Reg: DefUse, Imm: Use;
 
     movrr32 Reg: Def, Reg: Use;

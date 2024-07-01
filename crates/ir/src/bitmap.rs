@@ -46,7 +46,7 @@ impl Bitmap {
             if *a != b {
                 changed = true;
             }
-            *a &= b;
+            *a |= b;
         }
         changed
     }

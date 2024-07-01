@@ -38,13 +38,11 @@ fn build_diff() -> Function {
     });
 
     builder.begin_block(on_true);
-    // TODO: should be Sub instruction but that isn't implemented yet
-    let y_minus_x = builder.build_bin_op(BinOp::Add, y, x, IrType::I32);
+    let y_minus_x = builder.build_bin_op(BinOp::Sub, y, x, IrType::I32);
     builder.terminate_block(Terminator::Goto(after, &[y_minus_x]));
 
     builder.begin_block(on_false);
-    // TODO: should be Sub instruction but that isn't implemented yet
-    let x_minus_y = builder.build_bin_op(BinOp::Add, x, y, IrType::I32);
+    let x_minus_y = builder.build_bin_op(BinOp::Sub, x, y, IrType::I32);
     builder.terminate_block(Terminator::Goto(after, &[x_minus_y]));
 
     let args = builder.begin_block_with_args(after, int_ty.into());
