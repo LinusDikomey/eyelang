@@ -110,6 +110,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     };
                     inst_ri(text, &[0x83], wide, 5 << 3, (r, i));
                 }
+                Inst::subrm32 => inst_rm(text, &[0x2B], rm()),
                 Inst::imulrr32 => inst_rr(text, &[0x0F, 0xAF], swap(rr())),
                 Inst::imulrm32 => inst_rm(text, &[0x0F, 0xAF], rm()),
                 Inst::imulrri32 => {
@@ -152,9 +153,10 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     }
                     text.extend([0xB8 + r, b0, b1, b2, b3]);
                 }
-                Inst::movrm32 => {
+                Inst::movrm32 | Inst::movrm64 => {
+                    let wide = inst.inst == Inst::movrm64;
                     let (r, (ptr, off)) = rm();
-                    let modrm = encode_modrm_rm(r, ptr, off, false);
+                    let modrm = encode_modrm_rm(r, ptr, off, wide);
                     if modrm.rex != 0 {
                         text.push(modrm.rex);
                     }
@@ -170,20 +172,7 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     text.extend([0x89, modrm.modrm]);
                     off.write(text);
                 }
-                Inst::movmi32 => {
-                    let ((reg, off), i) = mi();
-                    let (reg, b) = encode_modrm_reg(reg);
-                    let modrm = reg | off.modrm_bits();
-                    if b {
-                        // REX byte
-                        text.push(0b0100_0100);
-                    }
-                    text.extend([0xC7, modrm]);
-                    off.write(text);
-                    let imm = i as i64;
-                    let imm32: Result<i32, _> = imm.try_into();
-                    text.extend(imm32.expect("immediate too large").to_le_bytes());
-                }
+                Inst::movmi32 => inst_mi(text, &[0xC7], false, mi()),
                 Inst::call => todo!(),
                 Inst::push64 => {
                     let r = r(inst.ops[0]);
@@ -236,6 +225,8 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                         todo!("larger immediate for cmp");
                     }
                 }
+                Inst::cmprm32 => inst_rm(text, &[0x3B], rm()),
+                Inst::cmpmi32 => todo!(),
                 Inst::jmp => emit_jmp(
                     &[0xEB],
                     &[0xE9],
@@ -325,6 +316,25 @@ fn inst_ri(text: &mut Vec<u8>, opcode: &[u8], wide: bool, modrm_bits: u8, (r, im
     }
 }
 
+fn inst_mi(
+    text: &mut Vec<u8>,
+    opcode: &[u8],
+    wide: bool,
+    ((reg, off), i): ((Reg, OffsetClass), u64),
+) {
+    let (reg, b) = encode_modrm_reg(reg);
+    let modrm = reg | off.modrm_bits();
+    if b {
+        // REX byte
+        text.push(0b0100_0100);
+    }
+    text.extend([0xC7, modrm]);
+    off.write(text);
+    let imm = i as i64;
+    let imm32: Result<i32, _> = imm.try_into();
+    text.extend(imm32.expect("immediate too large").to_le_bytes());
+}
+
 fn copy_rr(text: &mut Vec<u8>, to: Reg, from: Reg) {
     if to == from {
         return;
@@ -389,12 +399,13 @@ enum OffsetClass {
 }
 impl OffsetClass {
     fn from_imm(value: i64) -> Self {
+        let value: i32 = value.try_into().unwrap();
         if value == 0 {
             Self::Zero
         } else if let Ok(b) = value.try_into() {
             Self::Byte(b)
         } else {
-            Self::DWord(value.try_into().expect("encoded offset too large"))
+            Self::DWord(value)
         }
     }
 

@@ -18,7 +18,7 @@ pub struct MachineIR<I: Instruction> {
     blocks: Vec<BlockInfo>,
     next_virtual: u32,
     stack_slots: Vec<StackSlot>,
-    stack_offset: u64,
+    stack_offset: u32,
 }
 impl<I: Instruction> MachineIR<I> {
     pub fn new() -> Self {
@@ -132,25 +132,26 @@ impl<I: Instruction> MachineIR<I> {
 
     /// creates a new stack slot and returns the slot's offset. On targets where the stack grows
     /// down, the offset should be subtracted from the base pointer.
-    pub fn create_stack_slot(&mut self, layout: Layout) -> u64 {
+    pub fn create_stack_slot(&mut self, layout: Layout) -> u32 {
         if layout.size == 0 {
             return 0;
         }
-        let misalignment = self.stack_offset % layout.align.get();
+        let align = layout.align.get() as u32;
+        let misalignment = self.stack_offset % align;
         if misalignment != 0 {
-            self.stack_offset += layout.align.get() - misalignment;
+            self.stack_offset += align - misalignment;
         }
         let offset = self.stack_offset;
         self.stack_slots.push(StackSlot {
             offset,
-            size: layout.size,
+            size: layout.size as u32,
         });
-        self.stack_offset += layout.size;
+        self.stack_offset += layout.size as u32;
         offset
     }
 
     /// gets the current offset of the stack required for storing all created stack slots
-    pub fn stack_offset(&self) -> u64 {
+    pub fn stack_offset(&self) -> u32 {
         self.stack_offset
     }
 }
@@ -372,6 +373,8 @@ struct BlockInfo {
 pub trait Instruction: Copy {
     type Register: Register + std::fmt::Debug;
 
+    const COPY: Self;
+
     fn to_str(self) -> &'static str;
     fn ops(self) -> [OpType; 4];
     fn op_usage(self) -> [OpUsage; 4];
@@ -539,8 +542,8 @@ impl VRegs {
 }
 
 pub struct StackSlot {
-    pub offset: u64,
-    pub size: u64,
+    pub offset: u32,
+    pub size: u32,
 }
 
 #[macro_export]
@@ -585,6 +588,8 @@ macro_rules! inst {
 
         impl $crate::mc::Instruction for $name {
             type Register = $register;
+
+            const COPY: Self = Self::Copy;
 
             fn to_str(self) -> &'static str {
                 match self {

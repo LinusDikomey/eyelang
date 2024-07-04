@@ -96,12 +96,14 @@ ir::mc::inst! { Inst Reg
     // sub
     subrr32 Reg: DefUse, Reg: Use               !implicit_def eflags;
     subri32 Reg: DefUse, Reg: Use               !implicit_def eflags;
+    subrm32 Reg: DefUse, Reg: Use, Imm: Use     !implicit_def eflags;
+
     subri64 Reg: DefUse, Imm: Use               !implicit_def eflags;
 
     // mul
-    imulrr32  Reg: DefUse, Reg: Use              !implicit_def eflags;
-    imulrri32 Reg: Def   , Reg: Use, Imm: Use    !implicit_def eflags;
-    imulrm32  Reg: DefUse, Reg: Use, Imm: Use    !implicit_def eflags;
+    imulrr32  Reg: DefUse, Reg: Use             !implicit_def eflags;
+    imulrri32 Reg: Def   , Reg: Use, Imm: Use   !implicit_def eflags;
+    imulrm32  Reg: DefUse, Reg: Use, Imm: Use   !implicit_def eflags;
 
     movrr32 Reg: Def, Reg: Use;
     movrr64 Reg: Def, Reg: Use;
@@ -110,6 +112,8 @@ ir::mc::inst! { Inst Reg
     movrm32 Reg: Def, Reg: Use, Imm: Use;
     movmr32 Reg: Use, Imm: Use, Reg: Use;
     movmi32 Reg: Use, Imm: Use, Imm: Use;
+
+    movrm64 Reg: Def, Reg: Use, Imm: Use;
 
 
     call    Fun: Use; // TODO: clobbered and implicit regs, how to solve different number of args
@@ -121,9 +125,11 @@ ir::mc::inst! { Inst Reg
     ret0;
     ret32 !implicit eax;
 
-    cmpri8  Reg: Use, Imm: Use !implicit_def eflags;
-    cmprr32 Reg: Use, Reg: Use !implicit_def eflags;
-    cmpri32 Reg: Use, Imm: Use !implicit_def eflags;
+    cmpri8  Reg: Use, Imm: Use                  !implicit_def eflags;
+    cmprr32 Reg: Use, Reg: Use                  !implicit_def eflags;
+    cmpri32 Reg: Use, Imm: Use                  !implicit_def eflags;
+    cmprm32 Reg: Use, Reg: Use, Imm: Use        !implicit_def eflags;
+    cmpmi32 Reg: Use, Reg: Use, Imm: Use        !implicit_def eflags;
     jmp Blk: Use;
     je Blk: Use !implicit eflags;
 

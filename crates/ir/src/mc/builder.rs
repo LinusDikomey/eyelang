@@ -35,6 +35,18 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         });
     }
 
+    /// create a copy instruction
+    pub fn copy(&mut self, to: Op<I::Register>, from: Op<I::Register>) {
+        self.inst(I::COPY, [to, from]);
+    }
+
+    /// create a copy into a newly created virtual register
+    pub fn copy_to_fresh(&mut self, from: Op<I::Register>) -> VReg {
+        let vreg = self.reg();
+        self.copy(vreg.op(), from);
+        vreg
+    }
+
     /// create a phi instruction given the phi operands ordered by the predecessor block
     pub fn build_copyargs(
         &mut self,
@@ -70,7 +82,7 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         self.mir.reg()
     }
 
-    pub fn create_stack_slot(&mut self, layout: Layout) -> u64 {
+    pub fn create_stack_slot(&mut self, layout: Layout) -> u32 {
         self.mir.create_stack_slot(layout)
     }
 

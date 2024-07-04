@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::cwrite;
 
-use crate::GlobalId;
+use crate::{GlobalId, TypeRefs};
 
 use super::{ir_types::TypeRef, BlockIndex, Ref};
 
@@ -17,12 +17,12 @@ pub struct Instruction {
 #[repr(u8)]
 #[allow(unused)] // FIXME: these instructions should be cleaned up if they still aren't used
 pub enum Tag {
-    /// get a pointer to a global
-    Global,
-
     /// Block arg pseudo-instruction to give each block arg a Ref. Will be inserted automatically
     /// and should never be present inside the block itself.
     BlockArg,
+
+    /// get a pointer to a global
+    Global,
 
     // block terminators
     /// return from the current function
@@ -174,7 +174,6 @@ const _FORCE_DATA_SIZE: u64 = unsafe { std::mem::transmute(Data { int: 0 }) };
 /// retrieved which shouldn't cause any unsafety. For this reason, safe getters for the variants
 /// are provided for easier access.
 pub union Data {
-    pub int32: u32,
     pub int: u64,
     pub extra: u32,
     pub extra_len: (u32, u32),
@@ -238,6 +237,10 @@ impl Data {
         unsafe { self.ref_int }
     }
 
+    pub fn global(self) -> GlobalId {
+        unsafe { self.global }
+    }
+
     pub fn phi<'a>(
         &self,
         extra: &'a [u8],
@@ -253,6 +256,14 @@ impl Data {
             (block, r)
         })
     }
+
+    pub fn member_ptr(&self, extra: &[u8]) -> (Ref, TypeRefs, u32) {
+        let (ptr, extra_start) = self.ref_int();
+        let i = extra_start as usize;
+        let elem_refs = TypeRefs::from_bytes(extra[i..i + 8].try_into().unwrap());
+        let elem_idx = u32::from_le_bytes(extra[i + 8..i + 12].try_into().unwrap());
+        (ptr, elem_refs, elem_idx)
+    }
 }
 impl fmt::Debug for Data {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -263,7 +274,6 @@ impl fmt::Debug for Data {
 #[derive(Clone, Copy)]
 pub enum DataVariant {
     Int,
-    Int32,
     LargeInt,
     Global,
     TypeTableIdx,

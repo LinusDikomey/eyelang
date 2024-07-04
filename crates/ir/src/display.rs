@@ -256,120 +256,117 @@ fn display_data(
     info: Info,
     blocks: &[BlockInfo],
 ) -> fmt::Result {
-    unsafe {
-        match inst.tag.union_data_type() {
-            DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int),
-            DataVariant::Int32 => cwrite!(f, "#y<{}>", inst.data.int32),
-            DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global),
-            DataVariant::MemberPtr => {
-                let (ptr, extra_start) = inst.data.ref_int;
-                let i = extra_start as usize;
-                let elem_refs = TypeRefs::from_bytes(extra[i..i + 8].try_into().unwrap());
-                let elem_idx = u32::from_le_bytes(extra[i + 8..i + 12].try_into().unwrap());
-                write_ref(f, ptr)?;
-                cwrite!(f, " #g<as> #m<*(>")?;
-                write_delimited_with(
-                    f,
-                    elem_refs.iter(),
-                    |f, elem| display_type(f, types[elem], types, info),
-                    ", ",
-                )?;
-                cwrite!(f, "#m<)>, #y<{elem_idx}>")
-            }
-            DataVariant::ArrayIndex => {
-                let (array_ptr, extra_start) = inst.data.ref_int;
-                let i = extra_start as usize;
-                let elem_ty = TypeRef::from_bytes(extra[i..i + 4].try_into().unwrap());
-                let index_ref = Ref::from_bytes(extra[i + 4..i + 8].try_into().unwrap());
-                write_ref(f, array_ptr)?;
-                cwrite!(f, " #g<as> #m<*[>")?;
-                display_type(f, types[elem_ty], types, info)?;
-                cwrite!(f, "#m<]>, ")?;
-                write_ref(f, index_ref)
-            }
-            DataVariant::LargeInt => {
-                let bytes = &extra[inst.data.extra as usize..(inst.data.extra + 16) as usize];
-                let mut bytes_arr = [0; 16];
-                bytes_arr.copy_from_slice(bytes);
-                cwrite!(f, "#y<{}>", u128::from_le_bytes(bytes_arr))
-            }
-            DataVariant::String => {
-                let string = String::from_utf8_lossy(
-                    &extra[inst.data.extra_len.0 as usize
-                        ..(inst.data.extra_len.0 + inst.data.extra_len.1) as usize],
-                );
-                cwrite!(f, "#y<{:?}>", string)
-            }
-            DataVariant::Call => {
-                let start = inst.data.extra_len.0 as usize;
-                let mut bytes = [0; 8];
-                bytes.copy_from_slice(&extra[start..start + 8]);
-                let func = FunctionId::from_bytes(bytes);
-                let refs = (0..inst.data.extra_len.1).map(|i| {
-                    let mut ref_bytes = [0; 4];
-                    let begin = 8 + start + (4 * i) as usize;
-                    ref_bytes.copy_from_slice(&extra[begin..begin + 4]);
-                    Ref::from_bytes(ref_bytes)
-                });
-                cwrite!(f, "#r<{}>(", info.funcs[func.0 as usize].name)?;
-                write_delimited_with(f, refs, write_ref, ", ")?;
-                cwrite!(f, ")")
-            }
-            DataVariant::ExtraBranchRefs => {
-                for i in 0..inst.data.extra_len.1 {
-                    if i != 0 {
-                        cwrite!(f, ", ")?;
-                    }
-                    let mut current_bytes = [0; 4];
-                    let begin = (inst.data.extra_len.0 + i * 8) as usize;
-                    current_bytes.copy_from_slice(&extra[begin..begin + 4]);
-                    let block = u32::from_le_bytes(current_bytes);
-                    current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
-                    current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
-                    let r = Ref::from_bytes(current_bytes);
-                    cwrite!(f, "[")?;
-                    cwrite!(f, "#b!<b{}>, ", block)?;
-                    write_ref(f, r)?;
-                    cwrite!(f, "]")?;
+    match inst.tag.union_data_type() {
+        DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int()),
+        DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global()),
+        DataVariant::MemberPtr => {
+            let (ptr, elem_refs, elem_idx) = inst.data.member_ptr(extra);
+            write_ref(f, ptr)?;
+            cwrite!(f, " #g<as> #m<*(>")?;
+            write_delimited_with(
+                f,
+                elem_refs.iter(),
+                |f, elem| display_type(f, types[elem], types, info),
+                ", ",
+            )?;
+            cwrite!(f, "#m<)>, #y<{elem_idx}>")
+        }
+        DataVariant::ArrayIndex => {
+            let (array_ptr, extra_start) = inst.data.ref_int();
+            let i = extra_start as usize;
+            let elem_ty = TypeRef::from_bytes(extra[i..i + 4].try_into().unwrap());
+            let index_ref = Ref::from_bytes(extra[i + 4..i + 8].try_into().unwrap());
+            write_ref(f, array_ptr)?;
+            cwrite!(f, " #g<as> #m<*[>")?;
+            display_type(f, types[elem_ty], types, info)?;
+            cwrite!(f, "#m<]>, ")?;
+            write_ref(f, index_ref)
+        }
+        DataVariant::LargeInt => {
+            let i = inst.data.extra() as usize;
+            cwrite!(
+                f,
+                "#y<{}>",
+                u128::from_le_bytes(extra[i..i + 16].try_into().unwrap())
+            )
+        }
+        DataVariant::String => {
+            let (i, len) = inst.data.extra_len();
+            let string = String::from_utf8_lossy(&extra[i as usize..i as usize + len as usize]);
+            cwrite!(f, "#y<{:?}>", string)
+        }
+        DataVariant::Call => {
+            let (start, arg_count) = inst.data.extra_len();
+            let start = start as usize;
+            let mut bytes = [0; 8];
+            bytes.copy_from_slice(&extra[start..start + 8]);
+            let func = FunctionId::from_bytes(bytes);
+            let refs = (0..arg_count).map(|i| {
+                let mut ref_bytes = [0; 4];
+                let begin = 8 + start + (4 * i) as usize;
+                ref_bytes.copy_from_slice(&extra[begin..begin + 4]);
+                Ref::from_bytes(ref_bytes)
+            });
+            cwrite!(f, "#r<{}>(", info.funcs[func.0 as usize].name)?;
+            write_delimited_with(f, refs, write_ref, ", ")?;
+            cwrite!(f, ")")
+        }
+        DataVariant::ExtraBranchRefs => {
+            for i in 0..inst.data.extra_len().1 {
+                if i != 0 {
+                    cwrite!(f, ", ")?;
                 }
-                Ok(())
-            }
-            DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float),
-            DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty], types, info),
-            DataVariant::UnOp => write_ref(f, inst.data.un_op),
-            DataVariant::BinOp => {
-                write_ref(f, inst.data.bin_op.0)?;
-                write!(f, ", ")?;
-                write_ref(f, inst.data.bin_op.1)
-            }
-            DataVariant::Goto => {
-                let (block, extra_idx) = inst.data.goto();
-                let arg_count = blocks[block.idx() as usize].arg_count;
-                cwrite!(f, "{}", block)?;
-                write_block_args(f, arg_count, &extra, extra_idx)
-            }
-            DataVariant::Branch => {
-                let (r, a, b, i) = inst.data.branch(extra);
+                let mut current_bytes = [0; 4];
+                let begin = (inst.data.extra_len().0 + i * 8) as usize;
+                current_bytes.copy_from_slice(&extra[begin..begin + 4]);
+                let block = u32::from_le_bytes(current_bytes);
+                current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
+                current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
+                let r = Ref::from_bytes(current_bytes);
+                cwrite!(f, "[")?;
+                cwrite!(f, "#b!<b{}>, ", block)?;
                 write_ref(f, r)?;
-                let a_count = blocks[a.idx() as usize].arg_count;
-                let b_count = blocks[b.idx() as usize].arg_count;
-                cwrite!(f, "#b!<{a}>")?;
-                write_block_args(f, a_count, extra, i)?;
-                cwrite!(f, " #g<or> ")?;
-                write_block_args(f, a_count, extra, i)?;
-                cwrite!(f, "#b!<{}>", b)?;
-                write_block_args(f, b_count, extra, i + a_count as usize * 4)
+                cwrite!(f, "]")?;
             }
-            DataVariant::RefInt => {
-                write_ref(f, inst.data.ref_int.0)?;
-                cwrite!(f, ", #y<{}>", inst.data.ref_int.1)
-            }
-            DataVariant::Asm => {
+            Ok(())
+        }
+        DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float()),
+        DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty()], types, info),
+        DataVariant::UnOp => write_ref(f, inst.data.un_op()),
+        DataVariant::BinOp => {
+            write_ref(f, inst.data.bin_op().0)?;
+            write!(f, ", ")?;
+            write_ref(f, inst.data.bin_op().1)
+        }
+        DataVariant::Goto => {
+            let (block, extra_idx) = inst.data.goto();
+            let arg_count = blocks[block.idx() as usize].arg_count;
+            cwrite!(f, "{}", block)?;
+            write_block_args(f, arg_count, &extra, extra_idx)
+        }
+        DataVariant::Branch => {
+            let (r, a, b, i) = inst.data.branch(extra);
+            write_ref(f, r)?;
+            let a_count = blocks[a.idx() as usize].arg_count;
+            let b_count = blocks[b.idx() as usize].arg_count;
+            cwrite!(f, "#b!<{a}>")?;
+            write_block_args(f, a_count, extra, i)?;
+            cwrite!(f, " #g<or> ")?;
+            write_block_args(f, a_count, extra, i)?;
+            cwrite!(f, "#b!<{}>", b)?;
+            write_block_args(f, b_count, extra, i + a_count as usize * 4)
+        }
+        DataVariant::RefInt => {
+            write_ref(f, inst.data.ref_int().0)?;
+            cwrite!(f, ", #y<{}>", inst.data.ref_int().1)
+        }
+        DataVariant::Asm => {
+            unsafe {
                 let Data {
                     asm: (extra_idx, str_len, arg_count),
                 } = inst.data;
                 let str_bytes = &extra[extra_idx as usize..extra_idx as usize + str_len as usize];
-                cwrite!(f, "#y<\"{}\">", std::str::from_utf8_unchecked(str_bytes))?;
+                cwrite!(f, "#y<\"{}\">", std::str::from_utf8(str_bytes).unwrap())?;
                 let expr_base = extra_idx as usize + str_len as usize;
                 for i in 0..arg_count as usize {
                     write!(f, ", ")?;
@@ -377,10 +374,10 @@ fn display_data(
                     arg_bytes.copy_from_slice(&extra[expr_base + 4 * i..expr_base + 4 * (i + 1)]);
                     write_ref(f, Ref::from_bytes(arg_bytes))?;
                 }
-                Ok(())
             }
-            DataVariant::None => Ok(()),
+            Ok(())
         }
+        DataVariant::None => Ok(()),
     }
 }
 

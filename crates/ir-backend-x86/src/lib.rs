@@ -75,7 +75,7 @@ impl Backend {
                 symtab.entry(elf::symtab::Entry {
                     name_index,
                     bind: elf::symtab::Bind::Global,
-                    ty: elf::symtab::Type::None,
+                    ty: elf::symtab::Type::Function,
                     visibility: elf::symtab::Visibility::Default,
                     section_index: 2,
                     value: offset,
