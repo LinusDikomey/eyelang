@@ -1,6 +1,6 @@
 use crate::Layout;
 
-use super::{MirBlock, OpType, Register, VReg, VRegs};
+use super::{MirBlock, OpType, RegClass, Register, VReg, VRegs};
 
 use super::{Instruction, InstructionStorage, MachineIR, Op};
 
@@ -41,8 +41,8 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
     }
 
     /// create a copy into a newly created virtual register
-    pub fn copy_to_fresh(&mut self, from: Op<I::Register>) -> VReg {
-        let vreg = self.reg();
+    pub fn copy_to_fresh(&mut self, from: Op<I::Register>, class: RegClass) -> VReg {
+        let vreg = self.reg(class);
         self.copy(vreg.op(), from);
         vreg
     }
@@ -53,8 +53,7 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         copyarg_inst: I,
         to: impl IntoIterator<Item = Op<I::Register>>,
         from: impl IntoIterator<Item = Op<I::Register>>,
-    ) -> VReg {
-        let r = self.reg();
+    ) {
         let extra_idx = self.mir.extra_ops.len();
         self.mir.extra_ops.extend(to);
         let count = self.mir.extra_ops.len() - extra_idx;
@@ -68,7 +67,6 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
                 implicit_dead: I::Register::NO_BITS,
             });
         }
-        r
     }
 
     pub fn register_successor(&mut self, successor: MirBlock) {
@@ -78,15 +76,18 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
     }
 
     /// creates a fresh virtual register
-    pub fn reg(&mut self) -> VReg {
-        self.mir.reg()
+    pub fn reg(&mut self, class: RegClass) -> VReg {
+        self.mir.reg(class)
     }
 
     pub fn create_stack_slot(&mut self, layout: Layout) -> u32 {
         self.mir.create_stack_slot(layout)
     }
 
-    pub fn create_block(&mut self, block_arg_count: u32) -> (MirBlock, VRegs) {
-        self.mir.create_block(block_arg_count)
+    pub fn create_block(
+        &mut self,
+        block_args: impl IntoIterator<Item = RegClass>,
+    ) -> (MirBlock, VRegs) {
+        self.mir.create_block(block_args)
     }
 }

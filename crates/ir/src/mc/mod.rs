@@ -16,7 +16,7 @@ pub struct MachineIR<I: Instruction> {
     insts: Vec<InstructionStorage<I>>,
     extra_ops: Vec<Op<I::Register>>,
     blocks: Vec<BlockInfo>,
-    next_virtual: u32,
+    virtual_regs: Vec<RegClass>,
     stack_slots: Vec<StackSlot>,
     stack_offset: u32,
 }
@@ -31,20 +31,21 @@ impl<I: Instruction> MachineIR<I> {
                 successors: Vec::new(),
                 block_args: VRegs::EMPTY,
             }],
-            next_virtual: 0,
+            virtual_regs: Vec::new(),
             stack_slots: Vec::new(),
             stack_offset: 0,
         }
     }
 
-    pub fn create_block(&mut self, block_arg_count: u32) -> (MirBlock, VRegs) {
+    pub fn create_block(
+        &mut self,
+        block_args: impl IntoIterator<Item = RegClass>,
+    ) -> (MirBlock, VRegs) {
         let block = MirBlock(self.blocks.len().try_into().expect("too many blocks"));
-        let start = self.next_virtual;
-        self.next_virtual += block_arg_count;
-        let block_args = VRegs {
-            start,
-            count: block_arg_count,
-        };
+        let start = self.virtual_regs.len() as u32;
+        self.virtual_regs.extend(block_args);
+        let count = self.virtual_regs.len() as u32 - start;
+        let block_args = VRegs { start, count };
         self.blocks.push(BlockInfo {
             start: 0,
             len: 0,
@@ -120,14 +121,18 @@ impl<I: Instruction> MachineIR<I> {
     }
 
     /// creates a fresh virtual register
-    pub fn reg(&mut self) -> VReg {
-        let r = self.next_virtual;
-        self.next_virtual += 1;
+    pub fn reg(&mut self, class: RegClass) -> VReg {
+        let r = self.virtual_regs.len() as u32;
+        self.virtual_regs.push(class);
         VReg(r)
     }
 
     pub fn virtual_register_count(&self) -> usize {
-        self.next_virtual as usize
+        self.virtual_regs.len()
+    }
+
+    pub fn virtual_reg_class(&self, reg: VReg) -> RegClass {
+        self.virtual_regs[reg.0 as usize]
     }
 
     /// creates a new stack slot and returns the slot's offset. On targets where the stack grows
@@ -395,7 +400,7 @@ pub trait Register: 'static + Copy {
 
     fn get_bit(self, bits: &Self::RegisterBits) -> bool;
     fn set_bit(self, bits: &mut Self::RegisterBits, bit: bool);
-    fn allocate_reg(free_bits: Self::RegisterBits, class: SizeClass) -> Option<Self>;
+    fn allocate_reg(free_bits: Self::RegisterBits, class: RegClass) -> Option<Self>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -511,12 +516,14 @@ pub enum OpUsage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SizeClass {
-    S1,
-    S8,
-    S16,
-    S32,
-    S64,
+pub enum RegClass {
+    GP8,
+    GP16,
+    GP32,
+    GP64,
+    F32,
+    F64,
+    Flags,
 }
 
 #[repr(transparent)]
@@ -663,9 +670,9 @@ macro_rules! registers {
         }
 
         impl $name {
-            pub fn size(self) -> $crate::mc::SizeClass {
+            pub fn class(self) -> $crate::mc::RegClass {
                 match self {
-                    $($(Self::$variant => $crate::mc::SizeClass::$size,)*)*
+                    $($(Self::$variant => $crate::mc::RegClass::$size,)*)*
                 }
             }
         }
@@ -699,9 +706,9 @@ macro_rules! registers {
                 bits.set(self, set);
             }
 
-            fn allocate_reg(free: Self::RegisterBits, class: $crate::mc::SizeClass) -> Option<Self> {
+            fn allocate_reg(free: Self::RegisterBits, class: $crate::mc::RegClass) -> Option<Self> {
                 $(
-                    if class == $crate::mc::SizeClass::$size {
+                    if class == $crate::mc::RegClass::$size {
                         $(if Self::$variant.get_bit(&free) {
                             return Some(Self::$variant)
                         })*

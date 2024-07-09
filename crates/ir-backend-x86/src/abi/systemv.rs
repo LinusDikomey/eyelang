@@ -1,10 +1,17 @@
 use ir::{IrType, IrTypes, TypeRefs};
 
-use crate::{isa::Reg, MCReg, MCValue};
+use crate::isa::Reg;
 
 use super::{Abi, ParamStorage, ReturnPlace};
 
-const ABI_PARAM_REGISTERS: [Reg; 6] = [Reg::rdi, Reg::rsi, Reg::rdx, Reg::rcx, Reg::r8, Reg::r9];
+const ABI_PARAM_REGISTERS: [[Reg; 4]; 6] = [
+    [Reg::rdi, Reg::edi, Reg::di, Reg::dl],
+    [Reg::rsi, Reg::esi, Reg::si, Reg::sil],
+    [Reg::rdx, Reg::edx, Reg::dx, Reg::dl],
+    [Reg::rcx, Reg::ecx, Reg::cx, Reg::cl],
+    [Reg::r8, Reg::r8d, Reg::r8w, Reg::r8b],
+    [Reg::r9, Reg::r9d, Reg::r9w, Reg::r9b],
+];
 
 pub struct FunctionAbi {
     params: Vec<ParamStorage>,
@@ -21,7 +28,7 @@ impl Abi for FunctionAbi {
             .iter()
             .map(|param_ty| match types[param_ty] {
                 IrType::Unit => ParamStorage::None,
-                IrType::U1
+                ty @ (IrType::U1
                 | IrType::I8
                 | IrType::U8
                 | IrType::I16
@@ -30,11 +37,18 @@ impl Abi for FunctionAbi {
                 | IrType::U32
                 | IrType::I64
                 | IrType::U64
-                | IrType::Ptr => {
+                | IrType::Ptr) => {
+                    let size_idx = match ty {
+                        IrType::U1 | IrType::I8 | IrType::U8 => 3,
+                        IrType::I16 | IrType::U16 => 2,
+                        IrType::I32 | IrType::U32 => 1,
+                        IrType::I64 | IrType::U64 | IrType::Ptr => 0,
+                        _ => unreachable!(),
+                    };
                     if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
                         next_gp_reg += 1;
                         let idx = registers.len() as _;
-                        registers.push(reg);
+                        registers.push(reg[size_idx]);
                         ParamStorage::Reg(idx)
                     } else {
                         todo!("handle stack passed parameters")
@@ -42,8 +56,8 @@ impl Abi for FunctionAbi {
                 }
                 IrType::I128 | IrType::U128 => {
                     if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
-                        let r1 = ABI_PARAM_REGISTERS[next_gp_reg];
-                        let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1];
+                        let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
+                        let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
                         next_gp_reg += 2;
                         let idx = registers.len() as _;
                         registers.extend([r1, r2]);
@@ -60,8 +74,19 @@ impl Abi for FunctionAbi {
                         if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
                             next_gp_reg += 1;
                             let idx = registers.len() as _;
-                            registers.push(reg);
+                            registers.push(reg[0]);
                             ParamStorage::Reg(idx)
+                        } else {
+                            todo!("handle stack passed parameters")
+                        }
+                    } else if layout.size <= 16 {
+                        if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
+                            let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
+                            let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
+                            next_gp_reg += 2;
+                            let idx = registers.len() as _;
+                            registers.extend([r1, r2]);
+                            ParamStorage::TwoRegs(idx)
                         } else {
                             todo!("handle stack passed parameters")
                         }

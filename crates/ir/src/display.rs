@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, BlockInfo, FunctionId, TypeRef, TypeRefs};
+use crate::{ir_types::ConstIrType, BlockInfo, FunctionId, TypeRef};
 
 use super::{
     instruction::DataVariant, ir_types::IrTypes, Data, Function, FunctionIr, Instruction, Module,

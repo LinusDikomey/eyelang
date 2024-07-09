@@ -3,16 +3,16 @@ use std::{fmt, ops};
 use ir::mc::Register as _;
 
 ir::mc::registers! { Reg RegisterBits
-    S64 => rax rbx rcx rdx rbp rsi rdi rsp;
-    S32 => eax ebx ecx edx ebp esi edi esp;
-    S16 =>  ax  bx  cx  dx  bp  si  di  sp;
-    S8 =>  ah  bh  ch  dh;
-    S8 =>  al  bl  cl  dl bpl sil dil spl;
-    S64 => r8  r9  r10  r11  r12  r13  r14  r15;
-    S32 => r8d r9d r10d r11d r12d r13d r14d r15d;
-    S16 => r8w r9w r10w r11w r12w r13w r14w r15w;
-    S8 => r8b r9b r10b r11b r12b r13b r14b r15b;
-    S1 => eflags;
+    GP64 => rax rbx rcx rdx rbp rsi rdi rsp;
+    GP32 => eax ebx ecx edx ebp esi edi esp;
+    GP16 => ax  bx  cx  dx  bp  si  di  sp;
+    GP8 =>  al  bl  cl  dl  bpl sil dil spl;
+    GP8 =>  ah  bh  ch  dh;
+    GP64 => r8  r9  r10  r11  r12  r13  r14  r15;
+    GP32 => r8d r9d r10d r11d r12d r13d r14d r15d;
+    GP16 => r8w r9w r10w r11w r12w r13w r14w r15w;
+    GP8 => r8b r9b r10b r11b r12b r13b r14b r15b;
+    Flags => eflags;
 }
 impl fmt::Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -106,6 +106,18 @@ ir::mc::inst! { Inst Reg
     imulrm32  Reg: DefUse, Reg: Use, Imm: Use   !implicit_def eflags;
 
     // mov
+    movrr8  Reg: Def, Reg: Use;
+    movri8  Reg: Def, Imm: Use;
+    movrm8  Reg: Def, Reg: Use, Imm: Use;
+    movmr8  Reg: Use, Imm: Use, Reg: Use;
+    movmi8  Reg: Use, Imm: Use, Imm: Use;
+
+    movrr16 Reg: Def, Reg: Use;
+    movri16 Reg: Def, Imm: Use;
+    movrm16 Reg: Def, Reg: Use, Imm: Use;
+    movmr16 Reg: Use, Imm: Use, Reg: Use;
+    movmi16 Reg: Def, Imm: Use, Imm: Use;
+
     movrr32 Reg: Def, Reg: Use;
     movri32 Reg: Def, Imm: Use;
     movrm32 Reg: Def, Reg: Use, Imm: Use;
@@ -113,7 +125,10 @@ ir::mc::inst! { Inst Reg
     movmi32 Reg: Use, Imm: Use, Imm: Use;
 
     movrr64 Reg: Def, Reg: Use;
+    movri64 Reg: Def, Imm: Use;
     movrm64 Reg: Def, Reg: Use, Imm: Use;
+    movmr64 Reg: Use, Imm: Use, Reg: Use;
+    movmi64 Reg: Use, Imm: Use, Imm: Use;
 
 
     call    Fun: Use; // TODO: clobbered and implicit regs, how to solve different number of args

@@ -143,7 +143,8 @@ fn perform_regalloc<I: Instruction>(
         let mut free = I::Register::ALL_BITS;
         for arg in mir.block_args(block).iter() {
             let avail = free & !intersecting_precolored[arg.0 as usize];
-            let chosen_reg = I::Register::allocate_reg(avail, super::SizeClass::S32)
+            let class = mir.virtual_reg_class(arg);
+            let chosen_reg = I::Register::allocate_reg(avail, class)
                 .expect("register allocation failed, TODO: spilling");
             chosen_reg.set_bit(&mut free, false);
             chosen[arg.0 as usize] = chosen_reg;
@@ -241,7 +242,7 @@ fn perform_regalloc<I: Instruction>(
                             let occupied = intersecting_precolored[r.0 as usize];
                             let avail = free & !occupied;
                             let chosen_reg =
-                                I::Register::allocate_reg(avail, super::SizeClass::S32)
+                                I::Register::allocate_reg(avail, super::RegClass::GP32)
                                     .expect("register allocation failed, TODO: spilling");
                             chosen_reg.set_bit(&mut free, false);
                             chosen[r.0 as usize] = chosen_reg;
