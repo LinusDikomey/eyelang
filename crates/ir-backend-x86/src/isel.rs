@@ -1,12 +1,13 @@
 use ir::{
-    mc::{BlockBuilder, MachineIR, MirBlock, Op, VReg, VRegs},
-    offset_in_tuple, BlockGraph, BlockIndex, FunctionId, IrType, Ref, Tag,
+    mc::{BlockBuilder, MachineIR, MirBlock, Op, VRegs},
+    BlockGraph, BlockIndex, FunctionId, IrType, Ref, Tag,
 };
 
-use crate::isa::{Inst, Reg};
-
-const ABI_PARAM_REGISTERS: [Reg; 6] = [Reg::edi, Reg::esi, Reg::edx, Reg::ecx, Reg::r8d, Reg::r9d];
-const ABI_RETURN_REGISTER: Reg = Reg::rax;
+use crate::{
+    abi::{self, ReturnPlace},
+    isa::{Inst, Reg},
+    MCReg, MCValue,
+};
 
 type Builder<'a> = BlockBuilder<'a, Inst>;
 
@@ -27,16 +28,15 @@ pub fn codegen(
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
 
-    let (mir_entry_block, entry_block_args) = builder.create_block(function.params.count);
+    let abi = abi::get_function_abi(types, function.params, function.return_type);
+
+    let (mir_entry_block, entry_block_args) =
+        builder.create_block(abi.arg_registers().len() as u32);
     builder.register_successor(mir_entry_block);
-    // TODO: handle args abi correctly with different arg sizes and more than 6 args.
     builder.build_copyargs(
         Inst::Copyargs,
         entry_block_args.iter().map(|vreg| vreg.op()),
-        ABI_PARAM_REGISTERS
-            .iter()
-            .take(entry_block_args.iter().len())
-            .map(|&arg_phys_reg| Op::Reg(arg_phys_reg)),
+        abi.arg_registers().iter().copied().map(Op::Reg),
     );
 
     let block_map = body
@@ -56,6 +56,7 @@ pub fn codegen(
         })
         .collect();
     let mut gen = Gen {
+        abi,
         function,
         body,
         types,
@@ -80,6 +81,7 @@ pub fn codegen(
 }
 
 struct Gen<'a> {
+    abi: Box<dyn abi::Abi>,
     function: &'a ir::Function,
     body: &'a ir::FunctionIr,
     types: &'a ir::IrTypes,
@@ -112,22 +114,29 @@ impl<'a> Gen<'a> {
             }
             Tag::Load => {
                 let ptr = get_ref(&values, inst.data.un_op());
-                match self.types[inst.ty] {
-                    IrType::Unit => MCValue::None,
-                    IrType::I32 => match ptr {
-                        MCValue::None => panic!(),
-                        MCValue::Undef => MCValue::Undef,
-                        MCValue::Imm(_) => todo!("load from addresses"),
-                        MCValue::Reg(r) => MCValue::PtrOffset(r, 0),
-                        MCValue::Indirect(r, offset) => {
+                match ptr {
+                    MCValue::None | MCValue::TwoRegs(_, _) => unreachable!(),
+                    MCValue::Undef => MCValue::Undef,
+                    MCValue::Imm(_) => todo!("load from addresses"),
+                    MCValue::Reg(r) => MCValue::PtrOffset(r, 0),
+                    MCValue::Indirect(r, offset) => match self.types[inst.ty] {
+                        IrType::Unit => MCValue::None,
+                        IrType::I32 | IrType::U32 => {
                             let loaded = builder.reg();
                             builder
                                 .inst(Inst::movrm32, [loaded.op(), r.op(), Op::Imm(offset as u64)]);
                             MCValue::Reg(MCReg::Virtual(loaded))
                         }
-                        MCValue::PtrOffset(r, offset) => MCValue::Indirect(r, offset),
+                        IrType::I64 | IrType::U64 | IrType::Ptr => {
+                            let loaded = builder.reg();
+                            builder
+                                .inst(Inst::movrm64, [loaded.op(), r.op(), Op::Imm(offset as u64)]);
+                            MCValue::Reg(MCReg::Virtual(loaded))
+                        }
+                        IrType::Const(_) => unreachable!(),
+                        ty => todo!("load value of type {ty:?}"),
                     },
-                    ty => todo!("load value of type {ty:?}"),
+                    MCValue::PtrOffset(r, offset) => MCValue::Indirect(r, offset),
                 }
             }
             Tag::Store => {
@@ -151,15 +160,15 @@ impl<'a> Gen<'a> {
                         builder.inst(Inst::movrm32, [tmp.op(), r.op(), offset_op(r_off)]);
                         builder.inst(Inst::movmr32, [ptr.op(), offset_op(off), tmp.op()]);
                     }
+                    MCValue::TwoRegs(_, _) => todo!(),
                 }
                 MCValue::None
             }
             Tag::MemberPtr => {
                 let (ptr, elem_types, elem_idx) = inst.data.member_ptr(extra);
                 let offset = ir::offset_in_tuple(elem_types, elem_idx, self.types);
-                //let offset: i32 = offset.try_into().expect("TODO: handle large offsets");
                 match get_ref(values, ptr) {
-                    MCValue::None => unreachable!(),
+                    MCValue::None | MCValue::TwoRegs(_, _) => unreachable!(),
                     MCValue::Undef => MCValue::Undef,
                     MCValue::Imm(imm) => MCValue::Imm(imm + offset),
                     MCValue::Reg(r) => MCValue::PtrOffset(
@@ -240,6 +249,9 @@ impl<'a> Gen<'a> {
                     }
                     IrType::I32 => {
                         match val {
+                            MCValue::None | MCValue::PtrOffset(_, _) | MCValue::TwoRegs(_, _) => {
+                                unreachable!()
+                            }
                             MCValue::Reg(MCReg::Register(Reg::eax)) => {}
                             MCValue::Reg(reg) => {
                                 builder.inst(Inst::Copy, [Op::Reg(Reg::eax), reg.op()]);
@@ -251,8 +263,7 @@ impl<'a> Gen<'a> {
                                 Inst::movrm32,
                                 [Op::Reg(Reg::eax), reg.op(), Op::Imm(offset as u64)],
                             ),
-                            MCValue::PtrOffset(_, _) => todo!("calculate ptr addr for ret"),
-                            MCValue::None | MCValue::Undef => {}
+                            MCValue::Undef => {}
                         }
                         self.create_epilogue(builder);
                         builder.inst(Inst::ret32, []);
@@ -277,11 +288,21 @@ impl<'a> Gen<'a> {
                 });
                 */
                 builder.inst(Inst::call, [Op::Func(func)]);
-                match self.types[inst.ty] {
-                    IrType::Unit => MCValue::Undef,
-                    IrType::I32 => MCValue::Reg(MCReg::Register(ABI_RETURN_REGISTER)),
-                    IrType::Const(_) => panic!(),
-                    other => todo!("handle call with type {other:?}"),
+                match self.abi.return_place() {
+                    ReturnPlace::None => MCValue::None,
+                    ReturnPlace::Reg(r) => {
+                        MCValue::Reg(MCReg::Virtual(builder.copy_to_fresh(Op::Reg(r))))
+                    }
+                    ReturnPlace::TwoRegs(r1, r2) => {
+                        let vr1 = builder.reg();
+                        let vr2 = builder.reg();
+                        builder.build_copyargs(
+                            Inst::Copyargs,
+                            [vr1.op(), vr2.op()],
+                            [Op::Reg(r1), Op::Reg(r2)],
+                        );
+                        MCValue::TwoRegs(MCReg::Virtual(vr1), MCReg::Virtual(vr2))
+                    }
                 }
             }
             Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE => {
@@ -411,8 +432,10 @@ impl<'a> Gen<'a> {
                     }
                     MCReg::Virtual(reg)
                 }
-                (MCValue::PtrOffset(_, _) | MCValue::None, _)
-                | (_, MCValue::PtrOffset(_, _) | MCValue::None) => unreachable!(),
+                (MCValue::PtrOffset(_, _) | MCValue::None | MCValue::TwoRegs(_, _), _)
+                | (_, MCValue::PtrOffset(_, _) | MCValue::None | MCValue::TwoRegs(_, _)) => {
+                    unreachable!()
+                }
             },
             _ => todo!("handle add of type {ty:?}"),
         };
@@ -438,8 +461,10 @@ impl<'a> Gen<'a> {
         let lhs = get_ref(values, lhs);
         let rhs = get_ref(values, rhs);
         let lhs = match (lhs, rhs) {
-            (MCValue::None | MCValue::PtrOffset(_, _), _)
-            | (_, MCValue::None | MCValue::PtrOffset(_, _)) => unreachable!(),
+            (MCValue::None | MCValue::PtrOffset(_, _) | MCValue::TwoRegs(_, _), _)
+            | (_, MCValue::None | MCValue::PtrOffset(_, _) | MCValue::TwoRegs(_, _)) => {
+                unreachable!()
+            }
             (MCValue::Undef, _) | (_, MCValue::Undef) => return MCValue::Undef,
             (MCValue::Imm(a), MCValue::Imm(b)) => return MCValue::Imm(fold(a, b)),
             (MCValue::Imm(lhs), _) => {
@@ -455,7 +480,9 @@ impl<'a> Gen<'a> {
             }
         };
         match rhs {
-            MCValue::None | MCValue::Undef | MCValue::PtrOffset(_, _) => unreachable!(),
+            MCValue::None | MCValue::Undef | MCValue::PtrOffset(_, _) | MCValue::TwoRegs(_, _) => {
+                unreachable!()
+            }
             MCValue::Imm(i) => builder.inst(insts32.ri, [lhs.op(), Op::Imm(i)]),
             MCValue::Reg(r) => builder.inst(insts32.rr, [lhs.op(), r.op()]),
             MCValue::Indirect(r, r_off) => {
@@ -534,6 +561,9 @@ impl<'a> Gen<'a> {
                 builder.inst(Inst::movrm32, [va.op(), a.op(), offset_op(a_off)]);
                 builder.inst(Inst::cmprm32, [va.op(), b.op(), offset_op(b_off)]);
             }
+            (MCValue::TwoRegs(_, _), _) | (_, MCValue::TwoRegs(_, _)) => {
+                todo!("handle comparison with large integers")
+            }
         };
         let r = builder.reg();
         let set_inst = match (tag, flip) {
@@ -559,66 +589,6 @@ struct BinOpInsts {
     ri: Inst,
     is_rri: bool,
     rm: Inst,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum MCValue {
-    /// this value doesn't have any runtime bits
-    None,
-    /// value is undefined and can be assumed to be any value at runtime
-    Undef,
-    /// an immediate (pointer-sized) constant value
-    Imm(u64),
-    /// value is located in a register
-    Reg(MCReg),
-    /// represents a constant offset from a register
-    PtrOffset(MCReg, i32),
-    /// value is located at a constant offset from an address in a register
-    Indirect(MCReg, i32),
-}
-impl MCValue {
-    // Converts the value to either a value in a register or an intermediate, potentially loading it
-    // and applying constant offsets.
-    pub fn to_ri32(self, builder: &mut Builder) -> RI {
-        match self {
-            Self::None => unreachable!("ri value should have a runtime value"),
-            Self::Undef => RI::Undef,
-            Self::Imm(imm) => RI::Imm(imm),
-            Self::Reg(r) => RI::Reg(r),
-            Self::PtrOffset(r, i) => {
-                let vreg = builder.reg();
-                builder.inst(Inst::Copy, [vreg.op(), r.op()]);
-                builder.inst(Inst::addri32, [vreg.op(), Op::Imm(i as u64)]);
-                RI::Reg(MCReg::Virtual(vreg))
-            }
-            Self::Indirect(r, off) => {
-                let vreg = builder.reg();
-                builder.inst(Inst::movrm32, [vreg.op(), r.op(), Op::Imm(off as u64)]);
-                RI::Reg(MCReg::Virtual(vreg))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum RI {
-    Undef,
-    Imm(u64),
-    Reg(MCReg),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum MCReg {
-    Register(Reg),
-    Virtual(VReg),
-}
-impl MCReg {
-    pub fn op(self) -> Op<Reg> {
-        match self {
-            MCReg::Register(r) => Op::Reg(r),
-            MCReg::Virtual(r) => Op::VReg(r),
-        }
-    }
 }
 
 fn get_ref(values: &[MCValue], r: ir::Ref) -> MCValue {

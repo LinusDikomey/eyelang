@@ -536,6 +536,10 @@ pub struct VRegs {
 impl VRegs {
     pub const EMPTY: Self = Self { start: 0, count: 0 };
 
+    pub fn count(self) -> u32 {
+        self.count
+    }
+
     pub fn iter(self) -> impl ExactSizeIterator<Item = VReg> {
         (self.start..self.start + self.count).map(VReg)
     }

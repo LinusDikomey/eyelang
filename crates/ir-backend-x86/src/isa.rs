@@ -105,14 +105,14 @@ ir::mc::inst! { Inst Reg
     imulrri32 Reg: Def   , Reg: Use, Imm: Use   !implicit_def eflags;
     imulrm32  Reg: DefUse, Reg: Use, Imm: Use   !implicit_def eflags;
 
+    // mov
     movrr32 Reg: Def, Reg: Use;
-    movrr64 Reg: Def, Reg: Use;
-
     movri32 Reg: Def, Imm: Use;
     movrm32 Reg: Def, Reg: Use, Imm: Use;
     movmr32 Reg: Use, Imm: Use, Reg: Use;
     movmi32 Reg: Use, Imm: Use, Imm: Use;
 
+    movrr64 Reg: Def, Reg: Use;
     movrm64 Reg: Def, Reg: Use, Imm: Use;
 
 

@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use elf::{ElfObjectWriter, SectionHeader};
+use ir::mc::Op;
 
+mod abi;
 mod elf;
 mod emit;
 mod isa;
@@ -104,5 +106,36 @@ impl Backend {
         writer.section(symtab_header, symtab_contents);
         writer.write(out_file).map_err(Error::IO)?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MCValue {
+    /// this value doesn't have any runtime bits
+    None,
+    /// value is undefined and can be assumed to be any value at runtime
+    Undef,
+    /// an immediate (pointer-sized) constant value
+    Imm(u64),
+    /// value is located in a register
+    Reg(MCReg),
+    /// value is up to 16 bytes large and is spread across two registers (lower bits, upper bits)
+    TwoRegs(MCReg, MCReg),
+    /// represents a constant offset from a register
+    PtrOffset(MCReg, i32),
+    /// value is located at a constant offset from an address in a register
+    Indirect(MCReg, i32),
+}
+#[derive(Debug, Clone, Copy)]
+enum MCReg {
+    Register(isa::Reg),
+    Virtual(ir::mc::VReg),
+}
+impl MCReg {
+    pub fn op(self) -> Op<isa::Reg> {
+        match self {
+            MCReg::Register(r) => Op::Reg(r),
+            MCReg::Virtual(r) => Op::VReg(r),
+        }
     }
 }

@@ -326,9 +326,10 @@ fn inst_mi(
     let modrm = reg | off.modrm_bits();
     if b {
         // REX byte
-        text.push(0b0100_0100);
+        text.push(0b0100_0100 | if wide { REX_W } else { 0 });
     }
-    text.extend([0xC7, modrm]);
+    text.extend(opcode);
+    text.push(modrm);
     off.write(text);
     let imm = i as i64;
     let imm32: Result<i32, _> = imm.try_into();
@@ -389,7 +390,7 @@ const REX: u8 = 0b0100_0001;
 const REX_B: u8 = 1 << 0;
 //const REX_X: u8 = 1 << 1;
 //const REX_R: u8 = 1 << 2;
-//const REX_W: u8 = 1 << 3;
+const REX_W: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy)]
 enum OffsetClass {
