@@ -138,13 +138,31 @@ unsafe fn build_func(
         println!("Translating function {} to LLVM IR", func.name);
     }
 
-    let blocks: Vec<_> = (0..ir.blocks().len())
-        .map(|_| core::LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE))
+    let mut instructions = vec![ptr::null_mut(); ir.inst.len()];
+
+    // create an LLVM block for each block while also creating a Phi node for each incoming block arg.
+    let blocks: Vec<_> = ir
+        .blocks()
+        .map(|block| {
+            let llvm_block = core::LLVMAppendBasicBlockInContext(ctx, llvm_func, NONE);
+
+            let block_args = ir.get_block_args(block);
+            LLVMPositionBuilderAtEnd(builder, llvm_block);
+            for (i, arg) in block_args.iter().enumerate() {
+                if block == ir::BlockIndex::ENTRY {
+                    instructions[arg as usize] = LLVMGetParam(llvm_func, i as _);
+                } else {
+                    let arg_ty = ir.get_ref_ty(ir::Ref::index(arg), &func.types);
+                    if let Some(ty) = llvm_ty(ctx, arg_ty, &func.types) {
+                        instructions[arg as usize] = LLVMBuildPhi(builder, ty, NONE);
+                    }
+                }
+            }
+            llvm_block
+        })
         .collect();
 
     let block_graph = ir::BlockGraph::calculate(ir);
-
-    let mut instructions = vec![ptr::null_mut(); ir.inst.len()];
 
     let i1 = LLVMInt1TypeInContext(ctx);
 
@@ -205,7 +223,33 @@ unsafe fn build_func(
     queued_blocks[BlockIndex::ENTRY.idx() as usize] = true;
 
     for block in block_graph.postorder().iter().copied().rev() {
-        LLVMPositionBuilderAtEnd(builder, blocks[block.idx() as usize]);
+        let llvm_block = blocks[block.idx() as usize];
+
+        let mut handle_successor = |ir: &ir::FunctionIr,
+                                    instructions: &[LLVMValueRef],
+                                    successor: ir::BlockIndex,
+                                    extra_idx: usize| {
+            for (block_arg_idx, extra_idx) in ir
+                .get_block_args(successor)
+                .iter()
+                .zip((extra_idx..).step_by(4))
+            {
+                let r = ir::Ref::from_bytes(ir.extra[extra_idx..extra_idx + 4].try_into().unwrap());
+                if let Some(mut llvm_val) = get_ref(&instructions, r) {
+                    let phi = instructions[block_arg_idx as usize];
+                    if !phi.is_null() {
+                        let mut block = llvm_block;
+                        LLVMAddIncoming(phi, &mut llvm_val, &mut block, 1);
+                    }
+                }
+            }
+            if !queued_blocks[successor.idx() as usize] {
+                queued_blocks[successor.idx() as usize] = true;
+                block_queue.push_back(successor);
+            }
+        };
+
+        LLVMPositionBuilderAtEnd(builder, llvm_block);
         for (i, inst) in ir.get_block(block) {
             if log {
                 print!("Generating %{i} = {:?} ->", inst);
@@ -586,25 +630,20 @@ unsafe fn build_func(
                 }
                 ir::Tag::Goto => {
                     let (block, extra_idx) = data.goto();
-                    // TODO: block args
-                    if !queued_blocks[block.idx() as usize] {
-                        queued_blocks[block.idx() as usize] = true;
-                        block_queue.push_back(block);
-                    }
+                    handle_successor(ir, &instructions, block, extra_idx);
                     LLVMBuildBr(builder, blocks[block.idx() as usize])
                 }
                 ir::Tag::Branch => {
                     let (r, a, b, extra_idx) = data.branch(&ir.extra);
                     // TODO block_args
                     let cond = get_ref(&instructions, r).unwrap();
-                    if !queued_blocks[a.idx() as usize] {
-                        queued_blocks[a.idx() as usize] = true;
-                        block_queue.push_back(a);
-                    }
-                    if !queued_blocks[b.idx() as usize] {
-                        queued_blocks[b.idx() as usize] = true;
-                        block_queue.push_back(b);
-                    }
+                    handle_successor(ir, &instructions, a, extra_idx);
+                    handle_successor(
+                        ir,
+                        &instructions,
+                        a,
+                        extra_idx + 4 * ir.get_block_args(a).count(),
+                    );
 
                     LLVMBuildCondBr(
                         builder,

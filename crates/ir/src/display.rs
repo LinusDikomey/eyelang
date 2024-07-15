@@ -349,7 +349,7 @@ fn display_data(
             write_ref(f, r)?;
             let a_count = blocks[a.idx() as usize].arg_count;
             let b_count = blocks[b.idx() as usize].arg_count;
-            cwrite!(f, "#b!<{a}>")?;
+            cwrite!(f, " #b!<{a}>")?;
             write_block_args(f, a_count, extra, i)?;
             cwrite!(f, " #g<or> ")?;
             write_block_args(f, a_count, extra, i)?;
