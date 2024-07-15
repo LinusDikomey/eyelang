@@ -184,7 +184,8 @@ pub fn def_expr(
             let id = if let Some(id) = symbols.types[id.idx()] {
                 id
             } else {
-                let assigned_id = compiler.add_type_def(module, id, name.into());
+                let generic_count = ast[id].generic_count();
+                let assigned_id = compiler.add_type_def(module, id, name.into(), generic_count);
                 compiler.get_module_ast_and_symbols(module).symbols.types[id.idx()] =
                     Some(assigned_id);
                 assigned_id
@@ -210,7 +211,6 @@ pub fn def_expr(
                 compiler,
                 &mut to_generate,
                 &[],
-                ir::TypeRefs::EMPTY,
                 &mut vars,
             );
             use ir::Val;

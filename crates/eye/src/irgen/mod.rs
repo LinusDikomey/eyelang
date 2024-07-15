@@ -8,7 +8,7 @@ use ::types::{Primitive, Type};
 use id::ModuleId;
 use ir::builder::{BinOp, Terminator};
 use ir::{builder::IrBuilder, IrType, Ref};
-use ir::{BlockIndex, RefVal, TypeRefs};
+use ir::{BlockIndex, RefVal};
 
 use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
@@ -31,16 +31,14 @@ pub fn lower_function(
     generics: &[Type],
 ) -> ir::Function {
     let mut types = ir::IrTypes::new();
-    let generic_ir_types =
-        types::get_multiple(compiler, &mut types, generics, TypeRefs::EMPTY).unwrap();
-    // TODO: figure out what to do when params/return_type are Invalid. We can no longer generate a
-    // valid signature
+    // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
+    // longer generate a valid signature
     let param_types = types::get_multiple_infos(
         compiler,
         &checked.types,
         &mut types,
         checked.params,
-        generic_ir_types,
+        types::Generics::function_instance(generics),
     )
     .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| IrType::Unit)));
 
@@ -50,7 +48,7 @@ pub fn lower_function(
         &checked.types,
         &mut types,
         return_type,
-        generic_ir_types,
+        types::Generics::function_instance(generics),
     )
     .unwrap_or(IrType::Unit);
 
@@ -70,7 +68,6 @@ pub fn lower_function(
             compiler,
             to_generate,
             generics,
-            generic_ir_types,
             &mut vars,
         )
     });
@@ -101,16 +98,14 @@ pub fn lower_hir(
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
     generics: &[Type],
-    generic_ir_types: TypeRefs,
     vars: &mut [(Ref, ir::TypeRef)],
 ) -> ir::FunctionIr {
-    debug_assert_eq!(generics.len(), generic_ir_types.count as usize);
     let mut ctx = Ctx {
         compiler,
         to_generate,
         hir,
         types: hir_types,
-        generics: generic_ir_types,
+        generics,
         generic_types: generics,
         builder,
         vars,
@@ -127,7 +122,7 @@ struct Ctx<'a> {
     to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a HIR,
     types: &'a TypeTable,
-    generics: TypeRefs,
+    generics: &'a [Type],
     generic_types: &'a [Type],
     builder: IrBuilder<'a>,
     vars: &'a mut [(Ref, ir::TypeRef)],
@@ -146,7 +141,12 @@ impl<'a> Ctx<'a> {
                 return None;
             }
         }
-        self.compiler.get_hir(module, id);
+        let checked = self.compiler.get_hir(module, id);
+        debug_assert_eq!(
+            checked.generic_count as usize,
+            generics.len(),
+            "trying to instantiate a function with an invalid generic count"
+        );
         let instances = &mut self.compiler.modules[module.idx()]
             .ast
             .as_mut()
@@ -189,7 +189,7 @@ impl<'a> Ctx<'a> {
             let ty = ty.clone();
             let value = const_value::translate(value);
             let mut types = ir::IrTypes::new();
-            let ty = types::get(&mut self.compiler, &mut types, &ty, ir::TypeRefs::EMPTY)?;
+            let ty = types::get(&mut self.compiler, &mut types, &ty, types::Generics::Empty)?;
             let global_id = ir::GlobalId(self.compiler.ir_module.globals.len() as _);
             self.compiler.ir_module.globals.push(ir::Global {
                 name,
@@ -211,7 +211,7 @@ impl<'a> Ctx<'a> {
             self.types,
             self.builder.types,
             ty,
-            self.generics,
+            types::Generics::function_instance(self.generics),
         )
         .ok_or_else(|| {
             build_crash_point(self);
@@ -225,7 +225,7 @@ impl<'a> Ctx<'a> {
             self.types,
             self.builder.types,
             ids,
-            self.generics,
+            types::Generics::function_instance(self.generics),
         )
         .ok_or_else(|| {
             build_crash_point(self);

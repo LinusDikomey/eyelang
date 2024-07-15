@@ -10,15 +10,40 @@ use crate::{
     Compiler,
 };
 
+#[derive(Clone, Copy, Debug)]
+pub enum Generics<'a> {
+    Empty,
+    Types(&'a [Type], &'a Generics<'a>),
+    Local(&'a TypeTable, LocalTypeIds, &'a Generics<'a>),
+}
+impl<'a> Generics<'a> {
+    pub fn function_instance(instance_generics: &'a [Type]) -> Self {
+        Self::Types(instance_generics, &Self::Empty)
+    }
+    fn get(&self, i: u8, compiler: &mut Compiler, ir_types: &mut IrTypes) -> Option<IrType> {
+        match self {
+            Self::Empty => unreachable!(),
+            Self::Types(generics, outer) => get(compiler, ir_types, &generics[i as usize], **outer),
+            Self::Local(type_table, generics, outer) => get_from_info(
+                compiler,
+                type_table,
+                ir_types,
+                type_table[generics.nth(i.into()).unwrap()],
+                **outer,
+            ),
+        }
+    }
+}
+
 pub fn get(
     compiler: &mut Compiler,
     ir_types: &mut IrTypes,
     ty: &Type,
-    generics: TypeRefs,
+    generics: Generics,
 ) -> Option<IrType> {
     Some(match ty {
-        Type::Primitive(p) => get_primitive(*p),
-        &Type::Generic(i) => ir_types[generics.nth(i.into())],
+        &Type::Primitive(p) => get_primitive(p),
+        &Type::Generic(i) => return generics.get(i, compiler, ir_types),
         Type::Invalid => return None,
         Type::Pointer(_) => IrType::Ptr,
         Type::Array(b) => {
@@ -34,9 +59,14 @@ pub fn get(
         } => {
             let def_generics = def_generics
                 .as_ref()
-                .expect("TODO: handle missing generics"); // TODO
-            let def_generics = get_multiple(compiler, ir_types, def_generics, generics)?;
-            get_def(compiler, ir_types, *id, def_generics)?
+                // TODO
+                .expect("TODO: handle missing generics");
+            get_def(
+                compiler,
+                ir_types,
+                *id,
+                Generics::Types(def_generics, &generics),
+            )?
         }
         Type::LocalEnum(_) => todo!("local enums"),
     })
@@ -46,7 +76,7 @@ pub fn get_multiple(
     compiler: &mut Compiler,
     ir_types: &mut IrTypes,
     types: &[Type],
-    generics: TypeRefs,
+    generics: Generics,
 ) -> Option<ir::TypeRefs> {
     let refs = ir_types.add_multiple(types.iter().map(|_| IrType::Unit));
     for (elem, ty) in types.iter().zip(refs.iter()) {
@@ -60,7 +90,7 @@ pub fn get_def(
     compiler: &mut Compiler,
     ir_types: &mut IrTypes,
     def: TypeId,
-    generics: TypeRefs,
+    generics: Generics,
 ) -> Option<IrType> {
     let resolved = compiler.get_resolved_type_def(def);
     let def = Rc::clone(&resolved.def);
@@ -75,13 +105,16 @@ pub fn get_def(
         }
         ResolvedTypeDef::Enum(def) => {
             let mut accumulated_layout = ir::Layout::EMPTY;
+            // TODO: reduce number of variants if reduced by never types in variants
             let ordinal_type = int_from_variant_count(def.variants.len() as u32);
-            for (_variant_name, args) in &*def.variants {
+            'variants: for (_variant_name, args) in &*def.variants {
                 let elems = ir_types.add_multiple((0..args.len() + 1).map(|_| IrType::Unit));
                 let mut elem_iter = elems.iter();
                 ir_types.replace(elem_iter.next().unwrap(), ordinal_type);
                 for (arg, r) in args.iter().zip(elem_iter) {
-                    let elem = get(compiler, ir_types, arg, generics)?;
+                    let Some(elem) = get(compiler, ir_types, arg, generics) else {
+                        continue 'variants;
+                    };
                     ir_types.replace(r, elem);
                 }
                 let variant_layout = ir::type_layout(IrType::Tuple(elems), ir_types);
@@ -98,16 +131,19 @@ pub fn get_from_info(
     types: &TypeTable,
     ir_types: &mut IrTypes,
     ty: TypeInfo,
-    generics: TypeRefs,
+    generics: Generics,
 ) -> Option<IrType> {
     Some(match ty {
         TypeInfo::Primitive(p) => get_primitive(p),
         TypeInfo::Integer => IrType::I32,
         TypeInfo::Float => IrType::F32,
-        TypeInfo::TypeDef(id, inner_generics) => {
-            let inner_generics =
-                get_multiple_infos(compiler, types, ir_types, inner_generics, generics)?;
-            get_def(compiler, ir_types, id, inner_generics)?
+        TypeInfo::TypeDef(id, def_generics) => {
+            return get_def(
+                compiler,
+                ir_types,
+                id,
+                Generics::Local(types, def_generics, &generics),
+            );
         }
         TypeInfo::Pointer(_) => IrType::Ptr,
         TypeInfo::Array {
@@ -120,12 +156,20 @@ pub fn get_from_info(
         TypeInfo::Enum(id) => {
             let mut accumulated_layout = ir::Layout::EMPTY;
             let variants = types.get_enum_variants(id);
-            for &variant in variants {
+            let mut inhabited_variants: usize = 0;
+            'variants: for &variant in variants {
                 let variant = &types[variant];
-                let args =
-                    get_multiple_infos(compiler, types, ir_types, variant.args, TypeRefs::EMPTY)?;
+                let Some(args) =
+                    get_multiple_infos(compiler, types, ir_types, variant.args, generics)
+                else {
+                    continue 'variants;
+                };
+                inhabited_variants += 1;
                 let variant_layout = ir::type_layout(IrType::Tuple(args), ir_types);
                 accumulated_layout.accumulate_variant(variant_layout);
+            }
+            if inhabited_variants == 0 {
+                return None;
             }
             type_from_layout(ir_types, accumulated_layout)
         }
@@ -137,7 +181,7 @@ pub fn get_from_info(
             }
             IrType::Tuple(member_refs)
         }
-        TypeInfo::Generic(id) => ir_types[generics.nth(id.into())],
+        TypeInfo::Generic(i) => return generics.get(i, compiler, ir_types),
         TypeInfo::Unknown
         | TypeInfo::UnknownSatisfying { .. }
         | TypeInfo::TypeItem { .. }
@@ -160,7 +204,7 @@ pub fn get_multiple_infos(
     types: &TypeTable,
     ir_types: &mut IrTypes,
     ids: LocalTypeIds,
-    generics: TypeRefs,
+    generics: Generics,
 ) -> Option<TypeRefs> {
     let refs = ir_types.add_multiple((0..ids.count).map(|_| IrType::Unit));
     for (ty, r) in ids.iter().zip(refs.iter()) {

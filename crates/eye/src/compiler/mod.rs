@@ -88,18 +88,26 @@ impl Compiler {
         self.projects[project.idx()].dependencies.push(dependency);
     }
 
-    pub fn add_type_def(&mut self, module: ModuleId, id: ast::TypeId, name: Box<str>) -> TypeId {
-        Self::add_type_def_to_types(module, id, name, &mut self.types)
+    pub fn add_type_def(
+        &mut self,
+        module: ModuleId,
+        id: ast::TypeId,
+        name: Box<str>,
+        generic_count: u8,
+    ) -> TypeId {
+        Self::add_type_def_to_types(module, id, name, generic_count, &mut self.types)
     }
 
     pub fn add_type_def_to_types(
         module: ModuleId,
         id: ast::TypeId,
         name: Box<str>,
+        generic_count: u8,
         types: &mut Vec<ResolvableTypeDef>,
     ) -> TypeId {
         let type_id = TypeId(types.len() as _);
         types.push(ResolvableTypeDef {
+            generic_count,
             module,
             id,
             name,
@@ -367,20 +375,19 @@ impl Compiler {
                                     Some(generics)
                                 }
                                 (None, None) => {
-                                    let def = self.get_resolved_type_def(id);
-                                    if def.generic_count != 0 {
-                                        let count = def.generic_count;
+                                    let generic_count = self.get_resolved_type_generic_count(id);
+                                    if generic_count != 0 {
                                         let span = path.span().in_mod(module);
                                         self.errors.emit_err(
                                             Error::InvalidGenericCount {
-                                                expected: count,
+                                                expected: generic_count,
                                                 found: 0,
                                             }
                                             .at_span(span),
                                         );
                                         Some(
                                             std::iter::repeat(Type::Invalid)
-                                                .take(count as usize)
+                                                .take(generic_count as usize)
                                                 .collect(),
                                         )
                                     } else {
@@ -754,6 +761,10 @@ impl Compiler {
         &self.types[ty.idx()].name
     }
 
+    pub fn get_resolved_type_generic_count(&mut self, ty: TypeId) -> u8 {
+        self.types[ty.idx()].generic_count
+    }
+
     pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &ResolvedType {
         match &self.types[ty.idx()].resolved {
             Resolvable::Resolved(_) => {
@@ -770,7 +781,6 @@ impl Compiler {
                 let ast_id = resolved_ty.id;
                 let ast = Rc::clone(self.get_module_ast(module));
                 let def = &ast[ast_id];
-                let generic_count = def.generic_count();
                 let methods;
                 let def = match def {
                     ast::TypeDef::Struct(struct_def) => {
@@ -807,7 +817,6 @@ impl Compiler {
                     }
                 };
                 let resolved = ResolvedType {
-                    generic_count,
                     def: Rc::new(def),
                     module,
                     methods,
@@ -932,19 +941,16 @@ impl Compiler {
             }
 
             for id in ast.type_ids() {
-                let id = match &mut self.modules[module.idx()]
-                    .ast
-                    .as_mut()
-                    .unwrap()
-                    .symbols
-                    .types[id.idx()]
-                {
+                let parsed = self.modules[module.idx()].ast.as_mut().unwrap();
+                let id = match &mut parsed.symbols.types[id.idx()] {
                     Some(id) => *id,
                     ty @ None => {
+                        let generic_count = parsed.ast[id].generic_count();
                         let id = Self::add_type_def_to_types(
                             module,
                             id,
                             "<anonymous type>".into(),
+                            generic_count,
                             &mut self.types,
                         );
                         *ty = Some(id);
@@ -997,6 +1003,11 @@ impl Compiler {
                         unreachable!()
                     };
                     let checked = Rc::clone(checked);
+                    assert_eq!(
+                        checked.generic_count as usize,
+                        f.generics.len(),
+                        "a function instance queued for ir generation has an invalid generic count"
+                    );
                     // TODO: generics in function name
                     let mut name = checked.name.clone();
                     if name == "main" {
@@ -1069,14 +1080,17 @@ impl Compiler {
         finished_functions
     }
 
-    /// Emit the ir for all top-level functions in a project and functions called by them.
+    /// Emit the ir for all non-generic top-level functions in a project and functions called by them.
     pub fn emit_whole_project_ir(&mut self, project: ProjectId) {
         let project = self.get_project(project);
         let mut module_queue = VecDeque::from([project.root_module]);
         while let Some(module) = module_queue.pop_front() {
-            let functions = self.get_module_ast(module).function_ids();
+            let ast = Rc::clone(self.get_module_ast(module));
+            let functions = ast.function_ids();
             for function in functions {
-                self.emit_ir_from_root((module, function));
+                if ast[function].generics.len() == 0 {
+                    self.emit_ir_from_root((module, function));
+                }
             }
         }
     }
@@ -1179,6 +1193,7 @@ impl<T> Resolvable<T> {
 
 id::id!(VarId);
 
+#[derive(Debug)]
 pub struct LocalScope<'p> {
     pub parent: Option<&'p LocalScope<'p>>,
     pub variables: DHashMap<String, VarId>,
@@ -1228,7 +1243,9 @@ impl<'p> LocalScope<'p> {
             }
             // a local scope has to have a parent scope if it doesn't have a static scope
             // associated with it
-            current_local = current_local.parent.unwrap();
+            current_local = current_local
+                .parent
+                .unwrap_or_else(|| panic!("{current_local:?}, {self:?}"));
         }
     }
 }
@@ -1363,7 +1380,6 @@ pub struct Signature {
 
 #[derive(Debug)]
 pub struct ResolvedType {
-    pub generic_count: u8,
     /// PERF: could put the specific vecs with variants/members into an Rc and avoid one level of
     /// indirection
     pub def: Rc<ResolvedTypeDef>,
@@ -1426,6 +1442,7 @@ pub struct ResolvableTypeDef {
     module: ModuleId,
     id: ast::TypeId,
     name: Box<str>,
+    generic_count: u8,
     resolved: Resolvable<ResolvedType>,
 }
 

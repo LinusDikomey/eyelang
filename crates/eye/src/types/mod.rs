@@ -251,8 +251,8 @@ impl TypeTable {
                     }
                     TypeInfo::TypeDef(*id, generics_ids)
                 } else {
-                    let resolved = compiler.get_resolved_type_def(*id);
-                    let generics = self.add_multiple_unknown(resolved.generic_count.into());
+                    let generic_count = compiler.get_resolved_type_generic_count(*id);
+                    let generics = self.add_multiple_unknown(generic_count.into());
                     TypeInfo::TypeDef(*id, generics)
                 }
             }

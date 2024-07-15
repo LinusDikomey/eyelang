@@ -157,15 +157,15 @@ pub fn check(
             Node::Invalid
         }
         &Expr::Type { id } => {
-            let resolved_id = ctx
-                .compiler
-                .add_type_def(ctx.module, id, "<anonymous type>".into());
+            let generic_count = ctx.ast[id].generic_count();
+            let resolved_id =
+                ctx.compiler
+                    .add_type_def(ctx.module, id, "<anonymous type>".into(), generic_count);
             ctx.compiler
                 .get_module_ast_and_symbols(ctx.module)
                 .symbols
                 .types[id.idx()] = Some(resolved_id);
-            let ty = ctx.compiler.get_resolved_type_def(resolved_id);
-            let generics = ctx.hir.types.add_multiple_unknown(ty.generic_count.into());
+            let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
             let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));
             ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| {
                 ast[expr].span(ast)
@@ -1232,8 +1232,11 @@ fn check_call(
         TypeInfo::Invalid => Node::Invalid,
         TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
             TypeInfo::TypeDef(id, generics) => {
+                debug_assert_eq!(
+                    generics.count,
+                    ctx.compiler.get_resolved_type_generic_count(id) as u32
+                );
                 let resolved = ctx.compiler.get_resolved_type_def(id);
-                debug_assert_eq!(generics.count, resolved.generic_count.into());
                 let def = Rc::clone(&resolved.def);
                 match &*def {
                     ResolvedTypeDef::Struct(struct_def) => {

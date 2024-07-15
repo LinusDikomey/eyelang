@@ -84,7 +84,7 @@ impl ImplTree {
                     .collect(),
             ),
             &Type::DefId { id, generics: None } => {
-                let expected = compiler.get_resolved_type_def(id).generic_count;
+                let expected = compiler.get_resolved_type_generic_count(id);
                 // TODO: error spans
                 compiler.errors.emit_err(
                     Error::InvalidGenericCount { expected, found: 0 }.at_span(span::Span::MISSING),
