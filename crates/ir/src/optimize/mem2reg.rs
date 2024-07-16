@@ -11,7 +11,7 @@ use super::RenameTable;
 #[derive(Debug)]
 pub struct Mem2Reg;
 impl super::FunctionPass for Mem2Reg {
-    fn run(&self, function: &mut crate::Function) {
+    fn run(&self, function: &mut crate::Function, _instrument: bool) {
         run(function);
     }
 }

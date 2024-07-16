@@ -209,6 +209,11 @@ impl Ref {
     pub const fn val(val: RefVal) -> Self {
         Self(val as u32)
     }
+
+    pub const fn bool(b: bool) -> Self {
+        Self::val(if b { RefVal::True } else { RefVal::False })
+    }
+
     pub fn index(idx: u32) -> Self {
         Self(INDEX_OFFSET + idx)
     }

@@ -3,7 +3,7 @@ use crate::{Bitmap, Function, Tag};
 #[derive(Debug)]
 pub struct Dce;
 impl super::FunctionPass for Dce {
-    fn run(&self, function: &mut Function) {
+    fn run(&self, function: &mut Function, _instrument: bool) {
         run(function);
     }
 }

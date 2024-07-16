@@ -52,3 +52,28 @@ pub fn fold_rem(a: u64, b: u64, ty: IrType) -> u64 {
     }
     fold_rem_unchecked(a, b, ty)
 }
+
+macro_rules! def_fold_cmp {
+    ($function: ident $op: tt) => {
+        pub fn $function(a: u64, b: u64, ty: IrType) -> bool {
+            match ty {
+                IrType::U1 => (a != 0) $op (b != 0),
+                IrType::U8 => (a as u8) $op (b as u8),
+                IrType::I8 => (a as i8) $op (b as i8),
+                IrType::U16 => (a as u16) $op (b as u16),
+                IrType::I16 => (a as i16) $op (b as i16),
+                IrType::U32 => (a as u32) $op (b as u32),
+                IrType::I32 => (a as i32) $op (b as i32),
+                IrType::U64 => a $op (b),
+                IrType::I64 => (a as i64) $op (b as i64),
+                IrType::U128 | IrType::I128 => todo!("fold 128-bit integers"),
+                _ => unreachable!(),
+            }
+        }
+    };
+}
+
+def_fold_cmp!(fold_lt <);
+def_fold_cmp!(fold_gt >);
+def_fold_cmp!(fold_le <=);
+def_fold_cmp!(fold_ge >=);

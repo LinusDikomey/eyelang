@@ -12,6 +12,34 @@ pub struct Instruction {
     pub tag: Tag,
     pub ty: TypeRef,
 }
+
+macro_rules! un_op_insts {
+    ($($name: ident $tag: ident)*) => {
+        $(
+            pub fn $name(value: Ref, ty: TypeRef) -> Self {
+                Self {
+                    data: Data { un_op: value },
+                    tag: Tag::$tag,
+                    ty,
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! bin_op_insts {
+    ($($name: ident $tag: ident)*) => {
+        $(
+            pub fn $name(l: Ref, r: Ref, ty: TypeRef) -> Self {
+                Self {
+                    data: Data { bin_op: (l, r) },
+                    tag: Tag::$tag,
+                    ty,
+                }
+            }
+        )*
+    };
+}
 impl Instruction {
     pub const NOTHING: Self = Self {
         data: Data { none: () },
@@ -27,44 +55,37 @@ impl Instruction {
         }
     }
 
-    pub fn add(l: Ref, r: Ref, ty: TypeRef) -> Self {
-        Self {
-            data: Data { bin_op: (l, r) },
-            tag: Tag::Add,
-            ty,
-        }
+    un_op_insts! {
+        ret Ret
+
+        load Load
+
+        neg Neg
+        not Not
+
+        int_to_ptr IntToPtr
+        ptr_to_int PtrToInt
+
     }
 
-    pub fn sub(l: Ref, r: Ref, ty: TypeRef) -> Self {
-        Self {
-            data: Data { bin_op: (l, r) },
-            tag: Tag::Sub,
-            ty,
-        }
-    }
+    bin_op_insts! {
+        store Store
 
-    pub fn mul(l: Ref, r: Ref, ty: TypeRef) -> Self {
-        Self {
-            data: Data { bin_op: (l, r) },
-            tag: Tag::Mul,
-            ty,
-        }
-    }
+        add Add
+        sub Sub
+        mul Mul
+        div Div
+        rem Rem
 
-    pub fn div(l: Ref, r: Ref, ty: TypeRef) -> Self {
-        Self {
-            data: Data { bin_op: (l, r) },
-            tag: Tag::Div,
-            ty,
-        }
-    }
+        or Or
+        and And
 
-    pub fn rem(l: Ref, r: Ref, ty: TypeRef) -> Self {
-        Self {
-            data: Data { bin_op: (l, r) },
-            tag: Tag::Rem,
-            ty,
-        }
+        eq Eq
+        ne NE
+        lt LT
+        gt GT
+        le LE
+        ge GE
     }
 
     pub fn visit_refs(&self, ir: &FunctionIr, mut visit: impl FnMut(Ref)) {

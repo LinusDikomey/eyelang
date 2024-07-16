@@ -13,7 +13,7 @@ pub use inst_combine::InstCombine;
 pub use mem2reg::Mem2Reg;
 
 pub trait FunctionPass: Debug {
-    fn run(&self, function: &mut Function);
+    fn run(&self, function: &mut Function, instrument: bool);
 }
 
 pub struct Pipeline {
@@ -63,7 +63,7 @@ impl Pipeline {
                 );
             }
             for pass in &self.function_passes {
-                pass.run(&mut module.funcs[i]);
+                pass.run(&mut module.funcs[i], self.print_passes);
                 if self.print_passes {
                     eprintln!(
                         "after {pass:?}:\n{}",
