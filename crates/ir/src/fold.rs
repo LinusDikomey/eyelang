@@ -77,3 +77,17 @@ def_fold_cmp!(fold_lt <);
 def_fold_cmp!(fold_gt >);
 def_fold_cmp!(fold_le <=);
 def_fold_cmp!(fold_ge >=);
+
+pub fn fold_neg(a: u64, ty: IrType) -> u64 {
+    debug_assert!(ty.is_signed_int() || ty.is_float());
+    match ty {
+        IrType::I8 => (a as i8).wrapping_neg() as u64,
+        IrType::I16 => (a as i16).wrapping_neg() as u64,
+        IrType::I32 => (a as i32).wrapping_neg() as u64,
+        IrType::I64 => (a as i64).wrapping_neg() as u64,
+        IrType::I128 => todo!("fold 128-bit integers"),
+        IrType::F32 => (-f32::from_bits(a as u32)).to_bits() as u64,
+        IrType::F64 => (-f64::from_bits(a)).to_bits(),
+        _ => unreachable!(),
+    }
+}

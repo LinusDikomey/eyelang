@@ -409,7 +409,6 @@ impl<'a> Gen<'a> {
                 MCValue::Undef
             }
             Tag::Global => todo!(),
-            Tag::Uninit => MCValue::Undef,
             Tag::ArrayIndex => todo!(),
             Tag::String => todo!(),
             Tag::Neg => todo!(),

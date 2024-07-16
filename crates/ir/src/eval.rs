@@ -150,7 +150,6 @@ fn eval_internal(
             super::Tag::Ret => break get_ref(&values, inst.data.un_op()),
             super::Tag::BlockArg => unreachable!("BlockArg should never exist inside a block"),
             super::Tag::Global => todo!("handle globals in const eval"),
-            super::Tag::Uninit => Val::Invalid,
             super::Tag::Int => Val::Int(inst.data.int()),
             super::Tag::LargeInt => {
                 let bytes =

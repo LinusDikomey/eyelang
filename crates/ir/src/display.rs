@@ -260,7 +260,14 @@ fn display_data(
     blocks: &[BlockInfo],
 ) -> fmt::Result {
     match inst.tag.union_data_type() {
-        DataVariant::Int => cwrite!(f, "#y<{}>", inst.data.int()),
+        DataVariant::Int => {
+            let x = inst.data.int();
+            if types[inst.ty].is_signed_int() {
+                cwrite!(f, "#y<{}>", x as i64)
+            } else {
+                cwrite!(f, "#y<{}>", x)
+            }
+        }
         DataVariant::Global => cwrite!(f, "#m<{}>", inst.data.global()),
         DataVariant::MemberPtr => {
             let (ptr, elem_refs, elem_idx) = inst.data.member_ptr(extra);

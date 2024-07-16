@@ -279,7 +279,6 @@ unsafe fn build_func(
                     }
                 }
                 ir::Tag::Global => globals[data.global.0 as usize],
-                ir::Tag::Uninit => table_ty(inst.ty).map_or(ptr::null_mut(), |ty| LLVMGetUndef(ty)),
                 ir::Tag::Int => LLVMConstInt(table_ty(ty).unwrap(), data.int, FALSE),
                 ir::Tag::LargeInt => {
                     let mut bytes = [0; 16];

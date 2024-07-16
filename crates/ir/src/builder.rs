@@ -244,10 +244,6 @@ impl<'a> IrBuilder<'a> {
         self.blocks[self.current_block as usize].len = len;
     }
 
-    pub fn _build_uninit(&mut self, ty: impl Into<IdxOrTy>) -> Ref {
-        self.add(Data { none: () }, Tag::Uninit, ty)
-    }
-
     pub fn build_int(&mut self, int: u64, ty: impl Into<IdxOrTy>) -> Ref {
         self.add(Data { int }, Tag::Int, ty)
     }

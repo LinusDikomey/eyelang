@@ -55,6 +55,14 @@ impl Instruction {
         }
     }
 
+    pub fn float(value: f64, ty: TypeRef) -> Self {
+        Self {
+            data: Data { float: value },
+            tag: Tag::Float,
+            ty,
+        }
+    }
+
     un_op_insts! {
         ret Ret
 
@@ -161,9 +169,6 @@ pub enum Tag {
     /// jump to one of two basic blocks depending on the passed in u1 value
     Branch,
 
-    /// uninitialized value, undefined when used
-    Uninit,
-
     /// integer with up to 64 bits in size
     Int,
     /// integer larger than 64 bits, currently always 128 bits
@@ -234,7 +239,6 @@ impl Tag {
             Tag::Nothing => V::None,
             Tag::BlockArg => unreachable!(),
             Tag::Global => V::Global,
-            Tag::Uninit => V::None,
             Tag::Ret
             | Tag::Load
             | Tag::Neg
@@ -294,7 +298,6 @@ impl Tag {
             Tag::Nothing
             | Tag::BlockArg
             | Tag::Global
-            | Tag::Uninit
             | Tag::Int
             | Tag::LargeInt
             | Tag::Float

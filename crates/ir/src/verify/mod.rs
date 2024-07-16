@@ -24,7 +24,6 @@ pub fn function(function: &Function) {
             match inst.tag {
                 Tag::Nothing => {}
                 Tag::BlockArg => unreachable!("BlockArg shouldn't exist inside a block"),
-                Tag::Uninit => {}
                 Tag::Int => {
                     let value = inst.data.int();
                     // HACK: currently, when a literal for a minimum signed integer (like i8 -128)
