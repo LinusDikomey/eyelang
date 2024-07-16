@@ -88,7 +88,7 @@ pub fn function(function: &Function) {
                 | Tag::Sub
                 | Tag::Mul
                 | Tag::Div
-                | Tag::Mod
+                | Tag::Rem
                 | Tag::Or
                 | Tag::And
                 | Tag::Eq

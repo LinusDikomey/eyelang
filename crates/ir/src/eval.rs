@@ -243,7 +243,7 @@ fn eval_internal(
             super::Tag::Sub => bin_op!(-, inst),
             super::Tag::Mul => bin_op!(*, inst),
             super::Tag::Div => bin_op!(/, inst),
-            super::Tag::Mod => bin_op!(%, inst),
+            super::Tag::Rem => bin_op!(%, inst),
             super::Tag::Or => {
                 let (Val::Int(a), Val::Int(b)) = (
                     get_ref(&values, inst.data.bin_op().0),

@@ -9,6 +9,8 @@ use std::{
 
 pub mod builder;
 pub mod display;
+/// helper functions for folding constants
+pub mod fold;
 /// machine code ir representation that is generic over the ISA
 pub mod mc;
 /// optimizations that operate on the ir

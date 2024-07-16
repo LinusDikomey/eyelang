@@ -1,8 +1,16 @@
-use crate::{Data, FunctionIr, Instruction, IrType, IrTypes, Ref, Tag};
+use crate::{Function, FunctionIr, Instruction, IrTypes, Ref, Tag};
 
 use super::RenameTable;
 
-pub fn run(function: &mut crate::Function) {
+#[derive(Debug)]
+pub struct InstCombine;
+impl super::FunctionPass for InstCombine {
+    fn run(&self, function: &mut Function) {
+        run(function);
+    }
+}
+
+pub fn run(function: &mut Function) {
     let Some(ir) = &mut function.ir else { return };
     let mut renames = RenameTable::new(ir);
     for block in ir.blocks() {
@@ -10,18 +18,25 @@ pub fn run(function: &mut crate::Function) {
             let mut inst = ir.get_inst(i);
             renames.visit_inst(ir, &mut inst);
             ir.replace(i, inst);
-            let m = match_inst(ir, &function.types, inst);
-            match m {
-                Match::None => {}
-                Match::Replace(new_inst) => ir.replace(i, new_inst),
-                Match::Delete(r) => {
-                    assert_ne!(
-                        r,
-                        Ref::index(i),
-                        "can't replace an instruction with it's own index, just do nothing instead"
-                    );
-                    ir.delete(i);
-                    renames.rename(i, r);
+            // try applying patterns until no more matches are found
+            loop {
+                let m = match_patterns(ir, &function.types, inst, true);
+                match m {
+                    Match::None => break,
+                    Match::Replace(new_inst) => {
+                        inst = new_inst;
+                        ir.replace(i, inst);
+                    }
+                    Match::Delete(r) => {
+                        assert_ne!(
+                            r,
+                            Ref::index(i),
+                            "can't replace an instruction with it's own index, just do nothing instead"
+                        );
+                        ir.delete(i);
+                        renames.rename(i, r);
+                        break;
+                    }
                 }
             }
         }
@@ -41,83 +56,132 @@ impl Match {
     }
 }
 
-fn get_const_int(ir: &FunctionIr, r: Ref) -> Option<u64> {
-    if let Some(val) = r.into_val() {
-        match val {
-            crate::RefVal::True => Some(1),
-            crate::RefVal::False => Some(0),
-            crate::RefVal::Unit => None,
-            crate::RefVal::Undef => None,
+macro_rules! ref_matches_pattern {
+    ($ir: ident, $r: expr, ($name: ident @ $pat: tt)) => {
+        let $name = $r;
+        ref_matches_pattern!($ir, $name, $pat);
+    };
+    // One underscore doesn't work here for some reason. Just use 2 underscores for now.
+    ($ir: ident, $r: expr, __) => {};
+    ($ir: ident, $r: expr, $name: ident) => {
+        let $name = $r;
+    };
+    ($ir: ident, $r: expr, (Int $val: literal)) => {
+        let Some(r_idx) = $r.into_ref() else {
+            return Match::None;
+        };
+        if $ir.get_inst(r_idx).tag != Tag::Int {
+            return Match::None;
         }
-    } else {
-        let inst = ir.get_inst(r.into_ref().unwrap());
-        if inst.tag == Tag::Int {
-            return Some(inst.data.int());
+        if $ir.get_inst(r_idx).data.int() != $val {
+            return Match::None;
         }
-        None
-    }
+    };
+    ($ir: ident, $r: expr, (Int $val: ident)) => {
+        let Some(r_idx) = $r.into_ref() else {
+            return Match::None;
+        };
+        if $ir.get_inst(r_idx).tag != Tag::Int {
+            return Match::None;
+        }
+        let $val = $ir.get_inst(r_idx).data.int();
+    };
+    ($ir: ident, $r: expr, ($constructor: ident $lhs: tt $rhs: tt)) => {
+        let Some(r_idx) = $r.into_ref() else {
+            return Match::None;
+        };
+        if $ir.get_inst(r_idx).tag != Tag::$constructor {
+            return Match::None;
+        }
+        let (__lhs, __rhs) = $ir.get_inst(r_idx).data.bin_op();
+        ref_matches_pattern!($ir, __lhs, $lhs);
+        ref_matches_pattern!($ir, __rhs, $rhs);
+    };
 }
 
-fn match_inst(ir: &FunctionIr, types: &IrTypes, inst: Instruction) -> Match {
-    if inst.tag == Tag::Add {
-        let (l, r) = inst.data.bin_op();
-        match (get_const_int(ir, l), get_const_int(ir, r)) {
-            (Some(a), Some(b)) => {
-                return Match::Replace(Instruction {
-                    tag: Tag::Int,
-                    data: Data {
-                        int: fold_add(a, b, types[inst.ty]),
-                    },
-                    ty: inst.ty,
-                })
-            }
-            (Some(0), None) => return Match::Delete(r),
-            (None, Some(0)) => return Match::Delete(r),
-            (Some(c), None) => {
-                if let Some(r_ref) = r.into_ref() {
-                    let m = add_const(ir, ir.get_inst(r_ref), c, types[inst.ty]);
-                    if m.success() {
-                        return m;
+macro_rules! patterns {
+    ($function: ident $ir: ident  $types: ident $inst: ident $($pattern_name: ident : ($constructor: ident $lhs: tt $rhs: tt) $(if $cond: expr)? => $result: expr,)*) => {
+        fn $function($ir: &FunctionIr, $types: &IrTypes, $inst: Instruction, diagnose: bool) -> Match {
+            $(
+                let result = (|| {
+                    if $inst.tag != Tag::$constructor {
+                        return Match::None;
                     }
-                }
-                // normalize to always have the constant on the right
-                return Match::Replace(Instruction {
-                    data: Data { bin_op: (r, l) },
-                    tag: Tag::Add,
-                    ty: inst.ty,
-                });
-            }
-            (None, Some(c)) => {
-                if let Some(l_ref) = l.into_ref() {
-                    let m = add_const(ir, ir.get_inst(l_ref), c, types[inst.ty]);
-                    if m.success() {
-                        return m;
+                    let (lhs, rhs) = $inst.data.bin_op();
+                    ref_matches_pattern!($ir, lhs, $lhs);
+                    ref_matches_pattern!($ir, rhs, $rhs);
+                    $(
+                        if !($cond) {
+                            return Match::None;
+                        }
+                    )*
+                    if diagnose {
+                        eprintln!("Matched pattern {}", stringify!($pattern_name));
                     }
-                }
-            }
-            (None, None) => {}
+                    $result
+                })();
+                if result.success() { return result; }
+            )*
+            Match::None
         }
-    }
-    Match::None
+    };
 }
 
-fn fold_add(a: u64, b: u64, ty: IrType) -> u64 {
-    match ty {
-        IrType::U1 => a.wrapping_add(b) % 2,
-        IrType::U8 | IrType::I8 => a.wrapping_add(b) % (u8::MAX as u64 + 1),
-        IrType::U16 | IrType::I16 => a.wrapping_add(b) % (u16::MAX as u64 + 1),
-        IrType::U32 | IrType::I32 => a.wrapping_add(b) % (u32::MAX as u64 + 1),
-        IrType::U64 | IrType::I64 => a.wrapping_add(b),
-        IrType::U128 | IrType::I128 => todo!("fold 128-bit integers"),
-        _ => unreachable!(),
+fn ref_value_eq(ir: &FunctionIr, a: Ref, b: Ref) -> bool {
+    if a == b {
+        return true;
     }
+    let Some(a_idx) = a.into_ref() else {
+        return false;
+    };
+    let Some(b_idx) = b.into_ref() else {
+        return false;
+    };
+    let a = ir.get_inst(a_idx);
+    let b = ir.get_inst(b_idx);
+    if a.tag == Tag::Int && b.tag == Tag::Int && a.data.int() == b.data.int() {
+        return true;
+    }
+    if a.tag == Tag::Float && b.tag == Tag::Float && a.data.float() == b.data.float() {
+        return true;
+    }
+    false
 }
 
-fn add_const(ir: &FunctionIr, l: Instruction, r: u64, _ty: IrType) -> Match {
-    if l.tag == Tag::Sub {
-        if get_const_int(ir, l.data.bin_op().1).is_some_and(|val| val == r) {
-            return Match::Delete(l.data.bin_op().0);
-        }
-    }
-    Match::None
-}
+patterns!(match_patterns ir types inst
+    add_consts:
+        (Add (Int l) (Int r)) => Match::Replace(Instruction::int(crate::fold::fold_add(l, r, types[inst.ty]), inst.ty)),
+    add_canonicalize:
+        (Add (l @ (Int __)) r) => Match::Replace(Instruction::add(r, l, inst.ty)),
+
+    sub_consts:
+        (Sub (Int l) (Int r)) => Match::Replace(Instruction::int(crate::fold::fold_sub(l, r, types[inst.ty]), inst.ty)),
+
+    mul_consts:
+        (Mul (Int l) (Int r)) => Match::Replace(Instruction::int(crate::fold::fold_mul(l, r, types[inst.ty]), inst.ty)),
+    mul_canonicalize:
+        (Mul (l @ (Int __)) r) => Match::Replace(Instruction::mul(r, l, inst.ty)),
+
+    div_consts:
+        (Div (Int l) (Int r)) => Match::Replace(Instruction::int(crate::fold::fold_div(l, r, types[inst.ty]), inst.ty)),
+
+    rem_consts:
+        (Rem (Int l) (Int r)) => Match::Replace(Instruction::int(crate::fold::fold_rem(l, r, types[inst.ty]), inst.ty)),
+
+    add_identity:
+        (Add l (Int 0)) => Match::Delete(l),
+    sub_identity:
+        (Sub l (Int 0)) => Match::Delete(l),
+    mul_identity:
+        (Mul l (Int 1)) => Match::Delete(l),
+    div_identity:
+        (Div l (Int 1)) => Match::Delete(l),
+
+    redundant_add_sub:
+        (Add (Sub a x) y) if ref_value_eq(ir, x, y) => Match::Delete(a),
+    redundant_sub_add:
+        (Sub (Add a x) y) if ref_value_eq(ir, x, y) => Match::Delete(a),
+    //add_add:
+        // TODO: when you can add instructions, add int(fold_add(a, b)) and fold add
+        //(Add (Add base (Int a)) (Int b)) => Match::None,
+);

@@ -1,6 +1,14 @@
 use crate::{Bitmap, Function, Tag};
 
-pub fn run(function: &mut Function) {
+#[derive(Debug)]
+pub struct Dce;
+impl super::FunctionPass for Dce {
+    fn run(&self, function: &mut Function) {
+        run(function);
+    }
+}
+
+fn run(function: &mut Function) {
     let Some(ir) = &mut function.ir else { return };
     let mut alive_insts = Bitmap::new(ir.total_inst_count() as usize);
     // assume all instructions are dead, then iterate, marking instructions as alive until a fix

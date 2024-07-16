@@ -362,7 +362,7 @@ unsafe fn build_func(
                 | ir::Tag::Sub
                 | ir::Tag::Mul
                 | ir::Tag::Div
-                | ir::Tag::Mod
+                | ir::Tag::Rem
                 | ir::Tag::Or
                 | ir::Tag::And => {
                     // can unwrap here because these operations don't support zero-sized types:
@@ -391,7 +391,7 @@ unsafe fn build_func(
                             t if t.is_float() => LLVMBuildFDiv(builder, l, r, NONE),
                             _ => panic!("invalid type for div"),
                         },
-                        ir::Tag::Mod => match func.types[ty] {
+                        ir::Tag::Rem => match func.types[ty] {
                             t if t.is_unsigned_int() => LLVMBuildURem(builder, l, r, NONE),
                             t if t.is_signed_int() => LLVMBuildSRem(builder, l, r, NONE),
                             t if t.is_float() => LLVMBuildFRem(builder, l, r, NONE),

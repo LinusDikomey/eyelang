@@ -1,38 +1,45 @@
+use std::fmt::Debug;
+
+use color_format::ceprintln;
+
 use crate::{instruction::DataVariant, Function, FunctionIr, Instruction, Ref};
 
 mod dce;
 mod inst_combine;
 mod mem2reg;
 
-#[derive(Clone, Copy, Debug)]
-pub enum Pass {
-    Mem2Reg,
-    InstCombine,
-    Dce,
-}
-impl Pass {
-    pub fn run(&self, function: &mut Function) {
-        match self {
-            Self::Mem2Reg => mem2reg::run(function),
-            Self::InstCombine => inst_combine::run(function),
-            Self::Dce => dce::run(function),
-        }
-    }
+pub use dce::Dce;
+pub use inst_combine::InstCombine;
+pub use mem2reg::Mem2Reg;
+
+pub trait FunctionPass: Debug {
+    fn run(&self, function: &mut Function);
 }
 
 pub struct Pipeline {
-    passes: Vec<Pass>,
+    function_passes: Vec<Box<dyn FunctionPass>>,
     print_passes: bool,
 }
 impl Default for Pipeline {
     fn default() -> Self {
         Self {
-            passes: vec![Pass::Mem2Reg, Pass::InstCombine, Pass::Dce],
+            function_passes: vec![Box::new(Mem2Reg), Box::new(InstCombine), Box::new(Dce)],
             print_passes: false,
         }
     }
 }
 impl Pipeline {
+    pub fn new() -> Self {
+        Self {
+            function_passes: Vec::new(),
+            print_passes: false,
+        }
+    }
+
+    pub fn add_function_pass(&mut self, pass: Box<dyn FunctionPass>) {
+        self.function_passes.push(pass);
+    }
+
     pub fn enable_print_passes(&mut self) {
         self.print_passes = true;
     }
@@ -43,15 +50,19 @@ impl Pipeline {
                 continue;
             }
             if self.print_passes {
-                eprintln!(
-                    "IR for {} before optimizations:\n{}",
+                for _ in 0..module.funcs[i].name.len() {
+                    eprint!("-");
+                }
+                ceprintln!(
+                    "-----------------------------\n\
+                    IR for #r<{}> before optimizations:\n{}",
                     module.funcs[i].name,
                     module.funcs[i].display(crate::display::Info {
                         funcs: &module.funcs
                     })
                 );
             }
-            for pass in &self.passes {
+            for pass in &self.function_passes {
                 pass.run(&mut module.funcs[i]);
                 if self.print_passes {
                     eprintln!(

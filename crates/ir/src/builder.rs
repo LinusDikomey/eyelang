@@ -342,7 +342,7 @@ impl<'a> IrBuilder<'a> {
             BinOp::Sub => Tag::Sub,
             BinOp::Mul => Tag::Mul,
             BinOp::Div => Tag::Div,
-            BinOp::Mod => Tag::Mod,
+            BinOp::Mod => Tag::Rem,
             BinOp::Or => {
                 if l.into_val() == Some(RefVal::True) || r.into_val() == Some(RefVal::True) {
                     return Ref::val(RefVal::True);

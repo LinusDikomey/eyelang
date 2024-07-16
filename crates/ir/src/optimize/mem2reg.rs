@@ -8,7 +8,15 @@ use crate::{Bitmap, IrType, Ref, Tag};
 
 use super::RenameTable;
 
-pub fn run(function: &mut crate::Function) {
+#[derive(Debug)]
+pub struct Mem2Reg;
+impl super::FunctionPass for Mem2Reg {
+    fn run(&self, function: &mut crate::Function) {
+        run(function);
+    }
+}
+
+fn run(function: &mut crate::Function) {
     let Some(ir) = &mut function.ir else { return };
     let mut can_alias = Bitmap::new(ir.total_inst_count() as usize);
 

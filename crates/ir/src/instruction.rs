@@ -19,6 +19,54 @@ impl Instruction {
         ty: TypeRef::NONE,
     };
 
+    pub fn int(value: u64, ty: TypeRef) -> Self {
+        Self {
+            data: Data { int: value },
+            tag: Tag::Int,
+            ty,
+        }
+    }
+
+    pub fn add(l: Ref, r: Ref, ty: TypeRef) -> Self {
+        Self {
+            data: Data { bin_op: (l, r) },
+            tag: Tag::Add,
+            ty,
+        }
+    }
+
+    pub fn sub(l: Ref, r: Ref, ty: TypeRef) -> Self {
+        Self {
+            data: Data { bin_op: (l, r) },
+            tag: Tag::Sub,
+            ty,
+        }
+    }
+
+    pub fn mul(l: Ref, r: Ref, ty: TypeRef) -> Self {
+        Self {
+            data: Data { bin_op: (l, r) },
+            tag: Tag::Mul,
+            ty,
+        }
+    }
+
+    pub fn div(l: Ref, r: Ref, ty: TypeRef) -> Self {
+        Self {
+            data: Data { bin_op: (l, r) },
+            tag: Tag::Div,
+            ty,
+        }
+    }
+
+    pub fn rem(l: Ref, r: Ref, ty: TypeRef) -> Self {
+        Self {
+            data: Data { bin_op: (l, r) },
+            tag: Tag::Rem,
+            ty,
+        }
+    }
+
     pub fn visit_refs(&self, ir: &FunctionIr, mut visit: impl FnMut(Ref)) {
         match self.tag.union_data_type() {
             DataVariant::Int
@@ -133,7 +181,7 @@ pub enum Tag {
     Sub,
     Mul,
     Div,
-    Mod,
+    Rem,
 
     Or,
     And,
@@ -189,7 +237,7 @@ impl Tag {
             | Tag::Sub
             | Tag::Mul
             | Tag::Div
-            | Tag::Mod
+            | Tag::Rem
             | Tag::Or
             | Tag::And
             | Tag::Eq
@@ -240,7 +288,7 @@ impl Tag {
             | Tag::Sub
             | Tag::Mul
             | Tag::Div
-            | Tag::Mod
+            | Tag::Rem
             | Tag::Or
             | Tag::And
             | Tag::Eq

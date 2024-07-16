@@ -307,7 +307,7 @@ impl<'a> Gen<'a> {
                 },
             ),
             Tag::Div => todo!(),
-            Tag::Mod => todo!(),
+            Tag::Rem => todo!(),
             Tag::Ret => {
                 let val = inst.data.un_op();
                 let val = get_ref(&values, val);
