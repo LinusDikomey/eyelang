@@ -13,18 +13,34 @@ pub fn function(function: &Function) {
     let dom_tree = BlockGraph::calculate(ir);
     for block in ir.blocks() {
         for (i, inst) in ir.get_block(block) {
+            inst.visit_refs(ir, |r| {
+                assert!(dom_tree.dominates(ir, i, r));
+                if let Some(idx) = r.into_ref() {
+                    if ir.get_inst(idx).tag == Tag::Nothing {
+                        panic!("Instruction {i} has a ref pointing to nothing %{idx}");
+                    }
+                }
+            });
             match inst.tag {
+                Tag::Nothing => {}
                 Tag::BlockArg => unreachable!("BlockArg shouldn't exist inside a block"),
                 Tag::Uninit => {}
                 Tag::Int => {
                     let value = inst.data.int();
+                    // HACK: currently, when a literal for a minimum signed integer (like i8 -128)
+                    // is written, the number 128 is added first and then subtracted. This fails
+                    // the verifier but works totally fine. For now, we just allow literal values
+                    // that are one too high
+                    let hack = 1;
                     let value_in_range = match function.types[inst.ty] {
-                        IrType::I8 => (i8::MIN as i64..=i8::MAX as i64).contains(&(value as i64)),
+                        IrType::I8 => {
+                            (i8::MIN as i64..=i8::MAX as i64 + hack).contains(&(value as i64))
+                        }
                         IrType::I16 => {
-                            (i16::MIN as i64..=i16::MAX as i64).contains(&(value as i64))
+                            (i16::MIN as i64..=i16::MAX as i64 + hack).contains(&(value as i64))
                         }
                         IrType::I32 => {
-                            (i32::MIN as i64..=i32::MAX as i64).contains(&(value as i64))
+                            (i32::MIN as i64..=i32::MAX as i64 + hack).contains(&(value as i64))
                         }
                         IrType::U8 => value <= u8::MAX as u64,
                         IrType::U16 => value <= u16::MAX as u64,

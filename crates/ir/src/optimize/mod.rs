@@ -1,0 +1,152 @@
+use crate::{instruction::DataVariant, Function, FunctionIr, Instruction, Ref};
+
+mod dce;
+mod inst_combine;
+mod mem2reg;
+
+#[derive(Clone, Copy, Debug)]
+pub enum Pass {
+    Mem2Reg,
+    InstCombine,
+    Dce,
+}
+impl Pass {
+    pub fn run(&self, function: &mut Function) {
+        match self {
+            Self::Mem2Reg => mem2reg::run(function),
+            Self::InstCombine => inst_combine::run(function),
+            Self::Dce => dce::run(function),
+        }
+    }
+}
+
+pub struct Pipeline {
+    passes: Vec<Pass>,
+    print_passes: bool,
+}
+impl Default for Pipeline {
+    fn default() -> Self {
+        Self {
+            passes: vec![Pass::Mem2Reg, Pass::InstCombine, Pass::Dce],
+            print_passes: false,
+        }
+    }
+}
+impl Pipeline {
+    pub fn enable_print_passes(&mut self) {
+        self.print_passes = true;
+    }
+
+    pub fn run(&self, module: &mut crate::Module) {
+        for i in 0..module.funcs.len() {
+            if module.funcs[i].ir.is_none() {
+                continue;
+            }
+            if self.print_passes {
+                eprintln!(
+                    "IR for {} before optimizations:\n{}",
+                    module.funcs[i].name,
+                    module.funcs[i].display(crate::display::Info {
+                        funcs: &module.funcs
+                    })
+                );
+            }
+            for pass in &self.passes {
+                pass.run(&mut module.funcs[i]);
+                if self.print_passes {
+                    eprintln!(
+                        "after {pass:?}:\n{}",
+                        module.funcs[i].display(crate::display::Info {
+                            funcs: &module.funcs,
+                        })
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Tracks renames of values to replace all uses of values with other values
+pub struct RenameTable {
+    renames: Box<[Option<Ref>]>,
+}
+impl RenameTable {
+    pub fn new(ir: &FunctionIr) -> Self {
+        Self {
+            renames: vec![None; ir.total_inst_count() as usize].into_boxed_slice(),
+        }
+    }
+
+    pub fn rename(&mut self, idx: u32, rename: Ref) {
+        self.renames[idx as usize] = Some(rename);
+    }
+
+    pub fn visit_inst(&self, ir: &mut FunctionIr, inst: &mut Instruction) {
+        let get_new =
+            |r: Ref| -> Option<Ref> { r.into_ref().and_then(|i| self.renames[i as usize]) };
+        let get = |r: Ref| get_new(r).unwrap_or(r);
+        unsafe {
+            match inst.tag.union_data_type() {
+                DataVariant::Int
+                | DataVariant::LargeInt
+                | DataVariant::Float
+                | DataVariant::Global
+                | DataVariant::TypeTableIdx
+                | DataVariant::String
+                | DataVariant::None => {}
+                DataVariant::MemberPtr | DataVariant::RefInt => {
+                    inst.data.ref_int.0 = get(inst.data.ref_int.0)
+                }
+                DataVariant::ArrayIndex => {
+                    let (array_ptr, extra_start) = inst.data.ref_int();
+                    let extra_start = extra_start as usize;
+                    let bytes = &mut ir.extra[extra_start + 4..extra_start + 8];
+                    let index_ref = Ref::from_bytes(bytes.try_into().unwrap());
+                    inst.data.ref_int.0 = get(array_ptr);
+                    if let Some(new) = get_new(index_ref) {
+                        bytes.copy_from_slice(&new.to_bytes());
+                    }
+                }
+                DataVariant::Call => {
+                    let (idx, arg_count) = inst.data.extra_len();
+                    for i in (idx as usize + 8..).step_by(4).take(arg_count as usize) {
+                        let bytes = &mut ir.extra[i..i + 4];
+                        let r = Ref::from_bytes(bytes.try_into().unwrap());
+                        if let Some(new) = get_new(r) {
+                            bytes.copy_from_slice(&new.to_bytes());
+                        }
+                    }
+                }
+                DataVariant::Goto => {
+                    let (block, extra_idx) = inst.data.goto();
+                    for i in (extra_idx..)
+                        .step_by(4)
+                        .take(ir.get_block_args(block).count())
+                    {
+                        let r = Ref::from_bytes(ir.extra[i..i + 4].try_into().unwrap());
+                        if let Some(new) = get_new(r) {
+                            ir.extra[i..i + 4].copy_from_slice(&new.to_bytes());
+                        }
+                    }
+                }
+                DataVariant::Branch => {
+                    let (cond, a, b, extra_idx) = inst.data.branch(&ir.extra);
+                    inst.data.ref_int.0 = get(cond);
+                    let total_args = ir.get_block_args(a).count() + ir.get_block_args(b).count();
+                    for i in (extra_idx..).step_by(4).take(total_args) {
+                        let r = Ref::from_bytes(ir.extra[i..i + 4].try_into().unwrap());
+                        if let Some(new) = get_new(r) {
+                            ir.extra[i..i + 4].copy_from_slice(&new.to_bytes());
+                        }
+                    }
+                }
+                DataVariant::UnOp => inst.data.un_op = get(inst.data.un_op),
+                DataVariant::BinOp => {
+                    inst.data.bin_op.0 = get(inst.data.bin_op.0);
+                    inst.data.bin_op.1 = get(inst.data.bin_op.1);
+                }
+                DataVariant::Asm => todo!("handle asm inst in InstCombine"),
+            };
+        }
+    }
+}

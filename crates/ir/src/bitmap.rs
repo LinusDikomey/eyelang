@@ -37,6 +37,16 @@ impl Bitmap {
         }
     }
 
+    pub fn visit_unset_bits(&self, mut on_unset: impl FnMut(usize)) {
+        for (i, &byte) in self.bits.iter().enumerate() {
+            for bi in 0..8 {
+                if byte & (1 << bi) == 0 {
+                    on_unset(i * 8 + bi);
+                }
+            }
+        }
+    }
+
     /// performs an in-place union operation with another bitmap (assumed to be of the same size)
     /// and returns if any bits where changed
     pub fn union_with(&mut self, other: &Bitmap) -> bool {

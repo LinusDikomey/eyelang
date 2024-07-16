@@ -4,13 +4,15 @@ use color_format::*;
 use std::{
     collections::BTreeMap,
     fmt,
-    ops::{Index, IndexMut},
+    ops::{Index, IndexMut, Range},
 };
 
 pub mod builder;
 pub mod display;
 /// machine code ir representation that is generic over the ISA
 pub mod mc;
+/// optimizations that operate on the ir
+pub mod optimize;
 /// Verify that a module or function is correctly constructed.
 pub mod verify;
 
@@ -104,6 +106,19 @@ impl FunctionIr {
         }
     }
 
+    pub fn get_block_range(&self, block: BlockIndex) -> Range<u32> {
+        let info = &self.blocks[block.idx() as usize];
+        info.start..info.start + info.len
+    }
+
+    pub fn get_inst(&self, idx: u32) -> Instruction {
+        self.inst[idx as usize]
+    }
+
+    pub fn total_inst_count(&self) -> u32 {
+        self.inst.len() as u32
+    }
+
     pub fn get_block<'a>(
         &'a self,
         block: BlockIndex,
@@ -121,8 +136,21 @@ impl FunctionIr {
             .1
     }
 
-    pub fn blocks<'a>(&'a self) -> impl 'a + ExactSizeIterator<Item = BlockIndex> {
+    pub fn blocks(&self) -> impl ExactSizeIterator<Item = BlockIndex> {
         (0..self.blocks.len() as _).map(BlockIndex)
+    }
+
+    pub fn replace(&mut self, idx: u32, inst: Instruction) {
+        self.inst[idx as usize] = inst;
+    }
+
+    pub fn delete(&mut self, idx: u32) {
+        debug_assert_ne!(
+            self.inst[idx as usize].tag,
+            Tag::BlockArg,
+            "don't delete BlockArgs"
+        );
+        self.inst[idx as usize] = Instruction::NOTHING;
     }
 }
 

@@ -141,4 +141,8 @@ pub struct Args {
     /// guaranteed.
     #[clap(long)]
     pub run_with_errors: bool,
+
+    /// Print the ir again after each optimization pass to show changes made by optimizations.
+    #[clap(long)]
+    pub passes: bool,
 }

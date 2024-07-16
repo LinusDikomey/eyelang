@@ -189,6 +189,7 @@ impl<'a> Gen<'a> {
         extra: &[u8],
     ) -> MCValue {
         match inst.tag {
+            Tag::Nothing => MCValue::None,
             Tag::BlockArg => unreachable!(),
             Tag::Int => MCValue::Imm(inst.data.int()),
             Tag::LargeInt => todo!(),

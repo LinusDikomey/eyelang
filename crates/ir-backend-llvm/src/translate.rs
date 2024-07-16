@@ -257,6 +257,7 @@ unsafe fn build_func(
             }
             let ir::Instruction { tag, data, ty } = inst;
             let val: LLVMValueRef = match tag {
+                ir::Tag::Nothing => ptr::null_mut(),
                 ir::Tag::BlockArg => unreachable!(),
                 ir::Tag::Ret => {
                     let value = data.un_op;

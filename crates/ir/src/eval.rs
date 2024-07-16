@@ -146,6 +146,7 @@ fn eval_internal(
     let val = loop {
         let inst = ir.inst[pos as usize];
         let value = match inst.tag {
+            super::Tag::Nothing => Val::Invalid,
             super::Tag::Ret => break get_ref(&values, inst.data.un_op()),
             super::Tag::BlockArg => unreachable!("BlockArg should never exist inside a block"),
             super::Tag::Global => todo!("handle globals in const eval"),

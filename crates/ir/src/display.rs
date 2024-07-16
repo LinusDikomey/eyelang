@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, BlockInfo, FunctionId, TypeRef};
+use crate::{ir_types::ConstIrType, BlockInfo, TypeRef};
 
 use super::{
     instruction::DataVariant, ir_types::IrTypes, Data, Function, FunctionIr, Instruction, Module,
@@ -45,6 +45,9 @@ impl fmt::Display for FunctionIrDisplay<'_> {
             }
             writeln!(f, ":")?;
             for (i, inst) in self.ir.get_block(block) {
+                if inst.tag == crate::Tag::Nothing {
+                    continue;
+                }
                 if inst.tag.is_usable() {
                     cwrite!(f, "    #c<{:>4}> = ", format!("%{i}"))?;
                 } else {
@@ -272,10 +275,7 @@ fn display_data(
             cwrite!(f, "#m<)>, #y<{elem_idx}>")
         }
         DataVariant::ArrayIndex => {
-            let (array_ptr, extra_start) = inst.data.ref_int();
-            let i = extra_start as usize;
-            let elem_ty = TypeRef::from_bytes(extra[i..i + 4].try_into().unwrap());
-            let index_ref = Ref::from_bytes(extra[i + 4..i + 8].try_into().unwrap());
+            let (array_ptr, elem_ty, index_ref) = inst.data.array_index(extra);
             write_ref(f, array_ptr)?;
             cwrite!(f, " #g<as> #m<*[>")?;
             display_type(f, types[elem_ty], types, info)?;
@@ -296,39 +296,10 @@ fn display_data(
             cwrite!(f, "#y<{:?}>", string)
         }
         DataVariant::Call => {
-            let (start, arg_count) = inst.data.extra_len();
-            let start = start as usize;
-            let mut bytes = [0; 8];
-            bytes.copy_from_slice(&extra[start..start + 8]);
-            let func = FunctionId::from_bytes(bytes);
-            let refs = (0..arg_count).map(|i| {
-                let mut ref_bytes = [0; 4];
-                let begin = 8 + start + (4 * i) as usize;
-                ref_bytes.copy_from_slice(&extra[begin..begin + 4]);
-                Ref::from_bytes(ref_bytes)
-            });
+            let (func, args) = inst.data.call(extra);
             cwrite!(f, "#r<{}>(", info.funcs[func.0 as usize].name)?;
-            write_delimited_with(f, refs, write_ref, ", ")?;
+            write_delimited_with(f, args, write_ref, ", ")?;
             cwrite!(f, ")")
-        }
-        DataVariant::ExtraBranchRefs => {
-            for i in 0..inst.data.extra_len().1 {
-                if i != 0 {
-                    cwrite!(f, ", ")?;
-                }
-                let mut current_bytes = [0; 4];
-                let begin = (inst.data.extra_len().0 + i * 8) as usize;
-                current_bytes.copy_from_slice(&extra[begin..begin + 4]);
-                let block = u32::from_le_bytes(current_bytes);
-                current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
-                current_bytes.copy_from_slice(&extra[begin + 4..begin + 8]);
-                let r = Ref::from_bytes(current_bytes);
-                cwrite!(f, "[")?;
-                cwrite!(f, "#b!<b{}>, ", block)?;
-                write_ref(f, r)?;
-                cwrite!(f, "]")?;
-            }
-            Ok(())
         }
         DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float()),
         DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty()], types, info),

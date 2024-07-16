@@ -161,6 +161,18 @@ fn main() -> Result<(), MainError> {
             #[cfg(debug_assertions)]
             ir::verify::module(&compiler.ir_module);
 
+            let optimize = true;
+            if optimize {
+                let mut pipeline = ir::optimize::Pipeline::default();
+                if args.passes {
+                    pipeline.enable_print_passes();
+                }
+                pipeline.run(&mut compiler.ir_module);
+
+                #[cfg(debug_assertions)]
+                ir::verify::module(&compiler.ir_module);
+            }
+
             if compiler.print_errors() && !args.run_with_errors {
                 return Err(MainError::ErrorsFound);
             }
