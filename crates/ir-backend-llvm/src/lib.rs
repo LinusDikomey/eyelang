@@ -15,6 +15,7 @@ mod emit;
 mod translate;
 
 pub use emit::list_targets;
+use translate::Attribs;
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,6 +28,7 @@ pub enum Error {
 pub struct Backend {
     log: bool,
     context: LLVMContextRef,
+    attribs: Attribs,
 }
 
 const NONE: *const i8 = "\0".as_ptr().cast();
@@ -44,10 +46,12 @@ fn llvm_bool(b: bool) -> LLVMBool {
 impl Backend {
     pub fn new() -> Self {
         let context = unsafe { llvm::core::LLVMContextCreate() };
+        let attribs = Attribs::lookup();
 
         Self {
             log: false,
             context,
+            attribs,
         }
     }
 
@@ -68,7 +72,9 @@ impl Backend {
         let llvm_funcs = module
             .funcs
             .iter()
-            .map(|func| unsafe { translate::add_function(self.context, llvm_module, func) })
+            .map(|func| unsafe {
+                translate::add_function(self.context, llvm_module, func, &self.attribs)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let llvm_globals = module
             .globals

@@ -730,11 +730,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            let mut arg_refs = Vec::with_capacity(args.iter().count());
-            for arg in args.iter() {
-                let arg = lower(ctx, arg)?;
-                arg_refs.push(arg);
-            }
             let call_generics = call_generics
                 .iter()
                 .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
@@ -742,6 +737,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let Some(func) = ctx.get_ir_id(function.0, function.1, call_generics) else {
                 crash_point!(ctx)
             };
+            let mut arg_refs = Vec::with_capacity(args.iter().count());
+            for arg in args.iter() {
+                let arg = lower(ctx, arg)?;
+                arg_refs.push(arg);
+            }
             let return_ty = ctx.get_type(ctx.types[return_ty])?;
             let res = ctx.builder.build_call(func, arg_refs, return_ty);
             if noreturn {
@@ -750,9 +750,37 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             }
             res
         }
-        &Node::TraitCall { .. } => {
-            //todo!("lower trait call")
-            Ref::UNDEF
+        &Node::TraitCall {
+            trait_id,
+            method_index,
+            self_ty,
+            args,
+            return_ty,
+            noreturn,
+        } => {
+            let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generic_types);
+            let Some((impl_, impl_generics)) =
+                ctx.compiler.get_checked_trait_impl(trait_id, &self_ty)
+            else {
+                crash_point!(ctx)
+            };
+            let function = (impl_.impl_module, impl_.functions[method_index as usize]);
+            // TODO: handle impl/method generics
+            let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
+                crash_point!(ctx)
+            };
+            let return_ty = ctx.get_type(ctx.types[return_ty])?;
+            let mut arg_refs = Vec::with_capacity(args.iter().count());
+            for arg in args.iter() {
+                let arg = lower(ctx, arg)?;
+                arg_refs.push(arg);
+            }
+            let res = ctx.builder.build_call(func, arg_refs, return_ty);
+            if noreturn {
+                ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
+                return Err(NoReturn);
+            }
+            res
         }
         &Node::TypeProperty(ty, property) => {
             let layout = ir::type_layout(ctx.get_type(ctx.types[ty])?, &ctx.builder.types);

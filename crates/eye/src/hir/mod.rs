@@ -1,10 +1,12 @@
 use std::ops::{Index, IndexMut};
 
 use id::{id, ConstValueId, ModuleId};
+use span::TSpan;
 use types::{FloatType, IntType, Primitive};
 
 use crate::{
     compiler::VarId,
+    error::{Error, Errors},
     parser::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
@@ -23,6 +25,7 @@ pub struct HIR {
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
     casts: Vec<Cast>,
+    pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
 }
 impl HIR {
     pub fn root_id(&self) -> NodeId {
@@ -834,11 +837,17 @@ impl HIRBuilder {
         }
     }
 
-    pub fn finish(mut self, root: Node) -> (HIR, TypeTable) {
+    pub fn finish(mut self, root: Node, errors: &mut Errors, module: ModuleId) -> (HIR, TypeTable) {
         self.nodes.push(root);
         for ty in self.types.type_infos_mut() {
             match ty {
                 TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
+                TypeInfo::UnknownSatisfying(_bounds) => {
+                    // TODO: span
+                    errors.emit_err(
+                        Error::TypeMustBeKnownHere.at_span(TSpan::MISSING.in_mod(module)),
+                    );
+                }
                 TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
                 TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
                 TypeInfo::Array {
@@ -855,6 +864,7 @@ impl HIRBuilder {
                 patterns: self.patterns,
                 vars: self.vars,
                 casts: self.casts,
+                trait_calls: Vec::new(),
             },
             self.types,
         )

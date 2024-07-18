@@ -1,7 +1,12 @@
 use id::{ModuleId, TypeId};
 use types::{Primitive, Type};
 
-use crate::{compiler::CheckedTrait, error::Error, parser::ast::FunctionId, Compiler};
+use crate::{
+    compiler::{CheckedTrait, FunctionGenerics},
+    error::Error,
+    parser::ast::FunctionId,
+    Compiler,
+};
 
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
@@ -24,6 +29,7 @@ pub enum BaseType {
 pub fn get_impl_candidates<'t>(
     ty: TypeInfo,
     types: &TypeTable,
+    generics: &FunctionGenerics,
     checked: &'t CheckedTrait,
 ) -> Candidates<'t> {
     eprintln!("getting impls for {:?}: {checked:?}", ty);
@@ -31,7 +37,7 @@ pub fn get_impl_candidates<'t>(
     let mut found = None;
     for (i, trait_impl) in checked.impls.iter().enumerate() {
         eprintln!("\tchecking {trait_impl:?}");
-        match trait_impl.impl_ty.matches_type(ty, types) {
+        match trait_impl.impl_ty.matches_type_info(ty, types, generics) {
             Decision::Yes => {
                 eprintln!("\t -> match!");
                 if found.is_some() {
@@ -56,11 +62,6 @@ pub fn get_impl_candidates<'t>(
     } else {
         Candidates::None
     }
-}
-
-enum InstanceType {
-    Generic(u8),
-    Base(BaseType, Vec<InstanceType>),
 }
 
 #[derive(Debug)]
@@ -117,7 +118,72 @@ enum Decision {
     Maybe,
 }
 impl ImplTree {
-    fn matches_type(&self, ty: TypeInfo, types: &TypeTable) -> Decision {
+    pub fn matches_type(&self, ty: &Type) -> bool {
+        match self {
+            Self::Any { .. } => return true,
+            Self::Base(base_type, args) => match ty {
+                Type::Invalid => return true,
+                Type::Primitive(p) => {
+                    if let BaseType::Primitive(base_p) = base_type {
+                        return p == base_p;
+                    }
+                }
+                Type::DefId { id, generics } => {
+                    if let BaseType::TypeId(base_id) = base_type {
+                        if id != base_id {
+                            return false;
+                        }
+                        let generics = generics.as_ref().unwrap(); // TODO: handle missing generics
+                        debug_assert_eq!(generics.len(), args.len());
+                        for (generic, base_type) in generics.iter().zip(args.iter()) {
+                            if !base_type.matches_type(generic) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                }
+                Type::Pointer(pointee) => {
+                    if let BaseType::Pointer = base_type {
+                        return args[0].matches_type(pointee);
+                    }
+                }
+                Type::Tuple(elems) => {
+                    let BaseType::Tuple = base_type else {
+                        return false;
+                    };
+                    if args.len() != elems.len() {
+                        return false;
+                    }
+                    for (elem, base_type) in elems.iter().zip(args) {
+                        if !base_type.matches_type(elem) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                Type::Array(b) => {
+                    let (elem, count) = &**b;
+                    let &BaseType::Array { count: base_count } = base_type else {
+                        return false;
+                    };
+                    if *count != base_count {
+                        return false;
+                    }
+                    args[0].matches_type(elem);
+                }
+                Type::Generic(_) | Type::LocalEnum(_) => return false,
+            },
+        }
+        false
+    }
+
+    fn matches_type_info(
+        &self,
+        ty: TypeInfo,
+        types: &TypeTable,
+        generics: &FunctionGenerics,
+    ) -> Decision {
         match self {
             Self::Any { .. } => Decision::Yes,
             Self::Base(base_type, args) => {
@@ -133,15 +199,15 @@ impl ImplTree {
                             }
                         }
                     }
-                    TypeInfo::TypeDef(id, generics) => {
+                    TypeInfo::TypeDef(id, def_generics) => {
                         if let &BaseType::TypeId(base_id) = base_type {
                             if id != base_id {
                                 return Decision::No;
                             }
-                            debug_assert_eq!(generics.count as usize, args.len());
+                            debug_assert_eq!(def_generics.count as usize, args.len());
                             let mut decision = Decision::Yes;
-                            for (arg, impl_tree) in generics.iter().zip(args) {
-                                match impl_tree.matches_type(types[arg], types) {
+                            for (arg, impl_tree) in def_generics.iter().zip(args) {
+                                match impl_tree.matches_type_info(types[arg], types, generics) {
                                     Decision::No => return Decision::No,
                                     Decision::Maybe => decision = Decision::Maybe,
                                     Decision::Yes => {}
@@ -153,7 +219,7 @@ impl ImplTree {
                     TypeInfo::Pointer(pointee) => {
                         if matches!(base_type, BaseType::Pointer) {
                             debug_assert_eq!(args.len(), 1);
-                            return args[0].matches_type(types[pointee], types);
+                            return args[0].matches_type_info(types[pointee], types, generics);
                         }
                     }
                     TypeInfo::Tuple(elems) => {
@@ -162,7 +228,7 @@ impl ImplTree {
                         {
                             let mut decision = Decision::Yes;
                             for (arg, impl_tree) in elems.iter().zip(args) {
-                                match impl_tree.matches_type(types[arg], types) {
+                                match impl_tree.matches_type_info(types[arg], types, generics) {
                                     Decision::No => return Decision::No,
                                     Decision::Maybe => decision = Decision::Maybe,
                                     Decision::Yes => {}
@@ -182,7 +248,8 @@ impl ImplTree {
                                 Decision::Maybe
                             };
                             debug_assert_eq!(args.len(), 1);
-                            return match args[0].matches_type(types[element], types) {
+                            return match args[0].matches_type_info(types[element], types, generics)
+                            {
                                 Decision::Yes => decision,
                                 d @ (Decision::Maybe | Decision::No) => d,
                             };
@@ -192,8 +259,8 @@ impl ImplTree {
                     TypeInfo::Integer | TypeInfo::Float => {
                         todo!("handle impls for <integer>/<float>")
                     }
-                    TypeInfo::Generic(_) => todo!("check traits of generics"),
-                    TypeInfo::TypeItem { .. }
+                    TypeInfo::Generic(_)
+                    | TypeInfo::TypeItem { .. }
                     | TypeInfo::TraitItem { .. }
                     | TypeInfo::FunctionItem { .. }
                     | TypeInfo::ModuleItem { .. }
@@ -249,7 +316,7 @@ impl Impl {
         impl_generics: LocalTypeIds,
         types: &mut TypeTable,
     ) -> TypeInfoOrIdx {
-        assert_eq!(trait_generics.count, 1, "TODO: handle generic traits");
+        assert_eq!(trait_generics.count, 0, "TODO: handle generic traits");
         self.impl_ty.instantiate(impl_generics, types)
     }
 }

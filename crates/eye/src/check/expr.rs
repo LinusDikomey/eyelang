@@ -13,7 +13,7 @@ use crate::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
     },
-    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 
 use super::{exhaust::Exhaustion, lval, pattern, Ctx};
@@ -664,11 +664,9 @@ pub fn check(
                 body: ctx.hir.add(body),
             }
         }
-
         &Expr::FunctionCall(call) => {
             check_call(ctx, &ast[call], expr, scope, expected, return_ty, noreturn)
         }
-
         Expr::Asm { .. } => todo!("implement inline assembly properly"),
     }
 }
@@ -681,6 +679,7 @@ fn check_multiple(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
 ) -> NodeIds {
+    debug_assert_eq!(args.count(), types.count as usize);
     let args_nodes = ctx.hir.add_nodes((0..args.count).map(|_| Node::Invalid));
     for ((arg, ty), node_id) in args.zip(types.iter()).zip(args_nodes.iter()) {
         let node = check(ctx, arg, scope, ty, return_ty, noreturn);
@@ -837,8 +836,7 @@ fn function_item(
     span: impl FnOnce(&Ast) -> TSpan,
 ) -> Node {
     let signature = ctx.compiler.get_signature(function_module, function);
-    let generics_count = signature.generics.len();
-    let generics = ctx.hir.types.add_multiple_unknown(generics_count as _);
+    let generics = signature.generics.instantiate(&mut ctx.hir.types);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
@@ -1076,6 +1074,7 @@ fn check_is_instance_method(
                         ty,
                         signature_ty,
                         generics,
+                        ctx.generics,
                         ctx.compiler,
                         || span(ctx.ast).in_mod(ctx.module),
                     );
@@ -1104,9 +1103,9 @@ fn create_method_call_generics(
     signature: &crate::compiler::Signature,
     type_generics: LocalTypeIds,
 ) -> LocalTypeIds {
-    if signature.generics.len() != type_generics.count as usize {
-        debug_assert!(signature.generics.len() > type_generics.count as usize);
-        let call_generics = types.add_multiple_unknown(signature.generics.len() as _);
+    if signature.generics.count() as u32 != type_generics.count {
+        debug_assert!(signature.generics.count() as u32 > type_generics.count);
+        let call_generics = types.add_multiple_unknown(signature.generics.count().into());
         for (r, generic) in call_generics.iter().zip(type_generics.iter()) {
             types.replace(r, generic);
         }
@@ -1416,25 +1415,26 @@ fn check_call(
             let generics = ctx
                 .hir
                 .types
-                .add_multiple_unknown(signature.generics.len() as _);
+                .add_multiple_unknown(signature.generics.count().into());
             assert!(
-                signature.generics.len() >= checked_trait.generics as usize + 1,
+                signature.generics.count() >= checked_trait.generics + 1,
                 "the method should at least have the trait's and the self type's generics {} >= {}",
-                signature.generics.len(),
+                signature.generics.count(),
                 checked_trait.generics + 1,
             );
+            // generics NOT including the self type
             let trait_generics = LocalTypeIds {
                 idx: generics.idx + 1,
-                count: checked_trait.generics as u32 + 1,
+                count: checked_trait.generics as u32,
             };
             let self_ty = generics.iter().next().unwrap();
-            ctx.hir.types.replace(
-                self_ty,
-                TypeInfo::UnknownSatisfying {
-                    id: (trait_module, trait_id),
-                    generics: trait_generics,
-                },
-            );
+            let self_bounds = ctx.hir.types.add_bounds([Bound {
+                trait_id: (trait_module, trait_id),
+                generics: trait_generics,
+            }]);
+            ctx.hir
+                .types
+                .replace(self_ty, TypeInfo::UnknownSatisfying(self_bounds));
             match check_call_signature(
                 ctx,
                 expr,

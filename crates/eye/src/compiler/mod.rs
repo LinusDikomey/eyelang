@@ -21,7 +21,7 @@ use crate::{
         self,
         ast::{self, Ast, FunctionId, GlobalId, ScopeId},
     },
-    types::{traits, LocalTypeId, LocalTypeIds, TypeInfoOrIdx, TypeTable},
+    types::{traits, Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     MainError,
 };
 
@@ -525,7 +525,22 @@ impl Compiler {
         let generics = function
             .generics
             .iter()
-            .map(|def| def.name(ast.src()).to_owned())
+            .map(|def| {
+                let requirements = def
+                    .requirements
+                    .iter()
+                    .map(|path| match self.resolve_path(module, scope, *path) {
+                        Def::Trait(trait_module, trait_id) => (trait_module, trait_id),
+                        Def::Invalid => todo!("handle invalid defs in generic reqs"),
+                        _ => {
+                            self.errors
+                                .emit_err(Error::TraitExpected.at_span(path.span().in_mod(module)));
+                            todo!("handle invalid defs in generic reqs")
+                        }
+                    })
+                    .collect();
+                (def.name(ast.src()).to_owned(), requirements)
+            })
             .collect();
 
         let args = function
@@ -544,7 +559,7 @@ impl Compiler {
             args,
             varargs: function.varargs,
             return_type,
-            generics,
+            generics: FunctionGenerics { generics },
             span: function.signature_span,
         }
     }
@@ -596,10 +611,10 @@ impl Compiler {
                 let impls = def
                     .impls
                     .iter()
-                    .map(|(impl_generics, generic_count, impl_ty, impl_functions)| {
+                    .map(|(impl_scope, generic_count, impl_ty, impl_functions)| {
                         let generic_count = *generic_count;
                         // don't count the Self type as a generic
-                        let impl_ty = self.resolve_type(impl_ty, module, *impl_generics);
+                        let impl_ty = self.resolve_type(impl_ty, module, *impl_scope);
                         let impl_ty = traits::ImplTree::from_type(&impl_ty, self);
                         let mut functions = vec![ast::FunctionId(u32::MAX); functions.len()];
                         for &(name_span, function) in impl_functions {
@@ -623,6 +638,21 @@ impl Compiler {
                             // TODO: check impl signature
                             functions[function_idx as usize] = function;
                         }
+                        let mut unimplemented = Vec::new();
+                        for (name, &i) in &functions_by_name {
+                            if functions[i as usize] == ast::FunctionId(u32::MAX) {
+                                unimplemented.push(name.clone());
+                            }
+                        }
+                        if !unimplemented.is_empty() {
+                            self.errors.emit_err(
+                                Error::NotAllFunctionsImplemented { unimplemented }
+                                    .at_span(ast[*impl_scope].span.in_mod(module)),
+                            );
+                        }
+                        for &function in &functions {
+                            if function == ast::FunctionId(u32::MAX) {}
+                        }
                         traits::Impl {
                             generic_count,
                             impl_ty,
@@ -643,6 +673,22 @@ impl Compiler {
                 )
             }
         }
+    }
+
+    pub fn get_checked_trait_impl(
+        &mut self,
+        trait_id: (ModuleId, ast::TraitId),
+        ty: &Type,
+    ) -> Option<(&traits::Impl, Vec<Type>)> {
+        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        for impl_ in &checked_trait.impls {
+            if impl_.impl_ty.matches_type(ty) {
+                assert_eq!(impl_.generic_count, 1, "TODO: generic impls");
+                return Some((impl_, Vec::new()));
+            }
+        }
+        // TODO: check impls on type
+        None
     }
 
     pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
@@ -707,7 +753,7 @@ impl Compiler {
                 let return_type = types.generic_info_from_resolved(self, &signature.return_type);
                 let return_type = types.add(return_type);
 
-                let generic_count = signature.generics.len().try_into().unwrap();
+                let generic_count = signature.generics.count();
                 let varargs = signature.varargs;
 
                 let (body, types) = if let Some(body) = function.body {
@@ -722,6 +768,7 @@ impl Compiler {
                         &ast,
                         module,
                         types,
+                        &signature.generics,
                         function.scope,
                         args,
                         body,
@@ -859,6 +906,7 @@ impl Compiler {
                         &global.ty,
                     ) {
                         Def::ConstValue(id) => self.const_values[id.idx()].clone(),
+                        Def::Invalid => ConstValue::Undefined,
                         _ => {
                             let error =
                                 Error::ExpectedValue.at_span(ast[val].span_in(&ast, module));
@@ -962,6 +1010,10 @@ impl Compiler {
 
             for id in ast.global_ids() {
                 self.get_checked_global(module, id);
+            }
+
+            for id in ast.trait_ids() {
+                self.get_checked_trait(module, id);
             }
         }
     }
@@ -1374,8 +1426,47 @@ pub struct Signature {
     pub args: Vec<(String, Type)>,
     pub varargs: bool,
     pub return_type: Type,
-    pub generics: Vec<String>,
+    pub generics: FunctionGenerics,
     pub span: TSpan,
+}
+
+#[derive(Debug)]
+pub struct FunctionGenerics {
+    generics: Vec<(String, Vec<(ModuleId, ast::TraitId)>)>,
+}
+impl FunctionGenerics {
+    pub const EMPTY: Self = Self {
+        generics: Vec::new(),
+    };
+
+    pub fn count(&self) -> u8 {
+        self.generics.len() as u8
+    }
+
+    pub fn satisfies_bound(&self, generic: u8, bound: &Bound) -> bool {
+        assert_eq!(bound.generics.count, 0);
+        self.generics[generic as usize].1.contains(&bound.trait_id)
+    }
+
+    pub fn instantiate(&self, types: &mut TypeTable) -> LocalTypeIds {
+        let generics = types.add_multiple_unknown(self.generics.len() as _);
+        for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
+            let info = if bounds.is_empty() {
+                TypeInfo::Unknown
+            } else {
+                let bounds = types.add_bounds(bounds.iter().map(|&trait_id| {
+                    // TODO: generic trait bounds, assuming no generics for now
+                    crate::types::Bound {
+                        trait_id,
+                        generics: LocalTypeIds::EMPTY,
+                    }
+                }));
+                TypeInfo::UnknownSatisfying(bounds)
+            };
+            types.replace(r, info);
+        }
+        generics
+    }
 }
 
 #[derive(Debug)]

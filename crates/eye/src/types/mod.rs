@@ -11,9 +11,9 @@ use unify::unify;
 
 use crate::{
     check::expr::int_ty_from_variant_count,
-    compiler::{Def, ResolvedTypeDef},
+    compiler::{Def, FunctionGenerics, ResolvedTypeDef},
     error::Error,
-    parser::ast,
+    parser::ast::{self, TraitId},
     Compiler,
 };
 
@@ -24,6 +24,7 @@ pub struct TypeTable {
     types: Vec<TypeInfoOrIdx>,
     enums: Vec<InferredEnum>,
     variants: Vec<InferredEnumVariant>,
+    bounds: Vec<Bound>,
 }
 impl Index<LocalTypeId> for TypeTable {
     type Output = TypeInfo;
@@ -52,6 +53,7 @@ impl TypeTable {
             types: Vec::new(),
             enums: Vec::new(),
             variants: Vec::new(),
+            bounds: Vec::new(),
         }
     }
 
@@ -178,6 +180,21 @@ impl TypeTable {
             std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(count as usize),
         );
         LocalTypeIds { idx: start, count }
+    }
+
+    pub fn add_bounds(&mut self, bounds: impl IntoIterator<Item = Bound>) -> Bounds {
+        let start = self.bounds.len() as u32;
+        self.bounds.extend(bounds);
+        let count = TryInto::<u32>::try_into(self.bounds.len()).unwrap() - start;
+        Bounds { start, count }
+    }
+
+    pub fn get_bounds(&self, bounds: Bounds) -> &[Bound] {
+        &self.bounds[bounds.start as usize..bounds.start as usize + bounds.count as usize]
+    }
+
+    pub fn get_bound(&self, id: BoundId) -> &Bound {
+        &self.bounds[id.0 as usize]
     }
 
     pub fn replace(&mut self, id: LocalTypeId, info_or_idx: impl Into<TypeInfoOrIdx>) {
@@ -365,6 +382,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         mut b: LocalTypeId,
+        generics: &FunctionGenerics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
@@ -385,7 +403,7 @@ impl TypeTable {
             return;
         }
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-        let new = unify(a_ty, b_ty, self, compiler).unwrap_or_else(|| {
+        let new = unify(a_ty, b_ty, self, generics, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
             self.type_to_string(compiler, a_ty, &mut expected);
             let mut found = String::new();
@@ -402,6 +420,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         mut b: LocalTypeId,
+        generics: &FunctionGenerics,
         compiler: &mut Compiler,
     ) -> bool {
         let original_b = b;
@@ -418,7 +437,7 @@ impl TypeTable {
             }
         };
         a == b
-            || unify(a_ty, b_ty, self, compiler)
+            || unify(a_ty, b_ty, self, generics, compiler)
                 .map(|unified| {
                     self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
@@ -431,10 +450,11 @@ impl TypeTable {
         &mut self,
         a: LocalTypeId,
         info: TypeInfo,
+        function_generics: &FunctionGenerics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
-        if let Err((a, b)) = self.try_specify(a, info, compiler) {
+        if let Err((a, b)) = self.try_specify(a, info, function_generics, compiler) {
             self.mismatched_type_error(compiler, a, b, span());
         }
     }
@@ -444,10 +464,13 @@ impl TypeTable {
         id: LocalTypeId,
         resolved: &Type,
         generics: LocalTypeIds,
+        function_generics: &FunctionGenerics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
-        if let Err((a, b)) = self.try_specify_resolved(id, resolved, generics, compiler) {
+        if let Err((a, b)) =
+            self.try_specify_resolved(id, resolved, generics, function_generics, compiler)
+        {
             self.mismatched_type_error(compiler, a, b, span());
         }
     }
@@ -559,14 +582,17 @@ impl TypeTable {
         id: LocalTypeId,
         resolved: &Type,
         generics: LocalTypeIds,
+        function_generics: &FunctionGenerics,
         compiler: &mut Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         // PERF:could special-case this function to avoid instantiating the Type
         let resolved_info = self.from_generic_resolved(compiler, resolved, generics);
         match resolved_info {
-            TypeInfoOrIdx::TypeInfo(info) => self.try_specify(id, info, compiler),
+            TypeInfoOrIdx::TypeInfo(info) => {
+                self.try_specify(id, info, function_generics, compiler)
+            }
             TypeInfoOrIdx::Idx(idx) => {
-                if self.try_unify(id, idx, compiler) {
+                if self.try_unify(id, idx, function_generics, compiler) {
                     Ok(())
                 } else {
                     Err((self[id], self[idx]))
@@ -579,6 +605,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         info: TypeInfo,
+        function_generics: &FunctionGenerics,
         compiler: &mut Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         let a_ty = loop {
@@ -587,7 +614,7 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(info) => break info,
             }
         };
-        let Some(info) = unify(a_ty, info, self, compiler) else {
+        let Some(info) = unify(a_ty, info, self, function_generics, compiler) else {
             self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
             return Err((a_ty, info));
         };
@@ -762,13 +789,30 @@ impl From<LocalTypeId> for LocalTypeIds {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct Bound {
+    pub trait_id: (ModuleId, TraitId),
+    pub generics: LocalTypeIds,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Bounds {
+    start: u32,
+    count: u32,
+}
+impl Bounds {
+    pub fn iter(self) -> impl ExactSizeIterator<Item = BoundId> {
+        (self.start..self.start + self.count).map(BoundId)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BoundId(u32);
+
+#[derive(Debug, Clone, Copy)]
 pub enum TypeInfo {
     Unknown,
-    /// an unknown type that has to implement a trait
-    UnknownSatisfying {
-        id: (ModuleId, ast::TraitId),
-        generics: LocalTypeIds,
-    },
+    /// an unknown type that has to implement a list of trait bounds
+    UnknownSatisfying(Bounds),
     Primitive(Primitive),
     Integer,
     Float,

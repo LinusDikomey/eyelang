@@ -200,6 +200,10 @@ pub enum Error {
         unimplemented: Vec<String>,
     },
     TraitSignatureMismatch,
+    UnsatisfiedTraitBound {
+        trait_name: String,
+        ty: String,
+    },
     InvalidCast {
         from: String,
         to: String,
@@ -291,6 +295,7 @@ impl Error {
             Error::TraitSignatureMismatch => {
                 "signature doesn't match the function's signature in the trait definition"
             }
+            Error::UnsatisfiedTraitBound { .. } => "unsatisfied trait bound",
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
             Error::EvalFailed(ir::Error::InfiniteLoop) => {
@@ -377,6 +382,9 @@ impl Error {
                     s
                 }
             }
+            Error::UnsatisfiedTraitBound { trait_name, ty } => {
+                cformat!("the type #m<{ty}> doesn't satisfy the #m<{trait_name}> trait")
+            }
             Error::InvalidCast { from, to } => {
                 cformat!("cannot cast from a value of type #m<{from}> to #m<{to}>")
             }
@@ -428,6 +436,18 @@ impl fmt::Display for Severity {
 }
 
 pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
+    if span == TSpan::MISSING {
+        match error.severity() {
+            Severity::Error => cprintln!("#r<error>: #r!<{}>", error.conclusion()),
+            Severity::Warn => cprintln!("#y<warn>: #y!<{}>", error.conclusion()),
+        }
+        cprintln!("#c<at>: #u<{}>:?", file.display());
+
+        if let Some(details) = error.details() {
+            cprintln!("  {details}");
+        }
+        return;
+    }
     let s = span.start as usize;
     let e = span.end as usize;
 

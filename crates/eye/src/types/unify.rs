@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     check::expr::int_ty_from_variant_count,
-    compiler::ResolvedTypeDef,
+    compiler::{FunctionGenerics, ResolvedTypeDef},
     types::{traits, TypeInfoOrIdx},
     Compiler,
 };
@@ -13,49 +13,56 @@ pub fn unify(
     a: TypeInfo,
     b: TypeInfo,
     types: &mut TypeTable,
+    function_generics: &FunctionGenerics,
     compiler: &mut Compiler,
 ) -> Option<TypeInfo> {
     use types::Primitive as P;
     use TypeInfo::*;
     Some(match (a, b) {
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
-        (
-            t,
-            UnknownSatisfying {
-                id: trait_id,
-                generics,
-            },
-        )
-        | (
-            UnknownSatisfying {
-                id: trait_id,
-                generics,
-            },
-            t,
-        ) => {
-            let self_ty = generics.nth(0).unwrap();
-            if types.try_specify(self_ty, t, compiler).is_err() {
-                return None;
-            }
-            let Some(checked_trait) = compiler.get_checked_trait(trait_id.0, trait_id.1) else {
-                return Some(TypeInfo::Invalid);
-            };
-            let candidates = traits::get_impl_candidates(types[self_ty], types, &*checked_trait);
-            match candidates {
-                traits::Candidates::None => return None, // TODO: better errors
-                traits::Candidates::Multiple => {
-                    eprintln!("TODO: defer trait impl check");
-                    // self.defer_impl_check((module, trait_id), );
-                    t
-                }
-                traits::Candidates::Unique(trait_impl) => {
-                    eprintln!("CHOSE IMPL: {trait_impl:?}");
-                    let impl_generics = types.add_multiple_unknown(trait_impl.generic_count.into());
-                    let info_or_idx = trait_impl.instantiate(generics, impl_generics, types);
-                    // TODO: probably handles generics completely incorrectly
-                    types.get_info_or_idx(info_or_idx)
+        (UnknownSatisfying(bounds), Generic(generic_id))
+        | (Generic(generic_id), UnknownSatisfying(bounds)) => {
+            for bound in types.get_bounds(bounds) {
+                if !function_generics.satisfies_bound(generic_id, bound) {
+                    // TODO: error message with missing trait bound
+                    return None;
                 }
             }
+            Generic(generic_id)
+        }
+        (t, UnknownSatisfying(bounds)) | (UnknownSatisfying(bounds), t) => {
+            let mut chosen_ty = t;
+            for bound in bounds.iter() {
+                let bound = *types.get_bound(bound);
+                let Some(checked_trait) =
+                    compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1)
+                else {
+                    return Some(TypeInfo::Invalid);
+                };
+                let candidates = traits::get_impl_candidates(
+                    chosen_ty,
+                    types,
+                    function_generics,
+                    &*checked_trait,
+                );
+                match candidates {
+                    traits::Candidates::None => return None, // TODO: better errors
+                    traits::Candidates::Multiple => {
+                        todo!("TODO: defer trait impl check");
+                        // self.defer_impl_check((module, trait_id), );
+                    }
+                    traits::Candidates::Unique(trait_impl) => {
+                        eprintln!("CHOSE IMPL: {trait_impl:?}");
+                        let impl_generics =
+                            types.add_multiple_unknown(trait_impl.generic_count.into());
+                        let info_or_idx =
+                            trait_impl.instantiate(bound.generics, impl_generics, types);
+                        // TODO: probably handles generics completely incorrectly
+                        chosen_ty = types.get_info_or_idx(info_or_idx);
+                    }
+                }
+            }
+            chosen_ty
         }
         (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
         (Invalid, _) | (_, Invalid) => Invalid,
@@ -66,7 +73,7 @@ pub fn unify(
         (TypeDef(id_a, generics_a), TypeDef(id_b, generics_b)) if id_a == id_b => {
             debug_assert_eq!(generics_a.count, generics_b.count);
             for (a, b) in generics_a.iter().zip(generics_b.iter()) {
-                if !types.try_unify(a, b, compiler) {
+                if !types.try_unify(a, b, function_generics, compiler) {
                     return None;
                 }
             }
@@ -105,7 +112,13 @@ pub fn unify(
                 }
                 for (arg, declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
                     if types
-                        .try_specify_resolved(arg, declared_arg, generics, compiler)
+                        .try_specify_resolved(
+                            arg,
+                            declared_arg,
+                            generics,
+                            function_generics,
+                            compiler,
+                        )
                         .is_err()
                     {
                         return None;
@@ -119,7 +132,7 @@ pub fn unify(
             todo!("unify enums")
         }
         (Pointer(a), Pointer(b)) => {
-            if !types.try_unify(a, b, compiler) {
+            if !types.try_unify(a, b, function_generics, compiler) {
                 return None;
             }
             Pointer(a)
@@ -134,7 +147,7 @@ pub fn unify(
                 count: c_b,
             },
         ) => {
-            if !types.try_unify(a, b, compiler) {
+            if !types.try_unify(a, b, function_generics, compiler) {
                 return None;
             }
             let count = match (c_a, c_b) {
@@ -156,14 +169,14 @@ pub fn unify(
                 return None;
             }
             for (a, b) in a.iter().zip(b.iter()) {
-                if !types.try_unify(a, b, compiler) {
+                if !types.try_unify(a, b, function_generics, compiler) {
                     return None;
                 }
             }
             Tuple(a)
         }
         (TypeItem { ty: a_ty }, TypeItem { ty: b_ty }) => {
-            if !types.try_unify(a_ty, b_ty, compiler) {
+            if !types.try_unify(a_ty, b_ty, function_generics, compiler) {
                 return None;
             }
             a
@@ -185,7 +198,7 @@ pub fn unify(
                 "invalid generics count, incorrect type info constructed"
             );
             for (a, b) in a_g.iter().zip(b_g.iter()) {
-                if !types.try_unify(a, b, compiler) {
+                if !types.try_unify(a, b, function_generics, compiler) {
                     return None;
                 }
             }
@@ -204,7 +217,7 @@ pub fn unify(
             },
         ) if a_m == b_m && a_f == b_f => {
             for (a, b) in a_g.iter().zip(b_g.iter()) {
-                types.try_unify(a, b, compiler);
+                types.try_unify(a, b, function_generics, compiler);
             }
             a
         }

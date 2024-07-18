@@ -9,7 +9,7 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::Signature,
+    compiler::{FunctionGenerics, Signature},
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Node, HIR},
     parser::ast::{Ast, ExprId, ScopeId},
@@ -24,6 +24,7 @@ pub fn check(
     ast: &Ast,
     module: ModuleId,
     types: TypeTable,
+    generics: &FunctionGenerics,
     scope: ScopeId,
     args: impl IntoIterator<Item = (String, LocalTypeId)>,
     expr: ExprId,
@@ -44,6 +45,7 @@ pub fn check(
         compiler,
         ast,
         module,
+        generics,
         hir,
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
@@ -64,6 +66,7 @@ pub struct Ctx<'a> {
     pub compiler: &'a mut Compiler,
     pub ast: &'a Ast,
     pub module: ModuleId,
+    pub generics: &'a FunctionGenerics,
     pub hir: HIRBuilder,
     /// Exhaustion value, type, pattern expr
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
@@ -81,9 +84,11 @@ impl<'a> Ctx<'a> {
         info: impl Into<TypeInfo>,
         span: impl FnOnce(&Ast) -> TSpan,
     ) {
-        self.hir.types.specify(ty, info.into(), self.compiler, || {
-            span(self.ast).in_mod(self.module)
-        })
+        self.hir
+            .types
+            .specify(ty, info.into(), self.generics, self.compiler, || {
+                span(self.ast).in_mod(self.module)
+            })
     }
 
     fn specify_resolved(
@@ -104,7 +109,9 @@ impl<'a> Ctx<'a> {
     fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
         self.hir
             .types
-            .unify(a, b, self.compiler, || span(self.ast).in_mod(self.module))
+            .unify(a, b, self.generics, self.compiler, || {
+                span(self.ast).in_mod(self.module)
+            })
     }
 
     fn invalidate(&mut self, ty: LocalTypeId) {
@@ -164,7 +171,9 @@ impl<'a> Ctx<'a> {
 
     pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {
         // TODO: finalize types?
-        let (mut hir, types) = self.hir.finish(root);
+        let (mut hir, types) = self
+            .hir
+            .finish(root, &mut self.compiler.errors, self.module);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
                 let error =
@@ -194,7 +203,7 @@ pub fn verify_main_signature(
             Error::MainArgs.at_span(signature.span.in_mod(main_module)),
         ));
     }
-    if !signature.generics.is_empty() {
+    if signature.generics.count() != 0 {
         return Err(Some(
             Error::MainGenerics.at_span(signature.span.in_mod(main_module)),
         ));

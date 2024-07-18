@@ -10,10 +10,10 @@ use llvm_sys::{
         LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
         LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
-        LLVMConstReal, LLVMFunctionType, LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext,
-        LLVMInt32TypeInContext, LLVMInt8TypeInContext, LLVMPointerTypeInContext,
-        LLVMPositionBuilderAtEnd, LLVMPrintValueToString, LLVMSetInitializer,
-        LLVMVoidTypeInContext,
+        LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName, LLVMGetParam,
+        LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext, LLVMInt8TypeInContext,
+        LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
+        LLVMSetInitializer, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -25,6 +25,7 @@ pub unsafe fn add_function(
     ctx: LLVMContextRef,
     llvm_module: LLVMModuleRef,
     function: &ir::Function,
+    attribs: &Attribs,
 ) -> Result<(LLVMValueRef, LLVMTypeRef), Error> {
     let return_ty = llvm_ty(ctx, function.return_type, &function.types)
         .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
@@ -49,6 +50,12 @@ pub unsafe fn add_function(
     )
     .map_err(|_| Error::NulByte)?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
+    /*
+    if true {
+        let noreturn = LLVMCreateEnumAttribute(ctx, attribs.noreturn, 0);
+        LLVMAddAttributeAtIndex(llvm_func, -1i32 as u32, noreturn);
+    }
+    */
     Ok((llvm_func, llvm_func_ty))
 }
 
@@ -85,6 +92,20 @@ pub unsafe fn function(
         );
     }
     Ok(())
+}
+
+pub struct Attribs {
+    noreturn: u32,
+}
+impl Attribs {
+    pub fn lookup() -> Self {
+        fn l(s: &str) -> u32 {
+            unsafe { LLVMGetEnumAttributeKindForName(s.as_ptr().cast(), s.len()) }
+        }
+        Self {
+            noreturn: l("noreturn"),
+        }
+    }
 }
 
 /// Converts an ir type to it's corresponding llvm type. Returns `None` if the type was zero-sized

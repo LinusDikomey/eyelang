@@ -2,6 +2,7 @@ use id::ModuleId;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
+    compiler::FunctionGenerics,
     error::Error,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
@@ -198,8 +199,17 @@ pub fn def_expr(
             let mut types = TypeTable::new();
             let expected = types.info_from_unresolved(ty, compiler, module, scope);
             let expected = types.add(expected);
-            let (hir, types) =
-                crate::check::check(compiler, ast, module, types, scope, [], expr, expected);
+            let (hir, types) = crate::check::check(
+                compiler,
+                ast,
+                module,
+                types,
+                &FunctionGenerics::EMPTY,
+                scope,
+                [],
+                expr,
+                expected,
+            );
             let mut to_generate = Vec::new();
             let mut ir_types = ir::IrTypes::new();
             let (builder, _) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);

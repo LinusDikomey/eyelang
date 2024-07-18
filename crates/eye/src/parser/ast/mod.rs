@@ -47,15 +47,19 @@ impl Ast {
     }
 
     pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> {
-        (0..self.functions.len()).map(|i| FunctionId(i as _))
+        (0..self.functions.len() as _).map(FunctionId)
     }
 
     pub fn type_ids(&self) -> impl Iterator<Item = TypeId> {
-        (0..self.types.len()).map(|i| TypeId(i as _))
+        (0..self.types.len() as _).map(TypeId)
     }
 
     pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> {
-        (0..self.globals.len()).map(|i| GlobalId(i as _))
+        (0..self.globals.len() as _).map(GlobalId)
+    }
+
+    pub fn trait_ids(&self) -> impl Iterator<Item = TraitId> {
+        (0..self.traits.len() as _).map(TraitId)
     }
 
     pub fn top_level_scope_id(&self) -> ScopeId {
