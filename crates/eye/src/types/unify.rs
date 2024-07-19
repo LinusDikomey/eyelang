@@ -7,7 +7,7 @@ use crate::{
     Compiler,
 };
 
-use super::{TypeInfo, TypeTable};
+use super::{LocalTypeId, TypeInfo, TypeTable};
 
 pub fn unify(
     a: TypeInfo,
@@ -15,6 +15,7 @@ pub fn unify(
     types: &mut TypeTable,
     function_generics: &FunctionGenerics,
     compiler: &mut Compiler,
+    unified_id: LocalTypeId,
 ) -> Option<TypeInfo> {
     use types::Primitive as P;
     use TypeInfo::*;
@@ -48,11 +49,9 @@ pub fn unify(
                 match candidates {
                     traits::Candidates::None => return None, // TODO: better errors
                     traits::Candidates::Multiple => {
-                        todo!("TODO: defer trait impl check");
-                        // self.defer_impl_check((module, trait_id), );
+                        types.defer_impl_check(unified_id, bounds);
                     }
                     traits::Candidates::Unique(trait_impl) => {
-                        eprintln!("CHOSE IMPL: {trait_impl:?}");
                         let impl_generics =
                             types.add_multiple_unknown(trait_impl.generic_count.into());
                         let info_or_idx =

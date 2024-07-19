@@ -9,5 +9,5 @@ pub use float::FloatType;
 pub use int::IntType;
 pub use layout::Layout;
 pub use primitive::Primitive;
-pub use resolved_type::Type;
+pub use resolved_type::{FunctionType, Type};
 pub use unresolved::UnresolvedType;

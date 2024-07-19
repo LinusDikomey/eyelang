@@ -7,7 +7,7 @@ pub enum Type {
     Primitive(Primitive),
     DefId {
         id: id::TypeId,
-        generics: Option<Box<[Type]>>,
+        generics: Box<[Type]>,
     },
     Pointer(Box<Type>),
     Array(Box<(Type, u32)>),
@@ -16,6 +16,7 @@ pub enum Type {
     Generic(u8),
     /// a local enum that will only be created from inference
     LocalEnum(Box<[Box<[Type]>]>),
+    Function(FunctionType),
     /// Self type (only used in trait definitions)
     Invalid,
 }
@@ -72,12 +73,10 @@ impl Type {
                 generics: ty_generics,
             } => Type::DefId {
                 id: *id,
-                generics: ty_generics.as_ref().map(|ty_generics| {
-                    ty_generics
-                        .iter()
-                        .map(|ty| ty.instantiate_generics(generics))
-                        .collect()
-                }),
+                generics: ty_generics
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect(),
             },
             Type::Pointer(inner) => Type::Pointer(Box::new(inner.instantiate_generics(generics))),
             Type::Array(b) => {
@@ -102,20 +101,88 @@ impl Type {
                     })
                     .collect(),
             ),
+            Type::Function(f) => Type::Function(FunctionType {
+                params: f
+                    .params
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect(),
+                return_type: Box::new(f.return_type.instantiate_generics(generics)),
+            }),
             Type::Invalid => Type::Invalid,
         }
+    }
+
+    pub fn is_same_as(
+        &self,
+        other: &Type,
+        a_generics: &[Type],
+        b_generics: &[Type],
+    ) -> Result<bool, ()> {
+        let l = if let &Self::Generic(i) = self {
+            &a_generics[i as usize]
+        } else {
+            self
+        };
+        let r = if let &Self::Generic(i) = other {
+            &b_generics[i as usize]
+        } else {
+            other
+        };
+
+        Ok(match (l, r) {
+            (Self::Invalid, _) | (_, Self::Invalid) => return Err(()),
+            (Self::Primitive(a), Self::Primitive(b)) => a == b,
+            (
+                Self::DefId {
+                    id: a,
+                    generics: a_generics,
+                },
+                Self::DefId {
+                    id: b,
+                    generics: b_generics,
+                },
+            ) => {
+                assert_eq!(a_generics.len(), b_generics.len());
+                if a != b {
+                    return Ok(false);
+                }
+                for (a, b) in a_generics.iter().zip(b_generics) {
+                    if !a.is_same_as(b, a_generics, b_generics)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (Self::Pointer(a), Self::Pointer(b)) => a.is_same_as(b, a_generics, b_generics)?,
+            (Self::Array(a), Self::Array(b)) => {
+                a.0.is_same_as(&b.0, a_generics, b_generics)? && a.1 == b.1
+            }
+            (Self::Tuple(a), Self::Tuple(b)) => {
+                if a.len() != b.len() {
+                    return Ok(false);
+                }
+                for (a, b) in a.iter().zip(b) {
+                    if !a.is_same_as(b, a_generics, b_generics)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            (Self::Generic(a), Self::Generic(b)) => a == b,
+            (Self::LocalEnum(_), Self::LocalEnum(_)) => unreachable!(),
+            (Self::Function(a), Self::Function(b)) => a.is_same_as(b, a_generics, b_generics)?,
+            _ => false,
+        })
     }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Primitive(p) => write!(f, "{}", <&str>::from(*p)),
-            Type::DefId {
-                id,
-                generics: Some(generics),
-            } => {
+            Type::DefId { id, generics } => {
                 write!(f, "TypeId({})", id.idx())?;
-                if generics.len() != 0 {
+                if !generics.is_empty() {
                     write!(f, "[")?;
                     for (i, generic) in generics.iter().enumerate() {
                         if i != 0 {
@@ -127,7 +194,6 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
-            Type::DefId { id, generics: None } => write!(f, "TypeId({})", id.idx()),
             Type::Pointer(pointee) => write!(f, "*{pointee}"),
             Type::Array(b) => {
                 let (elem, count) = &**b;
@@ -149,7 +215,42 @@ impl fmt::Display for Type {
             }
             Type::Generic(i) => write!(f, "<generic #{i}>"),
             Type::LocalEnum(_) => write!(f, "LocalEnum: TODO: write"),
+            Type::Function(func) => {
+                write!(f, "fn(")?;
+                for (i, param) in func.params.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{param}")?;
+                }
+                write!(f, ") -> {}", func.return_type)
+            }
             Type::Invalid => write!(f, "<invalid>"),
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FunctionType {
+    pub params: Box<[Type]>,
+    pub return_type: Box<Type>,
+}
+impl FunctionType {
+    pub fn is_same_as(
+        &self,
+        b: &Self,
+        a_generics: &[Type],
+        b_generics: &[Type],
+    ) -> Result<bool, ()> {
+        if self.params.len() != b.params.len() {
+            return Ok(false);
+        }
+        for (a, b) in self.params.iter().zip(&b.params) {
+            if !a.is_same_as(b, a_generics, b_generics)? {
+                return Ok(false);
+            }
+        }
+        self.return_type
+            .is_same_as(&b.return_type, a_generics, b_generics)
     }
 }

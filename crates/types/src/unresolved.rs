@@ -4,11 +4,18 @@ use crate::Primitive;
 
 #[derive(Debug, Clone)]
 pub enum UnresolvedType {
-    Primitive { ty: Primitive, span_start: u32 },
+    Primitive {
+        ty: Primitive,
+        span_start: u32,
+    },
     Unresolved(IdentPath, Option<(Box<[UnresolvedType]>, TSpan)>),
     Pointer(Box<(UnresolvedType, u32)>),
     Array(Box<(UnresolvedType, Option<u32>, TSpan)>),
     Tuple(Vec<UnresolvedType>, TSpan),
+    Function {
+        span_and_return_type: Box<(TSpan, UnresolvedType)>,
+        params: Box<[UnresolvedType]>,
+    },
     Infer(TSpan),
 }
 impl UnresolvedType {
@@ -63,17 +70,30 @@ impl UnresolvedType {
                 s.push('(');
                 for (i, ty) in types.iter().enumerate() {
                     if i != 0 {
-                        s.push_str(", ")
+                        s.push_str(", ");
                     }
                     ty.to_string(s, src);
                 }
                 s.push(')');
             }
+            UnresolvedType::Function {
+                span_and_return_type,
+                params,
+            } => {
+                s.push_str("fn(");
+                for (i, ty) in params.iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    ty.to_string(s, src);
+                }
+                s.push_str(") -> ");
+                span_and_return_type.1.to_string(s, src);
+            }
             UnresolvedType::Infer(_) => s.push('_'),
         }
     }
-}
-impl UnresolvedType {
+
     pub fn span(&self) -> TSpan {
         match self {
             &UnresolvedType::Primitive { ty, span_start } => {
@@ -89,6 +109,10 @@ impl UnresolvedType {
                 let (inner, start) = &**ptr;
                 TSpan::new(*start, inner.span().end)
             }
+            UnresolvedType::Function {
+                span_and_return_type,
+                ..
+            } => span_and_return_type.0,
         }
     }
 }

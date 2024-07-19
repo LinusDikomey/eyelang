@@ -173,7 +173,7 @@ impl<'a> Ctx<'a> {
         // TODO: finalize types?
         let (mut hir, types) = self
             .hir
-            .finish(root, &mut self.compiler.errors, self.module);
+            .finish(root, self.compiler, self.generics, self.module);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
                 let error =

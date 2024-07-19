@@ -758,9 +758,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generic_types);
-            let Some((impl_, impl_generics)) =
-                ctx.compiler.get_checked_trait_impl(trait_id, &self_ty)
+            let Some((impl_, impl_generics)) = ctx
+                .compiler
+                .get_checked_trait_impl_from_final_types(trait_id, ctx.types[self_ty], ctx.types)
             else {
                 crash_point!(ctx)
             };
@@ -1006,7 +1006,6 @@ fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) 
 }
 
 fn build_crash_point(ctx: &mut Ctx) {
-    // TODO: build proper crash point
     let msg = "program reached a compile error at runtime";
     let (ptr, str_ty) = lower_string_literal(&mut ctx.builder, msg);
     let msg = ctx.builder.build_load(ptr, str_ty);

@@ -627,6 +627,20 @@ impl<R: Representer> Repr<R> for UnresolvedType {
                 }
                 c.char(')');
             }
+            Self::Function {
+                span_and_return_type,
+                params,
+            } => {
+                c.write_add("fn(");
+                for (i, param) in params.iter().enumerate() {
+                    if i != 0 {
+                        c.write_add(", ");
+                    }
+                    param.repr(c);
+                }
+                c.write_add(") -> ");
+                span_and_return_type.1.repr(c);
+            }
             Self::Infer(_) => c.char('_'),
         }
     }

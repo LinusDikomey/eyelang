@@ -717,6 +717,13 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             Node::Invalid
         }
         Def::Function(module, id) => function_item(ctx, module, id, expected, |_| span),
+        Def::GenericType(id) => {
+            let generic_count = ctx.compiler.get_resolved_type_generic_count(id);
+            let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
+            let ty = ctx.hir.types.add(TypeInfo::TypeDef(id, generics));
+            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+            Node::Invalid
+        }
         Def::Type(ty) => {
             let ty = ctx.hir.types.generic_info_from_resolved(ctx.compiler, &ty);
             let ty = ctx.hir.types.add(ty);
@@ -1064,7 +1071,7 @@ fn check_is_instance_method(
         match current_ty {
             Type::DefId {
                 id: self_id,
-                generics: Some(signature_generics),
+                generics: signature_generics,
             } if id == *self_id => {
                 // generics count should always matched because the type is already checked and
                 // resolved
@@ -1072,19 +1079,13 @@ fn check_is_instance_method(
                 for (ty, signature_ty) in generics.iter().zip(signature_generics) {
                     ctx.hir.types.specify_resolved(
                         ty,
-                        signature_ty,
+                        &signature_ty,
                         generics,
                         ctx.generics,
                         ctx.compiler,
                         || span(ctx.ast).in_mod(ctx.module),
                     );
                 }
-                return Some((required_pointer_count, call_generics));
-            }
-            &Type::DefId {
-                id: self_id,
-                generics: None,
-            } if id == self_id => {
                 return Some((required_pointer_count, call_generics));
             }
             Type::Pointer(inner) => {

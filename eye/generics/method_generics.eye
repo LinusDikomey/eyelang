@@ -17,10 +17,10 @@ main :: fn {
     tuple := swap(x, y)
     y2 : f64 = tuple.0
     x2 := tuple.1
-    
+
     fib_a := fib(10)
     fib_b := fib(10)
-    
+
     printf("%d, %d\n".ptr, fib_a, fib_b)
 
     printf("%d = %d, %f = %f\n".ptr, x, x2, y, y2)
@@ -28,10 +28,10 @@ main :: fn {
 
     v := Vec2(1, 2)
     v2: Vec2[u64] = Vec2(3, 4)
-    v3: *Vec2 = new()
+    v3: *Vec2[_] = new()
     v3^.x = 5
     v3^.y = 6
-    
+
     v.print()
     v2.print()
     v3^.print()

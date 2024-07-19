@@ -1,17 +1,15 @@
 use std::ops::{Index, IndexMut};
 
 use id::{id, ConstValueId, ModuleId};
-use span::TSpan;
 use types::{FloatType, IntType, Primitive};
 
 use crate::{
-    compiler::VarId,
-    error::{Error, Errors},
+    compiler::{FunctionGenerics, VarId},
     parser::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
     },
-    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable, VariantId},
+    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
     Compiler,
 };
 
@@ -837,26 +835,15 @@ impl HIRBuilder {
         }
     }
 
-    pub fn finish(mut self, root: Node, errors: &mut Errors, module: ModuleId) -> (HIR, TypeTable) {
+    pub fn finish(
+        mut self,
+        root: Node,
+        compiler: &mut Compiler,
+        generics: &FunctionGenerics,
+        module: ModuleId,
+    ) -> (HIR, TypeTable) {
         self.nodes.push(root);
-        for ty in self.types.type_infos_mut() {
-            match ty {
-                TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
-                TypeInfo::UnknownSatisfying(_bounds) => {
-                    // TODO: span
-                    errors.emit_err(
-                        Error::TypeMustBeKnownHere.at_span(TSpan::MISSING.in_mod(module)),
-                    );
-                }
-                TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
-                TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
-                TypeInfo::Array {
-                    element: _,
-                    count: count @ None,
-                } => *count = Some(0),
-                _ => {}
-            }
-        }
+        self.types.finish(compiler, generics, module);
         (
             HIR {
                 nodes: self.nodes,

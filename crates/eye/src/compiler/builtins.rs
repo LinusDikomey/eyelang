@@ -28,11 +28,15 @@ pub fn get_str(compiler: &mut Compiler) -> TypeId {
     let str = compiler.resolve_in_module(string_module, "str", Span::MISSING);
     let Def::Type(Type::DefId {
         id: str_type,
-        generics: None,
+        generics,
     }) = str
     else {
         panic!("expected a type definition for builtin std.string.str, found {str:?}");
     };
+    assert!(
+        generics.is_empty(),
+        "std.string.str shouldn't have generics"
+    );
     compiler.builtins.str_type = Some(str_type);
     str_type
 }
@@ -54,7 +58,7 @@ pub fn get_str_eq(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
     let string_module = get_string_module(compiler);
     let Def::Type(Type::DefId {
         id: str_type,
-        generics: None,
+        generics: _,
     }) = compiler.resolve_in_module(string_module, "str", Span::MISSING)
     else {
         panic!("missing std.string.str");

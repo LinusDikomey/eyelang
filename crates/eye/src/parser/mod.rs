@@ -613,6 +613,7 @@ impl<'a> Parser<'a> {
         &mut self,
         trait_tok: Token,
         parent_scope: ScopeId,
+        associated_name: TSpan,
     ) -> ParseResult<TraitDefinition> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let self_generic = GenericDef {
@@ -683,6 +684,7 @@ impl<'a> Parser<'a> {
             scope,
             functions,
             impls,
+            associated_name,
         })
     }
 
@@ -773,7 +775,7 @@ impl<'a> Parser<'a> {
                 Expr::Type { id }
             },
             TokenType::Keyword(Keyword::Trait) => {
-                let trait_def = self.parse_trait_def(first, scope)?;
+                let trait_def = self.parse_trait_def(first, scope, TSpan::MISSING)?;
                 let id = self.ast.trait_def(trait_def);
                 Expr::Trait { id }
             },
@@ -1204,6 +1206,27 @@ impl<'a> Parser<'a> {
             },
             TokenType::Bang => {
                 Ok(UnresolvedType::Primitive { ty: Primitive::Never, span_start: type_tok.start })
+            },
+            TokenType::Keyword(Keyword::Fn) => {
+                let start = type_tok.start;
+                let mut params = Vec::new();
+                let end = if self.toks.step_if(TokenType::LParen).is_some() {
+                    self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                        params.push(p.parse_type()?);
+                        Ok(Delimit::OptionalIfNewLine)
+                    })?.end
+                } else {
+                    type_tok.end
+                };
+                let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
+                    self.parse_type()?
+                } else {
+                    UnresolvedType::Primitive {ty: Primitive::Unit, span_start: end }
+                };
+                Ok(UnresolvedType::Function {
+                    span_and_return_type: Box::new((TSpan::new(start, end), return_type)),
+                    params: params.into_boxed_slice(),
+                })
             },
             TokenType::Underscore => Ok(UnresolvedType::Infer(type_tok.span()))
         )

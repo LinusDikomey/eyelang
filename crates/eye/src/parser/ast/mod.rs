@@ -334,6 +334,7 @@ pub enum Item {
     Expr(Expr),
 }
 
+/*
 #[derive(Debug, Clone)]
 pub struct TraitImpl {
     pub impl_generics: Box<[GenericDef]>,
@@ -348,6 +349,7 @@ impl TraitImpl {
         TSpan::new(self.impl_keyword_start, self.ty.span().end)
     }
 }
+*/
 
 #[derive(Debug, Clone)]
 pub struct StructDefinition {
@@ -393,6 +395,7 @@ pub struct TraitDefinition {
     pub scope: ScopeId,
     pub functions: Vec<(TSpan, Function)>,
     pub impls: Vec<(ScopeId, u8, UnresolvedType, Vec<(TSpan, FunctionId)>)>,
+    pub associated_name: TSpan,
 }
 impl TraitDefinition {
     pub fn span(&self, scopes: &[Scope]) -> TSpan {

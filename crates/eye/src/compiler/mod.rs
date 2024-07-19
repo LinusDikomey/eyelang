@@ -9,7 +9,7 @@ use std::{
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, ProjectId, TypeId};
 use span::{IdentPath, Span, TSpan};
-use types::{Primitive, Type, UnresolvedType};
+use types::{FunctionType, Primitive, Type, UnresolvedType};
 
 use crate::{
     check,
@@ -358,62 +358,34 @@ impl Compiler {
             &UnresolvedType::Primitive { ty, .. } => Type::Primitive(ty),
             UnresolvedType::Unresolved(path, generics) => {
                 match self.resolve_path(module, scope, *path) {
-                    Def::Type(ty) => match ty {
-                        Type::Invalid => Type::Invalid,
+                    Def::GenericType(id) => {
+                        let expected = self.get_resolved_type_generic_count(id);
+                        let found = generics.as_ref().map_or(0, |g| g.0.len() as u8);
+                        if expected != found {
+                            let span = generics.as_ref().map_or_else(|| path.span(), |g| g.1);
+                            self.errors.emit_err(
+                                Error::InvalidGenericCount { expected, found }
+                                    .at_span(span.in_mod(module)),
+                            );
+                            return Type::Invalid;
+                        }
                         Type::DefId {
                             id,
-                            generics: existing_generics,
-                        } => {
-                            let generics = match (existing_generics, generics) {
-                                (Some(generics), None) => Some(generics),
-                                (None, Some((generics, _span))) => {
-                                    let generics = generics
-                                        .iter()
-                                        .map(|ty| self.resolve_type(ty, module, scope))
-                                        .collect();
-                                    // TODO: check correct generics count
-                                    Some(generics)
-                                }
-                                (None, None) => {
-                                    let generic_count = self.get_resolved_type_generic_count(id);
-                                    if generic_count != 0 {
-                                        let span = path.span().in_mod(module);
-                                        self.errors.emit_err(
-                                            Error::InvalidGenericCount {
-                                                expected: generic_count,
-                                                found: 0,
-                                            }
-                                            .at_span(span),
-                                        );
-                                        Some(
-                                            std::iter::repeat(Type::Invalid)
-                                                .take(generic_count as usize)
-                                                .collect(),
-                                        )
-                                    } else {
-                                        Some([].into())
-                                    }
-                                }
-                                (Some(_), Some((_, span))) => {
-                                    self.errors.emit_err(
-                                        Error::UnexpectedGenerics.at_span(span.in_mod(module)),
-                                    );
-                                    return Type::Invalid;
-                                }
-                            };
-                            Type::DefId { id, generics }
+                            generics: generics
+                                .as_ref()
+                                .map_or::<&[UnresolvedType], _>(&[], |g| &*g.0)
+                                .iter()
+                                .map(|ty| self.resolve_type(ty, module, scope))
+                                .collect(),
                         }
-                        other => {
-                            if let Some((_, span)) = generics {
-                                self.errors.emit_err(
-                                    Error::UnexpectedGenerics.at_span(span.in_mod(module)),
-                                );
-                                Type::Invalid
-                            } else {
-                                other
-                            }
+                    }
+                    Def::Type(ty) => {
+                        if let Some((_, span)) = generics {
+                            self.errors
+                                .emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
                         }
-                    },
+                        ty
+                    }
                     Def::Invalid => Type::Invalid,
                     _ => {
                         self.errors
@@ -441,6 +413,16 @@ impl Compiler {
                     .collect();
                 Type::Tuple(elems)
             }
+            UnresolvedType::Function {
+                span_and_return_type,
+                params,
+            } => Type::Function(types::FunctionType {
+                params: params
+                    .iter()
+                    .map(|param| self.resolve_type(param, module, scope))
+                    .collect(),
+                return_type: Box::new(self.resolve_type(&span_and_return_type.1, module, scope)),
+            }),
             UnresolvedType::Infer(span) => {
                 self.errors
                     .emit_err(Error::InferredTypeNotAllowedHere.at_span(span.in_mod(module)));
@@ -454,18 +436,18 @@ impl Compiler {
         ty: &UnresolvedType,
         module: ModuleId,
         scope: ScopeId,
-    ) -> Result<Option<Primitive>, ()> {
+    ) -> ResolvedPrimitive {
         match ty {
-            &UnresolvedType::Primitive { ty, .. } => Ok(Some(ty)),
+            &UnresolvedType::Primitive { ty, .. } => ResolvedPrimitive::Primitive(ty),
             &UnresolvedType::Unresolved(path, None) => {
                 match self.resolve_path(module, scope, path) {
-                    Def::Invalid => Err(()), // TODO: handle this seperately
-                    Def::Type(Type::Primitive(p)) => Ok(Some(p)),
-                    _ => Err(()),
+                    Def::Invalid => ResolvedPrimitive::Invalid,
+                    Def::Type(Type::Primitive(p)) => ResolvedPrimitive::Primitive(p),
+                    _ => ResolvedPrimitive::Other,
                 }
             }
-            UnresolvedType::Infer(_) => Ok(None),
-            _ => Err(()),
+            UnresolvedType::Infer(_) => ResolvedPrimitive::Infer,
+            _ => ResolvedPrimitive::Other,
         }
     }
 
@@ -475,11 +457,12 @@ impl Compiler {
         primitive: Primitive,
         module: ModuleId,
         scope: ScopeId,
-    ) -> bool {
+    ) -> Result<bool, ()> {
         match self.unresolved_primitive(ty, module, scope) {
-            Ok(None) => true,
-            Ok(Some(p)) => p == primitive,
-            Err(()) => false,
+            ResolvedPrimitive::Infer => Ok(true),
+            ResolvedPrimitive::Primitive(p) => Ok(p == primitive),
+            ResolvedPrimitive::Other => Ok(false),
+            ResolvedPrimitive::Invalid => Err(()),
         }
     }
 
@@ -511,6 +494,82 @@ impl Compiler {
                     .symbols
                     .function_signatures[id.idx()]
                 .put(Rc::new(signature))
+            }
+        }
+    }
+
+    pub fn check_signature_with_type(
+        &mut self,
+        func_id: (ModuleId, ast::FunctionId),
+        ty: &UnresolvedType,
+        scope: ScopeId,
+        ty_module: ModuleId,
+        func_span: Span,
+    ) -> Result<(), ()> {
+        let signature = self.get_signature(func_id.0, func_id.1);
+        match ty {
+            UnresolvedType::Infer(_) => Ok(()),
+            UnresolvedType::Function {
+                span_and_return_type: _,
+                params: _,
+            } => todo!("check partial function type annotation"),
+            UnresolvedType::Unresolved(path, generics) => {
+                let signature = Rc::clone(signature);
+                match self.resolve_path(ty_module, scope, *path) {
+                    Def::Invalid => Err(()),
+                    Def::Type(ty) => {
+                        if let Some((generics, generics_span)) = generics {
+                            if !generics.is_empty() {
+                                self.errors.emit_err(
+                                    Error::UnexpectedGenerics
+                                        .at_span(generics_span.in_mod(ty_module)),
+                                );
+                                return Err(());
+                            }
+                        }
+                        let Type::Function(function_ty) = &ty else {
+                            self.errors.emit_err(
+                                Error::MismatchedType {
+                                    expected: ty.to_string(),
+                                    found: "a function".to_owned(),
+                                }
+                                .at_span(func_span),
+                            );
+                            return Err(());
+                        };
+                        match signature.fits_function_type(function_ty) {
+                            Ok(true) => Ok(()),
+                            Ok(false) => {
+                                self.errors.emit_err(
+                                    Error::MismatchedType {
+                                        expected: ty.to_string(),
+                                        found: "TODO: display function type".to_owned(),
+                                    }
+                                    .at_span(func_span),
+                                );
+                                Err(())
+                            }
+                            Err(()) => Err(()),
+                        }
+                    }
+                    _ => {
+                        self.errors
+                            .emit_err(Error::TypeExpected.at_span(path.span().in_mod(ty_module)));
+                        Err(())
+                    }
+                }
+            }
+            _ => {
+                let mut expected = String::new();
+                ty.to_string(&mut expected, self.get_module_ast(ty_module).src());
+                self.errors.emit_err(
+                    Error::MismatchedType {
+                        expected,
+                        found: "a function".to_owned(),
+                    }
+                    .at_span(func_span),
+                );
+                Err(())
             }
         }
     }
@@ -613,7 +672,6 @@ impl Compiler {
                     .iter()
                     .map(|(impl_scope, generic_count, impl_ty, impl_functions)| {
                         let generic_count = *generic_count;
-                        // don't count the Self type as a generic
                         let impl_ty = self.resolve_type(impl_ty, module, *impl_scope);
                         let impl_ty = traits::ImplTree::from_type(&impl_ty, self);
                         let mut functions = vec![ast::FunctionId(u32::MAX); functions.len()];
@@ -650,9 +708,6 @@ impl Compiler {
                                     .at_span(ast[*impl_scope].span.in_mod(module)),
                             );
                         }
-                        for &function in &functions {
-                            if function == ast::FunctionId(u32::MAX) {}
-                        }
                         traits::Impl {
                             generic_count,
                             impl_ty,
@@ -664,6 +719,11 @@ impl Compiler {
                 Some(
                     self.get_module_ast_and_symbols(module).symbols.traits[id.idx()].put(Rc::new(
                         CheckedTrait {
+                            name: if def.associated_name == TSpan::MISSING {
+                                "<unnamed trait>".into()
+                            } else {
+                                ast[def.associated_name].into()
+                            },
                             generics,
                             functions,
                             functions_by_name,
@@ -688,6 +748,23 @@ impl Compiler {
             }
         }
         // TODO: check impls on type
+        None
+    }
+
+    /// only use with a finished type table meaning no unknown types or similar should be present.
+    pub fn get_checked_trait_impl_from_final_types(
+        &mut self,
+        trait_id: (ModuleId, ast::TraitId),
+        ty: TypeInfo,
+        types: &TypeTable,
+    ) -> Option<(&traits::Impl, Vec<Type>)> {
+        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        for impl_ in &checked_trait.impls {
+            if impl_.impl_ty.matches_type_info(ty, types) {
+                assert_eq!(impl_.generic_count, 1, "TODO: generic impls");
+                return Some((impl_, Vec::new()));
+            }
+        }
         None
     }
 
@@ -919,15 +996,17 @@ impl Compiler {
                         Ok(None) => const_value,
                         Ok(Some(value)) => value,
                         Err(found) => {
-                            let mut expected = String::new();
-                            global.ty.to_string(&mut expected, ast.src());
-                            self.errors.emit_err(
-                                Error::MismatchedType {
-                                    expected,
-                                    found: found.to_owned(),
-                                }
-                                .at_span(ast[val].span(&ast).in_mod(module)),
-                            );
+                            if let Some(found) = found {
+                                let mut expected = String::new();
+                                global.ty.to_string(&mut expected, ast.src());
+                                self.errors.emit_err(
+                                    Error::MismatchedType {
+                                        expected,
+                                        found: found.to_owned(),
+                                    }
+                                    .at_span(ast[val].span(&ast).in_mod(module)),
+                                );
+                            }
                             ConstValue::Undefined
                         }
                     };
@@ -1306,6 +1385,8 @@ impl<'p> LocalScope<'p> {
 pub enum Def {
     Invalid,
     Function(ModuleId, ast::FunctionId),
+    // a base type with generics not yet applied to it
+    GenericType(id::TypeId),
     Type(Type),
     Trait(ModuleId, ast::TraitId),
     ConstValue(ConstValueId),
@@ -1314,28 +1395,30 @@ pub enum Def {
 }
 impl Def {
     /// returns a potentially changed Def if the type matches and "found" string on type mismatch
+    /// or Err(None) on an invalid type
     pub fn check_with_type(
         self,
         module: ModuleId,
         scope: ScopeId,
         compiler: &mut Compiler,
         ty: &UnresolvedType,
-    ) -> Result<Def, &'static str> {
+    ) -> Result<Def, Option<&'static str>> {
         match self {
             Def::Invalid => Ok(Def::Invalid),
-            Def::Function(_, _) | Def::Module(_) => match ty {
+            Def::Function(_, _) | Def::Module(_) | Def::GenericType(_) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
-                _ => Err("a function"),
+                _ => Err(Some("a function")),
             },
             Def::Type(_) => {
                 return compiler
                     .unresolved_matches_primitive(ty, Primitive::Type, module, scope)
-                    .then_some(self)
-                    .ok_or("type")
+                    .map_or(Ok(Def::Invalid), |matches| {
+                        matches.then_some(self).ok_or(Some("type"))
+                    })
             }
             Def::Trait(_, _) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
-                _ => Err("a trait"),
+                _ => Err(Some("a trait")),
             },
             Def::ConstValue(const_val_id) => {
                 // PERF: cloning ConstValue but it might be fine
@@ -1353,6 +1436,7 @@ impl Def {
         match self {
             Self::Invalid => print!("<invalid>"),
             Self::Function(module, id) => print!("Function({}, {})", module.idx(), id.idx()),
+            Self::GenericType(id) => print!("GenericType({id:?})"),
             Self::Type(ty) => print!("Type({:?})", ty),
             Self::Trait(module, id) => print!("Trait({}, {})", module.idx(), id.idx()),
             Self::ConstValue(value) => compiler.const_values[value.idx()].dump(),
@@ -1368,7 +1452,7 @@ impl Def {
                 let ast = compiler.get_module_ast(module);
                 Some(ast[ast[id].scope].span.in_mod(module))
             }
-            Self::Type(_ty) => todo!("spans of types"),
+            Self::GenericType(_) | Self::Type(_) => todo!("spans of types"),
             &Self::Trait(module, id) => {
                 let ast = compiler.get_module_ast(module);
                 Some(ast[ast[id].scope].span.in_mod(module))
@@ -1428,6 +1512,28 @@ pub struct Signature {
     pub return_type: Type,
     pub generics: FunctionGenerics,
     pub span: TSpan,
+}
+impl Signature {
+    pub fn fits_function_type(&self, ty: &FunctionType) -> Result<bool, ()> {
+        if self.generics.count() != 0 {
+            return Ok(false);
+        }
+        if self.varargs {
+            return Ok(false);
+        }
+        if self.args.len() != ty.params.len() {
+            return Ok(false);
+        }
+        for ((_, arg), ty_arg) in self.args.iter().zip(&ty.params) {
+            if !arg.is_same_as(ty_arg, &[], &[])? {
+                return Ok(false);
+            }
+        }
+        if !self.return_type.is_same_as(&ty.return_type, &[], &[])? {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 #[derive(Debug)]
@@ -1514,6 +1620,13 @@ impl ResolvedStructDef {
     }
 }
 
+pub enum ResolvedPrimitive {
+    Primitive(Primitive),
+    Infer,
+    Invalid,
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedEnumDef {
     pub variants: Box<[(String, Box<[Type]>)]>,
@@ -1577,14 +1690,28 @@ pub struct CheckedFunction {
 }
 impl CheckedFunction {
     pub fn dump(&self, compiler: &Compiler) {
-        eprint!("BEGIN HIR {}(", self.name);
+        eprint!("BEGIN HIR {}", self.name);
+        if self.generic_count != 0 {
+            eprint!("[");
+            for i in 0..self.generic_count {
+                if i != 0 {
+                    eprint!(", ");
+                }
+                eprint!("${i}");
+            }
+            eprint!("]");
+        }
+        eprint!("(");
         for (i, param) in self.params.iter().enumerate() {
             if i != 0 {
                 eprint!(", ");
             }
+            eprint!("(var {i}): ");
             self.types.dump_type(compiler, param);
         }
-        eprint!(")\n  ");
+        eprint!(") -> ");
+        self.types.dump_type(compiler, self.return_type);
+        eprint!("\n  ");
         match &self.body {
             Some(body) => {
                 body.dump(body.root_id(), compiler, &self.types, 1);
@@ -1599,6 +1726,7 @@ impl CheckedFunction {
 
 #[derive(Debug)]
 pub struct CheckedTrait {
+    pub name: Box<str>,
     pub generics: u8,
     pub functions: Vec<Signature>,
     pub functions_by_name: DHashMap<String, u16>,

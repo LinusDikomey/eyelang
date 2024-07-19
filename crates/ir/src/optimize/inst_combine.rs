@@ -76,6 +76,7 @@ impl Match {
     }
 }
 
+#[allow(unused_macros)] // TODO: remove allow when unary patterns are used
 macro_rules! nullary_op_pat {
     ($tag: ident $ir: ident $r: expr) => {
         if !$r

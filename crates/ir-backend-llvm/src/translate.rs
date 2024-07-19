@@ -50,12 +50,11 @@ pub unsafe fn add_function(
     )
     .map_err(|_| Error::NulByte)?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
-    /*
-    if true {
-        let noreturn = LLVMCreateEnumAttribute(ctx, attribs.noreturn, 0);
-        LLVMAddAttributeAtIndex(llvm_func, -1i32 as u32, noreturn);
+    // TODO: noreturn attribute in ir
+    if false {
+        let noreturn = core::LLVMCreateEnumAttribute(ctx, attribs.noreturn, 0);
+        core::LLVMAddAttributeAtIndex(llvm_func, -1i32 as u32, noreturn);
     }
-    */
     Ok((llvm_func, llvm_func_ty))
 }
 

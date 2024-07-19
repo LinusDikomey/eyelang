@@ -201,8 +201,11 @@ pub enum Error {
     },
     TraitSignatureMismatch,
     UnsatisfiedTraitBound {
-        trait_name: String,
+        trait_name: Box<str>,
         ty: String,
+    },
+    TypeAnnotationNeeded {
+        bound: Box<str>,
     },
     InvalidCast {
         from: String,
@@ -296,6 +299,7 @@ impl Error {
                 "signature doesn't match the function's signature in the trait definition"
             }
             Error::UnsatisfiedTraitBound { .. } => "unsatisfied trait bound",
+            Error::TypeAnnotationNeeded { .. } => "type annotation needed",
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
             Error::EvalFailed(ir::Error::InfiniteLoop) => {
@@ -384,6 +388,9 @@ impl Error {
             }
             Error::UnsatisfiedTraitBound { trait_name, ty } => {
                 cformat!("the type #m<{ty}> doesn't satisfy the #m<{trait_name}> trait")
+            }
+            Error::TypeAnnotationNeeded { bound } => {
+                cformat!("a type satisfying #c<{bound}> is needed")
             }
             Error::InvalidCast { from, to } => {
                 cformat!("cannot cast from a value of type #m<{from}> to #m<{to}>")

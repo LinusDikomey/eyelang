@@ -1,7 +1,7 @@
 use std::{ops::Index, rc::Rc};
 
 use id::{ModuleId, TypeId};
-use span::Span;
+use span::{Span, TSpan};
 use types::{Primitive, Type};
 
 pub mod traits;
@@ -25,6 +25,7 @@ pub struct TypeTable {
     enums: Vec<InferredEnum>,
     variants: Vec<InferredEnumVariant>,
     bounds: Vec<Bound>,
+    deferred_checks: Vec<(LocalTypeId, Bounds)>,
 }
 impl Index<LocalTypeId> for TypeTable {
     type Output = TypeInfo;
@@ -54,6 +55,7 @@ impl TypeTable {
             enums: Vec::new(),
             variants: Vec::new(),
             bounds: Vec::new(),
+            deferred_checks: Vec::new(),
         }
     }
 
@@ -137,12 +139,10 @@ impl TypeTable {
             }
             TypeInfo::TypeDef(id, inner_generics) => Type::DefId {
                 id,
-                generics: Some(
-                    inner_generics
-                        .iter()
-                        .map(|generic| self.to_resolved(self[generic], generics))
-                        .collect(),
-                ),
+                generics: inner_generics
+                    .iter()
+                    .map(|generic| self.to_resolved(self[generic], generics))
+                    .collect(),
             },
             TypeInfo::Invalid => Type::Invalid,
             TypeInfo::Generic(i) => generics[i as usize].clone(),
@@ -195,6 +195,10 @@ impl TypeTable {
 
     pub fn get_bound(&self, id: BoundId) -> &Bound {
         &self.bounds[id.0 as usize]
+    }
+
+    pub fn defer_impl_check(&mut self, ty: LocalTypeId, bounds: Bounds) {
+        self.deferred_checks.push((ty, bounds));
     }
 
     pub fn replace(&mut self, id: LocalTypeId, info_or_idx: impl Into<TypeInfoOrIdx>) {
@@ -259,19 +263,13 @@ impl TypeTable {
                 id,
                 generics: inner_generics,
             } => {
-                if let Some(inner_generics) = inner_generics {
-                    let count = inner_generics.len();
-                    let generics_ids = self.add_multiple_unknown(count as u32);
-                    for (resolved, id) in inner_generics.iter().zip(generics_ids.iter()) {
-                        let ty = self.from_generic_resolved_internal(compiler, resolved, generics);
-                        self.replace(id, ty)
-                    }
-                    TypeInfo::TypeDef(*id, generics_ids)
-                } else {
-                    let generic_count = compiler.get_resolved_type_generic_count(*id);
-                    let generics = self.add_multiple_unknown(generic_count.into());
-                    TypeInfo::TypeDef(*id, generics)
+                let count = inner_generics.len();
+                let generics_ids = self.add_multiple_unknown(count as u32);
+                for (resolved, id) in inner_generics.iter().zip(generics_ids.iter()) {
+                    let ty = self.from_generic_resolved_internal(compiler, resolved, generics);
+                    self.replace(id, ty)
                 }
+                TypeInfo::TypeDef(*id, generics_ids)
             }
             Type::Pointer(pointee) => {
                 let pointee = self.from_generic_resolved_internal(compiler, pointee, generics);
@@ -300,6 +298,7 @@ impl TypeTable {
                 None => TypeInfo::Generic(i),
             },
             Type::LocalEnum(_) => todo!("local enum infos"),
+            Type::Function(_) => todo!("fn TypeInfo"),
         };
         TypeInfoOrIdx::TypeInfo(info)
     }
@@ -317,7 +316,44 @@ impl TypeTable {
                 let def = compiler.resolve_path(module, scope, *path);
                 match def {
                     Def::Invalid => TypeInfo::Invalid,
+                    Def::GenericType(id) => {
+                        // TODO: decide if types without generic annotations should be allowed
+                        let required_generics = compiler.get_resolved_type_generic_count(id);
+                        let Some((generics, generics_span)) = generics else {
+                            compiler.errors.emit_err(
+                                Error::InvalidGenericCount {
+                                    expected: required_generics,
+                                    found: 0,
+                                }
+                                .at_span(ty.span().in_mod(module)),
+                            );
+                            return TypeInfo::Invalid;
+                        };
+                        let count = generics.len() as u8;
+                        if count != required_generics {
+                            compiler.errors.emit_err(
+                                Error::InvalidGenericCount {
+                                    expected: required_generics,
+                                    found: count,
+                                }
+                                .at_span(generics_span.in_mod(module)),
+                            );
+                            return TypeInfo::Invalid;
+                        }
+                        let generic_types = self.add_multiple_unknown(count.into());
+                        for (ty, r) in generics.iter().zip(generic_types.iter()) {
+                            let info = self.info_from_unresolved(ty, compiler, module, scope);
+                            self.replace(r, TypeInfoOrIdx::TypeInfo(info));
+                        }
+                        TypeInfo::TypeDef(id, generic_types)
+                    }
                     Def::Type(ty) => {
+                        if let Some((_, span)) = generics {
+                            compiler
+                                .errors
+                                .emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                            return TypeInfo::Invalid;
+                        }
                         let generics = generics.as_ref().map(|(generics, _)| {
                             let generic_infos = self.add_multiple_unknown(generics.len() as _);
                             for (r, ty) in generic_infos.iter().zip(generics) {
@@ -374,6 +410,7 @@ impl TypeTable {
 
                 TypeInfo::Tuple(ids)
             }
+            types::UnresolvedType::Function { .. } => todo!("fn TypeInfo"),
             types::UnresolvedType::Infer(_) => TypeInfo::Unknown,
         }
     }
@@ -403,7 +440,7 @@ impl TypeTable {
             return;
         }
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-        let new = unify(a_ty, b_ty, self, generics, compiler).unwrap_or_else(|| {
+        let new = unify(a_ty, b_ty, self, generics, compiler, a).unwrap_or_else(|| {
             let mut expected = String::new();
             self.type_to_string(compiler, a_ty, &mut expected);
             let mut found = String::new();
@@ -437,7 +474,7 @@ impl TypeTable {
             }
         };
         a == b
-            || unify(a_ty, b_ty, self, generics, compiler)
+            || unify(a_ty, b_ty, self, generics, compiler, a)
                 .map(|unified| {
                     self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
@@ -614,7 +651,7 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(info) => break info,
             }
         };
-        let Some(info) = unify(a_ty, info, self, function_generics, compiler) else {
+        let Some(info) = unify(a_ty, info, self, function_generics, compiler, a) else {
             self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
             return Err((a_ty, info));
         };
@@ -705,7 +742,7 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
             TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
-            TypeInfo::Generic(i) => write!(s, "<generic #{i}>").unwrap(),
+            TypeInfo::Generic(i) => write!(s, "${i}").unwrap(),
             TypeInfo::Invalid => s.push_str("<invalid>"),
         }
     }
@@ -739,11 +776,80 @@ impl TypeTable {
         }
     }
 
-    pub fn type_infos_mut(&mut self) -> impl Iterator<Item = &mut TypeInfo> {
-        self.types.iter_mut().filter_map(|ty| match ty {
-            TypeInfoOrIdx::TypeInfo(info) => Some(info),
-            TypeInfoOrIdx::Idx(_) => None,
-        })
+    pub fn finish(
+        &mut self,
+        compiler: &mut Compiler,
+        generics: &FunctionGenerics,
+        module: ModuleId,
+    ) {
+        for (ty, bounds) in std::mem::take(&mut self.deferred_checks) {
+            let mut idx = ty;
+            let info = loop {
+                match self.types[idx.0 as usize] {
+                    TypeInfoOrIdx::Idx(new_idx) => idx = new_idx,
+                    TypeInfoOrIdx::TypeInfo(info) => break info,
+                }
+            };
+            for bound in bounds.iter() {
+                let bound = &self.bounds[bound.0 as usize];
+                let Some(checked_trait) =
+                    compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1)
+                else {
+                    continue;
+                };
+                match traits::get_impl_candidates(info, self, generics, checked_trait) {
+                    traits::Candidates::None => {
+                        let trait_name = checked_trait.name.clone();
+                        let mut type_name = String::new();
+                        self.type_to_string(compiler, info, &mut type_name);
+                        compiler.errors.emit_err(
+                            Error::UnsatisfiedTraitBound {
+                                trait_name,
+                                ty: type_name,
+                            }
+                            // TODO: span
+                            .at_span(TSpan::MISSING.in_mod(module)),
+                        );
+                        self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
+                    }
+                    traits::Candidates::Unique(impl_) => {
+                        // TODO: trait generics
+                        impl_.instantiate(bound.generics, LocalTypeIds::EMPTY, self);
+                    }
+                    traits::Candidates::Multiple => {
+                        let name = checked_trait.name.clone();
+                        compiler.errors.emit_err(
+                            Error::TypeAnnotationNeeded {
+                                bound: name, // TODO: should also show generics here
+                            }
+                            .at_span(TSpan::MISSING.in_mod(module)),
+                        );
+                        self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
+                    }
+                }
+            }
+        }
+        for ty in &mut self.types {
+            let TypeInfoOrIdx::TypeInfo(ty) = ty else {
+                continue;
+            };
+            match ty {
+                TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
+                TypeInfo::UnknownSatisfying(_bounds) => {
+                    // TODO: span
+                    compiler.errors.emit_err(
+                        Error::TypeMustBeKnownHere.at_span(TSpan::MISSING.in_mod(module)),
+                    );
+                }
+                TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
+                TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
+                TypeInfo::Array {
+                    element: _,
+                    count: count @ None,
+                } => *count = Some(0),
+                _ => {}
+            }
+        }
     }
 }
 

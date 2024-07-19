@@ -1,3 +1,4 @@
+#![allow(unused)] // TODO: remove when x86 backend is worked on again
 use std::path::Path;
 
 use elf::{ElfObjectWriter, SectionHeader};

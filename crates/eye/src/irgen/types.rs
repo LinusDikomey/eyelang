@@ -56,19 +56,14 @@ pub fn get(
         Type::DefId {
             id,
             generics: def_generics,
-        } => {
-            let def_generics = def_generics
-                .as_ref()
-                // TODO
-                .expect("TODO: handle missing generics");
-            get_def(
-                compiler,
-                ir_types,
-                *id,
-                Generics::Types(def_generics, &generics),
-            )?
-        }
+        } => get_def(
+            compiler,
+            ir_types,
+            *id,
+            Generics::Types(def_generics, &generics),
+        )?,
         Type::LocalEnum(_) => todo!("local enums"),
+        Type::Function(_) => IrType::Ptr,
     })
 }
 
@@ -182,6 +177,7 @@ pub fn get_from_info(
             IrType::Tuple(member_refs)
         }
         TypeInfo::Generic(i) => return generics.get(i, compiler, ir_types),
+        TypeInfo::FunctionItem { .. } => IrType::Unit,
         TypeInfo::Unknown
         | TypeInfo::UnknownSatisfying { .. }
         | TypeInfo::TypeItem { .. }
@@ -190,7 +186,6 @@ pub fn get_from_info(
             element: _,
             count: None,
         }
-        | TypeInfo::FunctionItem { .. }
         | TypeInfo::ModuleItem(_)
         | TypeInfo::MethodItem { .. }
         | TypeInfo::TraitMethodItem { .. }
