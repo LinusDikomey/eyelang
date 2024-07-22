@@ -2,7 +2,7 @@ use id::ModuleId;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
-    compiler::{FunctionGenerics, ResolvedPrimitive},
+    compiler::{Generics, ResolvedPrimitive},
     error::Error,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
@@ -272,7 +272,7 @@ pub fn def_expr(
                 ast,
                 module,
                 types,
-                &FunctionGenerics::EMPTY,
+                &Generics::EMPTY,
                 scope,
                 [],
                 expr,

@@ -102,10 +102,6 @@ pub struct Args {
     #[clap(short, long)]
     pub reconstruct_src: bool,
 
-    /// Debug the type inferer.
-    #[clap(long)]
-    pub debug_infer: bool,
-
     /// Print the internal HIR (high-level intermediate representation) to stderr.
     /// This will still normally execute the subcommand.
     #[clap(long)]

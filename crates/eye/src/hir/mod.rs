@@ -4,7 +4,7 @@ use id::{id, ConstValueId, ModuleId};
 use types::{FloatType, IntType, Primitive};
 
 use crate::{
-    compiler::{FunctionGenerics, VarId},
+    compiler::{Generics, VarId},
     parser::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
@@ -839,7 +839,7 @@ impl HIRBuilder {
         mut self,
         root: Node,
         compiler: &mut Compiler,
-        generics: &FunctionGenerics,
+        generics: &Generics,
         module: ModuleId,
     ) -> (HIR, TypeTable) {
         self.nodes.push(root);

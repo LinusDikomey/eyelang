@@ -394,7 +394,14 @@ pub struct TraitDefinition {
     pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
     pub functions: Vec<(TSpan, Function)>,
-    pub impls: Vec<(ScopeId, u8, UnresolvedType, Vec<(TSpan, FunctionId)>)>,
+    pub impls: Box<
+        [(
+            ScopeId,
+            Box<[GenericDef]>,
+            UnresolvedType,
+            Box<[(TSpan, FunctionId)]>,
+        )],
+    >,
     pub associated_name: TSpan,
 }
 impl TraitDefinition {

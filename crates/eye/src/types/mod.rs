@@ -11,7 +11,7 @@ use unify::unify;
 
 use crate::{
     check::expr::int_ty_from_variant_count,
-    compiler::{Def, FunctionGenerics, ResolvedTypeDef},
+    compiler::{Def, Generics, ResolvedTypeDef},
     error::Error,
     parser::ast::{self, TraitId},
     Compiler,
@@ -73,9 +73,7 @@ impl TypeTable {
     }
 
     pub fn add_unknown(&mut self) -> LocalTypeId {
-        let id = LocalTypeId(self.types.len() as _);
-        self.types.push(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown));
-        id
+        self.add(TypeInfo::Unknown)
     }
 
     pub fn add_enum_type(&mut self) -> InferredEnumId {
@@ -419,7 +417,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         mut b: LocalTypeId,
-        generics: &FunctionGenerics,
+        generics: &Generics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
@@ -457,7 +455,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         mut b: LocalTypeId,
-        generics: &FunctionGenerics,
+        generics: &Generics,
         compiler: &mut Compiler,
     ) -> bool {
         let original_b = b;
@@ -487,7 +485,7 @@ impl TypeTable {
         &mut self,
         a: LocalTypeId,
         info: TypeInfo,
-        function_generics: &FunctionGenerics,
+        function_generics: &Generics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
@@ -501,7 +499,7 @@ impl TypeTable {
         id: LocalTypeId,
         resolved: &Type,
         generics: LocalTypeIds,
-        function_generics: &FunctionGenerics,
+        function_generics: &Generics,
         compiler: &mut Compiler,
         span: impl FnOnce() -> Span,
     ) {
@@ -619,7 +617,7 @@ impl TypeTable {
         id: LocalTypeId,
         resolved: &Type,
         generics: LocalTypeIds,
-        function_generics: &FunctionGenerics,
+        function_generics: &Generics,
         compiler: &mut Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         // PERF:could special-case this function to avoid instantiating the Type
@@ -642,7 +640,7 @@ impl TypeTable {
         &mut self,
         mut a: LocalTypeId,
         info: TypeInfo,
-        function_generics: &FunctionGenerics,
+        function_generics: &Generics,
         compiler: &mut Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         let a_ty = loop {
@@ -776,12 +774,7 @@ impl TypeTable {
         }
     }
 
-    pub fn finish(
-        &mut self,
-        compiler: &mut Compiler,
-        generics: &FunctionGenerics,
-        module: ModuleId,
-    ) {
+    pub fn finish(&mut self, compiler: &mut Compiler, generics: &Generics, module: ModuleId) {
         for (ty, bounds) in std::mem::take(&mut self.deferred_checks) {
             let mut idx = ty;
             let info = loop {
@@ -790,8 +783,12 @@ impl TypeTable {
                     TypeInfoOrIdx::TypeInfo(info) => break info,
                 }
             };
+            if matches!(info, TypeInfo::Invalid) {
+                continue;
+            }
             for bound in bounds.iter() {
                 let bound = &self.bounds[bound.0 as usize];
+                let span = bound.span;
                 let Some(checked_trait) =
                     compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1)
                 else {
@@ -807,14 +804,22 @@ impl TypeTable {
                                 trait_name,
                                 ty: type_name,
                             }
-                            // TODO: span
-                            .at_span(TSpan::MISSING.in_mod(module)),
+                            .at_span(span.in_mod(module)),
                         );
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                     }
                     traits::Candidates::Unique(impl_) => {
-                        // TODO: trait generics
-                        impl_.instantiate(bound.generics, LocalTypeIds::EMPTY, self);
+                        let self_ty = impl_.instantiate(bound.generics, self, span);
+                        match self_ty {
+                            TypeInfoOrIdx::TypeInfo(info) => {
+                                self.specify(ty, info, generics, compiler, || span.in_mod(module))
+                            }
+                            TypeInfoOrIdx::Idx(self_idx) => {
+                                self.unify(idx, self_idx, generics, compiler, || {
+                                    span.in_mod(module)
+                                })
+                            }
+                        }
                     }
                     traits::Candidates::Multiple => {
                         let name = checked_trait.name.clone();
@@ -822,7 +827,7 @@ impl TypeTable {
                             Error::TypeAnnotationNeeded {
                                 bound: name, // TODO: should also show generics here
                             }
-                            .at_span(TSpan::MISSING.in_mod(module)),
+                            .at_span(span.in_mod(module)),
                         );
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                     }
@@ -835,11 +840,22 @@ impl TypeTable {
             };
             match ty {
                 TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
-                TypeInfo::UnknownSatisfying(_bounds) => {
-                    // TODO: span
-                    compiler.errors.emit_err(
-                        Error::TypeMustBeKnownHere.at_span(TSpan::MISSING.in_mod(module)),
-                    );
+                TypeInfo::UnknownSatisfying(bounds) => {
+                    if let Some(first_bound) = bounds.iter().next() {
+                        let bound = &self.bounds[first_bound.0 as usize];
+                        let name = compiler
+                            .get_trait_name(bound.trait_id.0, bound.trait_id.1)
+                            .to_owned();
+                        compiler.errors.emit_err(
+                            Error::TypeMustBeKnownHere {
+                                needed_bound: Some(name),
+                            }
+                            .at_span(bound.span.in_mod(module)),
+                        );
+                        *ty = TypeInfo::Invalid;
+                    } else {
+                        *ty = TypeInfo::Primitive(Primitive::Unit);
+                    }
                 }
                 TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
                 TypeInfo::Float => *ty = TypeInfo::Primitive(Primitive::F32),
@@ -898,6 +914,8 @@ impl From<LocalTypeId> for LocalTypeIds {
 pub struct Bound {
     pub trait_id: (ModuleId, TraitId),
     pub generics: LocalTypeIds,
+    /// the location where the bound on the type variable is introduced
+    pub span: TSpan,
 }
 
 #[derive(Debug, Clone, Copy)]

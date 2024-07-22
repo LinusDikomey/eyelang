@@ -758,9 +758,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            let Some((impl_, impl_generics)) = ctx
-                .compiler
-                .get_checked_trait_impl_from_final_types(trait_id, ctx.types[self_ty], ctx.types)
+            // PERF: could implement get_checked_trait_impl_from_final_types again to avoid
+            // the to_resolved_call.
+            // Only do this when tests exist to ensure TraitCall instantiation works
+            let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generics);
+            let Some((impl_, impl_generics)) =
+                ctx.compiler.get_checked_trait_impl(trait_id, &self_ty)
             else {
                 crash_point!(ctx)
             };

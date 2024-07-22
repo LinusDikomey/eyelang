@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     check::expr::int_ty_from_variant_count,
-    compiler::{FunctionGenerics, ResolvedTypeDef},
+    compiler::{Generics, ResolvedTypeDef},
     types::{traits, TypeInfoOrIdx},
     Compiler,
 };
@@ -13,7 +13,7 @@ pub fn unify(
     a: TypeInfo,
     b: TypeInfo,
     types: &mut TypeTable,
-    function_generics: &FunctionGenerics,
+    function_generics: &Generics,
     compiler: &mut Compiler,
     unified_id: LocalTypeId,
 ) -> Option<TypeInfo> {
@@ -31,6 +31,7 @@ pub fn unify(
             }
             Generic(generic_id)
         }
+        (UnknownSatisfying(_a), UnknownSatisfying(_b)) => todo!("join bounds"),
         (t, UnknownSatisfying(bounds)) | (UnknownSatisfying(bounds), t) => {
             let mut chosen_ty = t;
             for bound in bounds.iter() {
@@ -49,15 +50,31 @@ pub fn unify(
                 match candidates {
                     traits::Candidates::None => return None, // TODO: better errors
                     traits::Candidates::Multiple => {
+                        // TODO: might emit multiple checks since this path happens when a single
+                        // bound is not fulfilled but will check all bounds again
                         types.defer_impl_check(unified_id, bounds);
                     }
                     traits::Candidates::Unique(trait_impl) => {
-                        let impl_generics =
-                            types.add_multiple_unknown(trait_impl.generic_count.into());
-                        let info_or_idx =
-                            trait_impl.instantiate(bound.generics, impl_generics, types);
-                        // TODO: probably handles generics completely incorrectly
-                        chosen_ty = types.get_info_or_idx(info_or_idx);
+                        let self_ty = trait_impl.instantiate(bound.generics, types, bound.span);
+                        match self_ty {
+                            TypeInfoOrIdx::TypeInfo(info) => {
+                                chosen_ty = unify(
+                                    chosen_ty,
+                                    info,
+                                    types,
+                                    function_generics,
+                                    compiler,
+                                    unified_id,
+                                )?;
+                            }
+                            TypeInfoOrIdx::Idx(idx) => {
+                                types
+                                    .try_specify(idx, chosen_ty, function_generics, compiler)
+                                    .ok()?;
+                                chosen_ty = types[idx];
+                                types.replace(idx, TypeInfoOrIdx::Idx(unified_id));
+                            }
+                        }
                     }
                 }
             }

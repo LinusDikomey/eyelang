@@ -146,7 +146,7 @@ pub fn check(
             check_enum_literal(ctx, scope, expected, return_ty, span, ident, args, noreturn)
         }
         &Expr::Function { id } => {
-            function_item(ctx, ctx.module, id, expected, |ast| ast[expr].span(ast))
+            function_item(ctx, ctx.module, id, expected, ctx.ast[expr].span(ctx.ast))
         }
         &Expr::Primitive { primitive, .. } => {
             // PERF @TypeInfoReuse
@@ -191,6 +191,9 @@ pub fn check(
             annotated_ty,
             val,
         } => {
+            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
+                ast[expr].span(ast)
+            });
             let mut exhaustion = Exhaustion::None;
             let ty = ctx.hir.types.info_from_unresolved(
                 &annotated_ty,
@@ -395,9 +398,9 @@ pub fn check(
                 _ => {
                     // TODO: could add TupleCountMode and stuff again to unify with tuple with
                     // Size::AtLeast. Not doing that for now since it is very rare.
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(expr)));
+                    ctx.compiler.errors.emit_err(
+                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(expr)),
+                    );
                     return Node::Invalid;
                 }
             };
@@ -716,7 +719,7 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             ctx.specify(expected, TypeInfo::Invalid, |_| span);
             Node::Invalid
         }
-        Def::Function(module, id) => function_item(ctx, module, id, expected, |_| span),
+        Def::Function(module, id) => function_item(ctx, module, id, expected, span),
         Def::GenericType(id) => {
             let generic_count = ctx.compiler.get_resolved_type_generic_count(id);
             let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
@@ -840,10 +843,10 @@ fn function_item(
     function_module: ModuleId,
     function: FunctionId,
     expected: LocalTypeId,
-    span: impl FnOnce(&Ast) -> TSpan,
+    span: TSpan,
 ) -> Node {
     let signature = ctx.compiler.get_signature(function_module, function);
-    let generics = signature.generics.instantiate(&mut ctx.hir.types);
+    let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
@@ -851,7 +854,7 @@ fn function_item(
             function,
             generics,
         },
-        span,
+        |_| span,
     );
     // TODO: should this stay a unit node?
     Node::Unit
@@ -1027,10 +1030,23 @@ fn check_member_access(
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
-            TypeInfo::Unknown => {
+            TypeInfo::UnknownSatisfying(bounds) => {
+                let needed_bound = bounds.iter().next().map(|bound| {
+                    let trait_id = ctx.hir.types.get_bound(bound).trait_id;
+                    ctx.compiler
+                        .get_trait_name(trait_id.0, trait_id.1)
+                        .to_owned()
+                });
                 ctx.compiler
                     .errors
-                    .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                    .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
+            TypeInfo::Unknown => {
+                ctx.compiler.errors.emit_err(
+                    Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
+                );
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1201,10 +1217,20 @@ fn check_type_item_member_access(
                 }
             }
             TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
-            TypeInfo::Unknown => {
+            TypeInfo::UnknownSatisfying(bounds) => {
+                let needed_bound = bounds.iter().next().map(|bound| {
+                    let id = ctx.hir.types.get_bound(bound).trait_id;
+                    ctx.compiler.get_trait_name(id.0, id.1).to_owned()
+                });
                 ctx.compiler
                     .errors
-                    .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                    .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+                return Node::Invalid;
+            }
+            TypeInfo::Unknown => {
+                ctx.compiler.errors.emit_err(
+                    Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
+                );
                 return Node::Invalid;
             }
             _ => {}
@@ -1413,25 +1439,28 @@ fn check_call(
             };
             let checked_trait = Rc::clone(checked_trait);
             let signature = &checked_trait.functions[method_index as usize];
-            let generics = ctx
-                .hir
-                .types
-                .add_multiple_unknown(signature.generics.count().into());
-            assert!(
-                signature.generics.count() >= checked_trait.generics + 1,
+            let span = ctx.ast[expr].span(ctx.ast);
+            let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
+            debug_assert!(
+                signature.generics.count() >= checked_trait.generics.count() + 1,
                 "the method should at least have the trait's and the self type's generics {} >= {}",
                 signature.generics.count(),
-                checked_trait.generics + 1,
+                checked_trait.generics.count() + 1,
             );
             // generics NOT including the self type
             let trait_generics = LocalTypeIds {
                 idx: generics.idx + 1,
-                count: checked_trait.generics as u32,
+                count: checked_trait.generics.count().into(),
             };
             let self_ty = generics.iter().next().unwrap();
+            assert!(
+                matches!(ctx.hir.types[self_ty], TypeInfo::Unknown),
+                "TODO: handle existing self bounds"
+            );
             let self_bounds = ctx.hir.types.add_bounds([Bound {
                 trait_id: (trait_module, trait_id),
                 generics: trait_generics,
+                span,
             }]);
             ctx.hir
                 .types
@@ -1469,10 +1498,25 @@ fn check_call(
                 }
             }
         }
+        TypeInfo::UnknownSatisfying(bounds) => {
+            let needed_bound = bounds.iter().next().map(|bound| {
+                let trait_id = ctx.hir.types.get_bound(bound).trait_id;
+                ctx.compiler
+                    .get_trait_name(trait_id.0, trait_id.1)
+                    .to_owned()
+            });
+            ctx.compiler.errors.emit_err(
+                Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
+            );
+            ctx.invalidate(expected);
+            return Node::Invalid;
+        }
         TypeInfo::Unknown => {
-            ctx.compiler
-                .errors
-                .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(call.called_expr)));
+            ctx.compiler.errors.emit_err(
+                Error::TypeMustBeKnownHere { needed_bound: None }
+                    .at_span(ctx.span(call.called_expr)),
+            );
+            ctx.invalidate(expected);
             Node::Invalid
         }
         _ => {
@@ -1513,9 +1557,9 @@ fn check_call_signature(
     let arg_types = ctx.hir.types.add_multiple_unknown(args.count);
     // iterating over the signature, all extra arguments in case of vararg
     // arguments will stay unknown which is intended
-    for (i, (_, arg)) in signature.iter().enumerate() {
+    for ((_, arg), i) in signature.iter().zip(0..) {
         let ty = ctx.type_from_resolved(arg, generics);
-        ctx.hir.types.replace(arg_types.nth(i as _).unwrap(), ty);
+        ctx.hir.types.replace(arg_types.nth(i).unwrap(), ty);
     }
 
     ctx.specify_resolved(expected, return_type, generics, |ast| ast[expr].span(ast));

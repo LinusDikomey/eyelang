@@ -58,9 +58,20 @@ pub fn check(
             loop {
                 match ctx.hir.types[current_ty] {
                     TypeInfo::Unknown => {
-                        ctx.compiler
-                            .errors
-                            .emit_err(Error::TypeMustBeKnownHere.at_span(ctx.span(left)));
+                        ctx.compiler.errors.emit_err(
+                            Error::TypeMustBeKnownHere { needed_bound: None }
+                                .at_span(ctx.span(left)),
+                        );
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    }
+                    TypeInfo::UnknownSatisfying(bounds) => {
+                        let needed_bound = bounds.iter().next().map(|bound| {
+                            let id = ctx.hir.types.get_bound(bound).trait_id;
+                            ctx.compiler.get_trait_name(id.0, id.1).to_owned()
+                        });
+                        ctx.compiler.errors.emit_err(
+                            Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)),
+                        );
                         return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
                     }
                     TypeInfo::Invalid => {

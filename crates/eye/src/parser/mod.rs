@@ -659,19 +659,14 @@ impl<'a> Parser<'a> {
                     TokenType::RBrace = TokenType::RBrace => break,
                     TokenType::Keyword(Keyword::Impl) = TokenType::Keyword(Keyword::Impl) => {
                         let start = next.start;
-                        let generics = self.parse_optional_generics(generics.to_vec())?;
-                        let Ok(generic_count) = generics.len().try_into() else {
-                            let start = generics[0].span().start;
-                            let end = generics.last().unwrap().span().end;
-                            return Err(Error::TooManyGenerics(generics.len()).at_span(TSpan::new(start, end).in_mod(self.toks.module)));
-                        };
+                        let generics = self.parse_optional_generics(Vec::new())?;
                         let impl_scope = self.ast
                             .scope(ast::Scope::from_generics(parent_scope, self.src, &generics, TSpan::MISSING));
                         let ty = self.parse_type()?;
                         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-                        let (functions, end) = self.parse_trait_impl_body(lbrace, impl_scope)?;
+                        let (functions, end) = self.parse_trait_impl_body(lbrace, impl_scope, &generics)?;
                         self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, end);
-                        impls.push((impl_scope, generic_count, ty, functions));
+                        impls.push((impl_scope, generics, ty, functions));
                     }
                 }
             }
@@ -683,7 +678,7 @@ impl<'a> Parser<'a> {
             generics,
             scope,
             functions,
-            impls,
+            impls: impls.into_boxed_slice(),
             associated_name,
         })
     }
@@ -692,7 +687,8 @@ impl<'a> Parser<'a> {
         &mut self,
         lbrace: Token,
         scope: ScopeId,
-    ) -> ParseResult<(Vec<(TSpan, ast::FunctionId)>, u32)> {
+        impl_generics: &[GenericDef],
+    ) -> ParseResult<(Box<[(TSpan, ast::FunctionId)]>, u32)> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut functions = Vec::new();
         let last = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
@@ -701,12 +697,12 @@ impl<'a> Parser<'a> {
             p.toks.step_expect(TokenType::DoubleColon)?;
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
             // TODO: figure out inherited generics here
-            let func = p.parse_function_def(fn_tok, scope, name_span, Vec::new())?;
+            let func = p.parse_function_def(fn_tok, scope, name_span, impl_generics.to_vec())?;
             let func_id = p.ast.function(func);
             functions.push((name_span, func_id));
             Ok(Delimit::OptionalIfNewLine)
         })?;
-        Ok((functions, last.end))
+        Ok((functions.into_boxed_slice(), last.end))
     }
 
     fn parse_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr> {
@@ -1255,6 +1251,13 @@ impl<'a> Parser<'a> {
             generics.push(GenericDef { name, requirements });
             Ok(Delimit::OptionalIfNewLine)
         })?;
+        let generic_count: Result<u8, _> = generics.len().try_into();
+        if generic_count.is_err() {
+            let start = generics[0].span().start;
+            let end = generics.last().unwrap().span().end;
+            return Err(Error::TooManyGenerics(generics.len())
+                .at_span(TSpan::new(start, end).in_mod(self.toks.module)));
+        };
         Ok(generics.into_boxed_slice())
     }
 

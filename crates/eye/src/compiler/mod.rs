@@ -13,13 +13,13 @@ use types::{FunctionType, Primitive, Type, UnresolvedType};
 
 use crate::{
     check,
-    error::{CompileError, Error, Errors},
+    error::{CompileError, Error, Errors, ImplIncompatibility},
     eval::{self, ConstValue},
     hir::HIR,
     irgen,
     parser::{
         self,
-        ast::{self, Ast, FunctionId, GlobalId, ScopeId},
+        ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId},
     },
     types::{traits, Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     MainError,
@@ -574,15 +574,14 @@ impl Compiler {
         }
     }
 
-    fn check_signature(
+    fn resolve_generics(
         &mut self,
-        function: &ast::Function,
+        generics: &[GenericDef],
         module: ModuleId,
+        scope: ScopeId,
         ast: &Ast,
-    ) -> Signature {
-        let scope = function.scope;
-        let generics = function
-            .generics
+    ) -> Generics {
+        let generics = generics
             .iter()
             .map(|def| {
                 let requirements = def
@@ -601,6 +600,17 @@ impl Compiler {
                 (def.name(ast.src()).to_owned(), requirements)
             })
             .collect();
+        Generics { generics }
+    }
+
+    fn check_signature(
+        &mut self,
+        function: &ast::Function,
+        module: ModuleId,
+        ast: &Ast,
+    ) -> Signature {
+        let scope = function.scope;
+        let generics = self.resolve_generics(&function.generics, module, scope, ast);
 
         let args = function
             .params
@@ -618,9 +628,14 @@ impl Compiler {
             args,
             varargs: function.varargs,
             return_type,
-            generics: FunctionGenerics { generics },
+            generics,
             span: function.signature_span,
         }
+    }
+
+    pub fn get_trait_name(&mut self, module: ModuleId, id: ast::TraitId) -> &str {
+        self.get_checked_trait(module, id)
+            .map_or("<unknown trait>", |checked| &checked.name)
     }
 
     /// returns None when the trait can't be resolved, an error was already emitted in that case
@@ -649,8 +664,8 @@ impl Compiler {
             Resolvable::Unresolved => {
                 let ast = Rc::clone(&parsed.ast);
                 let def = &ast[id];
-                // don't include self type in generic count
-                let generics = def.generics.len() as u8 - 1;
+                // don't include self type in generics, it is handled seperately
+                let generics = self.resolve_generics(&def.generics[1..], module, def.scope, &ast);
                 let mut functions_by_name = dmap::with_capacity(def.functions.len());
                 let functions: Vec<Signature> = def
                     .functions
@@ -667,14 +682,16 @@ impl Compiler {
                         self.check_signature(function, module, &ast)
                     })
                     .collect();
+                let base_offset = def.generics.len() as u8;
                 let impls = def
                     .impls
                     .iter()
-                    .map(|(impl_scope, generic_count, impl_ty, impl_functions)| {
-                        let generic_count = *generic_count;
+                    .map(|(impl_scope, impl_generics, impl_ty, impl_functions)| {
+                        let impl_generics =
+                            self.resolve_generics(impl_generics, module, *impl_scope, &ast);
                         let impl_ty = self.resolve_type(impl_ty, module, *impl_scope);
-                        let impl_ty = traits::ImplTree::from_type(&impl_ty, self);
-                        let mut functions = vec![ast::FunctionId(u32::MAX); functions.len()];
+                        let impl_tree = traits::ImplTree::from_type(&impl_ty, self);
+                        let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
                         for &(name_span, function) in impl_functions {
                             let name = &ast[name_span];
                             let Some(&function_idx) = functions_by_name.get(name) else {
@@ -687,18 +704,38 @@ impl Compiler {
                                 );
                                 continue;
                             };
-                            if functions[function_idx as usize].0 != u32::MAX {
+                            if function_ids[function_idx as usize].0 != u32::MAX {
                                 self.errors.emit_err(
                                     Error::DuplicateDefinition.at_span(name_span.in_mod(module)),
                                 );
                                 continue;
                             }
                             // TODO: check impl signature
-                            functions[function_idx as usize] = function;
+                            let signature = self.get_signature(module, function);
+                            let trait_signature = &functions[function_idx as usize];
+                            let trait_impl_generics = vec![];
+                            let base_generic = |i: u8| match i {
+                                0 => &impl_ty,
+                                i => trait_impl_generics[(i - 1) as usize],
+                            };
+                            let compatible = signature.compatible_with(
+                                trait_signature,
+                                impl_generics.count(),
+                                base_offset,
+                                base_generic,
+                            );
+                            match compatible {
+                                Ok(None) | Err(()) => {}
+                                Ok(Some(incompat)) => self.errors.emit_err(
+                                    Error::TraitSignatureMismatch(incompat)
+                                        .at_span(name_span.in_mod(module)),
+                                ),
+                            }
+                            function_ids[function_idx as usize] = function;
                         }
                         let mut unimplemented = Vec::new();
                         for (name, &i) in &functions_by_name {
-                            if functions[i as usize] == ast::FunctionId(u32::MAX) {
+                            if function_ids[i as usize] == ast::FunctionId(u32::MAX) {
                                 unimplemented.push(name.clone());
                             }
                         }
@@ -709,10 +746,10 @@ impl Compiler {
                             );
                         }
                         traits::Impl {
-                            generic_count,
-                            impl_ty,
+                            generics: impl_generics,
+                            impl_ty: impl_tree,
                             impl_module: module,
-                            functions,
+                            functions: function_ids,
                         }
                     })
                     .collect();
@@ -741,30 +778,19 @@ impl Compiler {
         ty: &Type,
     ) -> Option<(&traits::Impl, Vec<Type>)> {
         let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        let mut impl_generics = Vec::new();
         for impl_ in &checked_trait.impls {
-            if impl_.impl_ty.matches_type(ty) {
-                assert_eq!(impl_.generic_count, 1, "TODO: generic impls");
-                return Some((impl_, Vec::new()));
+            impl_generics.clear();
+            impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
+            if impl_.impl_ty.matches_type(ty, &mut impl_generics) {
+                debug_assert!(
+                    impl_generics.iter().all(|ty| !matches!(ty, Type::Invalid)),
+                    "impl generics were not properly instantiated"
+                );
+                return Some((impl_, impl_generics));
             }
         }
         // TODO: check impls on type
-        None
-    }
-
-    /// only use with a finished type table meaning no unknown types or similar should be present.
-    pub fn get_checked_trait_impl_from_final_types(
-        &mut self,
-        trait_id: (ModuleId, ast::TraitId),
-        ty: TypeInfo,
-        types: &TypeTable,
-    ) -> Option<(&traits::Impl, Vec<Type>)> {
-        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
-        for impl_ in &checked_trait.impls {
-            if impl_.impl_ty.matches_type_info(ty, types) {
-                assert_eq!(impl_.generic_count, 1, "TODO: generic impls");
-                return Some((impl_, Vec::new()));
-            }
-        }
         None
     }
 
@@ -1510,7 +1536,7 @@ pub struct Signature {
     pub args: Vec<(String, Type)>,
     pub varargs: bool,
     pub return_type: Type,
-    pub generics: FunctionGenerics,
+    pub generics: Generics,
     pub span: TSpan,
 }
 impl Signature {
@@ -1524,23 +1550,67 @@ impl Signature {
         if self.args.len() != ty.params.len() {
             return Ok(false);
         }
+        // function types can't be generics and generic count was checked to be zero
+        let base_generic = |_| unreachable!();
         for ((_, arg), ty_arg) in self.args.iter().zip(&ty.params) {
-            if !arg.is_same_as(ty_arg, &[], &[])? {
+            if !arg.is_same_as(ty_arg, base_generic)? {
                 return Ok(false);
             }
         }
-        if !self.return_type.is_same_as(&ty.return_type, &[], &[])? {
+        if !self.return_type.is_same_as(&ty.return_type, base_generic)? {
             return Ok(false);
         }
         Ok(true)
     }
+
+    /// used for checking if a function in a trait impl is compatible with a base type.
+    /// The signature is allowed to have looser trait bound requirements than the base.
+    pub fn compatible_with<'a>(
+        &self,
+        base: &Signature,
+        generics_offset: u8,
+        base_generics_offset: u8,
+        base_generic: impl Copy + Fn(u8) -> &'a Type,
+    ) -> Result<Option<ImplIncompatibility>, ()> {
+        if !self
+            .generics
+            .compatible_with(&base.generics, generics_offset, base_generics_offset)
+        {
+            return Ok(Some(ImplIncompatibility::Generics));
+        }
+        if self.varargs != base.varargs {
+            return Ok(Some(if base.varargs {
+                ImplIncompatibility::VarargsNeeded
+            } else {
+                ImplIncompatibility::NoVarargsNeeded
+            }));
+        }
+        if self.args.len() != base.args.len() {
+            return Ok(Some(ImplIncompatibility::ArgCount {
+                base: base.args.len() as _,
+                impl_: self.args.len() as _,
+            }));
+        }
+        for (((_, arg), (_, base_arg)), i) in self.args.iter().zip(&base.args).zip(0..) {
+            if !arg.is_same_as(base_arg, base_generic)? {
+                return Ok(Some(ImplIncompatibility::Arg(i)));
+            }
+        }
+        if !self
+            .return_type
+            .is_same_as(&base.return_type, base_generic)?
+        {
+            return Ok(Some(ImplIncompatibility::ReturnType));
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Debug)]
-pub struct FunctionGenerics {
+pub struct Generics {
     generics: Vec<(String, Vec<(ModuleId, ast::TraitId)>)>,
 }
-impl FunctionGenerics {
+impl Generics {
     pub const EMPTY: Self = Self {
         generics: Vec::new(),
     };
@@ -1554,7 +1624,7 @@ impl FunctionGenerics {
         self.generics[generic as usize].1.contains(&bound.trait_id)
     }
 
-    pub fn instantiate(&self, types: &mut TypeTable) -> LocalTypeIds {
+    pub fn instantiate(&self, types: &mut TypeTable, span: TSpan) -> LocalTypeIds {
         let generics = types.add_multiple_unknown(self.generics.len() as _);
         for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
             let info = if bounds.is_empty() {
@@ -1565,6 +1635,7 @@ impl FunctionGenerics {
                     crate::types::Bound {
                         trait_id,
                         generics: LocalTypeIds::EMPTY,
+                        span,
                     }
                 }));
                 TypeInfo::UnknownSatisfying(bounds)
@@ -1572,6 +1643,25 @@ impl FunctionGenerics {
             types.replace(r, info);
         }
         generics
+    }
+
+    pub fn compatible_with(&self, base: &Self, offset: u8, base_offset: u8) -> bool {
+        if self.generics.len() as u8 - offset != base.generics.len() as u8 - base_offset {
+            return false;
+        }
+        for ((_, bounds), (_, base_bounds)) in self
+            .generics
+            .iter()
+            .skip(offset.into())
+            .zip(base.generics.iter().skip(base_offset.into()))
+        {
+            for bound in bounds {
+                if !base_bounds.contains(bound) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -1727,7 +1817,7 @@ impl CheckedFunction {
 #[derive(Debug)]
 pub struct CheckedTrait {
     pub name: Box<str>,
-    pub generics: u8,
+    pub generics: Generics,
     pub functions: Vec<Signature>,
     pub functions_by_name: DHashMap<String, u16>,
     pub impls: Vec<traits::Impl>,

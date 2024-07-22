@@ -55,6 +55,9 @@ fn main() -> Result<(), MainError> {
         return Ok(());
     }
     let mut compiler = compiler::Compiler::new();
+    if args.crash_on_error {
+        compiler.errors.crash_on_error();
+    }
 
     let (name, path) = match &args.path {
         Some(path_str) => {

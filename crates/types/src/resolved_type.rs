@@ -113,24 +113,17 @@ impl Type {
         }
     }
 
-    pub fn is_same_as(
+    pub fn is_same_as<'a>(
         &self,
         other: &Type,
-        a_generics: &[Type],
-        b_generics: &[Type],
+        base_generic: impl Copy + Fn(u8) -> &'a Type,
     ) -> Result<bool, ()> {
-        let l = if let &Self::Generic(i) = self {
-            &a_generics[i as usize]
-        } else {
-            self
-        };
-        let r = if let &Self::Generic(i) = other {
-            &b_generics[i as usize]
+        let r = if let &Type::Generic(i) = other {
+            base_generic(i)
         } else {
             other
         };
-
-        Ok(match (l, r) {
+        Ok(match (self, r) {
             (Self::Invalid, _) | (_, Self::Invalid) => return Err(()),
             (Self::Primitive(a), Self::Primitive(b)) => a == b,
             (
@@ -148,22 +141,20 @@ impl Type {
                     return Ok(false);
                 }
                 for (a, b) in a_generics.iter().zip(b_generics) {
-                    if !a.is_same_as(b, a_generics, b_generics)? {
+                    if !a.is_same_as(b, base_generic)? {
                         return Ok(false);
                     }
                 }
                 true
             }
-            (Self::Pointer(a), Self::Pointer(b)) => a.is_same_as(b, a_generics, b_generics)?,
-            (Self::Array(a), Self::Array(b)) => {
-                a.0.is_same_as(&b.0, a_generics, b_generics)? && a.1 == b.1
-            }
+            (Self::Pointer(a), Self::Pointer(b)) => a.is_same_as(b, base_generic)?,
+            (Self::Array(a), Self::Array(b)) => a.0.is_same_as(&b.0, base_generic)? && a.1 == b.1,
             (Self::Tuple(a), Self::Tuple(b)) => {
                 if a.len() != b.len() {
                     return Ok(false);
                 }
                 for (a, b) in a.iter().zip(b) {
-                    if !a.is_same_as(b, a_generics, b_generics)? {
+                    if !a.is_same_as(b, base_generic)? {
                         return Ok(false);
                     }
                 }
@@ -171,7 +162,7 @@ impl Type {
             }
             (Self::Generic(a), Self::Generic(b)) => a == b,
             (Self::LocalEnum(_), Self::LocalEnum(_)) => unreachable!(),
-            (Self::Function(a), Self::Function(b)) => a.is_same_as(b, a_generics, b_generics)?,
+            (Self::Function(a), Self::Function(b)) => a.is_same_as(b, base_generic)?,
             _ => false,
         })
     }
@@ -236,21 +227,19 @@ pub struct FunctionType {
     pub return_type: Box<Type>,
 }
 impl FunctionType {
-    pub fn is_same_as(
+    pub fn is_same_as<'a>(
         &self,
         b: &Self,
-        a_generics: &[Type],
-        b_generics: &[Type],
+        r_generic: impl Copy + Fn(u8) -> &'a Type,
     ) -> Result<bool, ()> {
         if self.params.len() != b.params.len() {
             return Ok(false);
         }
         for (a, b) in self.params.iter().zip(&b.params) {
-            if !a.is_same_as(b, a_generics, b_generics)? {
+            if !a.is_same_as(b, r_generic)? {
                 return Ok(false);
             }
         }
-        self.return_type
-            .is_same_as(&b.return_type, a_generics, b_generics)
+        self.return_type.is_same_as(&b.return_type, r_generic)
     }
 }

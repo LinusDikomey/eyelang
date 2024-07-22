@@ -13,12 +13,14 @@ use std::{
 pub struct Errors {
     pub errors: Vec<CompileError>,
     pub warnings: Vec<CompileError>,
+    crash_on_error: bool,
 }
 impl Errors {
     pub fn new() -> Self {
         Self {
             errors: Vec::new(),
             warnings: Vec::new(),
+            crash_on_error: false,
         }
     }
 
@@ -38,11 +40,9 @@ impl Errors {
 
     #[track_caller]
     pub fn emit_err(&mut self, err: CompileError) {
-        /*
-        if crate::CRASH_ON_ERROR.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.crash_on_error {
             panic!("Error encountered and --crash-on-error is enabled. The error is: {err:?}");
         }
-        */
         let list = match err.err.severity() {
             Severity::Error => &mut self.errors,
             Severity::Warn => &mut self.warnings,
@@ -90,6 +90,10 @@ impl Errors {
                 otherwise()
             }
         }
+    }
+
+    pub fn crash_on_error(&mut self) {
+        self.crash_on_error = true;
     }
 }
 
@@ -157,7 +161,9 @@ pub enum Error {
     CantNegateType,
     NonexistantMember(Option<MemberHint>),
     NonexistantEnumVariant,
-    TypeMustBeKnownHere,
+    TypeMustBeKnownHere {
+        needed_bound: Option<String>,
+    },
     MissingMainFile,
     CantAssignTo,
     CantTakeRef,
@@ -199,7 +205,7 @@ pub enum Error {
     NotAllFunctionsImplemented {
         unimplemented: Vec<String>,
     },
-    TraitSignatureMismatch,
+    TraitSignatureMismatch(ImplIncompatibility),
     UnsatisfiedTraitBound {
         trait_name: Box<str>,
         ty: String,
@@ -261,7 +267,7 @@ impl Error {
             Error::CantNegateType => "can't negate this value",
             Error::NonexistantMember(_) => "member doesn't exist",
             Error::NonexistantEnumVariant => "enum variant doesn't exist",
-            Error::TypeMustBeKnownHere => "type of value must be known here",
+            Error::TypeMustBeKnownHere { .. } => "type of value must be known here",
             Error::MissingMainFile => "no main.eye file found",
             Error::CantAssignTo => "not assignable",
             Error::CantTakeRef => "can't take reference of value",
@@ -295,7 +301,7 @@ impl Error {
             Error::NotAllFunctionsImplemented { .. } => {
                 "not all functions of the trait are implemented"
             }
-            Error::TraitSignatureMismatch => {
+            Error::TraitSignatureMismatch(_) => {
                 "signature doesn't match the function's signature in the trait definition"
             }
             Error::UnsatisfiedTraitBound { .. } => "unsatisfied trait bound",
@@ -340,6 +346,9 @@ impl Error {
                 )
             }
             Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint().to_owned()),
+            Error::TypeMustBeKnownHere { needed_bound: Some(bound) } => {
+                cformat!("#c<hint>: a type satisfying #m<{bound}> is needed")
+            },
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",
                 expected, found
@@ -385,6 +394,14 @@ impl Error {
                     }
                     s
                 }
+            }
+            Error::TraitSignatureMismatch(incompat) => match incompat {
+                ImplIncompatibility::Generics => "the generics differ".to_owned(),
+                ImplIncompatibility::VarargsNeeded => cformat!("#c<hint>: add varargs"),
+                ImplIncompatibility::NoVarargsNeeded => cformat!("#c<hint>: remove the varargs"),
+                ImplIncompatibility::ArgCount { base, impl_ } => cformat!("there are #r<{impl_}> arguments but #r<{base}> in the trait function"),
+                ImplIncompatibility::Arg(i) => cformat!("argument #r<{i}> has the wrong type"), // TODO: concrete type mismatch errors
+                ImplIncompatibility::ReturnType => "the return type is different".to_owned(),
             }
             Error::UnsatisfiedTraitBound { trait_name, ty } => {
                 cformat!("the type #m<{ty}> doesn't satisfy the #m<{trait_name}> trait")
@@ -571,4 +588,14 @@ impl MemberHint {
             }
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub enum ImplIncompatibility {
+    Generics,
+    VarargsNeeded,
+    NoVarargsNeeded,
+    ArgCount { base: u32, impl_: u32 },
+    Arg(u32),
+    ReturnType,
 }

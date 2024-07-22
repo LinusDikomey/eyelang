@@ -1,8 +1,9 @@
 use id::{ModuleId, TypeId};
+use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{CheckedTrait, FunctionGenerics},
+    compiler::{CheckedTrait, Generics},
     parser::ast::FunctionId,
     Compiler,
 };
@@ -28,7 +29,7 @@ pub enum BaseType {
 pub fn get_impl_candidates<'t>(
     ty: TypeInfo,
     types: &TypeTable,
-    _generics: &FunctionGenerics,
+    _generics: &Generics,
     checked: &'t CheckedTrait,
 ) -> Candidates<'t> {
     let mut found = None;
@@ -84,11 +85,13 @@ impl ImplTree {
             Type::Function(_) => todo!(),
         }
     }
-}
-impl ImplTree {
-    pub fn matches_type(&self, ty: &Type) -> bool {
+
+    pub fn matches_type(&self, ty: &Type, impl_generics: &mut [Type]) -> bool {
         match self {
-            Self::Any { .. } => return true,
+            &Self::Any { generic } => {
+                impl_generics[generic as usize] = ty.clone();
+                return true;
+            }
             Self::Base(base_type, args) => match ty {
                 Type::Invalid => return true,
                 Type::Primitive(p) => {
@@ -103,7 +106,7 @@ impl ImplTree {
                         }
                         debug_assert_eq!(generics.len(), args.len());
                         for (generic, base_type) in generics.iter().zip(args.iter()) {
-                            if !base_type.matches_type(generic) {
+                            if !base_type.matches_type(generic, impl_generics) {
                                 return false;
                             }
                         }
@@ -112,7 +115,7 @@ impl ImplTree {
                 }
                 Type::Pointer(pointee) => {
                     if let BaseType::Pointer = base_type {
-                        return args[0].matches_type(pointee);
+                        return args[0].matches_type(pointee, impl_generics);
                     }
                 }
                 Type::Tuple(elems) => {
@@ -123,7 +126,7 @@ impl ImplTree {
                         return false;
                     }
                     for (elem, base_type) in elems.iter().zip(args) {
-                        if !base_type.matches_type(elem) {
+                        if !base_type.matches_type(elem, impl_generics) {
                             return false;
                         }
                     }
@@ -137,7 +140,7 @@ impl ImplTree {
                     if *count != base_count {
                         return false;
                     }
-                    args[0].matches_type(elem);
+                    args[0].matches_type(elem, impl_generics);
                 }
                 Type::Generic(_) | Type::LocalEnum(_) => return false,
                 Type::Function(_) => return false,
@@ -223,7 +226,7 @@ impl ImplTree {
         }
     }
 
-    fn instantiate(&self, impl_generics: LocalTypeIds, types: &mut TypeTable) -> TypeInfoOrIdx {
+    pub fn instantiate(&self, impl_generics: LocalTypeIds, types: &mut TypeTable) -> TypeInfoOrIdx {
         match self {
             &Self::Any { generic } => {
                 TypeInfoOrIdx::Idx(impl_generics.nth(generic.into()).unwrap())
@@ -267,19 +270,22 @@ impl ImplTree {
 
 #[derive(Debug)]
 pub struct Impl {
-    pub generic_count: u8,
+    pub generics: Generics,
     pub impl_ty: ImplTree,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,
 }
 impl Impl {
+    /// returns the instantiated impl_ty and the impl_generics
     pub fn instantiate(
         &self,
         trait_generics: LocalTypeIds,
-        impl_generics: LocalTypeIds,
         types: &mut TypeTable,
+        span: TSpan,
     ) -> TypeInfoOrIdx {
         assert_eq!(trait_generics.count, 0, "TODO: handle generic traits");
-        self.impl_ty.instantiate(impl_generics, types)
+        let impl_generics = self.generics.instantiate(types, span);
+        let impl_ty = self.impl_ty.instantiate(impl_generics, types);
+        impl_ty
     }
 }

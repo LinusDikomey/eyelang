@@ -9,7 +9,7 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{FunctionGenerics, Signature},
+    compiler::{Generics, Signature},
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Node, HIR},
     parser::ast::{Ast, ExprId, ScopeId},
@@ -24,7 +24,7 @@ pub fn check(
     ast: &Ast,
     module: ModuleId,
     types: TypeTable,
-    generics: &FunctionGenerics,
+    generics: &Generics,
     scope: ScopeId,
     args: impl IntoIterator<Item = (String, LocalTypeId)>,
     expr: ExprId,
@@ -66,7 +66,7 @@ pub struct Ctx<'a> {
     pub compiler: &'a mut Compiler,
     pub ast: &'a Ast,
     pub module: ModuleId,
-    pub generics: &'a FunctionGenerics,
+    pub generics: &'a Generics,
     pub hir: HIRBuilder,
     /// Exhaustion value, type, pattern expr
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
