@@ -845,8 +845,10 @@ fn function_item(
     expected: LocalTypeId,
     span: TSpan,
 ) -> Node {
-    let signature = ctx.compiler.get_signature(function_module, function);
-    let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
+    let signature = Rc::clone(ctx.compiler.get_signature(function_module, function));
+    let generics = signature
+        .generics
+        .instantiate(&mut ctx.hir.types, ctx.compiler, span);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
@@ -1440,7 +1442,9 @@ fn check_call(
             let checked_trait = Rc::clone(checked_trait);
             let signature = &checked_trait.functions[method_index as usize];
             let span = ctx.ast[expr].span(ctx.ast);
-            let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
+            let generics = signature
+                .generics
+                .instantiate(&mut ctx.hir.types, ctx.compiler, span);
             debug_assert!(
                 signature.generics.count() >= checked_trait.generics.count() + 1,
                 "the method should at least have the trait's and the self type's generics {} >= {}",
@@ -1485,6 +1489,7 @@ fn check_call(
                     }
                     Node::TraitCall {
                         trait_id: (trait_module, trait_id),
+                        trait_generics,
                         method_index,
                         self_ty,
                         args,
@@ -1494,6 +1499,8 @@ fn check_call(
                 }
                 Err(err) => {
                     ctx.compiler.errors.emit_err(err);
+                    ctx.invalidate(expected);
+                    ctx.invalidate(self_ty);
                     Node::Invalid
                 }
             }

@@ -97,7 +97,7 @@ impl UnresolvedType {
     pub fn span(&self) -> TSpan {
         match self {
             &UnresolvedType::Primitive { ty, span_start } => {
-                TSpan::with_len(span_start, ty.token_len())
+                TSpan::with_len(span_start, ty.token_len().get() - 1)
             }
             UnresolvedType::Tuple(_, span) | UnresolvedType::Infer(span) => *span,
             UnresolvedType::Unresolved(path, generics) => generics.as_ref().map_or_else(

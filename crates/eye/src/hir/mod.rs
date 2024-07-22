@@ -382,6 +382,7 @@ impl HIR {
             }
             &Node::TraitCall {
                 trait_id,
+                trait_generics,
                 method_index,
                 self_ty,
                 args,
@@ -389,9 +390,17 @@ impl HIR {
                 noreturn: _,
             } => {
                 eprint!(
-                    "(call-trait-method <trait {}:{} as ",
+                    "(call-trait-method <trait {}:{}",
                     trait_id.0 .0, trait_id.1 .0
                 );
+                if trait_generics.count > 0 {
+                    eprint!("[");
+                    for generic in trait_generics.iter() {
+                        types.dump_type(compiler, generic);
+                    }
+                    eprint!("]");
+                }
+                eprint!(" as ");
                 types.dump_type(compiler, self_ty);
                 eprint!(">.{method_index}");
                 for arg in args.iter() {
@@ -717,6 +726,7 @@ pub enum Node {
     },
     TraitCall {
         trait_id: (ModuleId, TraitId),
+        trait_generics: LocalTypeIds,
         method_index: u16,
         self_ty: LocalTypeId,
         args: NodeIds,

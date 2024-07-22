@@ -28,12 +28,19 @@ pub enum BaseType {
 
 pub fn get_impl_candidates<'t>(
     ty: TypeInfo,
+    trait_generics: LocalTypeIds,
     types: &TypeTable,
-    _generics: &Generics,
+    _function_generics: &Generics,
     checked: &'t CheckedTrait,
 ) -> Candidates<'t> {
     let mut found = None;
-    for (i, trait_impl) in checked.impls.iter().enumerate() {
+    'candidates: for (i, trait_impl) in checked.impls.iter().enumerate() {
+        debug_assert_eq!(trait_generics.count, trait_impl.trait_generics.len() as u32);
+        for (idx, ty) in trait_generics.iter().zip(&trait_impl.trait_generics) {
+            if !types.compatible_with_type(types[idx], ty) {
+                continue 'candidates;
+            }
+        }
         if trait_impl.impl_ty.matches_type_info(ty, types) {
             if found.is_some() {
                 return Candidates::Multiple;
@@ -271,6 +278,7 @@ impl ImplTree {
 #[derive(Debug)]
 pub struct Impl {
     pub generics: Generics,
+    pub trait_generics: Vec<Type>,
     pub impl_ty: ImplTree,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,
@@ -280,11 +288,25 @@ impl Impl {
     pub fn instantiate(
         &self,
         trait_generics: LocalTypeIds,
+        function_generics: &Generics,
         types: &mut TypeTable,
+        compiler: &mut Compiler,
         span: TSpan,
     ) -> TypeInfoOrIdx {
-        assert_eq!(trait_generics.count, 0, "TODO: handle generic traits");
-        let impl_generics = self.generics.instantiate(types, span);
+        let impl_generics = self.generics.instantiate(types, compiler, span);
+        debug_assert_eq!(trait_generics.count, self.trait_generics.len() as u32);
+        for (idx, ty) in trait_generics.iter().zip(&self.trait_generics) {
+            types.specify_resolved(
+                idx,
+                ty,
+                impl_generics,
+                function_generics,
+                compiler,
+                // span should never be needed since the requirements should have already been
+                // checked so no errors should occur
+                || unreachable!(),
+            );
+        }
         let impl_ty = self.impl_ty.instantiate(impl_generics, types);
         impl_ty
     }

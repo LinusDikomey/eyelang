@@ -394,20 +394,22 @@ pub struct TraitDefinition {
     pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
     pub functions: Vec<(TSpan, Function)>,
-    pub impls: Box<
-        [(
-            ScopeId,
-            Box<[GenericDef]>,
-            UnresolvedType,
-            Box<[(TSpan, FunctionId)]>,
-        )],
-    >,
+    pub impls: Box<[Impl]>,
     pub associated_name: TSpan,
 }
 impl TraitDefinition {
     pub fn span(&self, scopes: &[Scope]) -> TSpan {
         scopes[self.scope.idx()].span
     }
+}
+
+#[derive(Debug)]
+pub struct Impl {
+    pub scope: ScopeId,
+    pub generics: Box<[GenericDef]>,
+    pub trait_generics: (Box<[UnresolvedType]>, TSpan),
+    pub implemented_type: UnresolvedType,
+    pub functions: Box<[(TSpan, FunctionId)]>,
 }
 
 #[derive(Debug)]
@@ -435,15 +437,15 @@ pub struct Function {
 pub struct GenericDef {
     /// missing span indicates that this is a `Self` type in a trait definition
     pub(super) name: TSpan,
-    pub requirements: Vec<IdentPath>,
+    pub bounds: Box<[TraitBound]>,
 }
 impl GenericDef {
     pub fn span(&self) -> TSpan {
         TSpan::new(
             self.name.start,
-            self.requirements
+            self.bounds
                 .last()
-                .map_or(self.name.end, |path| path.span().end),
+                .map_or(self.name.end, |bound| bound.generics_span.end),
         )
     }
 
@@ -454,6 +456,13 @@ impl GenericDef {
             &src[self.name.range()]
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitBound {
+    pub path: IdentPath,
+    pub generics: Box<[UnresolvedType]>,
+    pub generics_span: TSpan,
 }
 
 #[derive(Debug, Clone)]

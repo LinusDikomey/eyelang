@@ -19,7 +19,7 @@ use crate::{
     irgen,
     parser::{
         self,
-        ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId},
+        ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
     types::{traits, Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     MainError,
@@ -585,15 +585,35 @@ impl Compiler {
             .iter()
             .map(|def| {
                 let requirements = def
-                    .requirements
+                    .bounds
                     .iter()
-                    .map(|path| match self.resolve_path(module, scope, *path) {
-                        Def::Trait(trait_module, trait_id) => (trait_module, trait_id),
-                        Def::Invalid => todo!("handle invalid defs in generic reqs"),
+                    .map(|bound| match self.resolve_path(module, scope, bound.path) {
+                        Def::Trait(trait_module, trait_id) => {
+                            let trait_id = (trait_module, trait_id);
+                            let generic_count = self.get_trait_generic_count(trait_id);
+                            if generic_count as usize != bound.generics.len() {
+                                self.errors.emit_err(
+                                    Error::InvalidGenericCount {
+                                        expected: generic_count,
+                                        found: bound.generics.len() as _,
+                                    }
+                                    .at_span(bound.generics_span.in_mod(module)),
+                                );
+                                todo!("handle invalid bounds")
+                            }
+                            let generics = bound
+                                .generics
+                                .iter()
+                                .map(|ty| self.resolve_type(ty, module, scope))
+                                .collect();
+                            TraitBound { trait_id, generics }
+                        }
+                        Def::Invalid => todo!("handle invalid bounds"),
                         _ => {
-                            self.errors
-                                .emit_err(Error::TraitExpected.at_span(path.span().in_mod(module)));
-                            todo!("handle invalid defs in generic reqs")
+                            self.errors.emit_err(
+                                Error::TraitExpected.at_span(bound.path.span().in_mod(module)),
+                            );
+                            todo!("handle invalid bounds")
                         }
                     })
                     .collect();
@@ -636,6 +656,16 @@ impl Compiler {
     pub fn get_trait_name(&mut self, module: ModuleId, id: ast::TraitId) -> &str {
         self.get_checked_trait(module, id)
             .map_or("<unknown trait>", |checked| &checked.name)
+    }
+
+    pub fn get_trait_generic_count(&mut self, trait_id: (ModuleId, TraitId)) -> u8 {
+        // subtract the self generic
+        (self.get_module_ast_and_symbols(trait_id.0).ast[trait_id.1]
+            .generics
+            .len()
+            - 1)
+        .try_into()
+        .unwrap()
     }
 
     /// returns None when the trait can't be resolved, an error was already emitted in that case
@@ -686,18 +716,28 @@ impl Compiler {
                 let impls = def
                     .impls
                     .iter()
-                    .map(|(impl_scope, impl_generics, impl_ty, impl_functions)| {
+                    .map(|impl_| {
                         let impl_generics =
-                            self.resolve_generics(impl_generics, module, *impl_scope, &ast);
-                        let impl_ty = self.resolve_type(impl_ty, module, *impl_scope);
+                            self.resolve_generics(&impl_.generics, module, impl_.scope, &ast);
+
+                        let trait_generics: Vec<_> = impl_
+                            .trait_generics
+                            .0
+                            .iter()
+                            .map(|generic| self.resolve_type(generic, module, impl_.scope))
+                            .collect();
+
+                        let impl_ty =
+                            self.resolve_type(&impl_.implemented_type, module, impl_.scope);
                         let impl_tree = traits::ImplTree::from_type(&impl_ty, self);
                         let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
-                        for &(name_span, function) in impl_functions {
+                        for &(name_span, function) in &impl_.functions {
                             let name = &ast[name_span];
                             let Some(&function_idx) = functions_by_name.get(name) else {
+                                let trait_name = ast.src()[def.associated_name.range()].to_owned();
                                 self.errors.emit_err(
                                     Error::NotATraitMember {
-                                        trait_name: "TODO(trait_name)".to_owned(),
+                                        trait_name,
                                         function: name.to_owned(),
                                     }
                                     .at_span(name_span.in_mod(module)),
@@ -710,13 +750,12 @@ impl Compiler {
                                 );
                                 continue;
                             }
-                            // TODO: check impl signature
+
                             let signature = self.get_signature(module, function);
                             let trait_signature = &functions[function_idx as usize];
-                            let trait_impl_generics = vec![];
                             let base_generic = |i: u8| match i {
                                 0 => &impl_ty,
-                                i => trait_impl_generics[(i - 1) as usize],
+                                i => &trait_generics[(i - 1) as usize],
                             };
                             let compatible = signature.compatible_with(
                                 trait_signature,
@@ -742,11 +781,12 @@ impl Compiler {
                         if !unimplemented.is_empty() {
                             self.errors.emit_err(
                                 Error::NotAllFunctionsImplemented { unimplemented }
-                                    .at_span(ast[*impl_scope].span.in_mod(module)),
+                                    .at_span(ast[impl_.scope].span.in_mod(module)),
                             );
                         }
                         traits::Impl {
                             generics: impl_generics,
+                            trait_generics,
                             impl_ty: impl_tree,
                             impl_module: module,
                             functions: function_ids,
@@ -776,10 +816,17 @@ impl Compiler {
         &mut self,
         trait_id: (ModuleId, ast::TraitId),
         ty: &Type,
+        trait_generics: &[Type],
     ) -> Option<(&traits::Impl, Vec<Type>)> {
         let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
         let mut impl_generics = Vec::new();
-        for impl_ in &checked_trait.impls {
+        'impls: for impl_ in &checked_trait.impls {
+            debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
+            for (impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
+                if !impl_ty.is_same_as(ty, |_| todo!()).ok()? {
+                    continue 'impls;
+                }
+            }
             impl_generics.clear();
             impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
             if impl_.impl_ty.matches_type(ty, &mut impl_generics) {
@@ -1572,10 +1619,12 @@ impl Signature {
         base_generics_offset: u8,
         base_generic: impl Copy + Fn(u8) -> &'a Type,
     ) -> Result<Option<ImplIncompatibility>, ()> {
-        if !self
-            .generics
-            .compatible_with(&base.generics, generics_offset, base_generics_offset)
-        {
+        if !self.generics.compatible_with(
+            &base.generics,
+            generics_offset,
+            base_generics_offset,
+            base_generic,
+        )? {
             return Ok(Some(ImplIncompatibility::Generics));
         }
         if self.varargs != base.varargs {
@@ -1608,7 +1657,7 @@ impl Signature {
 
 #[derive(Debug)]
 pub struct Generics {
-    generics: Vec<(String, Vec<(ModuleId, ast::TraitId)>)>,
+    generics: Vec<(String, Vec<TraitBound>)>,
 }
 impl Generics {
     pub const EMPTY: Self = Self {
@@ -1619,35 +1668,77 @@ impl Generics {
         self.generics.len() as u8
     }
 
-    pub fn satisfies_bound(&self, generic: u8, bound: &Bound) -> bool {
-        assert_eq!(bound.generics.count, 0);
-        self.generics[generic as usize].1.contains(&bound.trait_id)
+    pub fn unify_generic_bound(
+        &self,
+        generic: u8,
+        bound: &Bound,
+        types: &mut TypeTable,
+        compiler: &mut Compiler,
+    ) -> bool {
+        let mut found = None;
+        for generic_bound in self.generics[generic as usize].1.iter() {
+            if bound.trait_id == generic_bound.trait_id {
+                assert!(
+                    found.is_none(),
+                    "TODO: handle multiple potential generic bounds"
+                );
+                found = Some(generic_bound);
+            }
+        }
+        found.is_some_and(|found| {
+            debug_assert_eq!(found.generics.len() as u8, bound.generics.count as u8);
+            for (id, ty) in bound.generics.iter().zip(found.generics.iter()) {
+                let info = types.generic_info_from_resolved(compiler, ty);
+                if types.try_specify(id, info, self, compiler).is_err() {
+                    return false;
+                }
+            }
+            true
+        })
     }
 
-    pub fn instantiate(&self, types: &mut TypeTable, span: TSpan) -> LocalTypeIds {
+    pub fn instantiate(
+        &self,
+        types: &mut TypeTable,
+        compiler: &mut Compiler,
+        span: TSpan,
+    ) -> LocalTypeIds {
         let generics = types.add_multiple_unknown(self.generics.len() as _);
         for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
             let info = if bounds.is_empty() {
                 TypeInfo::Unknown
             } else {
-                let bounds = types.add_bounds(bounds.iter().map(|&trait_id| {
+                let bound_ids = types.add_missing_bounds(bounds.len() as _);
+                for (bound, r) in bounds.iter().zip(bound_ids.iter()) {
                     // TODO: generic trait bounds, assuming no generics for now
-                    crate::types::Bound {
-                        trait_id,
-                        generics: LocalTypeIds::EMPTY,
-                        span,
+                    let trait_generics = types.add_multiple_unknown(bound.generics.len() as _);
+                    for (ty, r) in bound.generics.iter().zip(trait_generics.iter()) {
+                        let ty = types.from_generic_resolved(compiler, ty, generics);
+                        types.replace(r, ty);
                     }
-                }));
-                TypeInfo::UnknownSatisfying(bounds)
+                    let bound = crate::types::Bound {
+                        trait_id: bound.trait_id,
+                        generics: trait_generics,
+                        span,
+                    };
+                    types.replace_bound(r, bound);
+                }
+                TypeInfo::UnknownSatisfying(bound_ids)
             };
             types.replace(r, info);
         }
         generics
     }
 
-    pub fn compatible_with(&self, base: &Self, offset: u8, base_offset: u8) -> bool {
+    pub fn compatible_with<'a>(
+        &self,
+        base: &Self,
+        offset: u8,
+        base_offset: u8,
+        base_generic: impl Copy + Fn(u8) -> &'a Type,
+    ) -> Result<bool, ()> {
         if self.generics.len() as u8 - offset != base.generics.len() as u8 - base_offset {
-            return false;
+            return Ok(false);
         }
         for ((_, bounds), (_, base_bounds)) in self
             .generics
@@ -1655,14 +1746,31 @@ impl Generics {
             .skip(offset.into())
             .zip(base.generics.iter().skip(base_offset.into()))
         {
-            for bound in bounds {
-                if !base_bounds.contains(bound) {
-                    return false;
+            'bounds: for bound in bounds {
+                'base_bounds: for base_bound in base_bounds {
+                    if base_bound.trait_id != bound.trait_id {
+                        continue;
+                    }
+                    for (a, b) in base_bound.generics.iter().zip(&bound.generics) {
+                        if !a.is_same_as(b, base_generic)? {
+                            continue 'base_bounds;
+                        }
+                    }
+                    // bound is satisfied by base_bound
+                    continue 'bounds;
                 }
+                // no base bound satisfies the bound
+                return Ok(false);
             }
         }
-        true
+        Ok(true)
     }
+}
+
+#[derive(Debug)]
+pub struct TraitBound {
+    pub trait_id: (ModuleId, TraitId),
+    pub generics: Box<[Type]>,
 }
 
 #[derive(Debug)]

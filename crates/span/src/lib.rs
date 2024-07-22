@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 use id::ModuleId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,10 +18,10 @@ impl TSpan {
         Self { start, end }
     }
 
-    pub fn with_len(start: u32, len: NonZeroU32) -> Self {
+    pub fn with_len(start: u32, len: u32) -> Self {
         Self {
             start,
-            end: start + len.get(),
+            end: start + len,
         }
     }
 

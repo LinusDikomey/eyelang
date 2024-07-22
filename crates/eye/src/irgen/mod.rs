@@ -752,6 +752,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::TraitCall {
             trait_id,
+            trait_generics,
             method_index,
             self_ty,
             args,
@@ -759,11 +760,16 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             noreturn,
         } => {
             // PERF: could implement get_checked_trait_impl_from_final_types again to avoid
-            // the to_resolved_call.
+            // the to_resolved_calls and heap allocation for generics.
             // Only do this when tests exist to ensure TraitCall instantiation works
             let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generics);
+            let trait_generics: Box<[Type]> = trait_generics
+                .iter()
+                .map(|ty| ctx.types.to_resolved(ctx.types[ty], ctx.generics))
+                .collect();
             let Some((impl_, impl_generics)) =
-                ctx.compiler.get_checked_trait_impl(trait_id, &self_ty)
+                ctx.compiler
+                    .get_checked_trait_impl(trait_id, &self_ty, &trait_generics)
             else {
                 crash_point!(ctx)
             };

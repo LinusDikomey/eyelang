@@ -618,7 +618,7 @@ impl<'a> Parser<'a> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let self_generic = GenericDef {
             name: TSpan::MISSING,
-            requirements: Vec::new(),
+            bounds: Box::new([]),
         };
         let generics = self.parse_optional_generics(vec![self_generic])?;
         let scope = ast::Scope::from_generics(parent_scope, self.src, &generics, TSpan::MISSING);
@@ -660,13 +660,23 @@ impl<'a> Parser<'a> {
                     TokenType::Keyword(Keyword::Impl) = TokenType::Keyword(Keyword::Impl) => {
                         let start = next.start;
                         let generics = self.parse_optional_generics(Vec::new())?;
+                        let underscore_end = self.toks.step_expect(TokenType::Underscore)?.end;
+                        let trait_generics = self.parse_optional_generic_instance()?
+                            .unwrap_or_else(|| (Box::new([]), TSpan::new(underscore_end, underscore_end)));
+                        self.toks.step_expect(TokenType::Keyword(Keyword::For))?;
                         let impl_scope = self.ast
                             .scope(ast::Scope::from_generics(parent_scope, self.src, &generics, TSpan::MISSING));
-                        let ty = self.parse_type()?;
+                        let implemented_type = self.parse_type()?;
                         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
                         let (functions, end) = self.parse_trait_impl_body(lbrace, impl_scope, &generics)?;
                         self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, end);
-                        impls.push((impl_scope, generics, ty, functions));
+                        impls.push(ast::Impl {
+                            scope: impl_scope,
+                            generics,
+                            trait_generics,
+                            implemented_type,
+                            functions,
+                        });
                     }
                 }
             }
@@ -1241,14 +1251,26 @@ impl<'a> Parser<'a> {
             let mut requirements = Vec::new();
             if p.toks.step_if(TokenType::Colon).is_some() {
                 loop {
-                    requirements.push(p.parse_path()?);
+                    let path = p.parse_path()?;
+                    let (generics, generics_span) =
+                        p.parse_optional_generic_instance()?.unwrap_or_else(|| {
+                            (Box::new([]), TSpan::new(path.span().end, path.span().end))
+                        });
+                    requirements.push(ast::TraitBound {
+                        path,
+                        generics,
+                        generics_span,
+                    });
                     if p.toks.step_if(TokenType::Plus).is_none() {
                         break;
                     }
                 }
                 p.toks.step_if(TokenType::Ident);
             }
-            generics.push(GenericDef { name, requirements });
+            generics.push(GenericDef {
+                name,
+                bounds: requirements.into_boxed_slice(),
+            });
             Ok(Delimit::OptionalIfNewLine)
         })?;
         let generic_count: Result<u8, _> = generics.len().try_into();

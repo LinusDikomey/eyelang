@@ -1,4 +1,4 @@
-use std::{ops::Index, rc::Rc};
+use std::{f64::consts::PI, ops::Index, rc::Rc};
 
 use id::{ModuleId, TypeId};
 use span::{Span, TSpan};
@@ -185,6 +185,20 @@ impl TypeTable {
         self.bounds.extend(bounds);
         let count = TryInto::<u32>::try_into(self.bounds.len()).unwrap() - start;
         Bounds { start, count }
+    }
+
+    pub fn add_missing_bounds(&mut self, count: u32) -> Bounds {
+        let start = self.bounds.len() as u32;
+        self.bounds.extend((0..count).map(|_| Bound {
+            trait_id: (ModuleId::MISSING, TraitId::MISSING),
+            generics: LocalTypeIds::EMPTY,
+            span: TSpan::MISSING,
+        }));
+        Bounds { start, count }
+    }
+
+    pub fn replace_bound(&mut self, id: BoundId, bound: Bound) {
+        self.bounds[id.0 as usize] = bound;
     }
 
     pub fn get_bounds(&self, bounds: Bounds) -> &[Bound] {
@@ -410,6 +424,82 @@ impl TypeTable {
             }
             types::UnresolvedType::Function { .. } => todo!("fn TypeInfo"),
             types::UnresolvedType::Infer(_) => TypeInfo::Unknown,
+        }
+    }
+
+    pub fn compatible_with_type(&self, info: TypeInfo, ty: &Type) -> bool {
+        if let Type::Generic(_) = ty {
+            // check that the generics can the type info
+            todo!()
+        }
+        match info {
+            TypeInfo::Unknown => true,
+            TypeInfo::UnknownSatisfying(_bounds) => {
+                todo!("check bound compatibility")
+            }
+            TypeInfo::Primitive(p) => {
+                let &Type::Primitive(p2) = ty else {
+                    return false;
+                };
+                p == p2
+            }
+            TypeInfo::Integer => {
+                let Type::Primitive(p) = ty else { return false };
+                p.is_int()
+            }
+            TypeInfo::Float => {
+                let Type::Primitive(p) = ty else { return false };
+                p.is_float()
+            }
+            TypeInfo::TypeDef(id, generics) => {
+                let Type::DefId {
+                    id: ty_id,
+                    generics: ty_generics,
+                } = ty
+                else {
+                    return false;
+                };
+                if id != *ty_id {
+                    return false;
+                }
+                debug_assert_eq!(generics.count, ty_generics.len() as _);
+                for (id, ty) in generics.iter().zip(ty_generics) {
+                    if !self.compatible_with_type(self[id], ty) {
+                        return false;
+                    }
+                }
+                true
+            }
+            TypeInfo::Pointer(_) => todo!(),
+            TypeInfo::Array { element, count } => todo!(),
+            TypeInfo::Enum(_) => todo!(),
+            TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::TypeItem { ty } => todo!(),
+            TypeInfo::TraitItem { module, id } => todo!(),
+            TypeInfo::FunctionItem {
+                module,
+                function,
+                generics,
+            } => todo!(),
+            TypeInfo::ModuleItem(_) => todo!(),
+            TypeInfo::MethodItem {
+                module,
+                function,
+                generics,
+            } => todo!(),
+            TypeInfo::TraitMethodItem {
+                module,
+                trait_id,
+                method_index,
+            } => todo!(),
+            TypeInfo::EnumVariantItem {
+                enum_type,
+                generics,
+                ordinal,
+                arg_types,
+            } => todo!(),
+            TypeInfo::Generic(_) => todo!(),
+            TypeInfo::Invalid => todo!(),
         }
     }
 
@@ -794,7 +884,14 @@ impl TypeTable {
                 else {
                     continue;
                 };
-                match traits::get_impl_candidates(info, self, generics, checked_trait) {
+                let checked_trait = Rc::clone(checked_trait);
+                match traits::get_impl_candidates(
+                    info,
+                    bound.generics,
+                    self,
+                    generics,
+                    &checked_trait,
+                ) {
                     traits::Candidates::None => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
@@ -809,7 +906,8 @@ impl TypeTable {
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                     }
                     traits::Candidates::Unique(impl_) => {
-                        let self_ty = impl_.instantiate(bound.generics, self, span);
+                        let self_ty =
+                            impl_.instantiate(bound.generics, generics, self, compiler, span);
                         match self_ty {
                             TypeInfoOrIdx::TypeInfo(info) => {
                                 self.specify(ty, info, generics, compiler, || span.in_mod(module))

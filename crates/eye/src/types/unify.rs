@@ -23,9 +23,10 @@ pub fn unify(
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
         (UnknownSatisfying(bounds), Generic(generic_id))
         | (Generic(generic_id), UnknownSatisfying(bounds)) => {
-            for bound in types.get_bounds(bounds) {
-                if !function_generics.satisfies_bound(generic_id, bound) {
-                    // TODO: error message with missing trait bound
+            for bound in bounds.iter() {
+                let bound = *types.get_bound(bound);
+                if !function_generics.unify_generic_bound(generic_id, &bound, types, compiler) {
+                    // TODO: more specific error message with missing trait bound
                     return None;
                 }
             }
@@ -41,8 +42,10 @@ pub fn unify(
                 else {
                     return Some(TypeInfo::Invalid);
                 };
+                let checked_trait = Rc::clone(checked_trait);
                 let candidates = traits::get_impl_candidates(
                     chosen_ty,
+                    bound.generics,
                     types,
                     function_generics,
                     &*checked_trait,
@@ -55,7 +58,13 @@ pub fn unify(
                         types.defer_impl_check(unified_id, bounds);
                     }
                     traits::Candidates::Unique(trait_impl) => {
-                        let self_ty = trait_impl.instantiate(bound.generics, types, bound.span);
+                        let self_ty = trait_impl.instantiate(
+                            bound.generics,
+                            function_generics,
+                            types,
+                            compiler,
+                            bound.span,
+                        );
                         match self_ty {
                             TypeInfoOrIdx::TypeInfo(info) => {
                                 chosen_ty = unify(
