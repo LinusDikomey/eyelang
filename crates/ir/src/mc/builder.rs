@@ -1,6 +1,6 @@
 use crate::Layout;
 
-use super::{MirBlock, OpType, RegClass, Register, VReg, VRegs};
+use super::{MirBlock, RegClass, Register, VReg, VRegs};
 
 use super::{Instruction, InstructionStorage, MachineIR, Op};
 
@@ -20,7 +20,7 @@ impl<'a, I: Instruction> BlockBuilder<'a, I> {
         #[cfg(debug_assertions)]
         {
             let expected = inst.ops();
-            let mut found = [OpType::Non; 4];
+            let mut found = [crate::mc::OpType::Non; 4];
             found[..N].copy_from_slice(&operands.map(|op| op.op_type()));
             if expected != found {
                 panic!("invalid operands to instruction {}", inst.to_str());

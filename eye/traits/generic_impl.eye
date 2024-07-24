@@ -1,7 +1,7 @@
 MyTrait :: trait {
     my_function :: fn(l Self, r Self) -> Self
 } for {
-    impl[T: OtherTrait] T {
+    impl[T: OtherTrait] _ for T {
         my_function ::fn(l T, r T) -> T {
             OtherTrait.f(l)
             ret l
@@ -12,10 +12,10 @@ MyTrait :: trait {
 OtherTrait :: trait {
     f :: fn(self Self) -> bool
 } for {
-    impl f32 {
+    impl _ for f32 {
         f :: fn(self f32) -> bool: self == 0.0
     }
-    impl f64 {
+    impl _ for f64 {
         f :: fn(self f64) -> bool: self == 0.0
     }
 }

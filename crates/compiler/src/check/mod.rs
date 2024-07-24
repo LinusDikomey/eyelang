@@ -3,6 +3,9 @@ mod exhaust;
 pub mod expr;
 mod lval;
 mod pattern;
+pub mod traits;
+
+pub use traits::check_trait;
 
 use id::ModuleId;
 use span::TSpan;
@@ -170,7 +173,6 @@ impl<'a> Ctx<'a> {
     }
 
     pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {
-        // TODO: finalize types?
         let (mut hir, types) = self
             .hir
             .finish(root, self.compiler, self.generics, self.module);
@@ -221,11 +223,27 @@ pub fn verify_main_signature(
 }
 
 fn get_string_literal(src: &str, span: TSpan) -> Box<str> {
-    src[span.start as usize + 1..span.end as usize]
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-        .replace("\\r", "\r")
-        .replace("\\0", "\0")
-        .replace("\\\"", "\"")
-        .into_boxed_str()
+    let inp = &src[span.start as usize + 1..span.end as usize];
+    let mut out = String::with_capacity(inp.len());
+    let mut saw_backslash = false;
+    for c in inp.chars() {
+        if saw_backslash {
+            let c = match c {
+                '\\' => '\\',
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => '\0',
+                '\"' => '\"',
+                _ => unreachable!("invalid escape should have been caught in parser"),
+            };
+            out.push(c);
+            saw_backslash = false;
+        } else if c == '\\' {
+            saw_backslash = true;
+        } else {
+            out.push(c);
+        }
+    }
+    out.into_boxed_str()
 }

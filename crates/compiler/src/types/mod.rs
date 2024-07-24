@@ -1,16 +1,15 @@
-use std::{f64::consts::PI, ops::Index, rc::Rc};
+use std::{ops::Index, rc::Rc};
 
 use id::{ModuleId, TypeId};
 use span::{Span, TSpan};
 use types::{Primitive, Type};
 
-pub mod traits;
 mod unify;
 
 use unify::unify;
 
 use crate::{
-    check::expr::int_ty_from_variant_count,
+    check::{expr::int_ty_from_variant_count, traits},
     compiler::{Def, Generics, ResolvedTypeDef},
     error::Error,
     parser::ast::{self, TraitId},
@@ -432,6 +431,8 @@ impl TypeTable {
             // check that the generics can the type info
             todo!()
         }
+        // TODO
+        #[allow(unused)]
         match info {
             TypeInfo::Unknown => true,
             TypeInfo::UnknownSatisfying(_bounds) => {

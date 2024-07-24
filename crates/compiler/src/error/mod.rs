@@ -58,12 +58,10 @@ impl Errors {
         self.warnings.len()
     }
 
-    #[cfg(feature = "lsp")]
     pub fn get_errors(&self) -> &[CompileError] {
         &self.errors
     }
 
-    #[cfg(feature = "lsp")]
     pub fn get_warnings(&self) -> &[CompileError] {
         &self.warnings
     }

@@ -179,11 +179,11 @@ impl<'a> Ctx<'a> {
     }
 
     fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> Option<ir::GlobalId> {
-        let parsed = self.compiler.get_module_ast_and_symbols(module);
+        let parsed = self.compiler.get_parsed_module(module);
         if let Some(global) = parsed.instances.globals[id.idx()] {
             Some(global)
         } else {
-            let parsed = self.compiler.get_module_ast_and_symbols(module);
+            let parsed = self.compiler.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
             let (ty, value) = self.compiler.get_checked_global(module, id);
             let ty = ty.clone();
@@ -197,10 +197,7 @@ impl<'a> Ctx<'a> {
                 ty,
                 value,
             });
-            self.compiler
-                .get_module_ast_and_symbols(module)
-                .instances
-                .globals[id.idx()] = Some(global_id);
+            self.compiler.get_parsed_module(module).instances.globals[id.idx()] = Some(global_id);
             Some(global_id)
         }
     }

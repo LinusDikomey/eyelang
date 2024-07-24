@@ -1,25 +1,5 @@
-#![deny(unused_must_use)]
-
 /// command line argument parsing
 mod args;
-/// typechecking and emitting hir from the ast
-mod check;
-/// the query-based compiler able to answer and cache various requests
-mod compiler;
-/// compiler errors and error formatting
-mod error;
-/// compile-time code evaluation
-mod eval;
-/// high-level intermediate representation that knows type information and resolved identifiers
-mod hir;
-/// hir->ir lowering
-mod irgen;
-/// call the system linker
-mod link;
-/// parse source code into an ast
-mod parser;
-/// TypeTable data structure and logic for type inference/checking
-mod types;
 
 use std::{
     ffi::CString,
@@ -27,12 +7,11 @@ use std::{
 };
 
 use args::Backend;
-pub use compiler::Compiler;
-use span::Span;
+pub use compiler::{Compiler, Span};
 
 use compiler::Def;
 
-use crate::error::Error;
+use compiler::error::Error;
 
 #[derive(Debug)]
 pub enum MainError {
@@ -47,6 +26,14 @@ pub enum MainError {
     LinkingFailed(String),
     RunningProgramFailed(std::io::Error),
 }
+impl From<compiler::ProjectError> for MainError {
+    fn from(value: compiler::ProjectError) -> Self {
+        match value {
+            compiler::ProjectError::CantAccessPath(err, path) => Self::CantAccessPath(err, path),
+            compiler::ProjectError::NonexistentPath(path) => Self::NonexistentPath(path),
+        }
+    }
+}
 
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
@@ -54,6 +41,7 @@ fn main() -> Result<(), MainError> {
         list_targets(args.backend);
         return Ok(());
     }
+    let start_time = std::time::Instant::now();
     let mut compiler = compiler::Compiler::new();
     if args.crash_on_error {
         compiler.errors.crash_on_error();
@@ -91,13 +79,23 @@ fn main() -> Result<(), MainError> {
     println!("Compiling {} ...", name);
 
     // add standard library
-    let std = compiler.add_project("std".to_owned(), "std".into())?;
+    let std_path = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|path| path.join("std/")))
+        .and_then(|std_path| {
+            std_path
+                .try_exists()
+                .is_ok_and(|exists| exists)
+                .then_some(std_path)
+        })
+        .unwrap_or(PathBuf::from("std/"));
+    let std = compiler.add_project("std".to_owned(), std_path)?;
     compiler.add_dependency(project, std);
     compiler.builtins.set_std(std);
 
     if args.reconstruct_src {
         let ast = compiler.get_module_ast(root_module);
-        parser::ast::repr::ReprPrinter::new("  ", ast).print_module();
+        compiler::ReprPrinter::new("  ", ast).print_module();
     }
 
     // always check the complete project
@@ -126,7 +124,7 @@ fn main() -> Result<(), MainError> {
                 }
             };
             let signature = compiler.get_signature(main_module, main_id);
-            if let Err(err) = check::verify_main_signature(signature, main_module) {
+            if let Err(err) = compiler::check::verify_main_signature(signature, main_module) {
                 if let Some(error) = err {
                     compiler.errors.emit_err(error);
                 }
@@ -217,6 +215,9 @@ fn main() -> Result<(), MainError> {
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
                 }
             }
+            if args.timings {
+                eprintln!("Compiling took {:?}", start_time.elapsed());
+            }
             if args.emit_obj || args.lib {
                 return Ok(());
             }
@@ -225,7 +226,9 @@ fn main() -> Result<(), MainError> {
             #[cfg(target_os = "windows")]
             let exe_file_extension = ".exe";
             let exe_file = format!("eyebuild/{name}{exe_file_extension}");
-            if let Err(err) = link::link(&obj_file, &exe_file, &args) {
+            if let Err(err) =
+                compiler::link(&obj_file, &exe_file, args.link_cmd.as_deref(), &args.link)
+            {
                 return Err(MainError::LinkingFailed(err));
             }
             if args.cmd == args::Cmd::Run {

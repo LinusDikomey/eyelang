@@ -1,7 +1,5 @@
 use std::process::{self, Command};
 
-use crate::args::Args;
-
 #[allow(unused)]
 enum Os {
     Linux,
@@ -21,12 +19,17 @@ const OS: Option<Os> = Some(Os::Osx);
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 const OS: Option<Os> = None;
 
-pub fn link(obj: &str, out: &str, args: &Args) -> Result<(), String> {
-    let mut cmd = if let Some(link) = &args.link_cmd {
+pub fn link(
+    obj: &str,
+    out: &str,
+    linker_cmd: Option<&str>,
+    linked_libraries: &[String],
+) -> Result<(), String> {
+    let mut cmd = if let Some(link) = &linker_cmd {
         let mut cmd = Command::new("eval");
         cmd.arg(link.replace("[OBJ]", obj).replace("[OUT]", out));
         cmd
-    } else if let Some(cmd) = link_cmd(obj, out, &args.link) {
+    } else if let Some(cmd) = link_cmd(obj, out, linked_libraries) {
         cmd
     } else {
         return Err(format!("No link command known for this OS. You can manually link the object file created: {obj}"));

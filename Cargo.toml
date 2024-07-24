@@ -2,6 +2,7 @@
 
 members = [
     "crates/eye",
+    "crates/compiler",
     "crates/span",
     "crates/types",
     "crates/id",

@@ -161,10 +161,7 @@ pub fn check(
             let resolved_id =
                 ctx.compiler
                     .add_type_def(ctx.module, id, "<anonymous type>".into(), generic_count);
-            ctx.compiler
-                .get_module_ast_and_symbols(ctx.module)
-                .symbols
-                .types[id.idx()] = Some(resolved_id);
+            ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()] = Some(resolved_id);
             let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
             let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));
             ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| {

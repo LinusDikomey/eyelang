@@ -12,7 +12,7 @@ use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, Primitive, Type, UnresolvedType};
 
 use crate::{
-    check,
+    check::{self, traits},
     error::{CompileError, Error, Errors, ImplIncompatibility},
     eval::{self, ConstValue},
     hir::HIR,
@@ -21,8 +21,7 @@ use crate::{
         self,
         ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
-    types::{traits, Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
-    MainError,
+    types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use builtins::Builtins;
@@ -53,13 +52,13 @@ impl Compiler {
         }
     }
 
-    pub fn add_project(&mut self, name: String, root: PathBuf) -> Result<ProjectId, MainError> {
+    pub fn add_project(&mut self, name: String, root: PathBuf) -> Result<ProjectId, ProjectError> {
         let root = root.canonicalize().unwrap_or(root);
         if !root
             .try_exists()
-            .map_err(|err| MainError::CantAccessPath(err, root.clone()))?
+            .map_err(|err| ProjectError::CantAccessPath(err, root.clone()))?
         {
-            return Err(MainError::NonexistentPath(root));
+            return Err(ProjectError::NonexistentPath(root));
         }
         for (project, i) in self.projects.iter().zip(0..) {
             if project.name == name && project.root == root {
@@ -131,10 +130,10 @@ impl Compiler {
     }
 
     pub fn get_module_ast(&mut self, module_id: ModuleId) -> &Rc<Ast> {
-        &self.get_module_ast_and_symbols(module_id).ast
+        &self.get_parsed_module(module_id).ast
     }
 
-    pub fn get_module_ast_and_symbols(&mut self, module_id: ModuleId) -> &mut ParsedModule {
+    pub fn get_parsed_module(&mut self, module_id: ModuleId) -> &mut ParsedModule {
         if self.modules[module_id.idx()].ast.is_some() {
             // borrowing bullshit
             let Some(parsed) = &mut self.modules[module_id.idx()].ast else {
@@ -574,7 +573,7 @@ impl Compiler {
         }
     }
 
-    fn resolve_generics(
+    pub fn resolve_generics(
         &mut self,
         generics: &[GenericDef],
         module: ModuleId,
@@ -623,7 +622,7 @@ impl Compiler {
         Generics { generics }
     }
 
-    fn check_signature(
+    pub fn check_signature(
         &mut self,
         function: &ast::Function,
         module: ModuleId,
@@ -660,7 +659,7 @@ impl Compiler {
 
     pub fn get_trait_generic_count(&mut self, trait_id: (ModuleId, TraitId)) -> u8 {
         // subtract the self generic
-        (self.get_module_ast_and_symbols(trait_id.0).ast[trait_id.1]
+        (self.get_parsed_module(trait_id.0).ast[trait_id.1]
             .generics
             .len()
             - 1)
@@ -674,12 +673,12 @@ impl Compiler {
         module: ModuleId,
         id: ast::TraitId,
     ) -> Option<&Rc<CheckedTrait>> {
-        let parsed = self.get_module_ast_and_symbols(module);
+        let parsed = self.get_parsed_module(module);
         match &parsed.symbols.traits[id.idx()] {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
                 let Resolvable::Resolved(checked) =
-                    &self.get_module_ast_and_symbols(module).symbols.traits[id.idx()]
+                    &self.get_parsed_module(module).symbols.traits[id.idx()]
                 else {
                     unreachable!()
                 };
@@ -693,121 +692,8 @@ impl Compiler {
             }
             Resolvable::Unresolved => {
                 let ast = Rc::clone(&parsed.ast);
-                let def = &ast[id];
-                // don't include self type in generics, it is handled seperately
-                let generics = self.resolve_generics(&def.generics[1..], module, def.scope, &ast);
-                let mut functions_by_name = dmap::with_capacity(def.functions.len());
-                let functions: Vec<Signature> = def
-                    .functions
-                    .iter()
-                    .zip(0..)
-                    .map(|((name_span, function), function_index)| {
-                        let name = ast[*name_span].to_owned();
-                        let prev = functions_by_name.insert(name, function_index);
-                        if prev.is_some() {
-                            self.errors.emit_err(
-                                Error::DuplicateDefinition.at_span(name_span.in_mod(module)),
-                            );
-                        }
-                        self.check_signature(function, module, &ast)
-                    })
-                    .collect();
-                let base_offset = def.generics.len() as u8;
-                let impls = def
-                    .impls
-                    .iter()
-                    .map(|impl_| {
-                        let impl_generics =
-                            self.resolve_generics(&impl_.generics, module, impl_.scope, &ast);
-
-                        let trait_generics: Vec<_> = impl_
-                            .trait_generics
-                            .0
-                            .iter()
-                            .map(|generic| self.resolve_type(generic, module, impl_.scope))
-                            .collect();
-
-                        let impl_ty =
-                            self.resolve_type(&impl_.implemented_type, module, impl_.scope);
-                        let impl_tree = traits::ImplTree::from_type(&impl_ty, self);
-                        let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
-                        for &(name_span, function) in &impl_.functions {
-                            let name = &ast[name_span];
-                            let Some(&function_idx) = functions_by_name.get(name) else {
-                                let trait_name = ast.src()[def.associated_name.range()].to_owned();
-                                self.errors.emit_err(
-                                    Error::NotATraitMember {
-                                        trait_name,
-                                        function: name.to_owned(),
-                                    }
-                                    .at_span(name_span.in_mod(module)),
-                                );
-                                continue;
-                            };
-                            if function_ids[function_idx as usize].0 != u32::MAX {
-                                self.errors.emit_err(
-                                    Error::DuplicateDefinition.at_span(name_span.in_mod(module)),
-                                );
-                                continue;
-                            }
-
-                            let signature = self.get_signature(module, function);
-                            let trait_signature = &functions[function_idx as usize];
-                            let base_generic = |i: u8| match i {
-                                0 => &impl_ty,
-                                i => &trait_generics[(i - 1) as usize],
-                            };
-                            let compatible = signature.compatible_with(
-                                trait_signature,
-                                impl_generics.count(),
-                                base_offset,
-                                base_generic,
-                            );
-                            match compatible {
-                                Ok(None) | Err(()) => {}
-                                Ok(Some(incompat)) => self.errors.emit_err(
-                                    Error::TraitSignatureMismatch(incompat)
-                                        .at_span(name_span.in_mod(module)),
-                                ),
-                            }
-                            function_ids[function_idx as usize] = function;
-                        }
-                        let mut unimplemented = Vec::new();
-                        for (name, &i) in &functions_by_name {
-                            if function_ids[i as usize] == ast::FunctionId(u32::MAX) {
-                                unimplemented.push(name.clone());
-                            }
-                        }
-                        if !unimplemented.is_empty() {
-                            self.errors.emit_err(
-                                Error::NotAllFunctionsImplemented { unimplemented }
-                                    .at_span(ast[impl_.scope].span.in_mod(module)),
-                            );
-                        }
-                        traits::Impl {
-                            generics: impl_generics,
-                            trait_generics,
-                            impl_ty: impl_tree,
-                            impl_module: module,
-                            functions: function_ids,
-                        }
-                    })
-                    .collect();
-                Some(
-                    self.get_module_ast_and_symbols(module).symbols.traits[id.idx()].put(Rc::new(
-                        CheckedTrait {
-                            name: if def.associated_name == TSpan::MISSING {
-                                "<unnamed trait>".into()
-                            } else {
-                                ast[def.associated_name].into()
-                            },
-                            generics,
-                            functions,
-                            functions_by_name,
-                            impls,
-                        },
-                    )),
-                )
+                let checked = check::check_trait(self, ast, (module, id));
+                Some(self.get_parsed_module(module).symbols.traits[id.idx()].put(Rc::new(checked)))
             }
         }
     }
@@ -1024,12 +910,12 @@ impl Compiler {
     }
 
     pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(Type, ConstValue) {
-        let parsed = self.get_module_ast_and_symbols(module);
+        let parsed = self.get_parsed_module(module);
         let ast = parsed.ast.clone();
         match &parsed.symbols.globals[id.idx()] {
             Resolvable::Resolved(_) => {
                 let Resolvable::Resolved(global) =
-                    &self.get_module_ast_and_symbols(module).symbols.globals[id.idx()]
+                    &self.get_parsed_module(module).symbols.globals[id.idx()]
                 else {
                     unreachable!()
                 };
@@ -1039,7 +925,7 @@ impl Compiler {
                 let span = ast[id].span.in_mod(module);
                 self.errors
                     .emit_err(Error::RecursiveDefinition.at_span(span));
-                self.get_module_ast_and_symbols(module).symbols.globals[id.idx()]
+                self.get_parsed_module(module).symbols.globals[id.idx()]
                     .put((Type::Invalid, ConstValue::Undefined))
             }
             Resolvable::Unresolved => {
@@ -1176,7 +1062,7 @@ impl Compiler {
         function: ast::FunctionId,
         generics: Vec<Type>,
     ) -> ir::FunctionId {
-        self.get_module_ast_and_symbols(module);
+        self.get_parsed_module(module);
         let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().instances;
 
         let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
@@ -1262,12 +1148,7 @@ impl Compiler {
                 };
                 hir.dump(self);
             }
-            module_queue.extend(
-                self.get_module_ast_and_symbols(module)
-                    .child_modules
-                    .iter()
-                    .copied(),
-            )
+            module_queue.extend(self.get_parsed_module(module).child_modules.iter().copied())
         }
     }
 
@@ -1375,6 +1256,11 @@ impl Compiler {
         }
         false
     }
+}
+
+pub enum ProjectError {
+    CantAccessPath(std::io::Error, PathBuf),
+    NonexistentPath(PathBuf),
 }
 
 #[derive(Debug, Default)]

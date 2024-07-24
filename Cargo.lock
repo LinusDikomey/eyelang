@@ -129,6 +129,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acbf1af155f9b9ef647e42cdc158db4b64a1b61f743629225fde6f3e0be2a7c7"
 
 [[package]]
+name = "compiler"
+version = "0.1.0"
+dependencies = [
+ "color-format",
+ "dmap",
+ "id",
+ "ir",
+ "pathdiff",
+ "span",
+ "types",
+]
+
+[[package]]
 name = "dmap"
 version = "0.1.0"
 
@@ -138,14 +151,11 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "color-format",
- "dmap",
- "id",
+ "compiler",
  "ir",
  "ir-backend-llvm",
  "ir-backend-x86",
  "pathdiff",
- "span",
- "types",
 ]
 
 [[package]]

@@ -1,7 +1,6 @@
 use std::{
     ffi::{CStr, CString},
     path::Path,
-    ptr,
 };
 
 use llvm::{
@@ -113,7 +112,7 @@ impl Backend {
 
         #[cfg(debug_assertions)]
         {
-            let mut msg = ptr::null_mut();
+            let mut msg = std::ptr::null_mut();
             let action = llvm::analysis::LLVMVerifierFailureAction::LLVMAbortProcessAction;
             let invalid =
                 unsafe { llvm::analysis::LLVMVerifyModule(llvm_module, action, &mut msg) };

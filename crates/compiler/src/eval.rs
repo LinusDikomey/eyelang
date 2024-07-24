@@ -225,14 +225,13 @@ pub fn def_expr(
                 mismatched_type(compiler, Primitive::Type.to_string());
                 return Def::Invalid;
             }
-            let symbols = &mut compiler.get_module_ast_and_symbols(module).symbols;
+            let symbols = &mut compiler.get_parsed_module(module).symbols;
             let (id, generic_count) = if let Some(id) = symbols.types[id.idx()] {
                 (id, compiler.get_resolved_type_generic_count(id))
             } else {
                 let generic_count = ast[id].generic_count();
                 let assigned_id = compiler.add_type_def(module, id, name.into(), generic_count);
-                compiler.get_module_ast_and_symbols(module).symbols.types[id.idx()] =
-                    Some(assigned_id);
+                compiler.get_parsed_module(module).symbols.types[id.idx()] = Some(assigned_id);
                 (assigned_id, generic_count)
             };
             if generic_count == 0 {
