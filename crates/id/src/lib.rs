@@ -16,12 +16,6 @@ macro_rules! id {
     };
 }
 
-id!(ProjectId);
-impl Default for ProjectId {
-    fn default() -> Self {
-        Self::MISSING
-    }
-}
 id!(ModuleId);
 id!(TypeId);
 id!(ConstValueId);

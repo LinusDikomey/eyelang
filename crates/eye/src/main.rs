@@ -25,6 +25,7 @@ pub enum MainError {
     BackendFailed(String),
     LinkingFailed(String),
     RunningProgramFailed(std::io::Error),
+    LspFailed(String),
 }
 impl From<compiler::ProjectError> for MainError {
     fn from(value: compiler::ProjectError) -> Self {
@@ -37,6 +38,17 @@ impl From<compiler::ProjectError> for MainError {
 
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
+    match args.cmd {
+        args::Cmd::ListTargets => {
+            list_targets(args.backend);
+            return Ok(());
+        }
+        #[cfg(feature = "lsp")]
+        args::Cmd::Lsp => {
+            return eye_lsp::run().map_err(|err| MainError::LspFailed(format!("{err:?}")));
+        }
+        _ => {}
+    }
     if let args::Cmd::ListTargets = args.cmd {
         list_targets(args.backend);
         return Ok(());
@@ -243,9 +255,9 @@ fn main() -> Result<(), MainError> {
                 std::process::exit(exit_code);
             }
         }
-        #[cfg(feature = "lsp")]
-        args::Cmd::Lsp => todo!("reimplement lsp"),
         args::Cmd::ListTargets => unreachable!(),
+        #[cfg(feature = "lsp")]
+        args::Cmd::Lsp => unreachable!(),
     }
 
     Ok(())

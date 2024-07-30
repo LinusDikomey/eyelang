@@ -1,8 +1,8 @@
-use id::{ModuleId, ProjectId, TypeId};
+use id::{ModuleId, TypeId};
 use span::Span;
 use types::Type;
 
-use crate::{parser::ast::FunctionId, Compiler};
+use crate::{parser::ast::FunctionId, Compiler, ProjectId};
 
 use super::Def;
 

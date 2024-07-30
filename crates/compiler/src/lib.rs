@@ -23,3 +23,10 @@ pub use compiler::{Compiler, Def, ProjectError};
 pub use link::link;
 pub use parser::ast::repr::ReprPrinter;
 pub use span::{IdentPath, Span, TSpan};
+
+id::id!(ProjectId);
+impl Default for ProjectId {
+    fn default() -> Self {
+        Self::MISSING
+    }
+}

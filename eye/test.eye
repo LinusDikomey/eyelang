@@ -29,7 +29,7 @@ main :: fn {
     print(name, "\n")
     inp := parse("123456789")
     # print("You entered: ", string(inp), "\n")
-    
+
     x := 4
 
     if inp < 5:
@@ -43,7 +43,7 @@ main :: fn {
     # test()("Calling return value from test()\n")
 
     printVec3(addVec3(Vec3(1., 2., 3.), Vec3(4., 7., 9.)))
-    
+
     i := 5
     while i < 10: i = incAndPrint(i)
     incAndPrint :: fn(i i32) -> i32 {

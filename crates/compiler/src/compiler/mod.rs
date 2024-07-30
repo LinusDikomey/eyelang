@@ -7,7 +7,7 @@ use std::{
 };
 
 use dmap::DHashMap;
-use id::{ConstValueId, ModuleId, ProjectId, TypeId};
+use id::{ConstValueId, ModuleId, TypeId};
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, Primitive, Type, UnresolvedType};
 
@@ -22,6 +22,7 @@ use crate::{
         ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
+    ProjectId,
 };
 
 use builtins::Builtins;
@@ -1431,7 +1432,7 @@ pub struct Project {
     pub name: String,
     pub root: PathBuf,
     pub root_module: id::ModuleId,
-    pub dependencies: Vec<id::ProjectId>,
+    pub dependencies: Vec<ProjectId>,
 }
 pub struct Module {
     pub path: PathBuf,
