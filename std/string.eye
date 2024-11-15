@@ -25,6 +25,12 @@ str :: struct {
         ret true
     }
 
+    clone :: fn(this str) -> str {
+        new_ptr := malloc(this.len)
+        memcpy(new_ptr, this.ptr, this.len)
+        ret str(new_ptr, this.len)
+    }
+
     slice :: fn(this str, start u64, end u64) -> str {
         if end > this.len {
             printf("[PANIC]: string slice out of range: %d..%d > %d\n".ptr, start, end, this.len)
@@ -114,19 +120,20 @@ str :: struct {
 
     make_ascii_lowercase :: fn(this *str) {
         i := 0
-        white i < this.len {
+        while i < this.len {
             char_ptr := ptr_add(this.ptr, i)
-            if char_ptr^ >= "A".ptr^ && char_ptr^ <= "Z".ptr^ {
+            if char_ptr^ >= "A".ptr^ and char_ptr^ <= "Z".ptr^ {
                 char_ptr^ += 32
             }
             i += 1
         }
     }
+
     make_ascii_uppercase :: fn(this str) {
         i := 0
-        white i < this.len {
+        while i < this.len {
             char_ptr := ptr_add(this.ptr, i)
-            if char_ptr^ >= "A".ptr^ && char_ptr^ <= "Z".ptr^ {
+            if char_ptr^ >= "a".ptr^ and char_ptr^ <= "z".ptr^ {
                 char_ptr^ -= 32
             }
             i += 1
