@@ -112,6 +112,27 @@ str :: struct {
         ret this.slice(start, end)
     }
 
+    make_ascii_lowercase :: fn(this *str) {
+        i := 0
+        white i < this.len {
+            char_ptr := ptr_add(this.ptr, i)
+            if char_ptr^ >= "A".ptr^ && char_ptr^ <= "Z".ptr^ {
+                char_ptr^ += 32
+            }
+            i += 1
+        }
+    }
+    make_ascii_uppercase :: fn(this str) {
+        i := 0
+        white i < this.len {
+            char_ptr := ptr_add(this.ptr, i)
+            if char_ptr^ >= "A".ptr^ && char_ptr^ <= "Z".ptr^ {
+                char_ptr^ -= 32
+            }
+            i += 1
+        }
+    }
+
     get :: fn(this str, index u64) -> Option[str] {
         if index >= this.len: ret .None
         ret .Some(str(ptr_add(this.ptr, index), 1))
