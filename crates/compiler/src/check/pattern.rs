@@ -183,12 +183,12 @@ pub fn check(
                 }
             }
         }
-        /*
         &Expr::Tuple(span, members) => {
             let member_types = ctx.hir.types.add_multiple_unknown(members.count);
-            ctx.specify(expected, TypeInfo::Tuple(member_types, TupleCountMode::Exact), span.in_mod(ctx.scope().module.id));
+            // PERF: could add .specify_tuple to avoid adding more types than necessary
+            ctx.specify(expected, TypeInfo::Tuple(member_types), |_| span);
             let do_exhaust_checks = match exhaustion {
-                Exhaustion::Full | Exhaustion::Invalid => true,
+                Exhaustion::Full | Exhaustion::Invalid => false,
                 Exhaustion::None => {
                     *exhaustion = Exhaustion::Tuple(vec![Exhaustion::None; members.count as usize]);
                     true
@@ -199,20 +199,36 @@ pub fn check(
                     false
                 }
             };
-            for (i, (&item_pat, ty)) in ctx.ast[members].iter().zip(member_types.iter()).enumerate() {
-                if do_exhaust_checks {
-                    let Exhaustion::Tuple(members) = exhaustion else { unreachable!() };
-                    pat(item_pat, ty, ctx.reborrow(), &mut members[i]);
+            let member_patterns = ctx.hir.add_invalid_patterns(members.count);
+            for (i, ((item_pat, ty), pat_id)) in members
+                .into_iter()
+                .zip(member_types.iter())
+                .zip(member_patterns.iter())
+                .enumerate()
+            {
+                let pat = if do_exhaust_checks {
+                    let Exhaustion::Tuple(member_exhaustion) = exhaustion else {
+                        unreachable!()
+                    };
+                    check(ctx, variables, &mut member_exhaustion[i], item_pat, ty)
                 } else {
-                    pat(item_pat, ty, ctx.reborrow(), &mut Exhaustion::Full);
+                    check(ctx, variables, &mut Exhaustion::Full, item_pat, ty)
                 };
+                ctx.hir.modify_pattern(pat_id, pat);
+            }
+            debug_assert_eq!(members.count, member_patterns.count);
+            debug_assert_eq!(members.count, member_types.count);
+            Pattern::Tuple {
+                member_count: members.count,
+                patterns: member_patterns.index,
+                types: member_types.idx,
             }
         }
-        */
         _ => {
             ctx.compiler
                 .errors
                 .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
+            *exhaustion = Exhaustion::Invalid;
             Pattern::Invalid
         }
     }

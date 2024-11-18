@@ -868,7 +868,18 @@ fn lower_pattern(
             ctx.builder.build_store(var, value);
         }
         Pattern::Ignore => {}
-        Pattern::Tuple(_) => todo!(),
+        &Pattern::Tuple {
+            member_count,
+            patterns,
+            types,
+        } => {
+            for i in 0..member_count {
+                let member_pat = PatternId(patterns + i);
+                let member_ty = ctx.get_type(ctx.types[LocalTypeId(types + i)])?;
+                let member_value = ctx.builder.build_member_value(value, i, member_ty);
+                lower_pattern(ctx, member_pat, member_value, on_mismatch)?;
+            }
+        }
         &Pattern::Int(sign, val, ty) => {
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 panic!("integer type expected")

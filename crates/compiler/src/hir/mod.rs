@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    mem,
+    ops::{Index, IndexMut},
+};
 
 use id::{id, ConstValueId, ModuleId};
 use types::{FloatType, IntType, Primitive};
@@ -432,13 +435,32 @@ impl HIR {
                 types.dump_type(compiler, var_ty);
             }
             Pattern::Ignore => eprint!("_"),
-            Pattern::Tuple(ids) => {
+            &Pattern::Tuple {
+                member_count,
+                patterns,
+                types: type_ids,
+            } => {
                 eprint!("(");
-                for (i, id) in ids.iter().enumerate() {
+                let pats = PatternIds {
+                    index: patterns,
+                    count: member_count,
+                };
+                let type_ids = LocalTypeIds {
+                    idx: type_ids,
+                    count: member_count,
+                };
+                for (i, pat) in pats.iter().enumerate() {
                     if i != 0 {
                         eprint!(" ");
                     }
-                    self.dump_pattern(id, compiler, types);
+                    self.dump_pattern(pat, compiler, types);
+                }
+                eprint!("): (");
+                for (i, ty) in type_ids.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    types.dump_type(compiler, ty);
                 }
                 eprint!(")");
             }
@@ -760,7 +782,13 @@ pub enum Pattern {
     Invalid,
     Variable(VarId),
     Ignore,
-    Tuple(PatternIds),
+    Tuple {
+        member_count: u32,
+        /// member_count Patterns start index
+        patterns: u32,
+        /// member_count LocalTypeIds start index
+        types: u32,
+    },
     Int(bool, u128, LocalTypeId),
     Bool(bool),
     String(Box<str>),
