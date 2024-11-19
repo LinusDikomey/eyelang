@@ -1,11 +1,15 @@
 use string.str
 use option.Option
 
-print :: fn(s str) {
+print :: fn[T: ToString](value T) {
+    s := ToString.to_string(&value)
     c.printf("%.*s".ptr, s.len as i32, s.ptr)
+    c.free(s.ptr)
 }
-println :: fn(s str) {
+println :: fn[T: ToString](value T) {
+    s := ToString.to_string(&value)
     c.printf("%.*s\n".ptr, s.len as i32, s.ptr)
+    c.free(s.ptr)
 }
 
 skip_char :: fn {
@@ -24,6 +28,36 @@ input :: fn(msg str) -> str {
     print(msg)
     line := readline()
     ret line
+}
+
+ASCII_0 :: 48
+
+ToString :: trait {
+    to_string :: fn(this *Self) -> str
+} for {
+    impl _ for u32 {
+        to_string ::fn(this *u32) -> str {
+            x := this^
+            buf: [u8; 10] = [0,0,0,0,0,0,0,0,0,ASCII_0]
+            i := 9
+            while x >= 10 {
+                last_digit := x % 10
+                buf[i] = ASCII_0 + last_digit as u8
+                i -= 1
+                x /= 10
+            }
+            if x != 0 {
+                buf[i] = ASCII_0 + x as u8
+            } else i += 1
+            len := 10 - i
+            ptr := c.malloc(len)
+            c.memcpy(ptr, (&buf[i]) as *i8, len)
+            ret str(ptr, len)
+        }
+    }
+    impl _ for str {
+        to_string :: fn(this *str) -> str: this.clone()
+    }
 }
 
 int_to_str :: fn(i i32) -> str {

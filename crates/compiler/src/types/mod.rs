@@ -130,7 +130,13 @@ impl TypeTable {
     pub fn to_resolved(&self, info: TypeInfo, generics: &[Type]) -> Type {
         match info {
             TypeInfo::Primitive(p) => Type::Primitive(p),
-            TypeInfo::Unknown | TypeInfo::Integer | TypeInfo::Float => unreachable!(),
+            TypeInfo::Unknown
+            | TypeInfo::Integer
+            | TypeInfo::Float
+            | TypeInfo::Array {
+                element: _,
+                count: None,
+            } => unreachable!(),
             TypeInfo::Pointer(pointee) => {
                 Type::Pointer(Box::new(self.to_resolved(self[pointee], generics)))
             }
@@ -143,6 +149,10 @@ impl TypeTable {
             },
             TypeInfo::Invalid => Type::Invalid,
             TypeInfo::Generic(i) => generics[i as usize].clone(),
+            TypeInfo::Array {
+                element,
+                count: Some(count),
+            } => Type::Array(Box::new((self.to_resolved(self[element], generics), count))),
             _ => todo!("type to resolved: {info:?}"),
         }
     }
