@@ -70,8 +70,8 @@ impl IdentPath {
         src: &'a str,
     ) -> (
         Option<TSpan>,
-        impl Iterator<Item = (&str, TSpan)>,
-        Option<(&str, TSpan)>,
+        impl Iterator<Item = (&'a str, TSpan)>,
+        Option<(&'a str, TSpan)>,
     ) {
         let start_addr = src.as_ptr() as usize;
 

@@ -1,7 +1,4 @@
-use std::{
-    mem,
-    ops::{Index, IndexMut},
-};
+use std::ops::{Index, IndexMut};
 
 use id::{id, ConstValueId, ModuleId};
 use types::{FloatType, IntType, Primitive};

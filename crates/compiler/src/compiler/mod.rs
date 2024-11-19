@@ -244,8 +244,10 @@ impl Compiler {
                 ),
             };
 
-            // TODO: handle errors, don't just create them here and ignore them
             let mut errors = Errors::new();
+            if self.errors.crash_on_error() {
+                errors.enable_crash_on_error();
+            }
             let ast = parser::parse(source, &mut errors, module_id, definitions);
             self.errors.append(errors);
             let checked = ModuleSymbols::empty(&ast);

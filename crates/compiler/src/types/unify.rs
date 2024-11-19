@@ -32,7 +32,13 @@ pub fn unify(
             }
             Generic(generic_id)
         }
-        (UnknownSatisfying(_a), UnknownSatisfying(_b)) => todo!("join bounds"),
+        (UnknownSatisfying(a), UnknownSatisfying(b)) => {
+            // TODO: this might not work and it might be much better to unify duplicate traits
+            // PERF: avoid the vec and allocate into new bounds instead
+            let mut bounds = types.get_bounds(a).to_vec();
+            bounds.extend_from_slice(types.get_bounds(b));
+            UnknownSatisfying(types.add_bounds(bounds))
+        }
         (t, UnknownSatisfying(bounds)) | (UnknownSatisfying(bounds), t) => {
             let mut chosen_ty = t;
             for bound in bounds.iter() {

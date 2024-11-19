@@ -90,7 +90,11 @@ impl Errors {
         }
     }
 
-    pub fn crash_on_error(&mut self) {
+    pub fn crash_on_error(&self) -> bool {
+        self.crash_on_error
+    }
+
+    pub fn enable_crash_on_error(&mut self) {
         self.crash_on_error = true;
     }
 }

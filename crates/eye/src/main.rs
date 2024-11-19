@@ -56,7 +56,8 @@ fn main() -> Result<(), MainError> {
     let start_time = std::time::Instant::now();
     let mut compiler = compiler::Compiler::new();
     if args.crash_on_error {
-        compiler.errors.crash_on_error();
+        eprintln!("enabling crash on error");
+        compiler.errors.enable_crash_on_error();
     }
 
     let (name, path) = match &args.path {

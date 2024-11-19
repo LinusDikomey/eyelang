@@ -9,5 +9,6 @@ use root.panic
 use root.option.Option
 
 use root.string.str
+use root.string.ToString
 
 use root.list.List

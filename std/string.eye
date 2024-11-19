@@ -5,6 +5,7 @@ use root.c.memcpy
 use root.c.printf
 use root.c.exit
 use root.panic
+use root.int.Int
 
 # represents a string slice
 str :: struct {
@@ -148,6 +149,8 @@ str :: struct {
 
 NEWLINE: i8 : 10
 CARRIAGE_RETURN: i8 : 13
+ASCII_0 :: 48
+ASCII_MINUS :: 45
 
 len :: fn(s *i8) -> u64: root.c.strlen(s) as _
 
@@ -187,3 +190,78 @@ is_whitespace :: fn(c u8) -> bool: match c {
     32: true, # whitespace
     _: false,
 }
+
+ToString :: trait {
+    to_string :: fn(this *Self) -> str
+} for {
+    impl _ for str {
+        to_string :: fn(this *str) -> str: this.clone()
+    }
+
+    impl _ for u8 {
+        to_string ::fn(this *u8) -> str: int_to_string(this^)
+    }
+    impl _ for u16 {
+        to_string ::fn(this *u16) -> str: int_to_string(this^)
+    }
+    impl _ for u32 {
+        to_string ::fn(this *u32) -> str: int_to_string(this^)
+    }
+    impl _ for u64 {
+        to_string ::fn(this *u64) -> str: int_to_string(this^)
+    }
+    impl _ for i8 {
+        to_string ::fn(this *i8) -> str: int_to_string(this^)
+    }
+    impl _ for i16 {
+        to_string ::fn(this *i16) -> str: int_to_string(this^)
+    }
+    impl _ for i32 {
+        to_string ::fn(this *i32) -> str: int_to_string(this^)
+    }
+    impl _ for i64 {
+        to_string ::fn(this *i64) -> str: int_to_string(this^)
+    }
+
+}
+
+int_to_string :: fn[T: Int](x T) -> str {
+    # 20 digits are needed at most for a u64/i64
+    MAX_LEN :: 20
+    buf: [u8; 20] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,ASCII_0]
+    i := MAX_LEN - 1
+    negative := false
+    min_signed_int := false
+    if x < Int.zero() {
+        negative = true
+        x = -x
+        # handle min signed int
+        if x < Int.zero() {
+            # this is very hacky but we subtract one to get the max signed int and fix the last
+            # digit later since it is never 9
+            min_signed_int = true
+            x = Int.sub(x, Int.one())
+        }
+    }
+    while x >= Int.ten() {
+        last_digit := Int.mod(x, Int.ten())
+        buf[i] = ASCII_0 + Int.as_u8(last_digit)
+        i -= 1
+        x = Int.div(x, Int.ten())
+    }
+    if !Int.eq(x, Int.zero()) {
+        buf[i] = ASCII_0 + Int.as_u8(x)
+    } else if i != MAX_LEN - 1 {
+        i += 1
+    }
+    if negative {
+        i -= 1
+        buf[i] = ASCII_MINUS
+        if min_signed_int: buf[MAX_LEN-1] += 1
+    }
+    len := MAX_LEN - i
+    ptr := malloc(len)
+    memcpy(ptr, (&buf[i]) as *i8, len)
+    ret str(ptr, len)
+}
+

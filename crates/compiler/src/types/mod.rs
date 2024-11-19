@@ -896,6 +896,8 @@ impl TypeTable {
                     continue;
                 };
                 let checked_trait = Rc::clone(checked_trait);
+                // TODO: probably should retry impl candidates in a loop as long as one bound has
+                // multiple candidates but progress is made
                 match traits::get_impl_candidates(
                     info,
                     bound.generics,
@@ -932,13 +934,37 @@ impl TypeTable {
                     }
                     traits::Candidates::Multiple => {
                         let name = checked_trait.name.clone();
-                        compiler.errors.emit_err(
-                            Error::TypeAnnotationNeeded {
-                                bound: name, // TODO: should also show generics here
+                        let retry_with = match info {
+                            TypeInfo::Integer => Some(TypeInfo::Primitive(Primitive::I32)),
+                            TypeInfo::Float => Some(TypeInfo::Primitive(Primitive::F32)),
+                            _ => None,
+                        };
+                        let new_candidate = retry_with.and_then(|new_info| {
+                            let new_candidates = traits::get_impl_candidates(
+                                new_info,
+                                bound.generics,
+                                self,
+                                generics,
+                                &checked_trait,
+                            );
+                            if let traits::Candidates::Unique(impl_) = new_candidates {
+                                Some((new_info, impl_))
+                            } else {
+                                None
                             }
-                            .at_span(span.in_mod(module)),
-                        );
-                        self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
+                        });
+                        if let Some((new_info, impl_)) = new_candidate {
+                            impl_.instantiate(bound.generics, generics, self, compiler, span);
+                            self.replace(idx, new_info);
+                        } else {
+                            compiler.errors.emit_err(
+                                Error::TypeAnnotationNeeded {
+                                    bound: name, // TODO: should also show generics here
+                                }
+                                .at_span(span.in_mod(module)),
+                            );
+                            self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
+                        }
                     }
                 }
             }
