@@ -3,6 +3,8 @@ mod lexer;
 mod reader;
 pub mod token;
 
+use std::collections::hash_map::Entry;
+
 use dmap::DHashMap;
 pub use reader::ExpectedTokens;
 
@@ -138,7 +140,7 @@ impl<'a> Parser<'a> {
         definitions: DHashMap<String, Definition>,
         mut end: impl FnMut(&mut Self) -> bool,
         mut on_expr: impl FnMut(&mut Self, &mut ast::Scope, ScopeId, Expr, Span) -> ParseResult<()>,
-    ) -> ParseResult<ScopeId> {
+    ) -> Result<ScopeId, CompileError> {
         let scope_id = self.ast.scope(ast::Scope::missing());
         let mut scope = ast::Scope {
             parent,
@@ -156,29 +158,42 @@ impl<'a> Parser<'a> {
                     annotated_ty,
                     value,
                 } => {
-                    if let &Expr::Function { id } = self.ast.get_expr(value) {
-                        // this is a bit hacky but fine for now
-                        self.ast.assign_function_name(id, name_span);
+                    // try to assign names of definitions
+                    // this is a bit hacky but works for now
+                    match self.ast.get_expr(value) {
+                        &Expr::Function { id } => self.ast.assign_function_name(id, name_span),
+                        &Expr::Trait { id } => self.ast.assign_trait_name(id, name_span),
+                        _ => {}
                     }
-                    let prev = scope.definitions.insert(
-                        name,
-                        Definition::Expr {
-                            value,
-                            ty: annotated_ty,
-                        },
-                    );
-                    if let Some(_) = prev {
-                        return Err(Error::DuplicateDefinition.at(
-                            name_span.start,
-                            name_span.end,
-                            self.toks.module,
-                        ));
+                    match scope.definitions.entry(name) {
+                        Entry::Occupied(_) => {
+                            return Err(Error::DuplicateDefinition.at(
+                                name_span.start,
+                                name_span.end,
+                                self.toks.module,
+                            ));
+                        }
+                        Entry::Vacant(vacant_entry) => {
+                            vacant_entry.insert(Definition::Expr {
+                                value,
+                                ty: annotated_ty,
+                            });
+                        }
                     }
                 }
                 Item::Use(path) => {
                     let (_, _, name) = path.segments(self.src);
+                    let name_span = name.map_or_else(|| path.span(), |(_, span)| span);
                     let name = name.map_or("root", |(name, _)| name).to_owned();
-                    scope.definitions.insert(name, Definition::Path(path));
+                    match scope.definitions.entry(name) {
+                        Entry::Occupied(_) => {
+                            return Err(Error::DuplicateDefinition
+                                .at_span(name_span.in_mod(self.toks.module)))
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(Definition::Path(path));
+                        }
+                    }
                 }
                 Item::Expr(r) => {
                     let span = Span {

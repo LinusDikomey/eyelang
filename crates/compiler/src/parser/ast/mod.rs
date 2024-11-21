@@ -245,6 +245,10 @@ impl AstBuilder {
     pub(super) fn assign_function_name(&mut self, id: FunctionId, associated_name: TSpan) {
         self.functions[id.idx()].associated_name = associated_name;
     }
+
+    pub(super) fn assign_trait_name(&mut self, id: TraitId, associated_name: TSpan) {
+        self.traits[id.idx()].associated_name = associated_name;
+    }
 }
 
 #[derive(Debug)]
