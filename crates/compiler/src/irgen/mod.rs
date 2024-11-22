@@ -8,7 +8,7 @@ use ::types::{Primitive, Type};
 use id::ModuleId;
 use ir::builder::{BinOp, Terminator};
 use ir::{builder::IrBuilder, IrType, Ref};
-use ir::{BlockIndex, RefVal};
+use ir::{BlockArgs, BlockIndex, RefVal};
 
 use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
@@ -53,14 +53,7 @@ pub fn lower_function(
     .unwrap_or(IrType::Unit);
 
     let ir = checked.body.as_ref().map(|hir| {
-        let (mut builder, params) = ir::builder::IrBuilder::new(&mut types, param_types);
-        let mut vars = vec![(Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
-
-        for (i, (r, ty)) in params.iter().zip(param_types.iter()).enumerate() {
-            vars[i] = (builder.build_decl(ty), ty);
-            builder.build_store(vars[i].0, Ref::index(r));
-        }
-
+        let (builder, params) = ir::builder::IrBuilder::new(&mut types, param_types);
         lower_hir(
             builder,
             hir,
@@ -68,7 +61,7 @@ pub fn lower_function(
             compiler,
             to_generate,
             generics,
-            &mut vars,
+            params,
         )
     });
     ir::Function {
@@ -92,14 +85,44 @@ macro_rules! crash_point {
 }
 
 pub fn lower_hir(
-    builder: ir::builder::IrBuilder,
+    mut builder: ir::builder::IrBuilder,
     hir: &HIR,
     hir_types: &TypeTable,
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
     generics: &[Type],
-    vars: &mut [(Ref, ir::TypeRef)],
+    params: BlockArgs,
 ) -> ir::FunctionIr {
+    let vars = hir
+        .vars
+        .iter()
+        .map(|&var_ty| {
+            match types::get_from_info(
+                compiler,
+                hir_types,
+                builder.types,
+                hir_types[var_ty],
+                types::Generics::function_instance(generics),
+            ) {
+                Some(ty) => {
+                    let ty = builder.types.add(ty);
+                    let var = builder.build_decl(ty);
+                    Ok((var, ty))
+                }
+                None => {
+                    build_crash_point_inner(&mut builder, compiler);
+                    Err(NoReturn)
+                }
+            }
+        })
+        .collect();
+    let mut vars: Vec<_> = match vars {
+        Ok(vars) => vars,
+        Err(NoReturn) => return builder.finish(),
+    };
+    for (i, param) in params.iter().enumerate() {
+        builder.build_store(vars[i].0, Ref::index(param));
+    }
     let mut ctx = Ctx {
         compiler,
         to_generate,
@@ -108,8 +131,9 @@ pub fn lower_hir(
         generics,
         generic_types: generics,
         builder,
-        vars,
+        vars: &mut vars,
     };
+
     let val = lower(&mut ctx, hir.root_id());
     if let Ok(val) = val {
         ctx.builder.terminate_block(Terminator::Ret(val));
@@ -125,7 +149,7 @@ struct Ctx<'a> {
     generics: &'a [Type],
     generic_types: &'a [Type],
     builder: IrBuilder<'a>,
-    vars: &'a mut [(Ref, ir::TypeRef)],
+    vars: &'a [(Ref, ir::TypeRef)],
 }
 impl<'a> Ctx<'a> {
     fn get_ir_id(
@@ -860,12 +884,7 @@ fn lower_pattern(
     match &ctx.hir[pattern] {
         Pattern::Invalid => crash_point!(ctx),
         Pattern::Variable(id) => {
-            let var_ty = ctx.types[ctx.hir.vars[id.idx()]];
-            let ty = ctx.get_type(var_ty)?;
-            let ty = ctx.builder.types.add(ty);
-            let var = ctx.builder.build_decl(ty);
-            ctx.vars[id.idx()] = (var, ty);
-            ctx.builder.build_store(var, value);
+            ctx.builder.build_store(ctx.vars[id.idx()].0, value);
         }
         Pattern::Ignore => {}
         &Pattern::Tuple {
@@ -1023,12 +1042,16 @@ fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) 
 }
 
 fn build_crash_point(ctx: &mut Ctx) {
+    build_crash_point_inner(&mut ctx.builder, ctx.compiler);
+}
+
+fn build_crash_point_inner(builder: &mut IrBuilder, compiler: &mut Compiler) {
     let msg = "program reached a compile error at runtime";
-    let (ptr, str_ty) = lower_string_literal(&mut ctx.builder, msg);
-    let msg = ctx.builder.build_load(ptr, str_ty);
-    let panic_function = ctx.compiler.get_builtin_panic();
-    ctx.builder.build_call(panic_function, [msg], IrType::Unit);
-    ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
+    let (ptr, str_ty) = lower_string_literal(builder, msg);
+    let msg = builder.build_load(ptr, str_ty);
+    let panic_function = compiler.get_builtin_panic();
+    builder.build_call(panic_function, [msg], IrType::Unit);
+    builder.terminate_block(Terminator::Ret(Ref::UNDEF));
 }
 
 fn build_arithmetic(

@@ -279,8 +279,7 @@ pub fn def_expr(
             );
             let mut to_generate = Vec::new();
             let mut ir_types = ir::IrTypes::new();
-            let (builder, _) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
-            let mut vars = vec![(ir::Ref::UNDEF, ir::TypeRef::NONE); hir.vars.len()];
+            let (builder, params) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
             let ir = crate::irgen::lower_hir(
                 builder,
                 &hir,
@@ -288,7 +287,7 @@ pub fn def_expr(
                 compiler,
                 &mut to_generate,
                 &[],
-                &mut vars,
+                params,
             );
             use ir::Val;
             match ir::eval(&ir, &ir_types, &[]) {
