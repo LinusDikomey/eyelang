@@ -1,5 +1,5 @@
 Compiling errors ...
-Finished with 8 errors
+Finished with 10 errors
 error: unexpected characters
 at: eye/errors.eye:12:1
      | 
@@ -29,6 +29,27 @@ at: eye/errors.eye:24:27
      |                           ^
      |                           expected an expression but found ;
 
+error: token was not expected here
+at: eye/errors.eye:27:51
+     | 
+  27 | #- an invalid character at the end of the file -# ;
+     |                                                   ^
+     |                                                   expected an expression but found ;
+
+error: identifier not found
+at: eye/errors.eye:23:21
+     | 
+  23 | test :: fn(x u32, y u33, z u34, valid InvalidTypes) {
+     |                     ^^^
+     |                     the identifier u33 was not found
+
+error: identifier not found
+at: eye/errors.eye:23:28
+     | 
+  23 | test :: fn(x u32, y u33, z u34, valid InvalidTypes) {
+     |                            ^^^
+     |                            the identifier u34 was not found
+
 error: identifier not found
 at: eye/errors.eye:6:13
      | 
@@ -49,11 +70,4 @@ at: eye/errors.eye:9:5
    9 |     u35,
      |     ^^^
      |     the identifier u35 was not found
-
-error: identifier not found
-at: eye/errors.eye:1:1
-     | 
-   1 | main :: fn: print("Hello")
-     | ^
-     | the identifier main was not found
 

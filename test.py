@@ -160,6 +160,14 @@ def test(eye_file) -> str:
         print('... but expected:')
         print(f'--------------------\n{expected_output}\n--------------------')
         print(f'Stderr:\n--------------------\n{stderr}\n--------------------')
+        print(f'Diff:\n--------------------\n{stderr}\n--------------------')
+        f = open("eyebuild/out.eye", "w")
+        f.write(out)
+        f.close()
+        f = open("eyebuild/expected.eye", "w")
+        f.write(expected_output)
+        f.close()
+        subprocess.call(["diff", "eyebuild/out.eye", "eyebuild/expected.eye"])
         return ERR
 
 

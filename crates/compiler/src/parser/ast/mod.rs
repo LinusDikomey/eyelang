@@ -276,6 +276,7 @@ pub struct Scope {
     pub parent: Option<ScopeId>,
     pub definitions: DHashMap<String, Definition>,
     pub span: TSpan,
+    pub has_errors: bool,
 }
 impl Scope {
     pub fn missing() -> Self {
@@ -283,6 +284,7 @@ impl Scope {
             parent: None,
             definitions: dmap::new(),
             span: TSpan::MISSING,
+            has_errors: true,
         }
     }
 
@@ -295,6 +297,7 @@ impl Scope {
                 .map(|(i, generic)| (generic.name(src).to_owned(), Definition::Generic(i as u8)))
                 .collect(),
             span,
+            has_errors: false,
         }
     }
 }
@@ -471,6 +474,7 @@ pub struct TraitBound {
 
 #[derive(Debug, Clone)]
 pub enum Expr {
+    Error(TSpan),
     Block {
         scope: ScopeId,
         items: ExprExtra,
@@ -651,7 +655,8 @@ impl Expr {
             |r: &ExprId| exprs[r.idx()].end_inner(exprs, functions, types, traits, calls, scopes);
 
         match self {
-            Expr::StringLiteral(span)
+            Expr::Error(span)
+            | Expr::StringLiteral(span)
             | Expr::IntLiteral(span)
             | Expr::FloatLiteral(span)
             | Expr::Nested(span, _)

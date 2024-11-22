@@ -1,6 +1,10 @@
-use super::token::{Token, TokenType};
+use super::{
+    token::{Token, TokenType},
+    ExpectedTokens,
+};
 use crate::error::{Error, Errors};
 use id::ModuleId;
+use span::Span;
 
 pub fn lex(mut src: &str, errors: &mut Errors, module: ModuleId) -> Vec<Token> {
     if src.len() > u32::MAX as usize {
@@ -242,7 +246,9 @@ impl<'a> Lexer<'a> {
                     while self.peek() != Some('"') {
                         if self.step().is_none() {
                             errors.emit(
-                                Error::UnexpectedEndOfFile,
+                                Error::UnexpectedEndOfFile {
+                                    expected: ExpectedTokens::EndOfStringLiteral,
+                                },
                                 start,
                                 self.pos() - 1,
                                 self.module,
@@ -304,11 +310,15 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\n') => newlines += 1,
                 None => {
-                    errors.emit(
-                        Error::UnexpectedEndOfFile,
-                        start,
-                        self.pos() - 1,
-                        self.module,
+                    errors.emit_err(
+                        Error::UnexpectedEndOfFile {
+                            expected: ExpectedTokens::EndOfMultilineComment,
+                        }
+                        .at_span(Span::new(
+                            start,
+                            self.pos() - 1,
+                            self.module,
+                        )),
                     );
                     break;
                 }

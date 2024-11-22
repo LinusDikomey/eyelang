@@ -242,6 +242,11 @@ impl<C: Representer> Repr<C> for Expr {
     fn repr(&self, c: &C) {
         let ast = c.ast();
         match self {
+            &Self::Error(span) => {
+                c.write_add("[error ");
+                c.src(span);
+                c.write_add("]");
+            }
             &Self::Function { id } => {
                 c.ast()[id].repr(c, false);
             }

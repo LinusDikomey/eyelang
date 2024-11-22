@@ -54,6 +54,13 @@ impl Span {
     pub fn is_missing(&self) -> bool {
         self.start == u32::MAX && self.end == u32::MAX && self.module == ModuleId::MISSING
     }
+
+    pub fn tspan(&self) -> TSpan {
+        TSpan {
+            start: self.start,
+            end: self.end,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -28,6 +28,10 @@ pub fn check(
 ) -> Node {
     let ast = ctx.ast;
     match &ast[expr] {
+        Expr::Error(_) => {
+            *noreturn = true;
+            Node::Invalid
+        }
         &Expr::Block {
             scope: static_scope,
             items,

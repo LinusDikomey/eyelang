@@ -23,13 +23,15 @@ impl TokenReader {
             module,
         }
     }
-    pub fn current(&self) -> Result<&Token, CompileError> {
+    pub fn current(&self, expected: impl Into<ExpectedTokens>) -> Result<&Token, CompileError> {
         if self.index < self.len {
             Ok(&self.tokens[self.index])
         } else {
             let end = self.last_src_pos();
             Err(CompileError {
-                err: Error::UnexpectedEndOfFile,
+                err: Error::UnexpectedEndOfFile {
+                    expected: expected.into(),
+                },
                 span: Span::new(end, end, self.module),
             })
         }
@@ -43,26 +45,33 @@ impl TokenReader {
     }
 
     pub fn current_end_pos(&self) -> u32 {
-        self.current()
-            .map(|tok| tok.end)
-            .ok()
-            .or_else(|| self.tokens.last().map(|last| last.end))
-            .unwrap_or(0)
+        self.tokens
+            .get(self.index)
+            .or_else(|| self.tokens.last())
+            .map_or(0, |tok| tok.end)
+    }
+
+    pub fn try_step(&mut self) -> Option<Token> {
+        if self.index < self.len {
+            let i = self.index;
+            self.index += 1;
+            Some(self.tokens[i])
+        } else {
+            None
+        }
     }
 
     /// steps over the current token and returns it
-    pub fn step(&mut self) -> Result<Token, CompileError> {
-        self.index += 1;
-        if self.index <= self.len {
-            // <= because we are only getting the previous token
-            Ok(self.tokens[self.index - 1])
-        } else {
+    pub fn step(&mut self, expected: impl Into<ExpectedTokens>) -> Result<Token, CompileError> {
+        self.try_step().ok_or_else(|| {
             let end = self.last_src_pos();
-            Err(CompileError {
-                err: Error::UnexpectedEndOfFile,
+            CompileError {
+                err: Error::UnexpectedEndOfFile {
+                    expected: expected.into(),
+                },
                 span: Span::new(end, end, self.module),
-            })
-        }
+            }
+        })
     }
 
     pub fn step_back(&mut self) {
@@ -72,7 +81,8 @@ impl TokenReader {
     /// Steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
-        let tok = unsafe { self.step().unwrap_unchecked() };
+        let tok = *unsafe { self.tokens.get_unchecked(self.index) };
+        self.index += 1;
         debug_assert_eq!(tok.ty, ty.into());
         tok
     }
@@ -83,21 +93,32 @@ impl TokenReader {
     ) -> Result<Token, CompileError> {
         let expected = expected.into();
         let module = self.module;
-        let tok = self.step()?;
-        if !expected
-            .0
-            .iter()
-            .any(|expected_tok| *expected_tok == tok.ty)
-        {
-            return Err(CompileError {
-                err: Error::UnexpectedToken {
+        if self.tokens.get(self.index).is_some_and(|tok| {
+            expected
+                .0
+                .iter()
+                .any(|expected_tok| *expected_tok == tok.ty)
+        }) {
+            let i = self.index;
+            self.index += 1;
+            Ok(self.tokens[i])
+        } else {
+            Err(if let Some(tok) = self.tokens.get(self.index) {
+                CompileError {
+                    err: Error::UnexpectedToken {
+                        expected: expected.into(),
+                        found: tok.ty,
+                    },
+                    span: Span::new(tok.start, tok.end, module),
+                }
+            } else {
+                let end = self.last_src_pos();
+                Error::UnexpectedEndOfFile {
                     expected: expected.into(),
-                    found: tok.ty,
-                },
-                span: Span::new(tok.start, tok.end, module),
-            });
+                }
+                .at_span(Span::new(end, end, module))
+            })
         }
-        Ok(tok)
     }
 
     pub fn step_if<const N: usize, T: Into<TokenTypes<N>>>(
@@ -105,7 +126,11 @@ impl TokenReader {
         expected: T,
     ) -> Option<Token> {
         if let Some(next) = self.peek() {
-            next.is(expected).then(|| self.step().unwrap())
+            next.is(expected).then(|| {
+                let i = self.index;
+                self.index += 1;
+                self.tokens[i]
+            })
         } else {
             None
         }
@@ -128,39 +153,67 @@ impl TokenReader {
     }
 }
 
-macro_rules! match_or_unexpected {
-    ($tok_expr: expr, $module: expr, $($match_arm: pat = $match_expr: expr => $res: expr),*) => {{
-        let tok = $tok_expr;
-        match tok.ty {
-            $($match_arm => $res,)*
-            _ => return Err(CompileError {
-                err: Error::UnexpectedToken {
-                    expected: ExpectedTokens::AnyOf(vec![$($match_expr),*]),
-                    found: tok.ty
-                },
-                span: Span::new(tok.start, tok.end, $module),
-            })
+macro_rules! step_or_unexpected {
+    ($parser: ident, $($tok_ty: ident $($kw: ident $(($kw_val: ident))? )? $(#as $tok: ident)? => $res: expr),*) => {{
+        let tok = $parser.toks.try_step();
+        match tok.map(|t| (t, t.ty)) {
+            $(
+                Some(($($tok @)* _, TokenType::$tok_ty $((Keyword::$kw $(($kw_val))* ))* )) => $res,
+            )*
+            Some((tok, _)) => {
+                return Err(CompileError {
+                    err: Error::UnexpectedToken {
+                        expected: ExpectedTokens::AnyOf(vec![$(TokenType::$tok_ty $((Keyword::$kw))*),*]),
+                        found: tok.ty
+                    },
+                    span: Span::new(tok.start, tok.end, $parser.toks.module),
+                })
+            }
+            None => {
+                let end = $parser.toks.last_src_pos();
+                return Err(CompileError {
+                    err: Error::UnexpectedEndOfFile {
+                        expected: ExpectedTokens::AnyOf(vec![$(TokenType::$tok_ty $((Keyword::$kw))*),*]),
+                    },
+                    span: Span::new(end, end, $parser.toks.module),
+                })
+            }
         }
     }};
 }
-pub(crate) use match_or_unexpected;
-macro_rules! match_or_unexpected_value {
-    ($tok_expr: expr, $module: expr, $expected_tokens: expr, $($match_arm: pat => $res: expr),*) => {{
-        let tok = $tok_expr;
-        match tok.ty {
-            $($match_arm => $res,)*
-            _ => return Err(CompileError {
-                err: Error::UnexpectedToken {
-                    expected: $expected_tokens,
-                    found: tok.ty
-                },
-                span: Span::new(tok.start, tok.end, $module),
-            })
-        }
-    }};
-}
-pub(crate) use match_or_unexpected_value;
+pub(crate) use step_or_unexpected;
 
+macro_rules! step_or_unexpected_value {
+    ($parser: ident, $expected: expr, $($tok_ty: ident $($kw: ident $(($kw_val: ident))? )? $(#as $tok: ident)? => $res: expr),* $(,)?) => {{
+        let tok = $parser.toks.try_step();
+        match tok.map(|t| (t, t.ty)) {
+            $(
+                Some(($($tok @)* _, TokenType::$tok_ty $((Keyword::$kw $(($kw_val))* ))* )) => $res,
+            )*
+            Some((tok, _)) => {
+                return Err(CompileError {
+                    err: Error::UnexpectedToken {
+                        expected: $expected,
+                        found: tok.ty
+                    },
+                    span: Span::new(tok.start, tok.end, $parser.toks.module),
+                })
+            }
+            None => {
+                let end = $parser.toks.last_src_pos();
+                return Err(CompileError {
+                    err: Error::UnexpectedEndOfFile {
+                        expected: $expected,
+                    },
+                    span: Span::new(end, end, $parser.toks.module),
+                })
+            }
+        }
+    }};
+}
+pub(crate) use step_or_unexpected_value;
+
+#[derive(Clone, Copy)]
 pub struct TokenTypes<const N: usize>(pub [TokenType; N]);
 impl From<TokenType> for TokenTypes<1> {
     fn from(x: TokenType) -> Self {
@@ -196,6 +249,9 @@ pub enum ExpectedTokens {
     AnyOf(Vec<TokenType>),
     Expr,
     Type,
+    Item,
+    EndOfMultilineComment,
+    EndOfStringLiteral,
 }
 impl std::fmt::Display for ExpectedTokens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -218,6 +274,9 @@ impl std::fmt::Display for ExpectedTokens {
             }
             Self::Expr => write!(f, "an expression"),
             Self::Type => write!(f, "a type"),
+            Self::Item => write!(f, "an item"),
+            Self::EndOfMultilineComment => write!(f, "end of comment"),
+            Self::EndOfStringLiteral => write!(f, "end of string literal"),
         }
     }
 }
@@ -227,5 +286,10 @@ impl<const N: usize> From<TokenTypes<N>> for ExpectedTokens {
             [t] => Self::Specific(*t),
             other => Self::AnyOf(other.to_vec()),
         }
+    }
+}
+impl From<TokenType> for ExpectedTokens {
+    fn from(value: TokenType) -> Self {
+        Self::Specific(value)
     }
 }

@@ -114,7 +114,9 @@ impl CompileError {
 pub enum Error {
     Internal(String),
     FileSizeExceeeded,
-    UnexpectedEndOfFile,
+    UnexpectedEndOfFile {
+        expected: ExpectedTokens,
+    },
     UnexpectedCharacters,
     UnexpectedToken {
         expected: ExpectedTokens,
@@ -228,7 +230,7 @@ impl Error {
         match self {
             Error::Internal(_) => "internal compiler error",
             Error::FileSizeExceeeded => "maximum file size exceeded",
-            Error::UnexpectedEndOfFile => "unexpected end of file",
+            Error::UnexpectedEndOfFile { .. } => "unexpected end of file",
             Error::UnexpectedCharacters => "unexpected characters",
             Error::UnexpectedToken { .. } => "token was not expected here",
             Error::UnknownIdent(_) => "identifier not found",
@@ -323,6 +325,10 @@ impl Error {
             Error::Internal(msg) => cformat!(
                 "#r<internal compiler error> #y!<(this is a bug and not your fault)>: {}",
                 msg,
+            ),
+            Error::UnexpectedEndOfFile { expected } => cformat!(
+                "expected {} instead",
+                expected,
             ),
             Error::UnexpectedToken { expected, found } => cformat!(
                 "expected {} but found {}",
