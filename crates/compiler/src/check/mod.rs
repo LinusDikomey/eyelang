@@ -149,11 +149,14 @@ impl<'a> Ctx<'a> {
     ) -> Node {
         let mut current_ty = TypeInfoOrIdx::Idx(ty);
         while pointer_count < required_pointer_count {
+            /*
             let inner = self.hir.add(value);
             let value_ty = self.hir.types.add_info_or_idx(current_ty);
-            value = Node::AddressOf { inner, value_ty };
+            value = Node::AddressOf { value, value_ty };
             current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
             pointer_count += 1;
+            */
+            todo!("reimplement auto ref")
         }
         while pointer_count > required_pointer_count {
             let TypeInfo::Pointer(pointee) = self.hir.types.get_info_or_idx(current_ty) else {

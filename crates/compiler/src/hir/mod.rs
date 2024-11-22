@@ -153,9 +153,9 @@ impl HIR {
                 self.dump(id, compiler, types, indent_count);
                 eprint!(")");
             }
-            &Node::AddressOf { inner, value_ty } => {
+            &Node::AddressOf { value, value_ty } => {
                 eprint!("(addr ");
-                self.dump(inner, compiler, types, indent_count);
+                self.dump_lvalue(value, compiler, types, indent_count);
                 eprint!(": ");
                 types.dump_type(compiler, value_ty);
                 eprint!(")");
@@ -165,6 +165,11 @@ impl HIR {
                 self.dump(value, compiler, types, indent_count);
                 eprint!("): ");
                 types.dump_type(compiler, deref_ty);
+            }
+            &Node::Promote { value, variable } => {
+                eprint!("(promote ");
+                self.dump(value, compiler, types, indent_count);
+                eprint!(" into (var {}))", variable.0);
             }
             &Node::Cast(id) => {
                 let cast = &self[id];
@@ -524,7 +529,6 @@ impl HIR {
         match self[lval] {
             LValue::Invalid => eprint!("(invalid)"),
             LValue::Variable(id) => eprint!("(var {})", id.0),
-            LValue::Ignore => eprint!("(ignore)"),
             LValue::Global(module, id) => eprint!("(global {} {})", module.0, id.0),
             LValue::Deref(val) => {
                 eprint!("(deref ");
@@ -532,12 +536,12 @@ impl HIR {
                 eprint!(")");
             }
             LValue::Member {
-                ptr,
+                tuple,
                 index,
                 elem_types,
             } => {
                 eprint!("(member {index} ");
-                self.dump(ptr, compiler, types, indent_count);
+                self.dump_lvalue(tuple, compiler, types, indent_count);
                 eprint!("): (");
                 for (i, elem) in elem_types.iter().enumerate() {
                     if i != 0 {
@@ -548,12 +552,12 @@ impl HIR {
                 eprint!(")");
             }
             LValue::ArrayIndex {
-                array_ptr,
+                array,
                 index,
-                element_type,
+                elem_ty: element_type,
             } => {
                 eprint!("(index ");
-                self.dump(array_ptr, compiler, types, indent_count);
+                self.dump_lvalue(array, compiler, types, indent_count);
                 eprint!(" ");
                 self.dump(index, compiler, types, indent_count);
                 eprint!("): ");
@@ -678,12 +682,16 @@ pub enum Node {
     Negate(NodeId, LocalTypeId),
     Not(NodeId),
     AddressOf {
-        inner: NodeId,
+        value: LValueId,
         value_ty: LocalTypeId,
     },
     Deref {
         value: NodeId,
         deref_ty: LocalTypeId,
+    },
+    Promote {
+        value: NodeId,
+        variable: VarId,
     },
 
     Cast(CastId),
@@ -759,19 +767,53 @@ pub enum Node {
 pub enum LValue {
     Invalid,
     Variable(VarId),
-    Ignore,
     Global(ModuleId, GlobalId),
     Deref(NodeId),
     Member {
-        ptr: NodeId,
+        tuple: LValueId,
         index: u32,
         elem_types: LocalTypeIds,
     },
     ArrayIndex {
-        array_ptr: NodeId,
+        array: LValueId,
         index: NodeId,
-        element_type: LocalTypeId,
+        elem_ty: LocalTypeId,
     },
+}
+impl LValue {
+    pub fn try_from_node(node: &Node, hir: &mut HIRBuilder) -> Option<Self> {
+        Some(match *node {
+            Node::Invalid => Self::Invalid,
+            Node::Variable(id) => Self::Variable(id),
+            Node::Global(module, id, _) => Self::Global(module, id),
+            Node::Deref { value, deref_ty: _ } => Self::Deref(value),
+            Node::Element {
+                tuple_value,
+                index,
+                elem_types,
+            } => {
+                let tuple = Self::try_from_node(&hir[tuple_value].clone(), hir)?;
+                Self::Member {
+                    tuple: hir.add_lvalue(tuple),
+                    index,
+                    elem_types,
+                }
+            }
+            Node::ArrayIndex {
+                array,
+                index,
+                elem_ty,
+            } => {
+                let array = Self::try_from_node(&hir[array].clone(), hir)?;
+                Self::ArrayIndex {
+                    array: hir.add_lvalue(array),
+                    index,
+                    elem_ty,
+                }
+            }
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -857,6 +899,12 @@ pub struct HIRBuilder {
     pub types: TypeTable,
     vars: Vec<LocalTypeId>,
     casts: Vec<Cast>,
+}
+impl Index<NodeId> for HIRBuilder {
+    type Output = Node;
+    fn index(&self, index: NodeId) -> &Self::Output {
+        &self.nodes[index.0 as usize]
+    }
 }
 impl HIRBuilder {
     pub fn new(types: TypeTable) -> Self {

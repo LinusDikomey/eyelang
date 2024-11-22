@@ -8,7 +8,7 @@ use crate::{
     compiler::{builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef},
     error::Error,
     eval::ConstValue,
-    hir::{self, Comparison, Node, NodeIds},
+    hir::{self, Comparison, LValue, Node, NodeIds},
     parser::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
@@ -243,9 +243,18 @@ pub fn check(
                         ast[expr].span(ast)
                     });
                     let value = check(ctx, value, scope, pointee, return_ty, noreturn);
-                    Node::AddressOf {
-                        inner: ctx.hir.add(value),
-                        value_ty: pointee,
+                    if let Some(lval) = LValue::try_from_node(&value, &mut ctx.hir) {
+                        Node::AddressOf {
+                            value: ctx.hir.add_lvalue(lval),
+                            value_ty: pointee,
+                        }
+                    } else {
+                        // promote the value to a variable
+                        let promoted = ctx.hir.add_var(pointee);
+                        Node::Promote {
+                            value: ctx.hir.add(value),
+                            variable: promoted,
+                        }
                     }
                 }
                 UnOp::Deref => {

@@ -394,15 +394,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::Assign(lval, val, assign_ty, ty) => {
             let lval = lower_lval(ctx, lval)?;
             let val = lower(ctx, val)?;
-            // this will be none when the LValue is Ignore, don't perform a store in
-            // that case
-            use crate::parser::token::AssignType;
-            let Some(lval) = lval else {
-                // TODO: is ignoring the value fine for arithmetic assignment operations like
-                // plus-equals?
-                return Ok(ValueOrPlace::Value(Ref::UNIT));
-            };
             use crate::hir::Arithmetic;
+            use crate::parser::token::AssignType;
+
             let arithmetic = match assign_ty {
                 AssignType::Assign => {
                     ctx.builder.build_store(lval, val);
@@ -464,18 +458,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let value = lower(ctx, value)?;
             ctx.builder.build_not(value, IrType::U1)
         }
-        &Node::AddressOf { inner, value_ty } => {
-            let value = lower_expr(ctx, inner)?;
-            match value {
-                ValueOrPlace::Value(v) => {
-                    let ty = ctx.get_type(ctx.types[value_ty])?;
-                    let ptr = ctx.builder.build_decl(ty);
-                    ctx.builder.build_store(ptr, v);
-                    ptr
-                }
-                ValueOrPlace::Place { ptr, value_ty: _ } => ptr,
-            }
-        }
+        &Node::AddressOf { value, value_ty: _ } => lower_lval(ctx, value)?,
         &Node::Deref { value, deref_ty } => {
             let value = lower(ctx, value)?;
             let ty = ctx.get_type(ctx.types[deref_ty])?;
@@ -485,6 +468,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ptr: value,
                 value_ty,
             });
+        }
+        &Node::Promote { value, variable } => {
+            let val = lower(ctx, value)?;
+            let var = ctx.vars[variable.idx()].0;
+            ctx.builder.build_store(var, val);
+            var
         }
 
         &Node::Cast(id) => {
@@ -826,11 +815,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
     Ok(ValueOrPlace::Value(value))
 }
 
-fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Option<Ref>> {
-    Ok(Some(match ctx.hir[lval] {
+fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
+    Ok(match ctx.hir[lval] {
         LValue::Invalid => crash_point!(ctx),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
-        LValue::Ignore => return Ok(None),
         LValue::Global(module, id) => {
             let Some(id) = ctx.get_ir_global(module, id) else {
                 crash_point!(ctx)
@@ -839,26 +827,26 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Option<Ref>> {
         }
         LValue::Deref(pointer) => lower(ctx, pointer)?,
         LValue::Member {
-            ptr,
+            tuple,
             index,
             elem_types,
         } => {
-            let ptr = lower(ctx, ptr)?;
+            let ptr = lower_lval(ctx, tuple)?;
             let types = ctx.get_multiple_types(elem_types)?;
             ctx.builder.build_member_ptr(ptr, index, types)
         }
         LValue::ArrayIndex {
-            array_ptr,
+            array,
             index,
-            element_type,
+            elem_ty: element_type,
         } => {
-            let ptr = lower(ctx, array_ptr)?;
+            let ptr = lower_lval(ctx, array)?;
             let idx = lower(ctx, index)?;
             let ty = ctx.get_type(ctx.types[element_type])?;
             let ty = ctx.builder.types.add(ty);
             ctx.builder.build_array_index(ptr, idx, ty)
         }
-    }))
+    })
 }
 
 /// Lower a pattern, jumping to the on_mismatch block if the pattern doesn't match.

@@ -30,7 +30,6 @@ pub fn check(
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }
-        Expr::Hole(_) => (LValue::Ignore, ctx.hir.types.add_unknown()),
         &Expr::UnOp(_, UnOp::Deref, inner) => {
             let pointee = ctx.hir.types.add_unknown();
             let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
@@ -43,7 +42,7 @@ pub fn check(
         } => {
             let name = &ctx.ast.src()[name_span.range()];
             let left_ty = ctx.hir.types.add_unknown();
-            let left_node = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
+            let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
             match ctx.hir.types[left_ty] {
                 TypeInfo::ModuleItem(id) => {
                     let def =
@@ -90,25 +89,51 @@ pub fn check(
                             ResolvedTypeDef::Struct(struct_) => {
                                 let (indexed_field, elem_types) =
                                     struct_.get_indexed_field(ctx, generics, name);
-                                if let Some((index, field_ty)) = indexed_field {
-                                    let ptr =
-                                        ctx.auto_ref_deref(pointer_count, 1, left_node, left_ty);
-                                    let ptr = ctx.hir.add(ptr);
-                                    return (
-                                        LValue::Member {
-                                            ptr,
-                                            index,
-                                            elem_types,
-                                        },
-                                        field_ty,
-                                    );
-                                } else {
+                                let Some((index, field_ty)) = indexed_field else {
                                     ctx.compiler.errors.emit_err(
                                         Error::NonexistantMember(None)
                                             .at_span(name_span.in_mod(ctx.module)),
                                     );
                                     return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                                }
+                                };
+                                // perform auto deref while checking the lhs is an lvalue
+                                let left_lval = if pointer_count == 0 {
+                                    let Some(lval) = LValue::try_from_node(&left_val, &mut ctx.hir)
+                                    else {
+                                        ctx.compiler
+                                            .errors
+                                            .emit_err(Error::CantAssignTo.at_span(ctx.span(left)));
+                                        return (
+                                            LValue::Invalid,
+                                            ctx.hir.types.add(TypeInfo::Invalid),
+                                        );
+                                    };
+                                    lval
+                                } else {
+                                    let mut current_val = left_val;
+                                    let mut current_ty = left_ty;
+                                    // perform additional derefs and keep the last one as an LValue
+                                    while pointer_count > 1 {
+                                        let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty]
+                                        else {
+                                            unreachable!()
+                                        };
+                                        current_val = Node::Deref {
+                                            value: ctx.hir.add(current_val),
+                                            deref_ty: pointee,
+                                        };
+                                        current_ty = pointee;
+                                    }
+                                    LValue::Deref(ctx.hir.add(current_val))
+                                };
+                                return (
+                                    LValue::Member {
+                                        tuple: ctx.hir.add_lvalue(left_lval),
+                                        index,
+                                        elem_types,
+                                    },
+                                    field_ty,
+                                );
                             }
                             ResolvedTypeDef::Enum(_) => {
                                 ctx.compiler.errors.emit_err(
@@ -131,22 +156,22 @@ pub fn check(
         Expr::TupleIdx { .. } => todo!("lvalue tuple indexing"),
         &Expr::Index { expr, idx, .. } => {
             let element_type = ctx.hir.types.add_unknown();
-            let array_ty = ctx.hir.types.add(TypeInfo::Array {
-                element: element_type,
-                count: None,
-            });
-            let array = expr::check(ctx, expr, scope, array_ty, return_ty, noreturn);
-            let array_ptr = Node::AddressOf {
-                inner: ctx.hir.add(array),
-                value_ty: array_ty,
-            };
+            let (array, array_ty) = check(ctx, expr, scope, return_ty, noreturn);
+            ctx.specify(
+                array_ty,
+                TypeInfo::Array {
+                    element: element_type,
+                    count: None,
+                },
+                |ast| ast[expr].span(ast),
+            );
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
             let index = expr::check(ctx, idx, scope, index_ty, return_ty, noreturn);
             (
                 LValue::ArrayIndex {
-                    array_ptr: ctx.hir.add(array_ptr),
+                    array: ctx.hir.add_lvalue(array),
                     index: ctx.hir.add(index),
-                    element_type,
+                    elem_ty: element_type,
                 },
                 element_type,
             )
