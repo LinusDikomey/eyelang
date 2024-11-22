@@ -325,14 +325,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             debug_assert_eq!(elems.count, elem_types.count);
             let elem_types = ctx.get_multiple_types(elem_types)?;
             let tuple_ty = ctx.builder.types.add(IrType::Tuple(elem_types));
-            let var = ctx.builder.build_decl(tuple_ty);
+            let mut tuple = Ref::UNDEF;
             for (elem, i) in elems.iter().zip(0..) {
-                let elem_ptr = ctx.builder.build_member_ptr(var, i, elem_types);
                 let val = lower(ctx, elem)?;
-                ctx.builder.build_store(elem_ptr, val);
+                tuple = ctx.builder.build_insert_member(tuple, i, val, tuple_ty);
             }
-            // maybe do this differently, could do it like llvm: insertvalue
-            ctx.builder.build_load(var, tuple_ty)
+            tuple
         }
         &Node::EnumLiteral {
             elems,
@@ -352,8 +350,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             ctx.builder.build_load(var, enum_ty)
         }
         Node::StringLiteral(str) => {
-            let (ptr, value_ty) = lower_string_literal(&mut ctx.builder, str);
-            return Ok(ValueOrPlace::Place { ptr, value_ty });
+            let (s, _value_ty) = lower_string_literal(&mut ctx.builder, str);
+            s
         }
         &Node::InferredEnumOrdinal(variant) => {
             let variant = &ctx.types[variant];
@@ -919,8 +917,7 @@ fn lower_pattern(
             let str_eq = builtins::get_str_eq(ctx.compiler);
             // can unwrap here because we don't pass invalid generics
             let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new()).unwrap();
-            let (expected, str_ty) = lower_string_literal(&mut ctx.builder, s);
-            let expected = ctx.builder.build_load(expected, str_ty);
+            let (expected, _str_ty) = lower_string_literal(&mut ctx.builder, s);
             let matches = ctx
                 .builder
                 .build_call(str_eq, [value, expected], IrType::U1);
@@ -1020,13 +1017,11 @@ fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) 
     // TODO: cache string ir type to prevent generating it multiple times
     let elems = builder.types.add_multiple([IrType::Ptr, IrType::U64]);
     let str_ty = builder.types.add(IrType::Tuple(elems));
-    let str_var = builder.build_decl(str_ty);
     let str_ptr = builder.build_string(s.as_bytes(), true);
-    builder.build_store(str_var, str_ptr);
-    let str_len_var = builder.build_member_ptr(str_var, 1, elems);
+    let tuple = builder.build_insert_member(Ref::UNDEF, 0, str_ptr, str_ty);
     let str_len = builder.build_int(s.len() as u64, IrType::U64);
-    builder.build_store(str_len_var, str_len);
-    (str_var, str_ty)
+    let tuple = builder.build_insert_member(tuple, 1, str_len, str_ty);
+    (tuple, str_ty)
 }
 
 fn build_crash_point(ctx: &mut Ctx) {
@@ -1035,8 +1030,7 @@ fn build_crash_point(ctx: &mut Ctx) {
 
 fn build_crash_point_inner(builder: &mut IrBuilder, compiler: &mut Compiler) {
     let msg = "program reached a compile error at runtime";
-    let (ptr, str_ty) = lower_string_literal(builder, msg);
-    let msg = builder.build_load(ptr, str_ty);
+    let (msg, _str_ty) = lower_string_literal(builder, msg);
     let panic_function = compiler.get_builtin_panic();
     builder.build_call(panic_function, [msg], IrType::Unit);
     builder.terminate_block(Terminator::Ret(Ref::UNDEF));

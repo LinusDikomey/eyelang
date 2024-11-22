@@ -338,6 +338,12 @@ fn display_data(
             write_ref(f, inst.data.ref_int().0)?;
             cwrite!(f, ", #y<{}>", inst.data.ref_int().1)
         }
+        DataVariant::RefIntRef => {
+            let (r1, i, r2) = inst.data.ref_int_ref(extra);
+            write_ref(f, r1)?;
+            cwrite!(f, ", #y<{i}>, ")?;
+            write_ref(f, r2)
+        }
         DataVariant::Asm => {
             unsafe {
                 let Data {

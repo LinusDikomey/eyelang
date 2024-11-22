@@ -106,6 +106,13 @@ impl Instruction {
             | DataVariant::String
             | DataVariant::None => {}
             DataVariant::MemberPtr | DataVariant::RefInt => visit(self.data.ref_int().0),
+            DataVariant::RefIntRef => {
+                let (r, i) = self.data.ref_int();
+                visit(r);
+                visit(Ref::from_bytes(
+                    ir.extra[i as usize + 4..i as usize + 8].try_into().unwrap(),
+                ));
+            }
             DataVariant::ArrayIndex => {
                 let (array_ptr, _elem_ty, index_ref) = self.data.array_index(&ir.extra);
                 visit(array_ptr);
@@ -187,6 +194,8 @@ pub enum Tag {
     MemberPtr,
     /// extract an element value out of a tuple
     MemberValue,
+    /// insert a member into a tuple resulting in a new, modified tuple
+    InsertMember,
     /// Get a pointer to an array element. Element type has to be provided along with an index.
     ArrayIndex,
 
@@ -273,6 +282,7 @@ impl Tag {
             | Tag::GE => V::BinOp,
 
             Tag::MemberValue => V::RefInt,
+            Tag::InsertMember => V::RefIntRef,
             Tag::Goto => V::Goto,
             Tag::Branch => V::Branch,
             Tag::Asm => V::Asm,
@@ -327,6 +337,7 @@ impl Tag {
             | Tag::CastFloatToInt
             | Tag::IntToPtr
             | Tag::PtrToInt => false,
+            Tag::InsertMember => false,
 
             Tag::Ret | Tag::Goto | Tag::Branch | Tag::Decl | Tag::Store | Tag::Call | Tag::Asm => {
                 true
@@ -435,6 +446,14 @@ impl Data {
         unsafe { self.global }
     }
 
+    pub fn ref_int_ref(self, extra: &[u8]) -> (Ref, u32, Ref) {
+        let (r1, i) = self.ref_int();
+        let i = i as usize;
+        let int = u32::from_le_bytes(extra[i..i + 4].try_into().unwrap());
+        let r2 = Ref::from_bytes(extra[i + 4..i + 8].try_into().unwrap());
+        (r1, int, r2)
+    }
+
     pub fn array_index(&self, extra: &[u8]) -> (Ref, TypeRef, Ref) {
         let (array_ptr, extra_start) = self.ref_int();
         let i = extra_start as usize;
@@ -473,6 +492,7 @@ pub enum DataVariant {
     UnOp,
     BinOp,
     RefInt,
+    RefIntRef,
     Asm,
     None,
 }

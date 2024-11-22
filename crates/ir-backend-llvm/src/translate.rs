@@ -582,6 +582,21 @@ unsafe fn build_func(
                     }
                     */
                 }
+                ir::Tag::InsertMember => {
+                    let (tuple, idx, member) = data.ref_int_ref(&ir.extra);
+                    let tuple = if tuple == ir::Ref::UNDEF {
+                        llvm_ty(ctx, func.types[ty], &func.types).map(|ty| LLVMGetUndef(ty))
+                    } else {
+                        get_ref(&instructions, tuple)
+                    };
+                    if let Some((tuple, member)) = tuple.and_then(|tuple| {
+                        get_ref(&instructions, member).map(|member| (tuple, member))
+                    }) {
+                        core::LLVMBuildInsertValue(builder, tuple, member, idx, NONE)
+                    } else {
+                        ptr::null_mut()
+                    }
+                }
                 ir::Tag::ArrayIndex => {
                     let (array_ptr, extra_idx) = data.ref_int;
                     let i = extra_idx as usize;

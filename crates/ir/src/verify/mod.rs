@@ -107,6 +107,7 @@ pub fn function(function: &Function) {
                 Tag::Decl => {}
                 Tag::MemberPtr => {}
                 Tag::MemberValue => {}
+                Tag::InsertMember => {}
                 Tag::ArrayIndex => {}
                 Tag::String => {}
                 Tag::Call => {}

@@ -542,14 +542,14 @@ impl HIR {
             } => {
                 eprint!("(member {index} ");
                 self.dump_lvalue(tuple, compiler, types, indent_count);
-                eprint!("): (");
+                eprint!(": (");
                 for (i, elem) in elem_types.iter().enumerate() {
                     if i != 0 {
                         eprint!(", ");
                     }
                     types.dump_type(compiler, elem);
                 }
-                eprint!(")");
+                eprint!("))");
             }
             LValue::ArrayIndex {
                 array,

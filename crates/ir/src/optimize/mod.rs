@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use color_format::ceprintln;
+use inst_combine::ref_value_eq;
 
 use crate::{instruction::DataVariant, Function, FunctionIr, Instruction, Ref};
 
@@ -107,6 +108,16 @@ impl RenameTable {
                 | DataVariant::None => {}
                 DataVariant::MemberPtr | DataVariant::RefInt => {
                     inst.data.ref_int.0 = get(inst.data.ref_int.0)
+                }
+                DataVariant::RefIntRef => {
+                    let (r, extra) = inst.data.ref_int;
+                    if let Some(new) = get_new(r) {
+                        inst.data.ref_int.0 = new;
+                    }
+                    let ref_bytes = &mut ir.extra[extra as usize + 4..extra as usize + 8];
+                    if let Some(new) = get_new(Ref::from_bytes(ref_bytes.try_into().unwrap())) {
+                        ref_bytes.copy_from_slice(&new.to_bytes());
+                    }
                 }
                 DataVariant::ArrayIndex => {
                     let (array_ptr, extra_start) = inst.data.ref_int();

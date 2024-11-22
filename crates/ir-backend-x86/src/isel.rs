@@ -256,6 +256,7 @@ impl<'a> Gen<'a> {
                 }
             }
             Tag::MemberValue => todo!("MemberValue"),
+            Tag::InsertMember => todo!("InsertMember"),
             Tag::Add => self.bin_op_commutative(
                 builder,
                 values,

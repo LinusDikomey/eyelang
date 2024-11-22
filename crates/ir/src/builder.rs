@@ -394,6 +394,24 @@ impl<'a> IrBuilder<'a> {
         )
     }
 
+    pub fn build_insert_member(
+        &mut self,
+        tuple: Ref,
+        idx: u32,
+        value: Ref,
+        ty: impl Into<IdxOrTy>,
+    ) -> Ref {
+        let i = self.extra_data(&idx.to_le_bytes());
+        self.extra_data(&value.to_bytes());
+        self.add(
+            Data {
+                ref_int: (tuple, i),
+            },
+            Tag::InsertMember,
+            ty,
+        )
+    }
+
     pub fn build_array_index(&mut self, array_var: Ref, idx: Ref, elem_type: TypeRef) -> Ref {
         let extra = self.extra.len() as u32;
         self.extra.extend(elem_type.to_bytes());

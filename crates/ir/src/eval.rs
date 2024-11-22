@@ -294,6 +294,7 @@ fn eval_internal(
                 */
             }
             super::Tag::MemberValue => todo!(),
+            super::Tag::InsertMember => todo!(),
             super::Tag::ArrayIndex => todo!(),
             super::Tag::CastInt => {
                 let (v, from_ty) = get_ref_and_ty(&values, inst.data.un_op());
