@@ -14,7 +14,7 @@ use types::{Primitive, Type};
 use crate::{
     compiler::{Generics, Signature},
     error::{CompileError, Error},
-    hir::{CastId, HIRBuilder, Node, HIR},
+    hir::{CastId, HIRBuilder, LValue, Node, HIR},
     parser::ast::{Ast, ExprId, ScopeId},
     types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     Compiler,
@@ -148,15 +148,27 @@ impl<'a> Ctx<'a> {
         ty: LocalTypeId,
     ) -> Node {
         let mut current_ty = TypeInfoOrIdx::Idx(ty);
+        // try promoting the value to an lvalue first to potentially add one level of pointer
+        if pointer_count < required_pointer_count {
+            if let Some(lval) = LValue::try_from_node(&value, &mut self.hir) {
+                let value_ty = self.hir.types.add_info_or_idx(current_ty);
+                value = Node::AddressOf {
+                    value: self.hir.add_lvalue(lval),
+                    value_ty,
+                };
+                current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
+                pointer_count += 1
+            }
+        }
         while pointer_count < required_pointer_count {
-            /*
-            let inner = self.hir.add(value);
             let value_ty = self.hir.types.add_info_or_idx(current_ty);
-            value = Node::AddressOf { value, value_ty };
+            let variable = self.hir.add_var(value_ty);
+            value = Node::Promote {
+                value: self.hir.add(value),
+                variable,
+            };
             current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
             pointer_count += 1;
-            */
-            todo!("reimplement auto ref")
         }
         while pointer_count > required_pointer_count {
             let TypeInfo::Pointer(pointee) = self.hir.types.get_info_or_idx(current_ty) else {
