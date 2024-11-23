@@ -222,7 +222,7 @@ pub enum Error {
         to: String,
     },
     TrivialCast,
-    EvalFailed(ir::Error),
+    EvalFailed(ir::eval::Error),
     EvalReturnedStackPointer,
 }
 impl Error {
@@ -312,11 +312,14 @@ impl Error {
             Error::TypeAnnotationNeeded { .. } => "type annotation needed",
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
-            Error::EvalFailed(ir::Error::InfiniteLoop) => {
+            Error::EvalFailed(ir::eval::Error::InfiniteLoop) => {
                 "evaluation failed due to an infinite loop"
             }
-            Error::EvalFailed(ir::Error::ExternCallFailed(_)) => {
+            Error::EvalFailed(ir::eval::Error::ExternCallFailed(_)) => {
                 "evaluation failed while calling an extern function"
+            }
+            Error::EvalFailed(ir::eval::Error::StackOverflow) => {
+                "evaluation failed due to a stack overflow"
             }
             Error::EvalReturnedStackPointer => {
                 "evaluation returned an invalid pointer to the stack"
@@ -426,13 +429,13 @@ impl Error {
             Error::TrivialCast => {
                 cformat!("#c<hint>: remove this cast")
             }
-            Error::EvalFailed(ir::Error::InfiniteLoop) => {
+            Error::EvalFailed(ir::eval::Error::InfiniteLoop) => {
                 cformat!("#c<hint>: configuring the backwards jump limit \
                     (currently always #blue<{}>) will be configurable in the future",
-                    ir::BACKWARDS_JUMP_LIMIT
+                    ir::eval::BACKWARDS_JUMP_LIMIT
                 )
             }
-            Error::EvalFailed(ir::Error::ExternCallFailed(s)) => {
+            Error::EvalFailed(ir::eval::Error::ExternCallFailed(s)) => {
                 cformat!("#r<error>: {s}")
             }
             _ => return None

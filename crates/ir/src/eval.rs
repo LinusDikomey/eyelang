@@ -1,10 +1,12 @@
-use std::any::Any;
-
 use crate::{
     ir_types::{ConstIrType, IrType, IrTypes},
     layout::{type_layout, Layout},
     BlockIndex, Function, FunctionId, FunctionIr, Ref,
 };
+
+pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
+pub const STACK_SIZE: u32 = 8_000_000;
+pub const STACK_FRAME_COUNT: usize = 10000;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Val {
@@ -13,7 +15,7 @@ pub enum Val {
     Int(u64),
     F32(f32),
     F64(f64),
-    StackPointer(StackAddr),
+    Ptr(Ptr),
 }
 impl Val {
     fn equals(&self, r: Val) -> bool {
@@ -22,55 +24,99 @@ impl Val {
             (Val::Unit, Val::Unit) => true,
             (Val::F32(a), Val::F32(b)) => a == b,
             (Val::F64(a), Val::F64(b)) => a == b,
-            (Val::StackPointer(a), Val::StackPointer(b)) => a.0 == b.0,
+            (Val::Ptr(a), Val::Ptr(b)) => a.addr == b.addr,
             _ => panic!("invalid types for equality check"),
         }
     }
 }
 
-pub struct StackMem {
-    mem: Vec<u8>,
+const STACK_BIT: u32 = 1 << 31;
+
+pub struct Mem {
+    stack: Vec<u8>,
+    heap: Vec<u8>,
 }
-impl StackMem {
-    pub fn new() -> StackMem {
-        Self { mem: Vec::new() }
+impl Mem {
+    pub fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            heap: Vec::new(),
+        }
     }
 
-    pub fn alloc(&mut self, layout: Layout) -> StackAddr {
-        let addr = self.mem.len();
-        self.mem.resize_with(addr + layout.size as usize, || 0);
-        StackAddr(addr as _)
+    pub fn stack_alloc(&mut self, layout: Layout) -> Result<Ptr, Error> {
+        let addr = self.stack.len();
+        if self.stack.len() as u64 + layout.size > STACK_SIZE as u64 {
+            return Err(Error::StackOverflow);
+        }
+        self.stack.resize_with(addr + layout.size as usize, || 0);
+        Ok(Ptr {
+            addr: addr as u32 | STACK_BIT,
+            size: layout.size as u32,
+        })
     }
 
-    pub fn store(&mut self, addr: StackAddr, value: &[u8]) {
-        self.mem[addr.0 as usize..addr.0 as usize + value.len()].copy_from_slice(value);
+    pub fn sp(&self) -> u32 {
+        self.stack.len() as u32
     }
 
-    pub fn load_n<const N: usize>(&mut self, addr: StackAddr) -> [u8; N] {
+    pub fn restore_sp(&mut self, sp: u32) {
+        debug_assert!(sp <= self.stack.len() as u32);
+        self.stack.truncate(sp as usize);
+    }
+    pub fn malloc(&mut self, layout: Layout) -> Result<Ptr, OomError> {
+        if self.heap.len() as u64 + layout.size as u64 >= STACK_BIT as u64 {
+            return Err(OomError);
+        }
+        let addr = Ptr {
+            addr: self.heap.len() as u32,
+            size: layout.size as u32,
+        };
+        self.heap
+            .extend(std::iter::repeat(0).take(layout.size as usize));
+        Ok(addr)
+    }
+
+    pub fn load_n<const N: usize>(&mut self, mut ptr: Ptr) -> [u8; N] {
+        let mem = if ptr.addr & STACK_BIT != 0 {
+            ptr.addr &= !STACK_BIT;
+            &mut self.stack
+        } else {
+            &mut self.heap
+        };
         let mut arr = [0; N];
-        arr.copy_from_slice(&self.mem[addr.0 as usize..addr.0 as usize + N]);
+        arr.copy_from_slice(&mem[ptr.addr as usize..ptr.addr as usize + N]);
         arr
     }
 
-    pub fn sp(&self) -> usize {
-        self.mem.len()
+    pub fn store(&mut self, mut ptr: Ptr, value: &[u8]) {
+        let mem = if ptr.addr & STACK_BIT != 0 {
+            ptr.addr &= !STACK_BIT;
+            &mut self.stack
+        } else {
+            &mut self.heap
+        };
+        mem[ptr.addr as usize..ptr.addr as usize + value.len()].copy_from_slice(value);
     }
 
-    pub fn restore_sp(&mut self, sp: usize) {
-        debug_assert!(sp <= self.mem.len());
-        self.mem.truncate(sp);
+    pub fn free(&mut self, _ptr: Ptr, _layout: Layout) {
+        // TODO: proper allocator that can free, also: verify that free call was valid
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct StackAddr(u32);
+pub struct OomError;
 
-pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
+#[derive(Clone, Copy, Debug)]
+pub struct Ptr {
+    pub addr: u32,
+    pub size: u32,
+}
 
 #[derive(Debug, Clone)]
 pub enum Error {
     InfiniteLoop,
     ExternCallFailed(Box<str>),
+    StackOverflow,
 }
 
 pub trait Environment {
@@ -80,7 +126,7 @@ pub trait Environment {
         &mut self,
         _id: FunctionId,
         _args: &[Val],
-        _stack: &mut StackMem,
+        _mem: &mut Mem,
     ) -> Result<Val, Box<str>> {
         Err("Can't evaluate extern functions".into())
     }
@@ -107,7 +153,7 @@ pub fn eval<E: Environment>(
     env: &mut E,
 ) -> Result<Val, Error> {
     let top_level_function = (top_level_ir, top_level_types);
-    let mut stack = StackMem::new();
+    let mut mem = Mem::new();
     let mut values = vec![Val::Invalid; top_level_ir.inst.len()];
     let mut current_function = None;
     values[..params.len()].copy_from_slice(params);
@@ -197,7 +243,7 @@ pub fn eval<E: Environment>(
                     };
                     current_function = frame.function;
                     pc = frame.pc;
-                    stack.restore_sp(frame.sp);
+                    mem.restore_sp(frame.sp);
                     values = frame.values;
                     values[pc as usize] = return_val;
                     pc += 1;
@@ -220,12 +266,10 @@ pub fn eval<E: Environment>(
                 },
                 super::Tag::Decl => {
                     let layout = type_layout(types[inst.ty], &types);
-                    let pointer = stack.alloc(layout);
-                    Val::StackPointer(pointer)
+                    Val::Ptr(mem.stack_alloc(layout)?)
                 }
                 super::Tag::Load => {
-                    let Val::StackPointer(addr) =
-                        values[inst.data.un_op().into_ref().unwrap() as usize]
+                    let Val::Ptr(ptr) = values[inst.data.un_op().into_ref().unwrap() as usize]
                     else {
                         panic!()
                     };
@@ -233,48 +277,43 @@ pub fn eval<E: Environment>(
                     use IrType as P;
                     match types[inst.ty] {
                         P::U1 => {
-                            let [v] = stack.load_n(addr);
+                            let [v] = mem.load_n(ptr);
                             debug_assert!(v < 2);
                             Val::Int(v as u64)
                         }
-                        P::I8 | P::U8 => Val::Int(u8::from_le_bytes(stack.load_n(addr)) as u64),
-                        P::I16 | P::U16 => Val::Int(u16::from_le_bytes(stack.load_n(addr)) as u64),
-                        P::I32 | P::U32 => Val::Int(u32::from_le_bytes(stack.load_n(addr)) as u64),
-                        P::I64 | P::U64 => Val::Int(u64::from_le_bytes(stack.load_n(addr))),
+                        P::I8 | P::U8 => Val::Int(u8::from_le_bytes(mem.load_n(ptr)) as u64),
+                        P::I16 | P::U16 => Val::Int(u16::from_le_bytes(mem.load_n(ptr)) as u64),
+                        P::I32 | P::U32 => Val::Int(u32::from_le_bytes(mem.load_n(ptr)) as u64),
+                        P::I64 | P::U64 => Val::Int(u64::from_le_bytes(mem.load_n(ptr))),
                         P::I128 | P::U128 => todo!(),
-                        P::F32 => Val::F32(f32::from_le_bytes(stack.load_n(addr))),
-                        P::F64 => Val::F64(f64::from_le_bytes(stack.load_n(addr))),
-                        P::Ptr => {
-                            Val::StackPointer(StackAddr(u32::from_le_bytes(stack.load_n(addr))))
-                        }
+                        P::F32 => Val::F32(f32::from_le_bytes(mem.load_n(ptr))),
+                        P::F64 => Val::F64(f64::from_le_bytes(mem.load_n(ptr))),
+                        P::Ptr => Val::Ptr(Ptr {
+                            addr: (u32::from_le_bytes(mem.load_n(ptr))),
+                            size: u32::MAX, // TODO: figure out pointer tracking trough memory
+                        }),
                         P::Unit => Val::Unit,
                         _ => todo!("load complex types"),
                     }
                 }
                 super::Tag::Store => {
                     let (var, val) = inst.data.bin_op();
-                    let Val::StackPointer(addr) = get_ref(&values, var) else {
+                    let Val::Ptr(ptr) = get_ref(&values, var) else {
                         panic!()
                     };
                     let (val, ty) = get_ref_and_ty(&values, val);
                     match val {
                         Val::Unit | Val::Invalid => {}
                         Val::Int(i) => match ty {
-                            IrType::I8 | IrType::U8 => stack.store(addr, &(i as u8).to_le_bytes()),
-                            IrType::I16 | IrType::U16 => {
-                                stack.store(addr, &(i as u16).to_le_bytes())
-                            }
-                            IrType::I32 | IrType::U32 => {
-                                stack.store(addr, &(i as u32).to_le_bytes())
-                            }
-                            IrType::I64 | IrType::U64 => {
-                                stack.store(addr, &(i as u64).to_le_bytes())
-                            }
+                            IrType::I8 | IrType::U8 => mem.store(ptr, &(i as u8).to_le_bytes()),
+                            IrType::I16 | IrType::U16 => mem.store(ptr, &(i as u16).to_le_bytes()),
+                            IrType::I32 | IrType::U32 => mem.store(ptr, &(i as u32).to_le_bytes()),
+                            IrType::I64 | IrType::U64 => mem.store(ptr, &(i as u64).to_le_bytes()),
                             _ => panic!(),
                         },
-                        Val::F32(v) => stack.store(addr, &v.to_le_bytes()),
-                        Val::F64(v) => stack.store(addr, &v.to_le_bytes()),
-                        Val::StackPointer(addr) => stack.store(addr, &addr.0.to_le_bytes()),
+                        Val::F32(v) => mem.store(ptr, &v.to_le_bytes()),
+                        Val::F64(v) => mem.store(ptr, &v.to_le_bytes()),
+                        Val::Ptr(ptr) => mem.store(ptr, &ptr.addr.to_le_bytes()),
                     }
                     Val::Invalid
                 }
@@ -293,10 +332,13 @@ pub fn eval<E: Environment>(
                         let entry = BlockIndex::ENTRY;
                         let args_range = func_ir.get_block_args(entry).range();
                         new_values[args_range].copy_from_slice(&args);
+                        if call_stack.len() > STACK_FRAME_COUNT {
+                            return Err(Error::StackOverflow);
+                        }
                         call_stack.push(StackFrame {
                             function: current_function,
                             pc,
-                            sp: stack.sp(),
+                            sp: mem.sp(),
                             values,
                         });
                         pc = func_ir
@@ -308,7 +350,7 @@ pub fn eval<E: Environment>(
                         continue 'outer;
                     } else {
                         let res = env
-                            .call_extern(func_id, &args, &mut stack)
+                            .call_extern(func_id, &args, &mut mem)
                             .map_err(|s| Error::ExternCallFailed(s))?;
                         values[pc as usize] = res;
                         pc += 1;
@@ -508,7 +550,7 @@ struct StackFrame {
     /// if None, return to the original function that was passed to eval
     function: Option<FunctionId>,
     pc: u32,
-    sp: usize,
+    sp: u32,
     values: Vec<Val>,
 }
 

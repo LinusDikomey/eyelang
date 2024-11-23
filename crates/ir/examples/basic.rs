@@ -56,11 +56,11 @@ fn main() {
     ir::verify::function(&function);
 
     eprintln!("{display}");
-    let value = ir::eval(
+    let value = ir::eval::eval(
         &function.ir.as_ref().unwrap(),
         &function.types,
         &[],
-        &mut ir::EmptyEnv,
+        &mut ir::eval::EmptyEnv,
     );
     eprintln!("Function evaluated to {value:?}");
 
@@ -74,12 +74,12 @@ fn main() {
         .unwrap()
         .display(Info { funcs: &[] }, &mul.types);
     eprintln!("{display}");
-    let args = [ir::Val::Int(5), ir::Val::Int(3)];
-    let result = ir::eval(
+    let args = [ir::eval::Val::Int(5), ir::eval::Val::Int(3)];
+    let result = ir::eval::eval(
         &mul.ir.as_ref().unwrap(),
         &mul.types,
         &args,
-        &mut ir::EmptyEnv,
+        &mut ir::eval::EmptyEnv,
     )
     .expect("Function call failed");
     eprintln!("{:?}*{:?} = {:?}", args[0], args[1], result);

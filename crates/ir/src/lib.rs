@@ -9,6 +9,9 @@ use std::{
 
 pub mod builder;
 pub mod display;
+/// interpreter for evaluating ir in a safe, sandboxed environment with the ability to define
+/// behaviour when externs are called
+pub mod eval;
 /// helper functions for folding constants
 pub mod fold;
 /// machine code ir representation that is generic over the ISA
@@ -21,7 +24,6 @@ pub mod verify;
 mod bitmap;
 mod block_graph;
 mod const_value;
-mod eval;
 mod instruction;
 mod ir_types;
 mod layout;
@@ -29,7 +31,6 @@ mod layout;
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use const_value::ConstValue;
-pub use eval::{eval, EmptyEnv, Environment, Error, StackMem, Val, BACKWARDS_JUMP_LIMIT};
 pub use instruction::{Data, Instruction, Tag};
 pub use ir_types::{IrType, IrTypes, TypeRef, TypeRefs};
 pub use layout::{offset_in_tuple, type_layout, Layout};

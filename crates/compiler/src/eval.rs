@@ -1,7 +1,8 @@
-use std::rc::Rc;
+use std::{num::NonZeroU64, rc::Rc};
 
 use dmap::DHashMap;
 use id::ModuleId;
+use ir::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
@@ -292,12 +293,11 @@ pub fn def_expr(
                 &[],
                 params,
             );
-            use ir::Val;
             let mut env = LazyEvalEnv {
                 to_generate: to_generate.into_iter().map(|f| (f.ir_id, f)).collect(),
                 compiler,
             };
-            match ir::eval(&ir, &ir_types, &[], &mut env) {
+            match ir::eval::eval(&ir, &ir_types, &[], &mut env) {
                 Ok(val) => {
                     let const_val = match val {
                         Val::Invalid => panic!("internal error during evaluation occured"),
@@ -317,13 +317,16 @@ pub fn def_expr(
                         }
                         Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
                         Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
-                        Val::StackPointer(_) => {
+                        Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
+                        /*
+                        Val::Ptr(_) => {
                             compiler.errors.emit_err(
                                 Error::EvalReturnedStackPointer
                                     .at_span(ast[expr].span(ast).in_mod(module)),
                             );
                             return Def::Invalid;
                         }
+                        */
                     };
                     Def::ConstValue(compiler.add_const_value(const_val))
                 }
@@ -342,7 +345,7 @@ struct LazyEvalEnv<'a> {
     to_generate: DHashMap<ir::FunctionId, FunctionToGenerate>,
     compiler: &'a mut Compiler,
 }
-impl<'a> ir::Environment for LazyEvalEnv<'a> {
+impl<'a> ir::eval::Environment for LazyEvalEnv<'a> {
     fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
         if let Some(to_generate) = self.to_generate.remove(&id) {
             let mut to_generate_vec = Vec::new();
@@ -364,5 +367,31 @@ impl<'a> ir::Environment for LazyEvalEnv<'a> {
             }
         }
         &self.compiler.ir_module.funcs[id.0 as usize]
+    }
+
+    fn call_extern(
+        &mut self,
+        id: ir::FunctionId,
+        args: &[Val],
+        mem: &mut ir::eval::Mem,
+    ) -> Result<Val, Box<str>> {
+        let func = self.get_function(id);
+        Ok(match func.name.as_str() {
+            "malloc" => {
+                let &[Val::Int(size)] = args else {
+                    return Err("invalid signature for malloc".into());
+                };
+                let ptr = mem
+                    .malloc(ir::Layout {
+                        size,
+                        align: NonZeroU64::new(16).unwrap(),
+                    })
+                    .map_err(|_| "out of compile-time memory")?;
+                Val::Ptr(ptr)
+            }
+            name => {
+                return Err(format!("Can't evaluate extern function {name} at compile-time").into())
+            }
+        })
     }
 }

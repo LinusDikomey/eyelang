@@ -285,17 +285,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_block(&mut self, parent: ScopeId) -> Expr {
-        match self.toks.step_expect(TokenType::LBrace) {
-            Ok(lbrace) => self.parse_block_from_lbrace(lbrace, parent),
-            Err(err) => {
-                let span = err.span.tspan();
-                self.errors.emit_err(err);
-                Expr::Error(span)
-            }
-        }
-    }
-
     fn parse_block_from_lbrace(&mut self, lbrace: Token, parent: ScopeId) -> Expr {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut items = Vec::new();
