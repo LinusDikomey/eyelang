@@ -29,7 +29,7 @@ mod layout;
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use const_value::ConstValue;
-pub use eval::{eval, Error, Val, BACKWARDS_JUMP_LIMIT};
+pub use eval::{eval, EmptyEnv, Environment, Error, StackMem, Val, BACKWARDS_JUMP_LIMIT};
 pub use instruction::{Data, Instruction, Tag};
 pub use ir_types::{IrType, IrTypes, TypeRef, TypeRefs};
 pub use layout::{offset_in_tuple, type_layout, Layout};
@@ -188,6 +188,10 @@ impl BlockArgs {
 
     pub fn iter(self) -> impl ExactSizeIterator<Item = u32> {
         self.start..self.start + self.count
+    }
+
+    pub fn range(self) -> Range<usize> {
+        self.start as usize..self.start as usize + self.count as usize
     }
 }
 

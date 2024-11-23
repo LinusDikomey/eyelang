@@ -315,6 +315,9 @@ impl Error {
             Error::EvalFailed(ir::Error::InfiniteLoop) => {
                 "evaluation failed due to an infinite loop"
             }
+            Error::EvalFailed(ir::Error::ExternCallFailed(_)) => {
+                "evaluation failed while calling an extern function"
+            }
             Error::EvalReturnedStackPointer => {
                 "evaluation returned an invalid pointer to the stack"
             }
@@ -428,6 +431,9 @@ impl Error {
                     (currently always #blue<{}>) will be configurable in the future",
                     ir::BACKWARDS_JUMP_LIMIT
                 )
+            }
+            Error::EvalFailed(ir::Error::ExternCallFailed(s)) => {
+                cformat!("#r<error>: {s}")
             }
             _ => return None
         })

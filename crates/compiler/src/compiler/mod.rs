@@ -730,7 +730,7 @@ impl Compiler {
         None
     }
 
-    pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
+    pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<CheckedFunction> {
         let checked = &self.modules[module.idx()].ast.as_ref().unwrap().symbols;
         match &checked.functions[id.idx()] {
             Resolvable::Resolved(_) => {
@@ -1101,29 +1101,8 @@ impl Compiler {
                         f.generics.len(),
                         "a function instance queued for ir generation has an invalid generic count"
                     );
-                    // TODO: generics in function name
-                    let mut name = checked.name.clone();
-                    if name == "main" {
-                        name.clear();
-                        name.push_str("eyemain");
-                    }
-                    if !f.generics.is_empty() {
-                        // 2 characters per type because of commas and brackets is the minimum
-                        name.reserve(1 + 2 * f.generics.len());
-                        name.push('[');
-                        let mut first = true;
-                        for ty in &f.generics {
-                            if first {
-                                first = false;
-                            } else {
-                                name.push(',');
-                            }
-                            use std::fmt::Write;
-                            write!(name, "{ty}").unwrap();
-                        }
-                        name.push(']');
-                    }
 
+                    let name = mangle_name(&checked, &f.generics);
                     let func =
                         irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
                     self.ir_module[f.ir_id] = func;
@@ -1859,3 +1838,28 @@ pub struct FunctionToGenerate {
 
 #[derive(Clone)]
 struct FunctionInstances(DHashMap<Vec<Type>, ir::FunctionId>);
+
+pub fn mangle_name(checked: &CheckedFunction, generics: &[Type]) -> String {
+    let mut name = checked.name.clone();
+    if name == "main" {
+        name.clear();
+        name.push_str("eyemain");
+    }
+    if !generics.is_empty() {
+        // 2 characters per type because of commas and brackets is the minimum
+        name.reserve(1 + 2 * generics.len());
+        name.push('[');
+        let mut first = true;
+        for ty in generics {
+            if first {
+                first = false;
+            } else {
+                name.push(',');
+            }
+            use std::fmt::Write;
+            write!(name, "{ty}").unwrap();
+        }
+        name.push(']');
+    }
+    name
+}

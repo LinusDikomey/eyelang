@@ -56,7 +56,12 @@ fn main() {
     ir::verify::function(&function);
 
     eprintln!("{display}");
-    let value = ir::eval(&function.ir.as_ref().unwrap(), &function.types, &[]);
+    let value = ir::eval(
+        &function.ir.as_ref().unwrap(),
+        &function.types,
+        &[],
+        &mut ir::EmptyEnv,
+    );
     eprintln!("Function evaluated to {value:?}");
 
     // another example: square function taking in parameters
@@ -70,8 +75,13 @@ fn main() {
         .display(Info { funcs: &[] }, &mul.types);
     eprintln!("{display}");
     let args = [ir::Val::Int(5), ir::Val::Int(3)];
-    let result =
-        ir::eval(&mul.ir.as_ref().unwrap(), &mul.types, &args).expect("Function call failed");
+    let result = ir::eval(
+        &mul.ir.as_ref().unwrap(),
+        &mul.types,
+        &args,
+        &mut ir::EmptyEnv,
+    )
+    .expect("Function call failed");
     eprintln!("{:?}*{:?} = {:?}", args[0], args[1], result);
 }
 

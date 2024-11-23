@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use color_format::ceprintln;
-use inst_combine::ref_value_eq;
 
 use crate::{instruction::DataVariant, Function, FunctionIr, Instruction, Ref};
 

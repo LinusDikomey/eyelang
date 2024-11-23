@@ -1,8 +1,11 @@
+use std::rc::Rc;
+
+use dmap::DHashMap;
 use id::ModuleId;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
-    compiler::{Generics, ResolvedPrimitive},
+    compiler::{mangle_name, FunctionToGenerate, Generics, ResolvedPrimitive},
     error::Error,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
@@ -290,7 +293,11 @@ pub fn def_expr(
                 params,
             );
             use ir::Val;
-            match ir::eval(&ir, &ir_types, &[]) {
+            let mut env = LazyEvalEnv {
+                to_generate: to_generate.into_iter().map(|f| (f.ir_id, f)).collect(),
+                compiler,
+            };
+            match ir::eval(&ir, &ir_types, &[], &mut env) {
                 Ok(val) => {
                     let const_val = match val {
                         Val::Invalid => panic!("internal error during evaluation occured"),
@@ -328,5 +335,34 @@ pub fn def_expr(
                 }
             }
         }
+    }
+}
+
+struct LazyEvalEnv<'a> {
+    to_generate: DHashMap<ir::FunctionId, FunctionToGenerate>,
+    compiler: &'a mut Compiler,
+}
+impl<'a> ir::Environment for LazyEvalEnv<'a> {
+    fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
+        if let Some(to_generate) = self.to_generate.remove(&id) {
+            let mut to_generate_vec = Vec::new();
+            let hir = Rc::clone(
+                self.compiler
+                    .get_hir(to_generate.module, to_generate.ast_function_id),
+            );
+            let name = mangle_name(&hir, &to_generate.generics);
+            let ir = crate::irgen::lower_function(
+                self.compiler,
+                &mut to_generate_vec,
+                name,
+                &hir,
+                &to_generate.generics,
+            );
+            self.compiler.ir_module.funcs[id.0 as usize] = ir;
+            for to_generate in to_generate_vec {
+                self.to_generate.insert(to_generate.ir_id, to_generate);
+            }
+        }
+        &self.compiler.ir_module.funcs[id.0 as usize]
     }
 }
