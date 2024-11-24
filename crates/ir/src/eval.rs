@@ -1,3 +1,5 @@
+use std::{fmt, ops::Range};
+
 use crate::{
     ir_types::{ConstIrType, IrType, IrTypes},
     layout::{type_layout, Layout},
@@ -8,7 +10,7 @@ pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
 pub const STACK_SIZE: u32 = 8_000_000;
 pub const STACK_FRAME_COUNT: usize = 10000;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Val {
     Invalid,
     Unit,
@@ -16,15 +18,20 @@ pub enum Val {
     F32(f32),
     F64(f64),
     Ptr(Ptr),
+    Array(Box<[Val]>),
+    Tuple(Box<[Val]>),
 }
 impl Val {
-    fn equals(&self, r: Val) -> bool {
-        match (*self, r) {
+    fn equals(&self, r: &Val) -> bool {
+        match (self, r) {
             (Val::Int(a), Val::Int(b)) => a == b,
             (Val::Unit, Val::Unit) => true,
             (Val::F32(a), Val::F32(b)) => a == b,
             (Val::F64(a), Val::F64(b)) => a == b,
             (Val::Ptr(a), Val::Ptr(b)) => a.addr == b.addr,
+            (Val::Array(a), Val::Array(b)) | (Val::Tuple(a), Val::Tuple(b)) => {
+                a.iter().zip(b.iter()).all(|(a, b)| Val::equals(a, b))
+            }
             _ => panic!("invalid types for equality check"),
         }
     }
@@ -40,7 +47,7 @@ impl Mem {
     pub fn new() -> Self {
         Self {
             stack: Vec::new(),
-            heap: Vec::new(),
+            heap: vec![0], // to cover null pointers
         }
     }
 
@@ -106,17 +113,71 @@ impl Mem {
 
 pub struct OomError;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Ptr {
     pub addr: u32,
     pub size: u32,
 }
+impl fmt::Debug for Ptr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Ptr")
+            .field(
+                "addr",
+                &if self.addr & STACK_BIT != 0 {
+                    self.addr & !STACK_BIT
+                } else {
+                    self.addr
+                },
+            )
+            .field(
+                "location",
+                &if self.addr & STACK_BIT != 0 {
+                    "stack"
+                } else {
+                    "heap"
+                },
+            )
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+impl Ptr {
+    pub fn from_u64(x: u64) -> Self {
+        Ptr {
+            addr: (x >> 32) as u32,
+            size: x as u32,
+        }
+    }
+
+    pub fn into_u64(self) -> u64 {
+        (self.addr as u64) << 32 | self.size as u64
+    }
+
+    #[must_use]
+    pub fn add(self, offset: u32) -> Result<Self, ProvenanceError> {
+        let size = self.size.checked_sub(offset).ok_or(ProvenanceError)?;
+        Ok(Self {
+            addr: self.addr + offset,
+            size,
+        })
+    }
+}
+
+pub struct ProvenanceError;
 
 #[derive(Debug, Clone)]
 pub enum Error {
     InfiniteLoop,
     ExternCallFailed(Box<str>),
     StackOverflow,
+    ProvenanceViolation,
+    OutOfMemory,
+}
+impl From<ProvenanceError> for Error {
+    fn from(_: ProvenanceError) -> Self {
+        Self::ProvenanceViolation
+    }
 }
 
 pub trait Environment {
@@ -154,11 +215,17 @@ pub fn eval<E: Environment>(
 ) -> Result<Val, Error> {
     let top_level_function = (top_level_ir, top_level_types);
     let mut mem = Mem::new();
-    let mut values = vec![Val::Invalid; top_level_ir.inst.len()];
+
+    let mut values = Values::new(top_level_ir, top_level_types);
     let mut current_function = None;
-    values[..params.len()].copy_from_slice(params);
-    let entry_args = top_level_ir.get_block_args(BlockIndex::ENTRY);
-    values[entry_args.range()].copy_from_slice(params);
+    for (param, i) in params
+        .iter()
+        .zip(top_level_ir.get_block_args(BlockIndex::ENTRY).iter())
+    {
+        // TODO: check that the type fits
+        // let ty = top_level_types[top_level_ir.inst[i as usize].ty];
+        values.store(i, param);
+    }
 
     let mut pc: u32 = top_level_ir
         .get_block_range(top_level_ir.blocks().next().unwrap())
@@ -172,9 +239,10 @@ pub fn eval<E: Environment>(
             (function.ir.as_ref().unwrap(), &function.types)
         });
 
-        let get_ref_and_ty = |values: &[Val], r: Ref| -> (Val, IrType) {
+        let get_ref_and_ty = |values: &Values, r: Ref| -> (Val, IrType) {
             if let Some(r) = r.into_ref() {
-                (values[r as usize], types[ir.inst[r as usize].ty])
+                let ty = types[ir.inst[r as usize].ty];
+                (values.load(r, ty, types), ty)
             } else {
                 use crate::RefVal;
                 match r.into_val().unwrap() {
@@ -185,7 +253,7 @@ pub fn eval<E: Environment>(
                 }
             }
         };
-        let get_ref = |values: &[Val], r: Ref| -> Val { get_ref_and_ty(values, r).0 };
+        let get_ref = |values: &Values, r: Ref| -> Val { get_ref_and_ty(values, r).0 };
         macro_rules! bin_op {
             ($op: tt, $inst: expr) => {{
                 let l = get_ref(&values, $inst.data.bin_op().0);
@@ -232,11 +300,13 @@ pub fn eval<E: Environment>(
         // the inner loop should never break
         let _: std::convert::Infallible = loop {
             let inst = ir.inst[pc as usize];
+            //eprintln!("evaluating {} {:?} pc={pc}", inst.tag, inst.data);
             let value = match inst.tag {
                 super::Tag::Nothing => Val::Invalid,
                 super::Tag::Ret => {
                     let return_val = get_ref(&values, inst.data.un_op());
-                    let Some(frame) = call_stack.pop() else {
+                    //eprintln!("  -> returning {return_val:?}");
+                    let Some(mut frame) = call_stack.pop() else {
                         // the function that was originally evaluated returned, break to return the
                         // value from eval
                         break 'outer return_val;
@@ -244,8 +314,8 @@ pub fn eval<E: Environment>(
                     current_function = frame.function;
                     pc = frame.pc;
                     mem.restore_sp(frame.sp);
+                    frame.values.store(pc, &return_val);
                     values = frame.values;
-                    values[pc as usize] = return_val;
                     pc += 1;
                     continue 'outer;
                 }
@@ -265,56 +335,58 @@ pub fn eval<E: Environment>(
                     _ => panic!("invalid type"),
                 },
                 super::Tag::Decl => {
-                    let layout = type_layout(types[inst.ty], &types);
+                    let layout = type_layout(types[inst.data.ty()], &types);
                     Val::Ptr(mem.stack_alloc(layout)?)
                 }
                 super::Tag::Load => {
-                    let Val::Ptr(ptr) = values[inst.data.un_op().into_ref().unwrap() as usize]
-                    else {
-                        panic!()
-                    };
-
-                    use IrType as P;
-                    match types[inst.ty] {
-                        P::U1 => {
-                            let [v] = mem.load_n(ptr);
-                            debug_assert!(v < 2);
-                            Val::Int(v as u64)
-                        }
-                        P::I8 | P::U8 => Val::Int(u8::from_le_bytes(mem.load_n(ptr)) as u64),
-                        P::I16 | P::U16 => Val::Int(u16::from_le_bytes(mem.load_n(ptr)) as u64),
-                        P::I32 | P::U32 => Val::Int(u32::from_le_bytes(mem.load_n(ptr)) as u64),
-                        P::I64 | P::U64 => Val::Int(u64::from_le_bytes(mem.load_n(ptr))),
-                        P::I128 | P::U128 => todo!(),
-                        P::F32 => Val::F32(f32::from_le_bytes(mem.load_n(ptr))),
-                        P::F64 => Val::F64(f64::from_le_bytes(mem.load_n(ptr))),
-                        P::Ptr => Val::Ptr(Ptr {
-                            addr: (u32::from_le_bytes(mem.load_n(ptr))),
-                            size: u32::MAX, // TODO: figure out pointer tracking trough memory
-                        }),
-                        P::Unit => Val::Unit,
-                        _ => todo!("load complex types"),
-                    }
+                    let ptr = values.load_ptr(inst.data.un_op());
+                    values.load_primitives(pc, types[inst.ty], types, |size, offset| {
+                        let ptr = ptr.add(offset)?;
+                        let val = match size {
+                            PrimitiveSize::S8 => u8::from_le_bytes(mem.load_n(ptr)) as u64,
+                            PrimitiveSize::S16 => u16::from_le_bytes(mem.load_n(ptr)) as u64,
+                            PrimitiveSize::S32 => u32::from_le_bytes(mem.load_n(ptr)) as u64,
+                            PrimitiveSize::S64 => u64::from_le_bytes(mem.load_n(ptr)),
+                        };
+                        //eprintln!("  .. read {} bytes at {ptr:?} -> {val}", size.byte_size());
+                        Ok(val)
+                    })?;
+                    pc += 1;
+                    continue;
                 }
                 super::Tag::Store => {
                     let (var, val) = inst.data.bin_op();
-                    let Val::Ptr(ptr) = get_ref(&values, var) else {
+                    let Val::Ptr(mut ptr) = get_ref(&values, var) else {
                         panic!()
                     };
-                    let (val, ty) = get_ref_and_ty(&values, val);
-                    match val {
-                        Val::Unit | Val::Invalid => {}
-                        Val::Int(i) => match ty {
-                            IrType::I8 | IrType::U8 => mem.store(ptr, &(i as u8).to_le_bytes()),
-                            IrType::I16 | IrType::U16 => mem.store(ptr, &(i as u16).to_le_bytes()),
-                            IrType::I32 | IrType::U32 => mem.store(ptr, &(i as u32).to_le_bytes()),
-                            IrType::I64 | IrType::U64 => mem.store(ptr, &(i as u64).to_le_bytes()),
-                            _ => panic!(),
-                        },
-                        Val::F32(v) => mem.store(ptr, &v.to_le_bytes()),
-                        Val::F64(v) => mem.store(ptr, &v.to_le_bytes()),
-                        Val::Ptr(ptr) => mem.store(ptr, &ptr.addr.to_le_bytes()),
-                    }
+                    //let (val, ty) = get_ref_and_ty(&values, val);
+                    //eprintln!("  storing {val:?} into {ptr:?}",);
+                    values.visit_primitives(val, ir, types, |p| {
+                        //eprintln!("  storing {p:?} {ptr:?}");
+                        match p {
+                            PrimitiveVal::I8(x) => {
+                                let new_ptr = ptr.add(1)?;
+                                mem.store(ptr, &[x]);
+                                ptr = new_ptr;
+                            }
+                            PrimitiveVal::I16(x) => {
+                                let new_ptr = ptr.add(2)?;
+                                mem.store(ptr, &x.to_le_bytes());
+                                ptr = new_ptr;
+                            }
+                            PrimitiveVal::I32(x) => {
+                                let new_ptr = ptr.add(4)?;
+                                mem.store(ptr, &x.to_le_bytes());
+                                ptr = new_ptr;
+                            }
+                            PrimitiveVal::I64(x) => {
+                                let new_ptr = ptr.add(8)?;
+                                mem.store(ptr, &x.to_le_bytes());
+                                ptr = new_ptr;
+                            }
+                        }
+                        Ok(())
+                    })?;
                     Val::Invalid
                 }
                 super::Tag::String => {
@@ -328,10 +400,13 @@ pub fn eval<E: Environment>(
                     let args: Vec<_> = args.map(|r| get_ref(&values, r)).collect();
                     let func = env.get_function(func_id);
                     if let Some(func_ir) = &func.ir {
-                        let mut new_values = vec![Val::Invalid; func_ir.inst.len()];
+                        // PERF: could copy args directly here without allocating
+                        let mut new_values = Values::new(func_ir, &func.types);
                         let entry = BlockIndex::ENTRY;
-                        let args_range = func_ir.get_block_args(entry).range();
-                        new_values[args_range].copy_from_slice(&args);
+                        let args_indices = func_ir.get_block_args(entry);
+                        for (arg, val) in args_indices.range().zip(args) {
+                            new_values.store(arg as _, &val);
+                        }
                         if call_stack.len() > STACK_FRAME_COUNT {
                             return Err(Error::StackOverflow);
                         }
@@ -352,7 +427,7 @@ pub fn eval<E: Environment>(
                         let res = env
                             .call_extern(func_id, &args, &mut mem)
                             .map_err(|s| Error::ExternCallFailed(s))?;
-                        values[pc as usize] = res;
+                        values.store(pc, &res);
                         pc += 1;
                         continue 'outer;
                     }
@@ -398,37 +473,49 @@ pub fn eval<E: Environment>(
                 super::Tag::Eq => {
                     let l = get_ref(&values, inst.data.bin_op().0);
                     let r = get_ref(&values, inst.data.bin_op().1);
-                    Val::Int(l.equals(r) as u64)
+                    Val::Int(l.equals(&r) as u64)
                 }
                 super::Tag::NE => {
                     let l = get_ref(&values, inst.data.bin_op().0);
                     let r = get_ref(&values, inst.data.bin_op().1);
-                    Val::Int(!l.equals(r) as u64)
+                    Val::Int(!l.equals(&r) as u64)
                 }
                 super::Tag::LT => cmp_op!(< , inst),
                 super::Tag::GT => cmp_op!(> , inst),
                 super::Tag::LE => cmp_op!(<=, inst),
                 super::Tag::GE => cmp_op!(>=, inst),
                 super::Tag::MemberPtr => {
-                    todo!("should give pointer to member")
-                    /*
-                    let ConstVal::Int(_, member) = get_ref(&values, inst.data.bin_op.1)
-                        else { panic!("member should be an int") };
-                    let var_idx = inst.data.bin_op.0.into_ref().expect("Can't get member of value");
-                    values[pos as usize] = match &values[var_idx as usize] {
-                        LocalVal::Val(_) => panic!("Member used on value '{:?}'", values[var_idx as usize]),
-                        LocalVal::Var(_) => LocalVal::VarMember(var_idx, vec![member as u32]),
-                        LocalVal::VarMember(idx, members) => LocalVal::VarMember(
-                            *idx,
-                            members.iter().copied().chain([member as _]).collect()
-                        ),
-                    };
-                    pos += 1;
-                    continue;
-                    */
+                    let (ptr, elem_types, i) = inst.data.member_ptr(&ir.extra);
+                    let ptr = values.load_ptr(ptr);
+                    let offset = crate::offset_in_tuple(elem_types, i, types);
+                    Val::Ptr(ptr.add(offset.try_into().unwrap())?)
                 }
-                super::Tag::MemberValue => todo!(),
-                super::Tag::InsertMember => todo!(),
+                super::Tag::MemberValue => {
+                    let (tuple, i) = inst.data.ref_int();
+                    let Val::Tuple(t) = get_ref(&values, tuple) else {
+                        unreachable!()
+                    };
+                    t[i as usize].clone()
+                }
+                super::Tag::InsertMember => {
+                    let IrType::Tuple(elem_types) = types[inst.ty] else {
+                        unreachable!()
+                    };
+                    let (tuple, i, value) = inst.data.ref_int_ref(&ir.extra);
+                    let value = get_ref(&values, value);
+                    Val::Tuple(if tuple == Ref::UNDEF {
+                        let mut tuple_value: Box<_> =
+                            (0..elem_types.count).map(|_| Val::Invalid).collect();
+                        tuple_value[i as usize] = value;
+                        tuple_value
+                    } else {
+                        let Val::Tuple(mut t) = get_ref(&values, tuple) else {
+                            unreachable!()
+                        };
+                        t[i as usize] = value;
+                        t
+                    })
+                }
                 super::Tag::ArrayIndex => todo!(),
                 super::Tag::CastInt => {
                     let (v, from_ty) = get_ref_and_ty(&values, inst.data.un_op());
@@ -493,7 +580,7 @@ pub fn eval<E: Environment>(
                     }
                     let arg_count = args.len() as u32;
                     for (r, i) in args.zip(target_pos - arg_count..target_pos) {
-                        values[i as usize] = get_ref(&values, r);
+                        values.store(i, &get_ref(&values, r));
                     }
                     pc = target_pos;
                     continue;
@@ -522,20 +609,30 @@ pub fn eval<E: Environment>(
                     }
                     let args = decode_block_args(ir, target, args_idx);
                     for (r, i) in args.zip(target_pos - arg_count..target_pos) {
-                        values[i as usize] = get_ref(&values, r);
+                        values.store(i, &get_ref(&values, r));
                     }
                     pc = target_pos;
                     continue;
                 }
                 super::Tag::IntToPtr => {
-                    todo!("IntToPtr semantics, might have to be disallowed at compile time")
+                    let Val::Int(addr) = get_ref(&values, inst.data.un_op()) else {
+                        unreachable!()
+                    };
+                    // TODO: what to do with large addresses?
+                    // TODO: what can be done with size
+                    Val::Ptr(Ptr {
+                        addr: addr.try_into().unwrap(),
+                        size: u32::MAX,
+                    })
                 }
                 super::Tag::PtrToInt => {
-                    todo!("PtrToInt semantics, might have to be disallowed at compile time")
+                    let ptr = values.load_ptr(inst.data.un_op());
+                    Val::Int(ptr.addr as u64)
                 }
                 super::Tag::Asm => todo!(), // TODO: error handling
             };
-            values[pc as usize] = value;
+            //eprintln!("  -> got {value:?}");
+            values.store(pc, &value);
             pc += 1;
         };
     };
@@ -551,7 +648,7 @@ struct StackFrame {
     function: Option<FunctionId>,
     pc: u32,
     sp: u32,
-    values: Vec<Val>,
+    values: Values,
 }
 
 fn decode_block_args<'a>(
@@ -566,4 +663,348 @@ fn decode_block_args<'a>(
         bytes.copy_from_slice(&ir.extra[i..i + 4]);
         Ref::from_bytes(bytes)
     })
+}
+
+struct Values {
+    slots: Vec<u64>,
+    slot_map: Vec<u32>,
+}
+impl Values {
+    pub fn new(ir: &FunctionIr, types: &IrTypes) -> Self {
+        let mut slots = Vec::new();
+        let slot_map = ir
+            .inst
+            .iter()
+            .map(|inst| {
+                if !inst.ty.is_present() {
+                    return u32::MAX;
+                }
+                let count = slot_count(types[inst.ty], types);
+                if count == 0 {
+                    return u32::MAX;
+                }
+                let idx = slots.len() as u32;
+                slots.extend(std::iter::repeat(0).take(count as usize));
+                idx
+            })
+            .collect();
+        Self { slots, slot_map }
+    }
+
+    pub fn get_slice(&self, i: u32) -> &[u64] {
+        let start = self.slots[i as usize] as usize;
+        let end = self
+            .slots
+            .get(i as usize + 1)
+            .map_or(self.slots.len() + 1, |&i| i as usize);
+        &self.slots[start..end]
+    }
+
+    pub fn get_slice_mut(&mut self, i: u32) -> &mut [u64] {
+        let start = self.slots[i as usize] as usize;
+        let end = self
+            .slots
+            .get(i as usize + 1)
+            .map_or(self.slots.len(), |&i| i as usize);
+        &mut self.slots[start..end]
+    }
+
+    pub fn get_slice_for_range(&self, range: Range<u32>) -> &[u64] {
+        let start = self.slots[range.start as usize] as usize;
+        let end = self
+            .slots
+            .get(range.end as usize)
+            .map_or(self.slots.len(), |&i| i as usize);
+        &self.slots[start..end]
+    }
+
+    pub fn get_slice_for_range_mut(&mut self, range: Range<u32>) -> &mut [u64] {
+        let start = self.slots[range.start as usize] as usize;
+        let end = self
+            .slots
+            .get(range.end as usize)
+            .map_or(self.slots.len(), |&i| i as usize);
+        &mut self.slots[start..end]
+    }
+
+    pub fn visit_primitives(
+        &mut self,
+        r: Ref,
+        ir: &FunctionIr,
+        types: &IrTypes,
+        mut visit: impl FnMut(PrimitiveVal) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        if let Some(val) = r.into_val() {
+            match val {
+                crate::RefVal::True => visit(PrimitiveVal::I8(1)),
+                crate::RefVal::False => visit(PrimitiveVal::I8(0)),
+                crate::RefVal::Unit => Ok(()),
+                // TODO: might need to do error handling here
+                crate::RefVal::Undef => panic!("tried to visit undefined"),
+            }
+        } else {
+            let i = r.into_ref().unwrap();
+            let ty = types[ir.inst[i as usize].ty];
+            let slot_index = self.slot_map[i as usize];
+            self.visit_primitives_inner(&mut { slot_index }, ty, types, &mut { visit })
+        }
+    }
+
+    fn visit_primitives_inner<F: FnMut(PrimitiveVal) -> Result<(), Error>>(
+        &mut self,
+        i: &mut u32,
+        ty: IrType,
+        types: &IrTypes,
+        visit: &mut F,
+    ) -> Result<(), Error> {
+        match ty {
+            IrType::Unit => {}
+            IrType::I8 | IrType::U8 | IrType::U1 => {
+                visit(PrimitiveVal::I8(self.slots[*i as usize] as u8))?;
+                *i += 1;
+            }
+            IrType::I16 | IrType::U16 => {
+                visit(PrimitiveVal::I16(self.slots[*i as usize] as u16))?;
+                *i += 1;
+            }
+            IrType::I32 | IrType::U32 | IrType::F32 => {
+                visit(PrimitiveVal::I32(self.slots[*i as usize] as u32))?;
+                *i += 1;
+            }
+            IrType::I64 | IrType::U64 | IrType::F64 | IrType::Ptr => {
+                visit(PrimitiveVal::I64(self.slots[*i as usize]))?;
+                *i += 1;
+            }
+            IrType::I128 | IrType::U128 => todo!(),
+            IrType::Array(elem, len) => {
+                for _ in 0..len {
+                    self.visit_primitives_inner(i, types[elem], types, visit)?;
+                }
+            }
+            IrType::Tuple(elems) => {
+                for elem in elems.iter() {
+                    self.visit_primitives_inner(i, types[elem], types, visit)?;
+                }
+            }
+            IrType::Const(_) => todo!(),
+        }
+        Ok(())
+    }
+
+    pub fn load_primitives(
+        &mut self,
+        i: u32,
+        ty: IrType,
+        types: &IrTypes,
+        mut visit: impl FnMut(PrimitiveSize, u32) -> Result<u64, Error>,
+    ) -> Result<(), Error> {
+        let slot_index = self.slot_map[i as usize];
+        self.load_primitives_inner(&mut { slot_index }, 0, ty, types, &mut visit)
+    }
+
+    pub fn load_primitives_inner(
+        &mut self,
+        i: &mut u32,
+        offset: u32,
+        ty: IrType,
+        types: &IrTypes,
+        visit: &mut impl FnMut(PrimitiveSize, u32) -> Result<u64, Error>,
+    ) -> Result<(), Error> {
+        match ty {
+            IrType::Unit => {}
+            IrType::I8 | IrType::U8 | IrType::U1 => {
+                self.slots[*i as usize] = visit(PrimitiveSize::S8, offset)?;
+                *i += 1;
+            }
+            IrType::I16 | IrType::U16 => {
+                self.slots[*i as usize] = visit(PrimitiveSize::S16, offset.div_ceil(2) * 2)?;
+                *i += 1;
+            }
+            IrType::I32 | IrType::U32 | IrType::F32 => {
+                self.slots[*i as usize] = visit(PrimitiveSize::S32, offset.div_ceil(4) * 4)?;
+                *i += 1;
+            }
+            IrType::I64 | IrType::U64 | IrType::F64 | IrType::Ptr => {
+                self.slots[*i as usize] = visit(PrimitiveSize::S64, offset.div_ceil(8) * 8)?;
+                *i += 1;
+            }
+            IrType::I128 | IrType::U128 => todo!(),
+            IrType::Array(elem, len) => {
+                let elem_layout = types.layout(types[elem]);
+                if elem_layout.size == 0 {
+                    return Ok(());
+                }
+                let align: u32 = elem_layout
+                    .align
+                    .get()
+                    .try_into()
+                    .map_err(|_| Error::OutOfMemory)?;
+                let stride: u32 = elem_layout
+                    .stride()
+                    .try_into()
+                    .map_err(|_| Error::OutOfMemory)?;
+                let offset = offset.div_ceil(align) * align;
+                for elem_idx in 0..len {
+                    self.load_primitives_inner(
+                        i,
+                        offset + elem_idx * stride,
+                        types[elem],
+                        types,
+                        visit,
+                    )?;
+                }
+            }
+            IrType::Tuple(elems) => {
+                let layout = types.layout(IrType::Tuple(elems));
+                let align: u32 = layout
+                    .align
+                    .get()
+                    .try_into()
+                    .map_err(|_| Error::OutOfMemory)?;
+                let offset = offset.div_ceil(align) * align;
+                let mut layout = Layout::EMPTY;
+                for elem in elems.iter() {
+                    let elem_layout = types.layout(types[elem]);
+                    layout.align_for(elem_layout.align);
+                    let tuple_offset: u32 = layout.size.try_into().unwrap();
+                    self.load_primitives_inner(
+                        i,
+                        offset + tuple_offset,
+                        types[elem],
+                        types,
+                        visit,
+                    )?;
+                    layout.accumulate(types.layout(types[elem]));
+                }
+            }
+            IrType::Const(_) => todo!(),
+        }
+        Ok(())
+    }
+
+    pub fn store(&mut self, i: u32, val: &Val) {
+        let i = self.slot_map[i as usize];
+        self.store_inner(&mut { i }, val);
+    }
+
+    pub fn load(&self, i: u32, ty: IrType, types: &IrTypes) -> Val {
+        let i = self.slot_map[i as usize];
+        self.load_inner(&mut { i }, ty, types)
+    }
+
+    pub fn load_ptr(&mut self, r: Ref) -> Ptr {
+        Ptr::from_u64(self.slots[self.slot_map[r.into_ref().unwrap() as usize] as usize])
+    }
+
+    fn store_inner(&mut self, i: &mut u32, val: &Val) {
+        match val {
+            Val::Invalid | Val::Unit => {}
+            &Val::Int(n) => {
+                self.slots[*i as usize] = n;
+                *i += 1;
+            }
+            &Val::F32(n) => {
+                self.slots[*i as usize] = n.to_bits() as u64;
+                *i += 1;
+            }
+            &Val::F64(n) => {
+                self.slots[*i as usize] = n.to_bits();
+                *i += 1;
+            }
+            &Val::Ptr(ptr) => {
+                self.slots[*i as usize] = ptr.into_u64();
+                *i += 1;
+            }
+            Val::Array(elems) | Val::Tuple(elems) => {
+                for elem in elems {
+                    self.store_inner(i, elem);
+                }
+            }
+        }
+    }
+
+    fn load_inner(&self, i: &mut u32, ty: IrType, types: &IrTypes) -> Val {
+        match ty {
+            IrType::Unit => Val::Unit,
+            IrType::U1
+            | IrType::I8
+            | IrType::I16
+            | IrType::I32
+            | IrType::I64
+            | IrType::U8
+            | IrType::U16
+            | IrType::U32
+            | IrType::U64 => {
+                let val = Val::Int(self.slots[*i as usize]);
+                *i += 1;
+                val
+            }
+            IrType::I128 | IrType::U128 => todo!(),
+            IrType::F32 => {
+                let val = Val::F32(f32::from_bits(self.slots[*i as usize] as u32));
+                *i += 1;
+                val
+            }
+            IrType::F64 => {
+                let val = Val::F64(f64::from_bits(self.slots[*i as usize]));
+                *i += 1;
+                val
+            }
+            IrType::Ptr => {
+                let x = self.slots[*i as usize];
+                *i += 1;
+                Val::Ptr(Ptr::from_u64(x))
+            }
+            IrType::Array(elem, len) => Val::Array(
+                (0..len)
+                    .map(|_| self.load_inner(i, types[elem], types))
+                    .collect(),
+            ),
+            IrType::Tuple(elems) => Val::Tuple(
+                elems
+                    .iter()
+                    .map(|elem| self.load_inner(i, types[elem], types))
+                    .collect(),
+            ),
+            IrType::Const(_) => todo!("load const values"),
+        }
+    }
+}
+
+fn slot_count(ty: IrType, types: &IrTypes) -> u32 {
+    match ty {
+        IrType::Unit => 0,
+        IrType::Array(type_ref, count) => slot_count(types[type_ref], types) * count,
+        IrType::Tuple(type_refs) => type_refs
+            .iter()
+            .map(|ty| slot_count(types[ty], types))
+            .sum(),
+        _ => 1,
+    }
+}
+
+#[derive(Debug)]
+enum PrimitiveVal {
+    I8(u8),
+    I16(u16),
+    I32(u32),
+    I64(u64),
+}
+
+#[derive(Debug)]
+enum PrimitiveSize {
+    S8,
+    S16,
+    S32,
+    S64,
+}
+impl PrimitiveSize {
+    fn byte_size(&self) -> u32 {
+        match self {
+            Self::S8 => 1,
+            Self::S16 => 2,
+            Self::S32 => 4,
+            Self::S64 => 8,
+        }
+    }
 }

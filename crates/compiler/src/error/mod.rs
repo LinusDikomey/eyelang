@@ -321,6 +321,12 @@ impl Error {
             Error::EvalFailed(ir::eval::Error::StackOverflow) => {
                 "evaluation failed due to a stack overflow"
             }
+            Error::EvalFailed(ir::eval::Error::ProvenanceViolation) => {
+                "evaluation failed due to a provenance violation"
+            }
+            Error::EvalFailed(ir::eval::Error::OutOfMemory) => {
+                "evaluation failed by running out of memory"
+            }
             Error::EvalReturnedStackPointer => {
                 "evaluation returned an invalid pointer to the stack"
             }

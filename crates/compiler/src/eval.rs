@@ -1,12 +1,11 @@
 use std::{num::NonZeroU64, rc::Rc};
 
-use dmap::DHashMap;
 use id::ModuleId;
 use ir::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
-    compiler::{mangle_name, FunctionToGenerate, Generics, ResolvedPrimitive},
+    compiler::{mangle_name, Generics, ResolvedPrimitive},
     error::Error,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
@@ -293,10 +292,27 @@ pub fn def_expr(
                 &[],
                 params,
             );
-            let mut env = LazyEvalEnv {
-                to_generate: to_generate.into_iter().map(|f| (f.ir_id, f)).collect(),
-                compiler,
-            };
+            while let Some(to_generate_func) = to_generate.pop() {
+                let hir = Rc::clone(
+                    compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id),
+                );
+                let name = mangle_name(&hir, &to_generate_func.generics);
+                let ir = crate::irgen::lower_function(
+                    compiler,
+                    &mut to_generate,
+                    name,
+                    &hir,
+                    &to_generate_func.generics,
+                );
+                compiler.ir_module.funcs[to_generate_func.ir_id.0 as usize] = ir;
+            }
+            let display = ir.display(
+                ir::display::Info {
+                    funcs: &compiler.ir_module.funcs,
+                },
+                &ir_types,
+            );
+            let mut env = LazyEvalEnv { compiler };
             match ir::eval::eval(&ir, &ir_types, &[], &mut env) {
                 Ok(val) => {
                     let const_val = match val {
@@ -318,6 +334,7 @@ pub fn def_expr(
                         Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
                         Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
                         Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
+                        Val::Array(_) | Val::Tuple(_) => todo!("handle constant arrays/tuples"),
                         /*
                         Val::Ptr(_) => {
                             compiler.errors.emit_err(
@@ -342,31 +359,15 @@ pub fn def_expr(
 }
 
 struct LazyEvalEnv<'a> {
-    to_generate: DHashMap<ir::FunctionId, FunctionToGenerate>,
     compiler: &'a mut Compiler,
 }
 impl<'a> ir::eval::Environment for LazyEvalEnv<'a> {
     fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
-        if let Some(to_generate) = self.to_generate.remove(&id) {
-            let mut to_generate_vec = Vec::new();
-            let hir = Rc::clone(
-                self.compiler
-                    .get_hir(to_generate.module, to_generate.ast_function_id),
-            );
-            let name = mangle_name(&hir, &to_generate.generics);
-            let ir = crate::irgen::lower_function(
-                self.compiler,
-                &mut to_generate_vec,
-                name,
-                &hir,
-                &to_generate.generics,
-            );
-            self.compiler.ir_module.funcs[id.0 as usize] = ir;
-            for to_generate in to_generate_vec {
-                self.to_generate.insert(to_generate.ir_id, to_generate);
-            }
-        }
-        &self.compiler.ir_module.funcs[id.0 as usize]
+        let func = &self.compiler.ir_module.funcs[id.0 as usize];
+        let display = func.display(ir::display::Info {
+            funcs: &self.compiler.ir_module.funcs,
+        });
+        func
     }
 
     fn call_extern(
@@ -375,7 +376,7 @@ impl<'a> ir::eval::Environment for LazyEvalEnv<'a> {
         args: &[Val],
         mem: &mut ir::eval::Mem,
     ) -> Result<Val, Box<str>> {
-        let func = self.get_function(id);
+        let func = &self.compiler.ir_module.funcs[id.0 as usize];
         Ok(match func.name.as_str() {
             "malloc" => {
                 let &[Val::Int(size)] = args else {
