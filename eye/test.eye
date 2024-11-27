@@ -15,7 +15,7 @@ bla :: fn(x i32, y i32) {
 
 main :: fn {
     # print(string(abs(-4)), "\n")
-    v := Vec3(1.0, 2.5, 3.0)
+    v := Vec3(x: 1.0, y: 2.5, z: 3.0)
 
     # print("Vec before assignment: ", string(v.x), " ", string(v.y), " ", string(v.z), "\n")
 
@@ -42,7 +42,7 @@ main :: fn {
     print("Some calculations:\n")
     # test()("Calling return value from test()\n")
 
-    printVec3(addVec3(Vec3(1., 2., 3.), Vec3(4., 7., 9.)))
+    printVec3(addVec3(Vec3(x: 1., y: 2., z: 3.), Vec3(x: 4., y: 7., z: 9.)))
 
     i := 5
     while i < 10: i = incAndPrint(i)
@@ -52,7 +52,7 @@ main :: fn {
     }
 
     {
-        obj := PhysicsObject(Vec3(1, 2, 3), Vec3(4, 5, 6))
+        obj := PhysicsObject(pos: Vec3(x: 1, y: 2, z: 3), rot: Vec3(x: 4, y: 5, z: 6))
         std.c.printf("Physics Object: %d\n".ptr, obj.pos.y + obj.rot.z)
         PhysicsObject :: struct {
             pos Vec3,
@@ -61,7 +61,7 @@ main :: fn {
         Vec3 :: struct { x i32, y i32, z i32 }
     }
     # Here Vec3 means Vec3 from the global scope again
-    v := Vec3(1., 2.5, 3.141)
+    v := Vec3(x: 1., y: 2.5, z: 3.141)
     printVec3(v)
     bye()
 }
@@ -72,7 +72,7 @@ Vec3 :: struct {
     z f32
 }
 
-addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(x: a.x + b.x, y: a.y + b.y, z: a.z + b.z)
 printVec3 :: fn(v Vec3) {
     std.c.printf("Vec3[%d, %d, %d]\n".ptr, v.x as i32, v.y as i32, v.z as i32)
 }

@@ -156,7 +156,7 @@ impl Function {
             for (name_span, ty, default_value) in self.named_params.iter() {
                 write_arg(*name_span, ty);
                 c.write_add(" = ");
-                c.ast()[*default_value].repr(c);
+                c.ast()[default_value.unwrap()].repr(c);
             }
             c.write_add(")");
         }

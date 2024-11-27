@@ -11,7 +11,7 @@ Queue :: struct[T] {
     cap u64
     head u64
 
-    new :: fn -> Queue[T]: Queue(root.null(), 0, 0, 0)
+    new :: fn -> Queue[T]: Queue(buf: root.null(), len: 0, cap: 0, head: 0)
 
     tail :: fn(this *Queue[T]) -> u64 {
         ret (this.head + this.len) % this.cap

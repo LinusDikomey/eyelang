@@ -91,8 +91,8 @@ pub fn get_def(
     let def = Rc::clone(&resolved.def);
     Some(match &*def {
         ResolvedTypeDef::Struct(def) => {
-            let elems = ir_types.add_multiple((0..def.fields.len()).map(|_| IrType::Unit));
-            for ((_, field), r) in def.fields.iter().zip(elems.iter()) {
+            let elems = ir_types.add_multiple((0..def.field_count()).map(|_| IrType::Unit));
+            for ((_, field), r) in def.all_fields().zip(elems.iter()) {
                 let ty = get(compiler, ir_types, field, generics)?;
                 ir_types.replace(r, ty)
             }

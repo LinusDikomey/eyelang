@@ -12,7 +12,7 @@ str :: struct {
     ptr *i8
     len u64
 
-    from_cstr :: fn(ptr *i8) -> str: str(ptr, len(ptr))
+    from_cstr :: fn(ptr *i8) -> str: str(ptr: ptr, len: len(ptr))
 
     is_empty :: fn(this str) -> bool: this.len == 0
 
@@ -29,7 +29,7 @@ str :: struct {
     clone :: fn(this str) -> str {
         new_ptr := malloc(this.len)
         memcpy(new_ptr, this.ptr, this.len)
-        ret str(new_ptr, this.len)
+        ret str(ptr: new_ptr, len: this.len)
     }
 
     slice :: fn(this str, start u64, end u64) -> str {
@@ -38,7 +38,7 @@ str :: struct {
             exit(1)
         }
         if start > end: start = end
-        ret str(ptr_add(this.ptr, start), end - start)
+        ret str(ptr: ptr_add(this.ptr, start), len: end - start)
     }
 
     byte :: fn(this str, index u64) -> u8 {
@@ -51,7 +51,7 @@ str :: struct {
 
     split :: fn(this str, pat str) -> Split {
         if pat.len == 0: panic("empty pattern supplied to split")
-        ret Split(this, pat)
+        ret Split(string: this, pat: pat)
     }
 
     lines :: fn(this str) -> List[str] {
@@ -143,7 +143,7 @@ str :: struct {
 
     get :: fn(this str, index u64) -> Option[str] {
         if index >= this.len: ret .None
-        ret .Some(str(ptr_add(this.ptr, index), 1))
+        ret .Some(str(ptr: ptr_add(this.ptr, index), len: 1))
     }
 }
 
@@ -262,6 +262,5 @@ int_to_string :: fn[T: Int](x T) -> str {
     len := MAX_LEN - i
     ptr := malloc(len)
     memcpy(ptr, (&buf[i]) as *i8, len)
-    ret str(ptr, len)
+    ret str(ptr: ptr, len: len)
 }
-

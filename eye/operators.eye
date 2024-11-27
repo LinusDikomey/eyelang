@@ -17,7 +17,7 @@ bools :: fn {
 
     assert(true != false)
     assert(false != true)
-    
+
     assert(!false == true)
 
     assert((true or true) == true)
@@ -73,7 +73,7 @@ assign :: fn {
     x %= 3
     assert(x == 1)
 
-    p := Point(1, 13)
+    p := Point(x: 1, y: 13)
     p.x += 3
     assert(p.x == 4)
     p.y %= 5

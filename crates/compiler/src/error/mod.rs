@@ -3,6 +3,7 @@ use color_format::*;
 use core::fmt;
 use id::ModuleId;
 use span::{Span, TSpan};
+use std::fmt::Write;
 use std::{
     iter::{Enumerate, Peekable},
     path::Path,
@@ -163,6 +164,9 @@ pub enum Error {
         found: u32,
     },
     NonexistantNamedArg,
+    MissingNamedArgs {
+        names: Box<[Box<str>]>,
+    },
     CantNegateType,
     NonexistantMember(Option<MemberHint>),
     NonexistantEnumVariant,
@@ -271,6 +275,13 @@ impl Error {
             Error::ExpectedValueFoundHole => "expected a value but found a hole",
             Error::InvalidArgCount { .. } => "invalid argument count",
             Error::NonexistantNamedArg => "this named argument doesn't exist",
+            Error::MissingNamedArgs { names } => {
+                if names.len() == 1 {
+                    "missing named argument"
+                } else {
+                    "missing named arguments"
+                }
+            }
             Error::CantNegateType => "can't negate this value",
             Error::NonexistantMember(_) => "member doesn't exist",
             Error::NonexistantEnumVariant => "enum variant doesn't exist",
@@ -369,6 +380,20 @@ impl Error {
                     found,
                     if found == 1 { "was" } else { "were" }
                 )
+            }
+            Error::MissingNamedArgs { names } => {
+                let mut text = "expected arguments ".to_owned();
+                for (i, name) in names.iter().enumerate() {
+                    if i != 0 {
+                        if i + 1 == names.len() {
+                            text.push_str(" and ");
+                        } else {
+                            text.push_str(", ");
+                        }
+                    }
+                    cwrite!(text, "#c<{name}>").unwrap();
+                }
+                text
             }
             Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint().to_owned()),
             Error::TypeMustBeKnownHere { needed_bound: Some(bound) } => {

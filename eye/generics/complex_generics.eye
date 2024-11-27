@@ -12,8 +12,8 @@ swap_second :: fn[A1, A2, B](p1 *Pair[A1, B], p2 *Pair[A2, B]) {
 }
 
 main :: fn {
-    p1 := Pair(1, "Hello")
-    p2 := Pair(1.5, "Bye")
+    p1 := Pair(a: 1, b: "Hello")
+    p2 := Pair(a: 1.5, b: "Bye")
 
     std.c.printf("%s, %s\n".ptr, p1.b.ptr, p2.b.ptr)
     swap_second(&p1, &p2)

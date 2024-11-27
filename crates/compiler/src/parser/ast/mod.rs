@@ -437,7 +437,7 @@ pub struct Global {
 pub struct Function {
     pub generics: Box<[GenericDef]>,
     pub params: Box<[(TSpan, UnresolvedType)]>,
-    pub named_params: Box<[(TSpan, UnresolvedType, ExprId)]>,
+    pub named_params: Box<[(TSpan, UnresolvedType, Option<ExprId>)]>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprId>,

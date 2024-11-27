@@ -26,8 +26,8 @@ main :: fn {
     printf("%d = %d, %f = %f\n".ptr, x, x2, y, y2)
     z: i64 = x # makes x infer to i64
 
-    v := Vec2(1, 2)
-    v2: Vec2[u64] = Vec2(3, 4)
+    v := Vec2(x: 1, y: 2)
+    v2: Vec2[u64] = Vec2(x: 3, y: 4)
     v3: *Vec2[_] = new()
     v3^.x = 5
     v3^.y = 6

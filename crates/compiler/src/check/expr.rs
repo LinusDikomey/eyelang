@@ -879,7 +879,7 @@ fn function_item(
     Node::Unit
 }
 
-fn check_struct_def(
+fn check_struct_initializer(
     ctx: &mut Ctx,
     struct_def: &ResolvedStructDef,
     generics: LocalTypeIds,
@@ -888,32 +888,26 @@ fn check_struct_def(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
 ) -> Node {
-    if struct_def.fields.len() != call.args.count() {
-        ctx.compiler.errors.emit_err(
-            Error::InvalidArgCount {
-                expected: struct_def.fields.len() as u32,
-                varargs: false,
-                found: call.args.count,
-            }
-            .at_span(TSpan::new(call.open_paren_start, call.end).in_mod(ctx.module)),
-        );
-    }
-    let elem_nodes = ctx.hir.add_invalid_nodes(call.args.count);
-    let elem_types = ctx.hir.types.add_multiple_unknown(call.args.count);
-    for ((arg, (node_id, type_id)), (_field_name, field_ty)) in call
-        .args
-        .into_iter()
-        .zip(elem_nodes.iter().zip(elem_types.iter()))
-        .zip(&struct_def.fields)
-    {
-        let info_or_idx = ctx.type_from_resolved(field_ty, generics);
-        ctx.hir.types.replace(type_id, info_or_idx);
-        let node = check(ctx, arg, scope, type_id, return_ty, noreturn);
-        ctx.hir.modify_node(node_id, node);
-    }
-    Node::TupleLiteral {
-        elems: elem_nodes,
-        elem_types,
+    let span = TSpan::new(call.open_paren_start, call.end);
+    match check_call_args(
+        ctx,
+        scope,
+        return_ty,
+        noreturn,
+        span,
+        call.args,
+        &call.named_args,
+        generics,
+        &struct_def.fields,
+        &struct_def.named_fields,
+        false,
+        false,
+    ) {
+        Ok((elems, elem_types)) => Node::TupleLiteral { elems, elem_types },
+        Err(err) => {
+            ctx.compiler.errors.emit_err(err);
+            Node::Invalid
+        }
     }
 }
 
@@ -1273,6 +1267,7 @@ fn check_call(
 ) -> Node {
     let called_ty = ctx.hir.types.add_unknown();
     let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
+    let call_span = TSpan::new(call.open_paren_start, call.end);
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => Node::Invalid,
         TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
@@ -1286,7 +1281,7 @@ fn check_call(
                 match &*def {
                     ResolvedTypeDef::Struct(struct_def) => {
                         ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
-                        check_struct_def(
+                        check_struct_initializer(
                             ctx,
                             &struct_def,
                             generics,
@@ -1319,24 +1314,24 @@ fn check_call(
             generics,
         } => {
             let signature = Rc::clone(ctx.compiler.get_signature(module, function));
-
-            let call_node = match check_call_signature(
+            ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
+                ast[expr].span(ast)
+            });
+            let call_node = match check_call_args(
                 ctx,
-                expr,
                 scope,
-                expected,
                 return_ty,
                 noreturn,
+                call_span,
                 call.args,
                 &call.named_args,
                 generics,
                 &signature.params,
                 &signature.named_params,
-                &signature.return_type,
                 signature.varargs,
                 false,
             ) {
-                Ok(args) => {
+                Ok((args, _)) => {
                     if *noreturn {
                         return Node::Invalid;
                     }
@@ -1374,23 +1369,24 @@ fn check_call(
             // it was already checked that the first argument fits the self parameter correctly
             let signature_params = &signature.params[1..];
 
-            match check_call_signature(
+            ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
+                ast[expr].span(ast)
+            });
+            match check_call_args(
                 ctx,
-                expr,
                 scope,
-                expected,
                 return_ty,
                 noreturn,
+                call_span,
                 call.args,
                 &call.named_args,
                 generics,
                 signature_params,
                 &signature.named_params,
-                &signature.return_type,
                 signature.varargs,
                 true,
             ) {
-                Ok(args) => {
+                Ok((args, _)) => {
                     if *noreturn {
                         return Node::Invalid;
                     }
@@ -1496,23 +1492,22 @@ fn check_call(
             ctx.hir
                 .types
                 .replace(self_ty, TypeInfo::UnknownSatisfying(self_bounds));
-            match check_call_signature(
+            ctx.specify_resolved(expected, &signature.return_type, generics, |_| span);
+            match check_call_args(
                 ctx,
-                expr,
                 scope,
-                expected,
                 return_ty,
                 noreturn,
+                call_span,
                 call.args,
                 &call.named_args,
                 generics,
                 &signature.params,
                 &signature.named_params,
-                &signature.return_type,
                 signature.varargs,
                 false,
             ) {
-                Ok(args) => {
+                Ok((args, _)) => {
                     let call_noreturn =
                         matches!(signature.return_type, Type::Primitive(Primitive::Never));
                     if call_noreturn {
@@ -1566,22 +1561,20 @@ fn check_call(
     }
 }
 
-fn check_call_signature(
+fn check_call_args(
     ctx: &mut Ctx,
-    expr: ExprId,
     scope: &mut LocalScope,
-    expected: LocalTypeId,
     return_ty: LocalTypeId,
     noreturn: &mut bool,
+    span: TSpan,
     args: ExprExtra,
     named_args: &[(TSpan, ExprId)],
     generics: LocalTypeIds,
     params: &[(Box<str>, Type)],
-    named_params: &[(Box<str>, Type, ConstValueId)],
-    function_return_type: &Type,
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     varargs: bool,
     extra_arg_slot: bool,
-) -> Result<NodeIds, crate::error::CompileError> {
+) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
     // TODO: this function probably breaks with varargs and named args, properly define what combinations are allowed and how
     let invalid_arg_count = if varargs {
         args.count() < params.len()
@@ -1590,13 +1583,12 @@ fn check_call_signature(
     };
     if invalid_arg_count {
         let expected = params.len() as _;
-        let span = ctx.span(expr);
         return Err(Error::InvalidArgCount {
             expected,
             varargs,
             found: args.count,
         }
-        .at_span(span));
+        .at_span(span.in_mod(ctx.module)));
     }
     let vararg_count = args.count - params.len() as u32;
     let all_arg_nodes = ctx.hir.add_invalid_nodes(
@@ -1640,7 +1632,7 @@ fn check_call_signature(
     {
         let node = check(ctx, arg, scope, ty, return_ty, noreturn);
         if *noreturn {
-            return Ok(all_arg_nodes);
+            return Ok((all_arg_nodes, arg_types));
         }
         ctx.hir.modify_node(node_idx, node);
     }
@@ -1658,7 +1650,7 @@ fn check_call_signature(
             let ty = ctx.hir.types.add_unknown();
             check(ctx, *value, scope, ty, return_ty, noreturn);
             if *noreturn {
-                return Ok(all_arg_nodes);
+                return Ok((all_arg_nodes, arg_types));
             }
             continue;
         };
@@ -1666,30 +1658,37 @@ fn check_call_signature(
         let ty = arg_types.nth((params.len() + i) as u32).unwrap();
         let node = check(ctx, *value, scope, ty, return_ty, noreturn);
         if *noreturn {
-            return Ok(all_arg_nodes);
+            return Ok((all_arg_nodes, arg_types));
         }
         ctx.hir.modify_node(node_idx, node);
     }
 
-    for ((_, _, default_val), (node_id, ty)) in named_params
+    let mut missing_named_args = Vec::new();
+    for ((name, _, default_val), (node_id, ty)) in named_params
         .iter()
         .zip(arg_nodes.iter().zip(arg_types.iter()).skip(params.len()))
     {
         if matches!(ctx.hir[node_id], Node::Invalid) {
+            let Some(default_val) = *default_val else {
+                missing_named_args.push(name.clone());
+                continue;
+            };
             ctx.hir.modify_node(
                 node_id,
                 Node::Const {
-                    id: *default_val,
+                    id: default_val,
                     ty,
                 },
             );
         }
     }
-
-    ctx.specify_resolved(expected, function_return_type, generics, |ast| {
-        ast[expr].span(ast)
-    });
-    Ok(all_arg_nodes)
+    if !missing_named_args.is_empty() {
+        return Err(Error::MissingNamedArgs {
+            names: missing_named_args.into_boxed_slice(),
+        }
+        .at_span(span.in_mod(ctx.module)));
+    }
+    Ok((all_arg_nodes, arg_types))
 }
 
 pub fn int_ty_from_variant_count(count: u32) -> TypeInfo {

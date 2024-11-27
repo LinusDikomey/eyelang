@@ -12,7 +12,7 @@ File :: struct {
         if handle as u64 == 0 {
             panic("failed to open file")
         }
-        ret File(handle)
+        ret File(handle: handle)
     }
 
     close :: fn(this File) {
@@ -52,5 +52,5 @@ read_to_string :: fn(path str) -> str {
     buf.push(0)
     buf.realloc_to_cap(buf.len)
     file.close()
-    ret str(buf.buf, buf.len - 1)
+    ret str(ptr: buf.buf, len: buf.len - 1)
 }

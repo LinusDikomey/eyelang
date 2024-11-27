@@ -649,22 +649,21 @@ impl Compiler {
             .iter()
             .map(|(name_span, ty, default_value)| {
                 let name = ast[*name_span].into();
-                let (ty, default_value) =
-                    match eval::value_expr(self, module, scope, ast, *default_value, &ty) {
-                        Ok(value) => (value.ty(), self.add_const_value(value)),
+                let (ty, default_value) = match default_value.map(|default_value| {
+                    match eval::value_expr(self, module, scope, ast, default_value, &ty) {
+                        Ok(val) => val,
                         Err(err) => {
                             self.errors.emit_err(
                                 Error::EvalFailed(err)
-                                    .at_span(ast[*default_value].span(ast).in_mod(module)),
+                                    .at_span(ast[default_value].span(ast).in_mod(module)),
                             );
-                            // TODO: resolving type here when the eval failed may cause unhelpful
-                            // additional errors.
-                            (
-                                self.resolve_type(ty, module, scope),
-                                self.add_const_value(ConstValue::Undefined),
-                            )
+                            ConstValue::Undefined
                         }
-                    };
+                    }
+                }) {
+                    Some(value) => (value.ty(), Some(self.add_const_value(value))),
+                    None => (self.resolve_type(ty, module, scope), None),
+                };
                 (name, ty, default_value)
             })
             .collect();
@@ -893,18 +892,22 @@ impl Compiler {
                 let methods;
                 let def = match def {
                     ast::TypeDef::Struct(struct_def) => {
-                        let fields = struct_def
+                        let named_fields = struct_def
                             .members
                             .iter()
                             .map(|(name_span, ty)| {
                                 (
-                                    ast[*name_span].to_owned(),
+                                    ast[*name_span].into(),
                                     self.resolve_type(ty, module, struct_def.scope),
+                                    None,
                                 )
                             })
                             .collect();
                         methods = struct_def.methods.clone();
-                        ResolvedTypeDef::Struct(ResolvedStructDef { fields })
+                        ResolvedTypeDef::Struct(ResolvedStructDef {
+                            fields: Box::new([]),
+                            named_fields,
+                        })
                     }
                     ast::TypeDef::Enum(def) => {
                         methods = def.methods.clone();
@@ -1472,7 +1475,7 @@ pub struct ParsedModule {
 #[derive(Debug)]
 pub struct Signature {
     pub params: Box<[(Box<str>, Type)]>,
-    pub named_params: Box<[(Box<str>, Type, ConstValueId)]>,
+    pub named_params: Box<[(Box<str>, Type, Option<ConstValueId>)]>,
     pub varargs: bool,
     pub return_type: Type,
     pub generics: Generics,
@@ -1694,9 +1697,21 @@ pub enum ResolvedTypeDef {
 
 #[derive(Debug)]
 pub struct ResolvedStructDef {
-    pub fields: Vec<(String, Type)>,
+    pub fields: Box<[(Box<str>, Type)]>,
+    pub named_fields: Box<[(Box<str>, Type, Option<ConstValueId>)]>,
 }
 impl ResolvedStructDef {
+    pub fn all_fields(&self) -> impl Iterator<Item = (&str, &Type)> {
+        self.fields
+            .iter()
+            .map(|(name, ty)| (&**name, ty))
+            .chain(self.named_fields.iter().map(|(name, ty, _)| (&**name, ty)))
+    }
+
+    pub fn field_count(&self) -> u32 {
+        (self.fields.len() + self.named_fields.len()) as u32
+    }
+
     /// get the index of a field while getting the element types of all fields
     pub fn get_indexed_field(
         &self,
@@ -1708,10 +1723,12 @@ impl ResolvedStructDef {
         // again. This could be improved by caching structs somehow ?? or by putting
         // the fields along the TypeDef (easier but would make TypeDef very large,
         // similar problem for enums and extra solution required).
-        let elem_types = ctx.hir.types.add_multiple_unknown(self.fields.len() as _);
+        let elem_types = ctx
+            .hir
+            .types
+            .add_multiple_unknown((self.fields.len() + self.named_fields.len()) as _);
         let mut indexed_field = None;
-        let fields = self.fields.iter().zip(0..).zip(elem_types.iter());
-        for (((field_name, ty), index), r) in fields {
+        for (((field_name, ty), index), r) in self.all_fields().zip(0..).zip(elem_types.iter()) {
             let ty = ctx.type_from_resolved(ty, generics);
             if field_name == name {
                 indexed_field = Some((index, r));

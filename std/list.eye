@@ -14,8 +14,8 @@ List :: struct[T] {
     len u64
     cap u64
 
-    new :: fn -> List[T]: List(root.null(), 0, 0)
-    with_capacity :: fn(cap u64) -> List[T]: List(malloc(cap * T.stride) as _, 0, cap)
+    new :: fn -> List[T]: List(buf: root.null(), len: 0, cap: 0)
+    with_capacity :: fn(cap u64) -> List[T]: List(buf: malloc(cap * T.stride) as _, len: 0, cap: cap)
     fill :: fn(item T, count u64) -> List[T] {
         buf := malloc(count * T.stride) as *T
         i := 0
@@ -23,7 +23,7 @@ List :: struct[T] {
             ptr_add(buf, i)^ = item
             i += 1
         }
-        ret List(buf, count, count)
+        ret List(buf: buf, len: count, cap: count)
     }
 
     push :: fn(this *List[T], item T) {

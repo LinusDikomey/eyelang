@@ -13,6 +13,6 @@ fibs :: fn(n i32) {
 Point :: struct { x i32, y i32 }
 
 main :: fn {
-    x := Point(3, 5)
+    x := Point(x: 3, y: 5)
     printf("Result: %d\n".ptr, fib(x.x + x.y))
 }

@@ -7,7 +7,7 @@ Point :: struct { x i32, y i32 }
 use folder.file # modules can be used of course
 
 main :: fn {
-    p := Point(4, 2)
+    p := Point(x: 4, y: 2)
     printf("Hello World: %d\n".ptr, other.add(p.x, 2))
     printf("Square Magnitude of Point: %d\n".ptr, other.squareMag(p))
     file.function()

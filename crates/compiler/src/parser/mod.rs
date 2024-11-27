@@ -557,7 +557,7 @@ impl<'a> Parser<'a> {
                     if p.toks.step_if(TokenType::Equals).is_some() {
                         let default_value = p.parse_expr(scope)?;
                         // TODO: should check no duplicate params exist here or in check_signature
-                        named_params.push((name_span, ty, p.ast.expr(default_value)));
+                        named_params.push((name_span, ty, Some(p.ast.expr(default_value))));
                     } else {
                         params.push((name_span, ty));
                     }

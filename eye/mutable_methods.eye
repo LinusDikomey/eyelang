@@ -10,13 +10,13 @@ Vec2 :: struct {
     print :: fn(this Vec2) {
         std.c.printf("[%d, %d]\n".ptr, this.x, this.y)
     }
-    doubled :: fn(this Vec2) -> Vec2: Vec2(2 * this.x, 2 * this.y)
-    doubled_ptr :: fn(this *Vec2) -> Vec2: Vec2(2 * this^.x, 2 * this^.y)
+    doubled :: fn(this Vec2) -> Vec2: Vec2(x: 2 * this.x, y: 2 * this.y)
+    doubled_ptr :: fn(this *Vec2) -> Vec2: Vec2(x: 2 * this^.x, y: 2 * this^.y)
 }
 
 main :: fn {
 
-    v := Vec2(1, 2)
+    v := Vec2(x: 1, y: 2)
     v.inc()
     v.print()
 

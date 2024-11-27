@@ -51,7 +51,7 @@ Buf :: struct {
     cap u64
 }
 
-buf :: fn(initial_cap u64) -> Buf: Buf(c.malloc(initial_cap), 0, initial_cap)
+buf :: fn(initial_cap u64) -> Buf: Buf(ptr: c.malloc(initial_cap), size: 0, cap: initial_cap)
 
 buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
     if buf.cap - buf.size >= len {
@@ -68,7 +68,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
 
         c.memcpy((new_ptr as u64 + buf.size) as *i8, ptr as *i8, len)
 
-        buf = Buf(new_ptr, new_size, new_cap)
+        buf = Buf(ptr: new_ptr, size: new_size, cap: new_cap)
     }
     ret buf
 }
