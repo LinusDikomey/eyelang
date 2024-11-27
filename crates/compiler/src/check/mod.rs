@@ -29,7 +29,7 @@ pub fn check(
     types: TypeTable,
     generics: &Generics,
     scope: ScopeId,
-    args: impl IntoIterator<Item = (String, LocalTypeId)>,
+    args: impl IntoIterator<Item = (Box<str>, LocalTypeId)>,
     expr: ExprId,
     expected: LocalTypeId,
 ) -> (HIR, TypeTable) {
@@ -215,7 +215,7 @@ pub fn verify_main_signature(
     signature: &Signature,
     main_module: ModuleId,
 ) -> Result<(), Option<CompileError>> {
-    if signature.args.len() != 0 || signature.varargs {
+    if signature.params.len() != 0 || signature.varargs {
         return Err(Some(
             Error::MainArgs.at_span(signature.span.in_mod(main_module)),
         ));

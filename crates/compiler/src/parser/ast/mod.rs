@@ -328,6 +328,11 @@ impl Iterator for ExprExtra {
         })
     }
 }
+impl ExactSizeIterator for ExprExtra {
+    fn len(&self) -> usize {
+        self.count as usize
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Item {
@@ -431,7 +436,8 @@ pub struct Global {
 #[derive(Debug)]
 pub struct Function {
     pub generics: Box<[GenericDef]>,
-    pub params: Vec<(TSpan, UnresolvedType)>,
+    pub params: Box<[(TSpan, UnresolvedType)]>,
+    pub named_params: Box<[(TSpan, UnresolvedType, ExprId)]>,
     pub varargs: bool,
     pub return_type: UnresolvedType,
     pub body: Option<ExprId>,
@@ -779,7 +785,13 @@ pub struct Call {
     pub called_expr: ExprId,
     pub open_paren_start: u32,
     pub args: ExprExtra,
+    pub named_args: Vec<(TSpan, ExprId)>,
     pub end: u32,
+}
+impl Call {
+    pub fn total_arg_count(&self) -> u32 {
+        self.args.count + self.named_args.len() as u32
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

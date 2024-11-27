@@ -162,6 +162,7 @@ pub enum Error {
         varargs: bool,
         found: u32,
     },
+    NonexistantNamedArg,
     CantNegateType,
     NonexistantMember(Option<MemberHint>),
     NonexistantEnumVariant,
@@ -224,6 +225,7 @@ pub enum Error {
     TrivialCast,
     EvalFailed(ir::eval::Error),
     EvalReturnedStackPointer,
+    NameExpected,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -268,6 +270,7 @@ impl Error {
             }
             Error::ExpectedValueFoundHole => "expected a value but found a hole",
             Error::InvalidArgCount { .. } => "invalid argument count",
+            Error::NonexistantNamedArg => "this named argument doesn't exist",
             Error::CantNegateType => "can't negate this value",
             Error::NonexistantMember(_) => "member doesn't exist",
             Error::NonexistantEnumVariant => "enum variant doesn't exist",
@@ -330,6 +333,7 @@ impl Error {
             Error::EvalReturnedStackPointer => {
                 "evaluation returned an invalid pointer to the stack"
             }
+            Error::NameExpected => "expected a name",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -358,11 +362,12 @@ impl Error {
                 cformat!("expected value of type #m<{}> but found #m<{}>", expected, found)
             }
             &Error::InvalidArgCount { expected, varargs, found } => {
-                cformat!("expected #g<{}{}> argument{} but #r<{}> were found",
+                cformat!("expected #g<{}{}> argument{} but #r<{}> {} found",
                     if varargs { "at least " } else { "" },
                     expected,
                     if expected == 1 { "" } else { "s" },
-                    found
+                    found,
+                    if found == 1 { "was" } else { "were" }
                 )
             }
             Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint().to_owned()),

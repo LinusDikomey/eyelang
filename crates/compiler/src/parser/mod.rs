@@ -276,11 +276,11 @@ impl<'a> Parser<'a> {
         };
     }
 
-    fn parse_block_or_expr(&mut self, scope: ScopeId) -> ParseResult<Expr> {
+    fn parse_block_or_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr> {
         step_or_unexpected! {self,
             LBrace #as lbrace => Ok(self.parse_block_from_lbrace(lbrace, scope)),
             Colon => {
-                self.parse_expr(scope)
+                self.parse_stmt(scope)
             }
         }
     }
@@ -538,6 +538,7 @@ impl<'a> Parser<'a> {
         let generics = self.parse_optional_generics(inherited_generics)?;
 
         let mut params = Vec::new();
+        let mut named_params = Vec::new();
         let mut varargs = false;
 
         if self.toks.step_if(TokenType::LParen).is_some() {
@@ -553,7 +554,13 @@ impl<'a> Parser<'a> {
                     let name_tok = p.toks.step_expect(TokenType::Ident)?;
                     let name_span = TSpan::new(name_tok.start, name_tok.end);
                     let ty = p.parse_type()?;
-                    params.push((name_span, ty));
+                    if p.toks.step_if(TokenType::Equals).is_some() {
+                        let default_value = p.parse_expr(scope)?;
+                        // TODO: should check no duplicate params exist here or in check_signature
+                        named_params.push((name_span, ty, p.ast.expr(default_value)));
+                    } else {
+                        params.push((name_span, ty));
+                    }
                 }
                 Ok(Delimit::OptionalIfNewLine)
             })?;
@@ -577,7 +584,8 @@ impl<'a> Parser<'a> {
 
         Ok(Function {
             generics,
-            params,
+            params: params.into_boxed_slice(),
+            named_params: named_params.into_boxed_slice(),
             varargs,
             return_type,
             body: None,
@@ -740,6 +748,13 @@ impl<'a> Parser<'a> {
                 annotated_ty: UnresolvedType::Infer(declare.span()),
                 val: self.ast.expr(val),
             }
+        } else if self.toks.step_if(TokenType::Equals).is_some() {
+            let val = self.parse_expr(scope)?;
+            Expr::BinOp(
+                Operator::Assignment(token::AssignType::Assign),
+                self.ast.expr(expr),
+                self.ast.expr(val),
+            )
         } else {
             return Ok(expr);
         };
@@ -842,7 +857,7 @@ impl<'a> Parser<'a> {
                     let pat_value = self.parse_expr(scope)?;
                     Ok(self.ast.expr(pat_value))
                 }).transpose()?;
-                let then = self.parse_block_or_expr(scope)?;
+                let then = self.parse_block_or_stmt(scope)?;
                 let then = self.ast.expr(then);
 
                 let else_ = if let Some(tok) = self.toks.peek() {
@@ -852,7 +867,7 @@ impl<'a> Parser<'a> {
                         self.toks.peek()
                             .ok_or_else(|| Error::UnexpectedEndOfFile { expected: ExpectedTokens::Expr }.at(else_pos, else_pos, self.toks.module))?;
 
-                        let else_ = self.parse_expr(scope)?;
+                        let else_ = self.parse_stmt(scope)?;
                         Some(self.ast.expr(else_))
                     } else { None }
                 } else { None };
@@ -942,91 +957,106 @@ impl<'a> Parser<'a> {
         scope: ScopeId,
     ) -> ParseResult<Expr> {
         loop {
-            expr = match self.toks.peek().map(|t| t.ty) {
-                Some(TokenType::LParen) => {
-                    if !self.toks.more_on_line() {
-                        // LParen is on new line, ignore
-                        break Ok(expr);
+            expr =
+                match self.toks.peek().map(|t| t.ty) {
+                    Some(TokenType::LParen) => {
+                        if !self.toks.more_on_line() {
+                            // LParen is on new line, ignore
+                            break Ok(expr);
+                        }
+                        let open_paren_start = self.toks.step_assert(TokenType::LParen).start;
+
+                        // function call
+                        let mut args = Vec::new();
+                        let mut named_args = Vec::new();
+                        let end = self
+                            .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                                let expr = p.parse_expr(scope)?;
+                                if p.toks.step_if(TokenType::Colon).is_some() {
+                                    let value = p.parse_expr(scope)?;
+                                    let Expr::Ident { span: name_span } = expr else {
+                                        p.errors.emit_err(Error::NameExpected.at_span(
+                                            expr.span_builder(p.ast).in_mod(p.toks.module),
+                                        ));
+                                        return Ok(Delimit::OptionalIfNewLine);
+                                    };
+                                    named_args.push((name_span, p.ast.expr(value)));
+                                } else {
+                                    args.push(expr);
+                                }
+                                Ok(Delimit::OptionalIfNewLine)
+                            })?
+                            .end;
+                        let called_expr = self.ast.expr(expr);
+                        let args = self.ast.exprs(args);
+                        let call = self.ast.call(ast::Call {
+                            called_expr,
+                            open_paren_start,
+                            args,
+                            named_args,
+                            end,
+                        });
+                        Expr::FunctionCall(call)
                     }
-                    let open_paren_start = self.toks.step_assert(TokenType::LParen).start;
+                    Some(TokenType::LBracket) => {
+                        if !self.toks.more_on_line() {
+                            // LBracket is on new line, ignore
+                            break Ok(expr);
+                        }
+                        self.toks.step_assert(TokenType::LBracket);
 
-                    // function call
-                    let mut args = Vec::new();
-                    let end = self
-                        .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                            args.push(p.parse_expr(scope)?);
-                            Ok(Delimit::OptionalIfNewLine)
-                        })?
-                        .end;
-                    let called_expr = self.ast.expr(expr);
-                    let args = self.ast.exprs(args);
-                    let call = self.ast.call(ast::Call {
-                        called_expr,
-                        open_paren_start,
-                        args,
-                        end,
-                    });
-                    Expr::FunctionCall(call)
-                }
-                Some(TokenType::LBracket) => {
-                    if !self.toks.more_on_line() {
-                        // LBracket is on new line, ignore
-                        break Ok(expr);
-                    }
-                    self.toks.step_assert(TokenType::LBracket);
+                        // array index
+                        let idx = self.parse_expr(scope)?;
+                        let idx = self.ast.expr(idx);
 
-                    // array index
-                    let idx = self.parse_expr(scope)?;
-                    let idx = self.ast.expr(idx);
+                        let end = self.toks.step_expect(TokenType::RBracket)?.end;
 
-                    let end = self.toks.step_expect(TokenType::RBracket)?.end;
-
-                    Expr::Index {
-                        expr: self.ast.expr(expr),
-                        idx,
-                        end,
-                    }
-                }
-                Some(TokenType::Dot) => {
-                    let dot = self.toks.step_assert(TokenType::Dot);
-                    step_or_unexpected! {self,
-                        Ident #as tok => {
-                            Expr::MemberAccess {
-                                left: self.ast.expr(expr),
-                                name: tok.span(),
-                            }
-                        },
-                        IntLiteral #as tok => {
-                            let idx = self.src[tok.span().range()].parse().unwrap();
-                            Expr::TupleIdx { left: self.ast.expr(expr), idx, end: tok.end }
-                        },
-                        LBrace => {
-                            if dot.new_line {
-                                // record literal on new line, ignore
-                                self.toks.step_back();
-                                self.toks.step_back();
-                                break Ok(expr);
-                            }
-                            /*Expr::Record {
-                                span,
-                                names,
-                                values,
-                            }*/
-                            todo!("record parsing")
+                        Expr::Index {
+                            expr: self.ast.expr(expr),
+                            idx,
+                            end,
                         }
                     }
-                }
-                Some(TokenType::Caret) => {
-                    let caret = self.toks.step_assert(TokenType::Caret);
-                    Expr::UnOp(caret.end, UnOp::Deref, self.ast.expr(expr))
-                }
-                Some(TokenType::Keyword(Keyword::As)) if include_as => {
-                    self.toks.step_assert(TokenType::Keyword(Keyword::As));
-                    let target_ty = self.parse_type()?;
-                    Expr::As(self.ast.expr(expr), target_ty)
-                }
-                _ => break Ok(expr),
-            };
+                    Some(TokenType::Dot) => {
+                        let dot = self.toks.step_assert(TokenType::Dot);
+                        step_or_unexpected! {self,
+                            Ident #as tok => {
+                                Expr::MemberAccess {
+                                    left: self.ast.expr(expr),
+                                    name: tok.span(),
+                                }
+                            },
+                            IntLiteral #as tok => {
+                                let idx = self.src[tok.span().range()].parse().unwrap();
+                                Expr::TupleIdx { left: self.ast.expr(expr), idx, end: tok.end }
+                            },
+                            LBrace => {
+                                if dot.new_line {
+                                    // record literal on new line, ignore
+                                    self.toks.step_back();
+                                    self.toks.step_back();
+                                    break Ok(expr);
+                                }
+                                /*Expr::Record {
+                                    span,
+                                    names,
+                                    values,
+                                }*/
+                                todo!("record parsing")
+                            }
+                        }
+                    }
+                    Some(TokenType::Caret) => {
+                        let caret = self.toks.step_assert(TokenType::Caret);
+                        Expr::UnOp(caret.end, UnOp::Deref, self.ast.expr(expr))
+                    }
+                    Some(TokenType::Keyword(Keyword::As)) if include_as => {
+                        self.toks.step_assert(TokenType::Keyword(Keyword::As));
+                        let target_ty = self.parse_type()?;
+                        Expr::As(self.ast.expr(expr), target_ty)
+                    }
+                    _ => break Ok(expr),
+                };
         }
     }
 
@@ -1072,7 +1102,7 @@ impl<'a> Parser<'a> {
         if self.toks.step_if(TokenType::Declare).is_some() {
             let val = self.parse_expr(scope)?;
             let val = self.ast.expr(val);
-            let body = self.parse_block_or_expr(scope)?;
+            let body = self.parse_block_or_stmt(scope)?;
             let body = self.ast.expr(body);
             Ok(Expr::WhilePat {
                 start: while_tok.start,
@@ -1081,7 +1111,7 @@ impl<'a> Parser<'a> {
                 body,
             })
         } else {
-            let body = self.parse_block_or_expr(scope)?;
+            let body = self.parse_block_or_stmt(scope)?;
             Ok(Expr::While {
                 start: while_tok.start,
                 cond,

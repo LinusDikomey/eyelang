@@ -138,14 +138,25 @@ impl Function {
         c.write_add("fn");
         if !self.params.is_empty() {
             c.write_add("(");
-            for (i, (name_span, ty)) in self.params.iter().enumerate() {
-                let name = c.src(*name_span);
+            let mut first = true;
+            let mut write_arg = |name_span, ty: &UnresolvedType| {
+                if first {
+                    first = false;
+                } else {
+                    c.write_add(", ");
+                }
+                let name = c.src(name_span);
                 c.write_add(name);
                 c.space();
                 ty.repr(c);
-                if i != self.params.len() - 1 {
-                    c.write_add(", ");
-                }
+            };
+            for (name_span, ty) in &self.params {
+                write_arg(*name_span, ty);
+            }
+            for (name_span, ty, default_value) in self.named_params.iter() {
+                write_arg(*name_span, ty);
+                c.write_add(" = ");
+                c.ast()[*default_value].repr(c);
             }
             c.write_add(")");
         }

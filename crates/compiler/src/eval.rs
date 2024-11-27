@@ -265,97 +265,96 @@ pub fn def_expr(
             }
             Def::Type(Type::Primitive(primitive))
         }
-        _ => {
-            let mut types = TypeTable::new();
-            let expected = types.info_from_unresolved(ty, compiler, module, scope);
-            let expected = types.add(expected);
-            let (hir, types) = crate::check::check(
-                compiler,
-                ast,
-                module,
-                types,
-                &Generics::EMPTY,
-                scope,
-                [],
-                expr,
-                expected,
-            );
-            let mut to_generate = Vec::new();
-            let mut ir_types = ir::IrTypes::new();
-            let (builder, params) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
-            let ir = crate::irgen::lower_hir(
-                builder,
-                &hir,
-                &types,
-                compiler,
-                &mut to_generate,
-                &[],
-                params,
-            );
-            while let Some(to_generate_func) = to_generate.pop() {
-                let hir = Rc::clone(
-                    compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id),
-                );
-                let name = mangle_name(&hir, &to_generate_func.generics);
-                let ir = crate::irgen::lower_function(
-                    compiler,
-                    &mut to_generate,
-                    name,
-                    &hir,
-                    &to_generate_func.generics,
-                );
-                compiler.ir_module.funcs[to_generate_func.ir_id.0 as usize] = ir;
+        _ => match value_expr(compiler, module, scope, ast, expr, ty) {
+            Ok(val) => Def::ConstValue(compiler.add_const_value(val)),
+            Err(err) => {
+                compiler
+                    .errors
+                    .emit_err(Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)));
+                Def::Invalid
             }
-            let display = ir.display(
-                ir::display::Info {
-                    funcs: &compiler.ir_module.funcs,
-                },
-                &ir_types,
-            );
-            let mut env = LazyEvalEnv { compiler };
-            match ir::eval::eval(&ir, &ir_types, &[], &mut env) {
-                Ok(val) => {
-                    let const_val = match val {
-                        Val::Invalid => panic!("internal error during evaluation occured"),
-                        Val::Unit => ConstValue::Unit,
-                        Val::Int(n)
-                            if matches!(types[expected], TypeInfo::Primitive(Primitive::Bool)) =>
-                        {
-                            debug_assert!(n < 2);
-                            ConstValue::Bool(n != 0)
-                        }
-                        Val::Int(n) => {
-                            let TypeInfo::Primitive(p) = types[expected] else {
-                                unreachable!()
-                            };
-                            let int_ty = p.as_int().unwrap();
-                            ConstValue::Int(n, Some(int_ty))
-                        }
-                        Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
-                        Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
-                        Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
-                        Val::Array(_) | Val::Tuple(_) => todo!("handle constant arrays/tuples"),
-                        /*
-                        Val::Ptr(_) => {
-                            compiler.errors.emit_err(
-                                Error::EvalReturnedStackPointer
-                                    .at_span(ast[expr].span(ast).in_mod(module)),
-                            );
-                            return Def::Invalid;
-                        }
-                        */
-                    };
-                    Def::ConstValue(compiler.add_const_value(const_val))
-                }
-                Err(err) => {
-                    compiler.errors.emit_err(
-                        Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)),
-                    );
-                    Def::Invalid
-                }
-            }
-        }
+        },
     }
+}
+
+pub fn value_expr(
+    compiler: &mut Compiler,
+    module: ModuleId,
+    scope: ScopeId,
+    ast: &Ast,
+    expr: ExprId,
+    ty: &UnresolvedType,
+) -> Result<ConstValue, ir::eval::Error> {
+    let mut types = TypeTable::new();
+    let expected = types.info_from_unresolved(ty, compiler, module, scope);
+    let expected = types.add(expected);
+    let (hir, types) = crate::check::check(
+        compiler,
+        ast,
+        module,
+        types,
+        &Generics::EMPTY,
+        scope,
+        [],
+        expr,
+        expected,
+    );
+    let mut to_generate = Vec::new();
+    let mut ir_types = ir::IrTypes::new();
+    let (builder, params) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
+    let ir = crate::irgen::lower_hir(
+        builder,
+        &hir,
+        &types,
+        compiler,
+        &mut to_generate,
+        &[],
+        params,
+    );
+    while let Some(to_generate_func) = to_generate.pop() {
+        let hir =
+            Rc::clone(compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id));
+        let name = mangle_name(&hir, &to_generate_func.generics);
+        let ir = crate::irgen::lower_function(
+            compiler,
+            &mut to_generate,
+            name,
+            &hir,
+            &to_generate_func.generics,
+        );
+        compiler.ir_module.funcs[to_generate_func.ir_id.0 as usize] = ir;
+    }
+    let mut env = LazyEvalEnv { compiler };
+    ir::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| {
+        match val {
+            Val::Invalid => panic!("internal error during evaluation occured"),
+            Val::Unit => ConstValue::Unit,
+            Val::Int(n) if matches!(types[expected], TypeInfo::Primitive(Primitive::Bool)) => {
+                debug_assert!(n < 2);
+                ConstValue::Bool(n != 0)
+            }
+            Val::Int(n) => {
+                let TypeInfo::Primitive(p) = types[expected] else {
+                    unreachable!()
+                };
+                let int_ty = p.as_int().unwrap();
+                ConstValue::Int(n, Some(int_ty))
+            }
+            Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
+            Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
+            Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
+            Val::Array(_) | Val::Tuple(_) => todo!("handle constant arrays/tuples"),
+            /*
+            Val::Ptr(_) => {
+                compiler.errors.emit_err(
+                    Error::EvalReturnedStackPointer
+                        .at_span(ast[expr].span(ast).in_mod(module)),
+                );
+                return Def::Invalid;
+            }
+            */
+        }
+    })
 }
 
 struct LazyEvalEnv<'a> {
@@ -363,11 +362,7 @@ struct LazyEvalEnv<'a> {
 }
 impl<'a> ir::eval::Environment for LazyEvalEnv<'a> {
     fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
-        let func = &self.compiler.ir_module.funcs[id.0 as usize];
-        let display = func.display(ir::display::Info {
-            funcs: &self.compiler.ir_module.funcs,
-        });
-        func
+        &self.compiler.ir_module.funcs[id.0 as usize]
     }
 
     fn call_extern(

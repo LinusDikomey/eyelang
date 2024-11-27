@@ -343,7 +343,7 @@ impl From<TokenType> for Option<Operator> {
             TokenType::Slash => Div,
             TokenType::Percent => Mod,
 
-            TokenType::Equals => Assignment(AssignType::Assign),
+            //TokenType::Equals => Assignment(AssignType::Assign),
             TokenType::PlusEquals => Assignment(AssignType::AddAssign),
             TokenType::MinusEquals => Assignment(AssignType::SubAssign),
             TokenType::StarEquals => Assignment(AssignType::MulAssign),

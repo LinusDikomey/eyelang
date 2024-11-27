@@ -1028,7 +1028,7 @@ pub struct LocalTypeIds {
 impl LocalTypeIds {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
 
-    pub fn iter(self) -> impl Iterator<Item = LocalTypeId> {
+    pub fn iter(self) -> impl ExactSizeIterator<Item = LocalTypeId> {
         (self.idx..self.idx + self.count).map(LocalTypeId)
     }
 

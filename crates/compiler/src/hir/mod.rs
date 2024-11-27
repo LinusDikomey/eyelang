@@ -598,6 +598,13 @@ impl NodeIds {
     pub fn iter(self) -> impl Iterator<Item = NodeId> {
         (self.index..self.index + self.count).map(NodeId)
     }
+
+    pub fn skip(self, i: u32) -> NodeIds {
+        Self {
+            index: self.index + i,
+            count: self.count - i,
+        }
+    }
 }
 impl Index<NodeIds> for HIR {
     type Output = [Node];

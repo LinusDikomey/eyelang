@@ -17,7 +17,7 @@ use super::{exhaust::Exhaustion, Ctx};
 
 pub fn check(
     ctx: &mut Ctx,
-    variables: &mut DHashMap<String, VarId>,
+    variables: &mut DHashMap<Box<str>, VarId>,
     exhaustion: &mut Exhaustion,
     pat: ExprId,
     expected: LocalTypeId,
@@ -73,7 +73,7 @@ pub fn check(
         }
         Expr::Ident { span, .. } => {
             let var = ctx.hir.add_var(expected);
-            let name = ctx.ast.src()[span.range()].to_owned();
+            let name = ctx.ast.src()[span.range()].into();
             variables.insert(name, var);
             exhaustion.exhaust_full();
             Pattern::Variable(var)

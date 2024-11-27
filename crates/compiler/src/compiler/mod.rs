@@ -634,20 +634,44 @@ impl Compiler {
         let scope = function.scope;
         let generics = self.resolve_generics(&function.generics, module, scope, ast);
 
-        let args = function
+        let params = function
             .params
-            .clone()
-            .into_iter()
+            .iter()
             .map(|(name_span, ty)| {
-                (
-                    ast[name_span].to_owned(),
-                    self.resolve_type(&ty, module, scope),
-                )
+                let name = ast[*name_span].into();
+                let ty = self.resolve_type(ty, module, scope);
+                (name, ty)
+            })
+            .collect();
+
+        let named_params = function
+            .named_params
+            .iter()
+            .map(|(name_span, ty, default_value)| {
+                let name = ast[*name_span].into();
+                let (ty, default_value) =
+                    match eval::value_expr(self, module, scope, ast, *default_value, &ty) {
+                        Ok(value) => (value.ty(), self.add_const_value(value)),
+                        Err(err) => {
+                            self.errors.emit_err(
+                                Error::EvalFailed(err)
+                                    .at_span(ast[*default_value].span(ast).in_mod(module)),
+                            );
+                            // TODO: resolving type here when the eval failed may cause unhelpful
+                            // additional errors.
+                            (
+                                self.resolve_type(ty, module, scope),
+                                self.add_const_value(ConstValue::Undefined),
+                            )
+                        }
+                    };
+                (name, ty, default_value)
             })
             .collect();
         let return_type = self.resolve_type(&function.return_type, module, scope);
         Signature {
-            args,
+            params,
+            named_params,
             varargs: function.varargs,
             return_type,
             generics,
@@ -783,8 +807,8 @@ impl Compiler {
 
                 let mut types = TypeTable::new();
 
-                let param_types = types.add_multiple_unknown(signature.args.len() as u32);
-                for ((_, param), r) in signature.args.iter().zip(param_types.iter()) {
+                let param_types = types.add_multiple_unknown(signature.total_arg_count() as u32);
+                for ((_, param), r) in signature.all_params().zip(param_types.iter()) {
                     let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(self, param));
                     types.replace(r, i);
                 }
@@ -796,10 +820,9 @@ impl Compiler {
                 let varargs = signature.varargs;
 
                 let (body, types) = if let Some(body) = function.body {
-                    let args = signature
-                        .args
-                        .iter()
-                        .map(|(name, _ty)| name.clone())
+                    let params = signature
+                        .all_params()
+                        .map(|(name, _ty)| name.into())
                         .zip(param_types.iter());
 
                     let (hir, types) = check::check(
@@ -809,7 +832,7 @@ impl Compiler {
                         types,
                         &signature.generics,
                         function.scope,
-                        args,
+                        params,
                         body,
                         return_type,
                     );
@@ -1268,7 +1291,7 @@ id::id!(VarId);
 #[derive(Debug)]
 pub struct LocalScope<'p> {
     pub parent: Option<&'p LocalScope<'p>>,
-    pub variables: DHashMap<String, VarId>,
+    pub variables: DHashMap<Box<str>, VarId>,
     pub module: ModuleId,
     /// should only be none if this scope has a parent
     pub static_scope: Option<ScopeId>,
@@ -1448,13 +1471,25 @@ pub struct ParsedModule {
 
 #[derive(Debug)]
 pub struct Signature {
-    pub args: Vec<(String, Type)>,
+    pub params: Box<[(Box<str>, Type)]>,
+    pub named_params: Box<[(Box<str>, Type, ConstValueId)]>,
     pub varargs: bool,
     pub return_type: Type,
     pub generics: Generics,
     pub span: TSpan,
 }
 impl Signature {
+    pub fn total_arg_count(&self) -> usize {
+        self.params.len() + self.named_params.len()
+    }
+
+    pub fn all_params(&self) -> impl Iterator<Item = (&str, &Type)> {
+        self.params
+            .iter()
+            .map(|(name, ty)| (&**name, ty))
+            .chain(self.named_params.iter().map(|(name, ty, _)| (&**name, ty)))
+    }
+
     pub fn fits_function_type(&self, ty: &FunctionType) -> Result<bool, ()> {
         if self.generics.count() != 0 {
             return Ok(false);
@@ -1462,12 +1497,12 @@ impl Signature {
         if self.varargs {
             return Ok(false);
         }
-        if self.args.len() != ty.params.len() {
+        if self.params.len() != ty.params.len() {
             return Ok(false);
         }
         // function types can't be generics and generic count was checked to be zero
         let base_generic = |_| unreachable!();
-        for ((_, arg), ty_arg) in self.args.iter().zip(&ty.params) {
+        for ((_, arg), ty_arg) in self.all_params().zip(&ty.params) {
             if !arg.is_same_as(ty_arg, base_generic)? {
                 return Ok(false);
             }
@@ -1502,13 +1537,14 @@ impl Signature {
                 ImplIncompatibility::NoVarargsNeeded
             }));
         }
-        if self.args.len() != base.args.len() {
+        if self.params.len() != base.params.len() {
             return Ok(Some(ImplIncompatibility::ArgCount {
-                base: base.args.len() as _,
-                impl_: self.args.len() as _,
+                base: base.params.len() as _,
+                impl_: self.params.len() as _,
             }));
         }
-        for (((_, arg), (_, base_arg)), i) in self.args.iter().zip(&base.args).zip(0..) {
+        // TODO: should the default value also be compared?
+        for (((_, arg), (_, base_arg)), i) in self.all_params().zip(base.all_params()).zip(0..) {
             if !arg.is_same_as(base_arg, base_generic)? {
                 return Ok(Some(ImplIncompatibility::Arg(i)));
             }

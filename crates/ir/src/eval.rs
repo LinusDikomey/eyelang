@@ -393,7 +393,8 @@ pub fn eval<E: Environment>(
                     let _string = ir.extra[inst.data.extra_len().0 as usize
                         ..(inst.data.extra_len().0 + inst.data.extra_len().1) as usize]
                         .to_vec();
-                    todo!("evaluate strings")
+                    eprintln!("TODO: evaluate strings");
+                    Val::Tuple(Box::new([Val::Ptr(Ptr { addr: 0, size: 0 }), Val::Int(0)]))
                 }
                 super::Tag::Call => {
                     let (func_id, args) = inst.data.call(&ir.extra);
