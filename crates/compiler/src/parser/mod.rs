@@ -271,7 +271,11 @@ impl<'a> Parser<'a> {
             }
             _ => self.errors.emit_err(CompileError {
                 err: Error::InvalidTopLevelBlockItem,
-                span,
+                span: self
+                    .ast
+                    .get_expr(expr)
+                    .span_builder(self.ast)
+                    .in_mod(self.toks.module),
             }),
         };
     }
@@ -553,8 +557,13 @@ impl<'a> Parser<'a> {
                 } else {
                     let name_tok = p.toks.step_expect(TokenType::Ident)?;
                     let name_span = TSpan::new(name_tok.start, name_tok.end);
-                    let ty = p.parse_type()?;
-                    if p.toks.step_if(TokenType::Equals).is_some() {
+                    let equals = p.toks.step_if(TokenType::Equals);
+                    let ty = if let Some(equals) = equals {
+                        UnresolvedType::Infer(equals.span())
+                    } else {
+                        p.parse_type()?
+                    };
+                    if equals.is_some() || p.toks.step_if(TokenType::Equals).is_some() {
                         let default_value = p.parse_expr(scope)?;
                         // TODO: should check no duplicate params exist here or in check_signature
                         named_params.push((name_span, ty, Some(p.ast.expr(default_value))));
