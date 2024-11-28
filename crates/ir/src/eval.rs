@@ -1,4 +1,4 @@
-use std::{fmt, ops::Range};
+use std::fmt;
 
 use crate::{
     ir_types::{ConstIrType, IrType, IrTypes},
@@ -692,42 +692,6 @@ impl Values {
         Self { slots, slot_map }
     }
 
-    pub fn get_slice(&self, i: u32) -> &[u64] {
-        let start = self.slots[i as usize] as usize;
-        let end = self
-            .slots
-            .get(i as usize + 1)
-            .map_or(self.slots.len() + 1, |&i| i as usize);
-        &self.slots[start..end]
-    }
-
-    pub fn get_slice_mut(&mut self, i: u32) -> &mut [u64] {
-        let start = self.slots[i as usize] as usize;
-        let end = self
-            .slots
-            .get(i as usize + 1)
-            .map_or(self.slots.len(), |&i| i as usize);
-        &mut self.slots[start..end]
-    }
-
-    pub fn get_slice_for_range(&self, range: Range<u32>) -> &[u64] {
-        let start = self.slots[range.start as usize] as usize;
-        let end = self
-            .slots
-            .get(range.end as usize)
-            .map_or(self.slots.len(), |&i| i as usize);
-        &self.slots[start..end]
-    }
-
-    pub fn get_slice_for_range_mut(&mut self, range: Range<u32>) -> &mut [u64] {
-        let start = self.slots[range.start as usize] as usize;
-        let end = self
-            .slots
-            .get(range.end as usize)
-            .map_or(self.slots.len(), |&i| i as usize);
-        &mut self.slots[start..end]
-    }
-
     pub fn visit_primitives(
         &mut self,
         r: Ref,
@@ -998,14 +962,4 @@ enum PrimitiveSize {
     S16,
     S32,
     S64,
-}
-impl PrimitiveSize {
-    fn byte_size(&self) -> u32 {
-        match self {
-            Self::S8 => 1,
-            Self::S16 => 2,
-            Self::S32 => 4,
-            Self::S64 => 8,
-        }
-    }
 }

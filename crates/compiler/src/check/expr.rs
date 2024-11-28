@@ -684,23 +684,6 @@ pub fn check(
     }
 }
 
-fn check_multiple(
-    ctx: &mut Ctx,
-    args: ExprExtra,
-    types: LocalTypeIds,
-    scope: &mut LocalScope,
-    return_ty: LocalTypeId,
-    noreturn: &mut bool,
-) -> NodeIds {
-    debug_assert_eq!(args.count(), types.count as usize);
-    let args_nodes = ctx.hir.add_nodes((0..args.count).map(|_| Node::Invalid));
-    for ((arg, ty), node_id) in args.zip(types.iter()).zip(args_nodes.iter()) {
-        let node = check(ctx, arg, scope, ty, return_ty, noreturn);
-        ctx.hir.modify_node(node_id, node);
-    }
-    args_nodes
-}
-
 fn check_ident(
     ctx: &mut Ctx<'_>,
     scope: &mut LocalScope<'_>,
@@ -887,7 +870,7 @@ fn check_struct_initializer(
     scope: &mut LocalScope,
     return_ty: LocalTypeId,
     noreturn: &mut bool,
-) -> Node {
+) -> Result<Node, ()> {
     let span = TSpan::new(call.open_paren_start, call.end);
     match check_call_args(
         ctx,
@@ -903,10 +886,10 @@ fn check_struct_initializer(
         false,
         false,
     ) {
-        Ok((elems, elem_types)) => Node::TupleLiteral { elems, elem_types },
+        Ok((elems, elem_types)) => Ok(Node::TupleLiteral { elems, elem_types }),
         Err(err) => {
             ctx.compiler.errors.emit_err(err);
-            Node::Invalid
+            Err(())
         }
     }
 }
@@ -1269,7 +1252,10 @@ fn check_call(
     let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     let call_span = TSpan::new(call.open_paren_start, call.end);
     match ctx.hir.types[called_ty] {
-        TypeInfo::Invalid => Node::Invalid,
+        TypeInfo::Invalid => {
+            ctx.invalidate(expected);
+            Node::Invalid
+        }
         TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
             TypeInfo::TypeDef(id, generics) => {
                 debug_assert_eq!(
@@ -1290,6 +1276,10 @@ fn check_call(
                             return_ty,
                             noreturn,
                         )
+                        .unwrap_or_else(|_| {
+                            ctx.invalidate(expected);
+                            Node::Invalid
+                        })
                     }
                     ResolvedTypeDef::Enum(_) => {
                         ctx.compiler

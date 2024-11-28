@@ -63,8 +63,9 @@ impl<'a> Parser<'a> {
     /// `end` is the ending token. It will be returned from this function once parsed.
     fn parse_delimited<F, D>(
         &mut self,
+        open: Token,
         delim: TokenType,
-        end: TokenType,
+        close: TokenType,
         mut item: F,
     ) -> ParseResult<Token>
     where
@@ -72,31 +73,31 @@ impl<'a> Parser<'a> {
         D: Into<Delimit>,
     {
         loop {
-            if let Some(end_tok) = self.toks.step_if(end) {
+            if let Some(end_tok) = self.toks.step_if(close) {
                 return Ok(end_tok);
             }
-            let delimit = item(self)?.into();
-            match delimit {
-                Delimit::Yes => {
-                    let delim_or_end = self.toks.step_expect([delim, end])?;
-                    if delim_or_end.ty == delim {
+            match item(self).map(Into::into) {
+                Ok(Delimit::Yes) => {
+                    let delim_or_close = self.toks.step_expect([delim, close])?;
+                    if delim_or_close.ty == delim {
                         continue;
                     }
-                    if delim_or_end.ty == end {
-                        return Ok(delim_or_end);
+                    if delim_or_close.ty == close {
+                        return Ok(delim_or_close);
                     }
                     unreachable!()
                 }
-                Delimit::No => {}
-                Delimit::Optional => {
+                Ok(Delimit::No) => {}
+                Ok(Delimit::Optional) => {
                     self.toks.step_if(delim);
                 }
-                Delimit::OptionalIfNewLine => {
+                Ok(Delimit::OptionalIfNewLine) => {
                     if self.toks.step_if(delim).is_none() {
                         if let Some(after) = self.toks.peek() {
-                            if !after.new_line && after.ty != end {
+                            if !after.new_line && after.ty != close {
+                                self.recover_in_delimited(open.ty, close);
                                 return Err(Error::UnexpectedToken {
-                                    expected: ExpectedTokens::AnyOf(vec![delim, end]),
+                                    expected: ExpectedTokens::AnyOf(vec![delim, close]),
                                     found: after.ty,
                                 }
                                 .at_span(after.span().in_mod(self.toks.module)));
@@ -104,6 +105,29 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                Err(err) => {
+                    self.recover_in_delimited(open.ty, close);
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    fn recover_in_delimited(&mut self, open: TokenType, close: TokenType) {
+        let mut open_count: u32 = 0;
+        // try to find the close of the current enclosed delimited
+        loop {
+            match self.toks.try_step() {
+                Some(tok) if tok.ty == open => open_count += 1,
+                Some(tok) if tok.ty == close => {
+                    if let Some(x) = open_count.checked_sub(1) {
+                        open_count = x
+                    } else {
+                        break;
+                    }
+                }
+                Some(_) => {}
+                None => break,
             }
         }
     }
@@ -227,7 +251,7 @@ impl<'a> Parser<'a> {
         scope: &mut ast::Scope,
         scope_id: ScopeId,
         expr: Expr,
-        span: Span,
+        _: Span,
     ) {
         let expr = self.ast.expr(expr);
         let mut add_global =
@@ -323,7 +347,11 @@ impl<'a> Parser<'a> {
                     // constant definition
                     Some(TokenType::DoubleColon) => {
                         let double_colon = self.toks.step_assert(TokenType::DoubleColon);
-                        let value = self.parse_expr(scope)?;
+                        let value = self.parse_expr(scope).unwrap_or_else(|err| {
+                            let span = err.span;
+                            self.errors.emit_err(err);
+                            Expr::Error(span.tspan())
+                        });
                         let value = self.ast.expr(value);
                         Item::Definition {
                             name: name.to_owned(),
@@ -418,11 +446,11 @@ impl<'a> Parser<'a> {
             self.ast.scope(scope)
         };
 
-        self.toks.step_expect(TokenType::LBrace)?;
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
 
         let mut members: Vec<(TSpan, UnresolvedType)> = Vec::new();
         let mut methods = dmap::new();
-        let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
@@ -466,19 +494,19 @@ impl<'a> Parser<'a> {
             self.ast.scope(scope)
         };
 
-        self.toks.step_expect(TokenType::LBrace)?;
         let mut variants = Vec::new();
         let mut methods = dmap::new();
 
-        let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+        let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let ident = p.toks.step_expect(TokenType::Ident)?;
             match p.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
-                    p.toks.step_assert(TokenType::LParen);
                     let name_span = ident.span();
                     let mut args = vec![];
+                    let lparen = p.toks.step_assert(TokenType::LParen);
                     let end = p
-                        .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                        .parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                             p.parse_type().map(|ty| args.push(ty))
                         })?
                         .end;
@@ -545,34 +573,35 @@ impl<'a> Parser<'a> {
         let mut named_params = Vec::new();
         let mut varargs = false;
 
-        if self.toks.step_if(TokenType::LParen).is_some() {
-            let rparen = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
-                if varargs {
-                    // can't be an RParen since parse_delimited would have returned otherwise
-                    p.toks.step_expect(TokenType::RParen)?;
-                    unreachable!()
-                }
-                if p.toks.step_if(TokenType::TripleDot).is_some() {
-                    varargs = true;
-                } else {
-                    let name_tok = p.toks.step_expect(TokenType::Ident)?;
-                    let name_span = TSpan::new(name_tok.start, name_tok.end);
-                    let equals = p.toks.step_if(TokenType::Equals);
-                    let ty = if let Some(equals) = equals {
-                        UnresolvedType::Infer(equals.span())
-                    } else {
-                        p.parse_type()?
-                    };
-                    if equals.is_some() || p.toks.step_if(TokenType::Equals).is_some() {
-                        let default_value = p.parse_expr(scope)?;
-                        // TODO: should check no duplicate params exist here or in check_signature
-                        named_params.push((name_span, ty, Some(p.ast.expr(default_value))));
-                    } else {
-                        params.push((name_span, ty));
+        if let Some(lparen) = self.toks.step_if(TokenType::LParen) {
+            let rparen =
+                self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
+                    if varargs {
+                        // can't be an RParen since parse_delimited would have returned otherwise
+                        p.toks.step_expect(TokenType::RParen)?;
+                        unreachable!()
                     }
-                }
-                Ok(Delimit::OptionalIfNewLine)
-            })?;
+                    if p.toks.step_if(TokenType::TripleDot).is_some() {
+                        varargs = true;
+                    } else {
+                        let name_tok = p.toks.step_expect(TokenType::Ident)?;
+                        let name_span = TSpan::new(name_tok.start, name_tok.end);
+                        let equals = p.toks.step_if(TokenType::Equals);
+                        let ty = if let Some(equals) = equals {
+                            UnresolvedType::Infer(equals.span())
+                        } else {
+                            p.parse_type()?
+                        };
+                        if equals.is_some() || p.toks.step_if(TokenType::Equals).is_some() {
+                            let default_value = p.parse_expr(scope)?;
+                            // TODO: should check no duplicate params exist here or in check_signature
+                            named_params.push((name_span, ty, Some(p.ast.expr(default_value))));
+                        } else {
+                            params.push((name_span, ty));
+                        }
+                    }
+                    Ok(Delimit::OptionalIfNewLine)
+                })?;
             end = rparen.end;
         }
         let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
@@ -708,7 +737,7 @@ impl<'a> Parser<'a> {
     ) -> ParseResult<(Box<[(TSpan, ast::FunctionId)]>, u32)> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut functions = Vec::new();
-        let last = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+        let last = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?;
             let name_span = name.span();
             p.toks.step_expect(TokenType::DoubleColon)?;
@@ -802,7 +831,7 @@ impl<'a> Parser<'a> {
             },
             LBracket #as first => {
                 let mut elems = Vec::new();
-                let closing = self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+                let closing = self.parse_delimited(first, TokenType::Comma, TokenType::RBracket, |p| {
                     elems.push(p.parse_expr(scope)?);
                     Ok(Delimit::OptionalIfNewLine)
                 })?;
@@ -818,7 +847,7 @@ impl<'a> Parser<'a> {
                         Comma => {
                             // tuple
                             let mut elems = vec![expr];
-                            let end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                            let end = self.parse_delimited(first, TokenType::Comma, TokenType::RParen, |p| {
                                 elems.push(p.parse_expr(scope)?);
                                 Ok(())
                             })?.end;
@@ -895,7 +924,7 @@ impl<'a> Parser<'a> {
                 let lbrace = self.toks.step_expect(TokenType::LBrace)?;
 
                 let mut branches = Vec::new();
-                let rbrace = self.parse_delimited(TokenType::Comma, TokenType::RBrace, |p| {
+                let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
                     let pat = p.parse_expr(scope)?;
                     let (branch, delimit) = step_or_unexpected!{p,
                         Colon => {
@@ -973,13 +1002,13 @@ impl<'a> Parser<'a> {
                             // LParen is on new line, ignore
                             break Ok(expr);
                         }
-                        let open_paren_start = self.toks.step_assert(TokenType::LParen).start;
+                        let lparen = self.toks.step_assert(TokenType::LParen);
 
                         // function call
                         let mut args = Vec::new();
                         let mut named_args = Vec::new();
                         let end = self
-                            .parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                            .parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                                 let expr = p.parse_expr(scope)?;
                                 if p.toks.step_if(TokenType::Colon).is_some() {
                                     let value = p.parse_expr(scope)?;
@@ -1000,7 +1029,7 @@ impl<'a> Parser<'a> {
                         let args = self.ast.exprs(args);
                         let call = self.ast.call(ast::Call {
                             called_expr,
-                            open_paren_start,
+                            open_paren_start: lparen.start,
                             args,
                             named_args,
                             end,
@@ -1198,7 +1227,7 @@ impl<'a> Parser<'a> {
                     })
                 }
                 let mut tuple_types = Vec::new();
-                let rparen_end = self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                let rparen_end = self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                     tuple_types.push(p.parse_type()?);
                     Ok(())
                 })?.end;
@@ -1234,8 +1263,8 @@ impl<'a> Parser<'a> {
             Keyword Fn #as type_tok => {
                 let start = type_tok.start;
                 let mut params = Vec::new();
-                let end = if self.toks.step_if(TokenType::LParen).is_some() {
-                    self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                let end = if let Some(lparen) = self.toks.step_if(TokenType::LParen) {
+                    self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                         params.push(p.parse_type()?);
                         Ok(Delimit::OptionalIfNewLine)
                     })?.end
@@ -1260,11 +1289,11 @@ impl<'a> Parser<'a> {
         &mut self,
         inherited: Vec<GenericDef>,
     ) -> ParseResult<Box<[GenericDef]>> {
-        if !self.toks.step_if(TokenType::LBracket).is_some() {
+        let Some(lbracket) = self.toks.step_if(TokenType::LBracket) else {
             return Ok(inherited.into_boxed_slice());
-        }
+        };
         let mut generics = inherited;
-        self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+        self.parse_delimited(lbracket, TokenType::Comma, TokenType::RBracket, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?.span();
             let mut requirements = Vec::new();
             if p.toks.step_if(TokenType::Colon).is_some() {
@@ -1306,16 +1335,16 @@ impl<'a> Parser<'a> {
     ) -> ParseResult<Option<(Box<[UnresolvedType]>, TSpan)>> {
         self.toks
             .step_if(TokenType::LBracket)
-            .map(|l_bracket| {
+            .map(|lbracket| {
                 let mut types = Vec::new();
                 let r_bracket =
-                    self.parse_delimited(TokenType::Comma, TokenType::RBracket, |p| {
+                    self.parse_delimited(lbracket, TokenType::Comma, TokenType::RBracket, |p| {
                         types.push(p.parse_type()?);
                         Ok(())
                     })?;
                 Ok((
                     types.into_boxed_slice(),
-                    TSpan::new(l_bracket.start, r_bracket.end),
+                    TSpan::new(lbracket.start, r_bracket.end),
                 ))
             })
             .transpose()
@@ -1330,8 +1359,8 @@ impl<'a> Parser<'a> {
             .peek()
             .is_some_and(|tok| tok.ty == TokenType::LParen && !tok.new_line)
             .then(|| {
-                self.toks.step_assert(TokenType::LParen);
-                self.parse_delimited(TokenType::Comma, TokenType::RParen, |p| {
+                let lparen = self.toks.step_assert(TokenType::LParen);
+                self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                     args.push(p.parse_expr(scope)?);
                     Ok(Delimit::OptionalIfNewLine)
                 })

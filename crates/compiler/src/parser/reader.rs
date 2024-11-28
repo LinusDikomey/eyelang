@@ -61,19 +61,6 @@ impl TokenReader {
         }
     }
 
-    /// steps over the current token and returns it
-    pub fn step(&mut self, expected: impl Into<ExpectedTokens>) -> Result<Token, CompileError> {
-        self.try_step().ok_or_else(|| {
-            let end = self.last_src_pos();
-            CompileError {
-                err: Error::UnexpectedEndOfFile {
-                    expected: expected.into(),
-                },
-                span: Span::new(end, end, self.module),
-            }
-        })
-    }
-
     pub fn step_back(&mut self) {
         self.index -= 1;
     }
