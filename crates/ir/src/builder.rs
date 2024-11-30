@@ -302,20 +302,48 @@ impl<'a> IrBuilder<'a> {
     pub fn build_call(
         &mut self,
         func: FunctionId,
-        params: impl IntoIterator<Item = Ref>,
+        args: impl IntoIterator<Item = Ref>,
         return_ty: impl Into<IdxOrTy>,
     ) -> Ref {
         let extra = self.extra_data(&func.to_bytes());
-        let mut param_count = 0;
-        for param in params {
-            self.extra_data(&param.to_bytes());
-            param_count += 1;
+        let mut arg_count = 0;
+        for arg in args {
+            self.extra_data(&arg.to_bytes());
+            arg_count += 1;
         }
         self.add(
             Data {
-                extra_len: (extra, param_count),
+                extra_len: (extra, arg_count),
             },
             Tag::Call,
+            return_ty,
+        )
+    }
+
+    pub fn build_function_ptr(&mut self, function: FunctionId) -> Ref {
+        self.add(Data { function }, Tag::FunctionPtr, IrType::Ptr)
+    }
+
+    pub fn build_call_ptr(
+        &mut self,
+        func: Ref,
+        args: impl IntoIterator<Item = Ref>,
+        arg_types: TypeRefs,
+        return_ty: impl Into<IdxOrTy>,
+    ) -> Ref {
+        let extra = self.extra_data(&func.to_bytes());
+        self.extra_data(&arg_types.to_bytes());
+        let mut arg_count = 0;
+        for arg in args {
+            self.extra_data(&arg.to_bytes());
+            arg_count += 1;
+        }
+        debug_assert_eq!(arg_count, arg_types.count);
+        self.add(
+            Data {
+                extra_len: (extra, arg_count),
+            },
+            Tag::CallPtr,
             return_ty,
         )
     }

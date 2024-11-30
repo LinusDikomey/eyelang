@@ -111,6 +111,8 @@ pub fn function(function: &Function) {
                 Tag::ArrayIndex => {}
                 Tag::String => {}
                 Tag::Call => {}
+                Tag::FunctionPtr => {}
+                Tag::CallPtr => {}
                 Tag::Asm => {}
             }
         }

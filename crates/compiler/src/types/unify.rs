@@ -206,6 +206,55 @@ pub fn unify(
             }
             Tuple(a)
         }
+        (
+            Function {
+                params: a_params,
+                return_type: a_ret,
+            },
+            Function {
+                params: b_params,
+                return_type: b_ret,
+            },
+        ) => {
+            if a_params.count != b_params.count {
+                return None;
+            }
+            if !a_params
+                .iter()
+                .zip(b_params.iter())
+                .all(|(a, b)| types.try_unify(a, b, function_generics, compiler))
+                && types.try_unify(a_ret, b_ret, function_generics, compiler)
+            {
+                return None;
+            }
+            a
+        }
+        (
+            FunctionItem {
+                module,
+                function,
+                generics,
+            },
+            func @ Function {
+                params,
+                return_type,
+            },
+        )
+        | (
+            func @ Function {
+                params,
+                return_type,
+            },
+            FunctionItem {
+                module,
+                function,
+                generics,
+            },
+        ) => {
+            // TODO: make sure the function item is actually of the correct type
+            _ = (module, function, generics, params, return_type);
+            func
+        }
         (TypeItem { ty: a_ty }, TypeItem { ty: b_ty }) => {
             if !types.try_unify(a_ty, b_ty, function_generics, compiler) {
                 return None;
@@ -223,17 +272,21 @@ pub fn unify(
                 function: b_f,
                 generics: b_g,
             },
-        ) if a_m == b_m && a_f == b_f => {
-            debug_assert_eq!(
-                a_g.count, b_g.count,
-                "invalid generics count, incorrect type info constructed"
-            );
-            for (a, b) in a_g.iter().zip(b_g.iter()) {
-                if !types.try_unify(a, b, function_generics, compiler) {
-                    return None;
+        ) => {
+            if a_m == b_m && a_f == b_f {
+                debug_assert_eq!(
+                    a_g.count, b_g.count,
+                    "invalid generics count, incorrect type info constructed"
+                );
+                for (a, b) in a_g.iter().zip(b_g.iter()) {
+                    if !types.try_unify(a, b, function_generics, compiler) {
+                        return None;
+                    }
                 }
+                a
+            } else {
+                todo!("unify different function items")
             }
-            a
         }
         (
             MethodItem {

@@ -5,10 +5,12 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef},
+    compiler::{
+        builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef, Signature,
+    },
     error::Error,
     eval::ConstValue,
-    hir::{self, Comparison, LValue, Node, NodeIds},
+    hir::{self, Comparison, LValue, Node, NodeId, NodeIds},
     parser::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
@@ -858,8 +860,7 @@ fn function_item(
         },
         |_| span,
     );
-    // TODO: should this stay a unit node?
-    Node::Unit
+    Node::FunctionItem(function_module, function, generics)
 }
 
 fn check_struct_initializer(
@@ -1169,7 +1170,7 @@ fn check_type_item_member_access(
                         },
                         span,
                     );
-                    return Node::Invalid;
+                    return Node::FunctionItem(module, method, call_generics);
                 }
                 let def = Rc::clone(&ty.def);
                 if let ResolvedTypeDef::Enum(def) = &*def {
@@ -1251,6 +1252,51 @@ fn check_call(
     let called_ty = ctx.hir.types.add_unknown();
     let called_node = check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     let call_span = TSpan::new(call.open_paren_start, call.end);
+    let mut call_with_function =
+        |ctx: &mut Ctx, function: NodeId, signature: &Signature, generics| {
+            let call_node = match check_call_args(
+                ctx,
+                scope,
+                return_ty,
+                noreturn,
+                call_span,
+                call.args,
+                &call.named_args,
+                generics,
+                &signature.params,
+                &signature.named_params,
+                signature.varargs,
+                false,
+            ) {
+                Ok((args, arg_types)) => {
+                    if *noreturn {
+                        return Node::Invalid;
+                    }
+                    let call_noreturn =
+                        matches!(signature.return_type, Type::Primitive(Primitive::Never));
+                    if call_noreturn {
+                        *noreturn = true;
+                    }
+
+                    Node::Call {
+                        function,
+                        args,
+                        return_ty: expected,
+                        arg_types,
+                    }
+                }
+                Err(err) => {
+                    ctx.compiler.errors.emit_err(err);
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
+            };
+            // TODO: check that the type is never type recursively, handling empty enums as never
+            if signature.return_type == Type::Primitive(Primitive::Never) {
+                *noreturn = true;
+            }
+            call_node
+        };
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => {
             ctx.invalidate(expected);
@@ -1307,36 +1353,42 @@ fn check_call(
             ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
                 ast[expr].span(ast)
             });
-            let call_node = match check_call_args(
+            let function = ctx.hir.add(called_node);
+            call_with_function(ctx, function, &signature, generics)
+        }
+        TypeInfo::Function {
+            params,
+            return_type,
+        } => {
+            ctx.unify(expected, return_type, |_| call_span);
+            match check_call_args_inner(
                 ctx,
                 scope,
                 return_ty,
                 noreturn,
                 call_span,
                 call.args,
-                &call.named_args,
-                generics,
-                &signature.params,
-                &signature.named_params,
-                signature.varargs,
+                &[],
+                params.count,
+                &[],
+                params,
                 false,
             ) {
-                Ok((args, _)) => {
+                Ok((args, arg_types)) => {
                     if *noreturn {
                         return Node::Invalid;
                     }
-                    let call_noreturn =
-                        matches!(signature.return_type, Type::Primitive(Primitive::Never));
-                    if call_noreturn {
-                        *noreturn = true;
-                    }
+                    // TODO: check if partially inferred return type is noreturn
+                    // if call_noreturn {
+                    //     *noreturn = true;
+                    // }
+                    let function = ctx.hir.add(called_node);
 
                     Node::Call {
-                        function: (module, function),
-                        generics,
+                        function,
                         args,
                         return_ty: expected,
-                        noreturn: call_noreturn,
+                        arg_types,
                     }
                 }
                 Err(err) => {
@@ -1344,11 +1396,7 @@ fn check_call(
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
-            };
-            if signature.return_type == Type::Primitive(Primitive::Never) {
-                *noreturn = true;
             }
-            call_node
         }
         TypeInfo::MethodItem {
             module,
@@ -1376,12 +1424,15 @@ fn check_call(
                 signature.varargs,
                 true,
             ) {
-                Ok((args, _)) => {
+                Ok((args, arg_types)) => {
                     if *noreturn {
                         return Node::Invalid;
                     }
                     ctx.hir
                         .modify_node(args.iter().next().unwrap(), called_node);
+                    //ctx.hir
+                    //    .types
+                    //    .replace(arg_types.iter().next().unwrap(), self_type);
                     let call_noreturn =
                         matches!(signature.return_type, Type::Primitive(Primitive::Never));
                     if call_noreturn {
@@ -1389,11 +1440,10 @@ fn check_call(
                     }
 
                     Node::Call {
-                        function: (module, function),
-                        generics,
+                        function: ctx.hir.add(Node::FunctionItem(module, function, generics)),
                         args,
                         return_ty: expected,
-                        noreturn: call_noreturn,
+                        arg_types,
                     }
                 }
                 Err(err) => {
@@ -1551,6 +1601,44 @@ fn check_call(
     }
 }
 
+fn call_arg_types(
+    arg_count: u32,
+    ctx: &mut Ctx,
+    params: &[(Box<str>, Type)],
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
+    generics: LocalTypeIds,
+    varargs: bool,
+) -> Result<LocalTypeIds, Error> {
+    // TODO: this function probably breaks with varargs and named args, properly define what combinations are allowed and how
+    let invalid_arg_count = if varargs {
+        arg_count < params.len() as u32
+    } else {
+        arg_count != params.len() as u32
+    };
+    if invalid_arg_count {
+        let expected = params.len() as _;
+        return Err(Error::InvalidArgCount {
+            expected,
+            varargs,
+            found: arg_count,
+        });
+    }
+    let arg_types = ctx
+        .hir
+        .types
+        .add_multiple_unknown(arg_count + named_params.len() as u32);
+    for (ty, idx) in params
+        .iter()
+        .map(|(_, ty)| ty)
+        .chain(named_params.iter().map(|(_, ty, _)| ty))
+        .zip(arg_types.iter())
+    {
+        let ty = ctx.type_from_resolved(ty, generics);
+        ctx.hir.types.replace(idx, ty);
+    }
+    Ok(arg_types)
+}
+
 fn check_call_args(
     ctx: &mut Ctx,
     scope: &mut LocalScope,
@@ -1565,59 +1653,62 @@ fn check_call_args(
     varargs: bool,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
-    // TODO: this function probably breaks with varargs and named args, properly define what combinations are allowed and how
-    let invalid_arg_count = if varargs {
-        args.count() < params.len()
-    } else {
-        args.count() != params.len()
-    };
-    if invalid_arg_count {
-        let expected = params.len() as _;
-        return Err(Error::InvalidArgCount {
-            expected,
-            varargs,
-            found: args.count,
-        }
-        .at_span(span.in_mod(ctx.module)));
-    }
-    let vararg_count = args.count - params.len() as u32;
-    let all_arg_nodes = ctx.hir.add_invalid_nodes(
-        (params.len() + named_params.len()) as u32 + extra_arg_slot as u32 + vararg_count,
-    );
+    let arg_types = call_arg_types(args.count, ctx, params, named_params, generics, varargs)
+        .map_err(|err| err.at_span(span.in_mod(ctx.module)))?;
+    check_call_args_inner(
+        ctx,
+        scope,
+        return_ty,
+        noreturn,
+        span,
+        args,
+        named_args,
+        params.len() as u32,
+        named_params,
+        arg_types,
+        extra_arg_slot,
+    )
+}
+
+fn check_call_args_inner(
+    ctx: &mut Ctx,
+    scope: &mut LocalScope,
+    return_ty: LocalTypeId,
+    noreturn: &mut bool,
+    span: TSpan,
+    args: ExprExtra,
+    named_args: &[(TSpan, ExprId)],
+    param_count: u32,
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
+    arg_types: LocalTypeIds,
+    extra_arg_slot: bool,
+) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
+    let all_arg_nodes = ctx
+        .hir
+        .add_invalid_nodes(extra_arg_slot as u32 + arg_types.count);
     let arg_nodes = if extra_arg_slot {
         all_arg_nodes.skip(1)
     } else {
         all_arg_nodes
     };
 
-    let arg_types = ctx
-        .hir
-        .types
-        .add_multiple_unknown((args.count() + named_params.len()) as u32 + vararg_count);
-    for (ty, idx) in params
-        .iter()
-        .map(|(_, ty)| ty)
-        .chain(named_params.iter().map(|(_, ty, _)| ty))
-        .zip(arg_types.iter())
-    {
-        let ty = ctx.type_from_resolved(ty, generics);
-        ctx.hir.types.replace(idx, ty);
-    }
     // iterating over the signature, all extra arguments in case of vararg
     // arguments will stay unknown which is intended
     for ((arg, node_idx), ty) in args
         .into_iter()
         .zip(
-            arg_nodes
-                .iter()
-                .take(params.len())
-                .chain(arg_nodes.iter().skip(params.len() + named_args.len())),
+            arg_nodes.iter().take(param_count as usize).chain(
+                arg_nodes
+                    .iter()
+                    .skip(param_count as usize + named_args.len()),
+            ),
         )
         .zip(
-            arg_types
-                .iter()
-                .take(params.len())
-                .chain(arg_types.iter().skip(params.len() + named_args.len())),
+            arg_types.iter().take(param_count as usize).chain(
+                arg_types
+                    .iter()
+                    .skip(param_count as usize + named_args.len()),
+            ),
         )
     {
         let node = check(ctx, arg, scope, ty, return_ty, noreturn);
@@ -1644,8 +1735,8 @@ fn check_call_args(
             }
             continue;
         };
-        let node_idx = arg_nodes.iter().nth(params.len() + i).unwrap();
-        let ty = arg_types.nth((params.len() + i) as u32).unwrap();
+        let node_idx = arg_nodes.iter().nth(param_count as usize + i).unwrap();
+        let ty = arg_types.nth(param_count + i as u32).unwrap();
         let node = check(ctx, *value, scope, ty, return_ty, noreturn);
         if *noreturn {
             return Ok((all_arg_nodes, arg_types));
@@ -1654,10 +1745,12 @@ fn check_call_args(
     }
 
     let mut missing_named_args = Vec::new();
-    for ((name, _, default_val), (node_id, ty)) in named_params
-        .iter()
-        .zip(arg_nodes.iter().zip(arg_types.iter()).skip(params.len()))
-    {
+    for ((name, _, default_val), (node_id, ty)) in named_params.iter().zip(
+        arg_nodes
+            .iter()
+            .zip(arg_types.iter())
+            .skip(param_count as usize),
+    ) {
         if matches!(ctx.hir[node_id], Node::Invalid) {
             let Some(default_val) = *default_val else {
                 missing_named_args.push(name.clone());
@@ -1678,6 +1771,7 @@ fn check_call_args(
         }
         .at_span(span.in_mod(ctx.module)));
     }
+    debug_assert_eq!(all_arg_nodes.count, arg_types.count + extra_arg_slot as u32);
     Ok((all_arg_nodes, arg_types))
 }
 

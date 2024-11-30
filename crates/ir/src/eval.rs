@@ -433,6 +433,7 @@ pub fn eval<E: Environment>(
                         continue 'outer;
                     }
                 }
+                super::Tag::FunctionPtr | super::Tag::CallPtr => todo!("eval function pointers"),
                 super::Tag::Neg => match get_ref(&values, inst.data.un_op()) {
                     Val::Invalid => Val::Invalid,
                     Val::Int(val) => Val::Int(-(val as i64) as u64),

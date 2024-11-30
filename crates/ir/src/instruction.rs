@@ -104,7 +104,8 @@ impl Instruction {
             | DataVariant::Global
             | DataVariant::TypeTableIdx
             | DataVariant::String
-            | DataVariant::None => {}
+            | DataVariant::None
+            | DataVariant::Function => {}
             DataVariant::MemberPtr | DataVariant::RefInt => visit(self.data.ref_int().0),
             DataVariant::RefIntRef => {
                 let (r, i) = self.data.ref_int();
@@ -123,6 +124,13 @@ impl Instruction {
                 for i in (idx as usize + 8..).step_by(4).take(arg_count as usize) {
                     let r = Ref::from_bytes(ir.extra[i..i + 4].try_into().unwrap());
                     visit(r);
+                }
+            }
+            DataVariant::CallPtr => {
+                let (func, _, params) = self.data.call_ptr(&ir.extra);
+                visit(func);
+                for param in params {
+                    visit(param);
                 }
             }
             DataVariant::Goto => {
@@ -204,6 +212,10 @@ pub enum Tag {
     String,
     /// call a function
     Call,
+    /// gets a pointer to a function
+    FunctionPtr,
+    /// calls a function behind a function pointer
+    CallPtr,
 
     // unary operations
     /// negate an integer or float value
@@ -285,9 +297,9 @@ impl Tag {
             Tag::InsertMember => V::RefIntRef,
             Tag::Goto => V::Goto,
             Tag::Branch => V::Branch,
+            Tag::FunctionPtr => V::Function,
+            Tag::CallPtr => V::CallPtr,
             Tag::Asm => V::Asm,
-            //Tag::EnumTag | Tag::EnumValueTag => UnOp,
-            //Tag::EnumVariantMember | Tag::EnumValueVariantMember => VariantMember,
         }
     }
 
@@ -316,6 +328,7 @@ impl Tag {
             | Tag::MemberValue
             | Tag::ArrayIndex
             | Tag::String
+            | Tag::FunctionPtr
             | Tag::Neg
             | Tag::Not
             | Tag::Add
@@ -339,9 +352,14 @@ impl Tag {
             | Tag::PtrToInt => false,
             Tag::InsertMember => false,
 
-            Tag::Ret | Tag::Goto | Tag::Branch | Tag::Decl | Tag::Store | Tag::Call | Tag::Asm => {
-                true
-            }
+            Tag::Ret
+            | Tag::Goto
+            | Tag::Branch
+            | Tag::Decl
+            | Tag::Store
+            | Tag::Call
+            | Tag::CallPtr
+            | Tag::Asm => true,
         }
     }
 }
@@ -374,6 +392,7 @@ pub union Data {
     pub none: (),
     pub block_extra: (BlockIndex, u32),
     pub global: GlobalId,
+    pub function: FunctionId,
 }
 impl Data {
     pub fn int(self) -> u64 {
@@ -409,6 +428,10 @@ impl Data {
         (block, extra_index as usize)
     }
 
+    pub fn function(self) -> FunctionId {
+        unsafe { self.function }
+    }
+
     pub fn branch(&self, extra: &[u8]) -> (Ref, BlockIndex, BlockIndex, usize) {
         let (r, i) = self.ref_int();
         let mut bytes = [0; 4];
@@ -436,6 +459,21 @@ impl Data {
             Ref::from_bytes(ref_bytes)
         });
         (func, args)
+    }
+
+    pub fn call_ptr<'a>(
+        &self,
+        extra: &'a [u8],
+    ) -> (Ref, TypeRefs, impl 'a + ExactSizeIterator<Item = Ref>) {
+        let (i, arg_count) = self.extra_len();
+        let i = i as usize;
+        let func = Ref::from_bytes(extra[i..i + 4].try_into().unwrap());
+        let arg_types = TypeRefs::from_bytes(extra[i + 4..i + 12].try_into().unwrap());
+        let args = (0..arg_count).map(move |arg| {
+            let i = i + 12 + 4 * arg as usize;
+            Ref::from_bytes(extra[i..i + 4].try_into().unwrap())
+        });
+        (func, arg_types, args)
     }
 
     pub fn ref_int(self) -> (Ref, u32) {
@@ -489,6 +527,8 @@ pub enum DataVariant {
     Branch,
     String,
     Call,
+    Function,
+    CallPtr,
     UnOp,
     BinOp,
     RefInt,

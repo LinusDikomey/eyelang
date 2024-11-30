@@ -308,6 +308,24 @@ fn display_data(
             write_delimited_with(f, args, write_ref, ", ")?;
             cwrite!(f, ")")
         }
+        DataVariant::Function => {
+            let func = inst.data.function();
+            cwrite!(f, "#r<{}>", info.funcs[func.0 as usize].name)
+        }
+        DataVariant::CallPtr => {
+            let (func, arg_types, args) = inst.data.call_ptr(extra);
+            write_ref(f, func)?;
+            cwrite!(f, " #g<as> ")?;
+            write_delimited_with(
+                f,
+                arg_types.iter(),
+                |f, ty| display_type(f, types[ty], types, info),
+                ", ",
+            )?;
+            write!(f, "(")?;
+            write_delimited_with(f, args, write_ref, ", ")?;
+            write!(f, ")")
+        }
         DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float()),
         DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty()], types, info),
         DataVariant::UnOp => write_ref(f, inst.data.un_op()),

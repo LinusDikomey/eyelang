@@ -374,6 +374,7 @@ impl<'a> Gen<'a> {
                     }
                 }
             }
+            Tag::FunctionPtr | Tag::CallPtr => todo!(),
             Tag::Eq | Tag::NE | Tag::LT | Tag::GT | Tag::LE | Tag::GE => {
                 let (a, b) = inst.data.bin_op();
                 let ty = self.body.get_ref_ty(a, self.types);

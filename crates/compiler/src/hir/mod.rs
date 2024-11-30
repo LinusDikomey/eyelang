@@ -364,23 +364,17 @@ impl HIR {
             }
             &Node::Call {
                 function,
-                generics,
                 args,
+                arg_types,
                 return_ty,
-                noreturn: _,
             } => {
-                let name = compiler.get_function_name(function.0, function.1);
-                eprint!("(call {name}[");
-                for (i, generic) in generics.iter().enumerate() {
-                    if i != 0 {
-                        eprint!(" ");
-                    }
-                    types.dump_type(compiler, generic);
-                }
-                eprint!("]");
-                for arg in args.iter() {
+                eprint!("(call ");
+                self.dump(function, compiler, types, indent_count);
+                for (arg, ty) in args.iter().zip(arg_types.iter()) {
                     eprint!(" ");
                     self.dump(arg, compiler, types, indent_count);
+                    eprint!(": ");
+                    types.dump_type(compiler, ty);
                 }
                 eprint!("): ");
                 types.dump_type(compiler, return_ty);
@@ -424,6 +418,16 @@ impl HIR {
                 eprint!("(type_prop {prop} ");
                 types.dump_type(compiler, ty);
                 eprint!(")");
+            }
+            &Node::FunctionItem(module, function, generics) => {
+                eprint!("(function {}:{}[", module.0, function.0);
+                for (i, generic) in generics.iter().enumerate() {
+                    if i != 0 {
+                        eprint!(" ");
+                    }
+                    types.dump_type(compiler, generic);
+                }
+                eprint!("])");
             }
         }
     }
@@ -752,11 +756,10 @@ pub enum Node {
         body: NodeId,
     },
     Call {
-        function: (ModuleId, FunctionId),
-        generics: LocalTypeIds,
+        function: NodeId,
         args: NodeIds,
+        arg_types: LocalTypeIds,
         return_ty: LocalTypeId,
-        noreturn: bool,
     },
     TraitCall {
         trait_id: (ModuleId, TraitId),
@@ -768,6 +771,7 @@ pub enum Node {
         noreturn: bool,
     },
     TypeProperty(LocalTypeId, TypeProperty),
+    FunctionItem(ModuleId, FunctionId, LocalTypeIds),
 }
 
 #[derive(Debug, Clone)]

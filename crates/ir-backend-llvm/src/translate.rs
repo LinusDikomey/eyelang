@@ -365,6 +365,38 @@ unsafe fn build_func(
                         NONE,
                     )
                 }
+                ir::Tag::FunctionPtr => {
+                    let func_id = data.function();
+                    let (llvm_func, _) = llvm_funcs[func_id.0 as usize];
+                    llvm_func
+                }
+                ir::Tag::CallPtr => {
+                    let (func_ref, arg_types, args) = data.call_ptr(&ir.extra);
+                    let llvm_func = get_ref(&instructions, func_ref).unwrap();
+                    let mut args: Vec<_> =
+                        args.filter_map(|arg| get_ref(&instructions, arg)).collect();
+                    let return_ty = llvm_ty(ctx, func.types[ty], &func.types)
+                        .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
+                    let mut param_types: Vec<_> = arg_types
+                        .iter()
+                        .filter_map(|ty| llvm_ty(ctx, func.types[ty], &func.types))
+                        .collect();
+                    debug_assert_eq!(args.len(), param_types.len());
+                    let func_ty = LLVMFunctionType(
+                        return_ty,
+                        param_types.as_mut_ptr(),
+                        param_types.len() as u32,
+                        FALSE,
+                    );
+                    LLVMBuildCall2(
+                        builder,
+                        func_ty,
+                        llvm_func,
+                        args.as_mut_ptr(),
+                        args.len() as u32,
+                        NONE,
+                    )
+                }
                 ir::Tag::Neg => {
                     let r = get_ref(&instructions, data.un_op).unwrap();
                     match func.types[ty] {

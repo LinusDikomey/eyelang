@@ -104,6 +104,7 @@ impl RenameTable {
                 | DataVariant::Global
                 | DataVariant::TypeTableIdx
                 | DataVariant::String
+                | DataVariant::Function
                 | DataVariant::None => {}
                 DataVariant::MemberPtr | DataVariant::RefInt => {
                     inst.data.ref_int.0 = get(inst.data.ref_int.0)
@@ -134,6 +135,22 @@ impl RenameTable {
                         let bytes = &mut ir.extra[i..i + 4];
                         let r = Ref::from_bytes(bytes.try_into().unwrap());
                         if let Some(new) = get_new(r) {
+                            bytes.copy_from_slice(&new.to_bytes());
+                        }
+                    }
+                }
+                DataVariant::CallPtr => {
+                    let (i, arg_count) = inst.data.extra_len();
+                    let i = i as usize;
+                    let bytes = &mut ir.extra[i..i + 4];
+                    let func = Ref::from_bytes(bytes.try_into().unwrap());
+                    if let Some(new) = get_new(func) {
+                        bytes.copy_from_slice(&new.to_bytes());
+                    }
+                    for i in (i + 12..).step_by(4).take(arg_count as usize) {
+                        let bytes = &mut ir.extra[i..i + 4];
+                        let func = Ref::from_bytes(bytes.try_into().unwrap());
+                        if let Some(new) = get_new(func) {
                             bytes.copy_from_slice(&new.to_bytes());
                         }
                     }

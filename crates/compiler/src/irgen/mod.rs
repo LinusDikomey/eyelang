@@ -733,25 +733,33 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::Call {
             function,
-            generics: call_generics,
             args,
+            arg_types,
             return_ty,
-            noreturn,
         } => {
-            let call_generics = call_generics
+            let arg_refs = args
                 .iter()
-                .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
-                .collect();
-            let Some(func) = ctx.get_ir_id(function.0, function.1, call_generics) else {
-                crash_point!(ctx)
+                .map(|arg| lower(ctx, arg))
+                .collect::<Result<Vec<_>>>()?;
+            let return_info = ctx.types[return_ty];
+            let return_ty = ctx.get_type(return_info)?;
+            let res = if let Node::FunctionItem(module, id, call_generics) = ctx.hir[function] {
+                let call_generics = call_generics
+                    .iter()
+                    .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
+                    .collect();
+                let Some(func) = ctx.get_ir_id(module, id, call_generics) else {
+                    crash_point!(ctx)
+                };
+                ctx.builder.build_call(func, arg_refs, return_ty)
+            } else {
+                debug_assert_eq!(args.count, arg_types.count);
+                let func = lower(ctx, function)?;
+                let arg_types = ctx.get_multiple_types(arg_types)?;
+                ctx.builder
+                    .build_call_ptr(func, arg_refs, arg_types, return_ty)
             };
-            let mut arg_refs = Vec::with_capacity(args.iter().count());
-            for arg in args.iter() {
-                let arg = lower(ctx, arg)?;
-                arg_refs.push(arg);
-            }
-            let return_ty = ctx.get_type(ctx.types[return_ty])?;
-            let res = ctx.builder.build_call(func, arg_refs, return_ty);
+            let noreturn = ctx.types.is_uninhabited(return_info);
             if noreturn {
                 ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
                 return Err(NoReturn);
@@ -808,6 +816,16 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 TypeProperty::Stride => layout.stride(),
             };
             ctx.builder.build_int(value, IrType::U64)
+        }
+        &Node::FunctionItem(module, id, generics) => {
+            let generics = generics
+                .iter()
+                .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
+                .collect();
+            let Some(id) = ctx.get_ir_id(module, id, generics) else {
+                crash_point!(ctx)
+            };
+            ctx.builder.build_function_ptr(id)
         }
     };
     Ok(ValueOrPlace::Value(value))

@@ -140,7 +140,7 @@ pub fn get_from_info(
                 Generics::Local(types, def_generics, &generics),
             );
         }
-        TypeInfo::Pointer(_) => IrType::Ptr,
+        TypeInfo::Pointer(_) | TypeInfo::Function { .. } => IrType::Ptr,
         TypeInfo::Array {
             element,
             count: Some(count),

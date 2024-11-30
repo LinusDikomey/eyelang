@@ -319,7 +319,19 @@ impl TypeTable {
                 None => TypeInfo::Generic(i),
             },
             Type::LocalEnum(_) => todo!("local enum infos"),
-            Type::Function(_) => todo!("fn TypeInfo"),
+            Type::Function(func) => {
+                let params = self.add_multiple_unknown(func.params.len() as _);
+                for (param, id) in func.params.iter().zip(params.iter()) {
+                    self.types[id.idx()] =
+                        self.from_generic_resolved_internal(compiler, param, generics);
+                }
+                let return_type =
+                    self.from_generic_resolved_internal(compiler, &func.return_type, generics);
+                TypeInfo::Function {
+                    params,
+                    return_type: self.add_info_or_idx(return_type),
+                }
+            }
         };
         TypeInfoOrIdx::TypeInfo(info)
     }
@@ -480,6 +492,23 @@ impl TypeTable {
             TypeInfo::Array { element, count } => todo!(),
             TypeInfo::Enum(_) => todo!(),
             TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::Function {
+                params,
+                return_type,
+            } => {
+                let Type::Function(func) = ty else {
+                    return false;
+                };
+                if func.params.len() != params.count as usize {
+                    return false;
+                }
+                for (param, func_param) in params.iter().zip(func.params.iter()) {
+                    if !self.compatible_with_type(self[param], func_param) {
+                        return false;
+                    }
+                }
+                self.compatible_with_type(self[return_type], &func.return_type)
+            }
             TypeInfo::TypeItem { ty } => todo!(),
             TypeInfo::TraitItem { module, id } => todo!(),
             TypeInfo::FunctionItem {
@@ -825,6 +854,20 @@ impl TypeTable {
                     s.push(')');
                 }
             }
+            TypeInfo::Function {
+                params,
+                return_type,
+            } => {
+                s.push_str("fn(");
+                for (i, param) in params.iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    self.type_to_string(compiler, self[param], s);
+                }
+                s.push_str(") -> ");
+                self.type_to_string(compiler, self[return_type], s);
+            }
             TypeInfo::TypeItem { ty } => {
                 s.push_str("<type item: (");
                 self.type_to_string(compiler, self[ty], s);
@@ -997,6 +1040,15 @@ impl TypeTable {
             }
         }
     }
+
+    pub fn is_uninhabited(&self, info: TypeInfo) -> bool {
+        match info {
+            TypeInfo::Primitive(Primitive::Never) => true,
+            TypeInfo::TypeDef(_id, _generics) => false, // TODO: check if the type is uninhabited
+            TypeInfo::Tuple(elems) => elems.iter().any(|ty| self.is_uninhabited(self[ty])),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1078,6 +1130,10 @@ pub enum TypeInfo {
     },
     Enum(InferredEnumId),
     Tuple(LocalTypeIds),
+    Function {
+        params: LocalTypeIds,
+        return_type: LocalTypeId,
+    },
     TypeItem {
         ty: LocalTypeId,
     },

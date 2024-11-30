@@ -147,7 +147,7 @@ pub enum Candidates<'a> {
     Unique(&'a Impl),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaseType {
     Invalid,
     Primitive(Primitive),
@@ -155,6 +155,7 @@ pub enum BaseType {
     Pointer,
     Tuple,
     Array { count: u32 },
+    Function,
 }
 
 pub fn get_impl_candidates<'t>(
@@ -348,6 +349,21 @@ impl ImplTree {
                         let [elem_tree] = &**args else { unreachable!() };
                         elem_tree.matches_type_info(types[element], types)
                     }
+                    TypeInfo::Function {
+                        params,
+                        return_type,
+                    } => {
+                        if *base_type != BaseType::Function {
+                            return false;
+                        }
+                        let (return_type_tree, param_trees) = args.split_first().unwrap();
+                        param_trees.len() == params.count as usize
+                            && return_type_tree.matches_type_info(types[return_type], types)
+                            && param_trees
+                                .iter()
+                                .zip(params.iter())
+                                .all(|(tree, ty)| tree.matches_type_info(types[ty], types))
+                    }
                     TypeInfo::Enum(_) => false, // TODO: auto impl some traits for local enums
                     TypeInfo::Integer => matches!(base_type, BaseType::Primitive(p) if p.is_int()),
                     TypeInfo::Float => matches!(base_type, BaseType::Primitive(p) if p.is_float()),
@@ -399,6 +415,19 @@ impl ImplTree {
                     TypeInfo::Array {
                         element: types.add_info_or_idx(elem),
                         count: Some(count),
+                    }
+                }
+                BaseType::Function => {
+                    let (return_type_tree, param_trees) = args.split_first().unwrap();
+                    let params = types.add_multiple_unknown(args.len() as _);
+                    for (param, r) in param_trees.iter().zip(params.iter()) {
+                        let info = param.instantiate(impl_generics, types);
+                        types.replace(r, info);
+                    }
+                    let return_type = return_type_tree.instantiate(impl_generics, types);
+                    TypeInfo::Function {
+                        params,
+                        return_type: types.add_info_or_idx(return_type),
                     }
                 }
             }),
