@@ -437,11 +437,6 @@ impl TypeTable {
     }
 
     pub fn compatible_with_type(&self, info: TypeInfo, ty: &Type) -> bool {
-        if let Type::Generic(_) = ty {
-            // check that the generics can the type info
-            todo!()
-        }
-        // TODO
         #[allow(unused)]
         match info {
             TypeInfo::Unknown => true,
@@ -509,7 +504,7 @@ impl TypeTable {
                 ordinal,
                 arg_types,
             } => todo!(),
-            TypeInfo::Generic(_) => todo!(),
+            TypeInfo::Generic(i) => matches!(ty, &Type::Generic(j) if i == j),
             TypeInfo::Invalid => todo!(),
         }
     }

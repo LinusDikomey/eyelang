@@ -733,21 +733,26 @@ impl Compiler {
         let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
         let mut impl_generics = Vec::new();
         'impls: for impl_ in &checked_trait.impls {
+            impl_generics.clear();
+            impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
+            if !impl_.impl_ty.matches_type(ty, &mut impl_generics) {
+                continue 'impls;
+            }
+            debug_assert!(
+                impl_generics.iter().all(|ty| !matches!(ty, Type::Invalid)),
+                "impl generics were not properly instantiated"
+            );
             debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
             for (impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
-                if !impl_ty.is_same_as(ty, |_| todo!()).ok()? {
+                if !impl_ty
+                    .instantiate_generics(&impl_generics)
+                    .is_same_as(ty)
+                    .ok()?
+                {
                     continue 'impls;
                 }
             }
-            impl_generics.clear();
-            impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
-            if impl_.impl_ty.matches_type(ty, &mut impl_generics) {
-                debug_assert!(
-                    impl_generics.iter().all(|ty| !matches!(ty, Type::Invalid)),
-                    "impl generics were not properly instantiated"
-                );
-                return Some((impl_, impl_generics));
-            }
+            return Some((impl_, impl_generics));
         }
         // TODO: check impls on type
         None
@@ -1503,14 +1508,12 @@ impl Signature {
         if self.params.len() != ty.params.len() {
             return Ok(false);
         }
-        // function types can't be generics and generic count was checked to be zero
-        let base_generic = |_| unreachable!();
         for ((_, arg), ty_arg) in self.all_params().zip(&ty.params) {
-            if !arg.is_same_as(ty_arg, base_generic)? {
+            if !arg.is_same_as(ty_arg)? {
                 return Ok(false);
             }
         }
-        if !self.return_type.is_same_as(&ty.return_type, base_generic)? {
+        if !self.return_type.is_same_as(&ty.return_type)? {
             return Ok(false);
         }
         Ok(true)
@@ -1518,18 +1521,18 @@ impl Signature {
 
     /// used for checking if a function in a trait impl is compatible with a base type.
     /// The signature is allowed to have looser trait bound requirements than the base.
-    pub fn compatible_with<'a>(
+    pub fn compatible_with(
         &self,
         base: &Signature,
         generics_offset: u8,
         base_generics_offset: u8,
-        base_generic: impl Copy + Fn(u8) -> &'a Type,
+        base_generics: &[Type],
     ) -> Result<Option<ImplIncompatibility>, ()> {
         if !self.generics.compatible_with(
             &base.generics,
             generics_offset,
             base_generics_offset,
-            base_generic,
+            base_generics,
         )? {
             return Ok(Some(ImplIncompatibility::Generics));
         }
@@ -1548,13 +1551,13 @@ impl Signature {
         }
         // TODO: should the default value also be compared?
         for (((_, arg), (_, base_arg)), i) in self.all_params().zip(base.all_params()).zip(0..) {
-            if !arg.is_same_as(base_arg, base_generic)? {
+            if !arg.is_same_as(&base_arg.instantiate_generics(base_generics))? {
                 return Ok(Some(ImplIncompatibility::Arg(i)));
             }
         }
         if !self
             .return_type
-            .is_same_as(&base.return_type, base_generic)?
+            .is_same_as(&base.return_type.instantiate_generics(base_generics))?
         {
             return Ok(Some(ImplIncompatibility::ReturnType));
         }
@@ -1642,7 +1645,7 @@ impl Generics {
         base: &Self,
         offset: u8,
         base_offset: u8,
-        base_generic: impl Copy + Fn(u8) -> &'a Type,
+        base_generics: &[Type],
     ) -> Result<bool, ()> {
         if self.generics.len() as u8 - offset != base.generics.len() as u8 - base_offset {
             return Ok(false);
@@ -1659,7 +1662,7 @@ impl Generics {
                         continue;
                     }
                     for (a, b) in base_bound.generics.iter().zip(&bound.generics) {
-                        if !a.is_same_as(b, base_generic)? {
+                        if !a.is_same_as(&b.instantiate_generics(base_generics))? {
                             continue 'base_bounds;
                         }
                     }

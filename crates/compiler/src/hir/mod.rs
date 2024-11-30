@@ -370,14 +370,14 @@ impl HIR {
                 noreturn: _,
             } => {
                 let name = compiler.get_function_name(function.0, function.1);
-                eprint!("(call {name} (");
+                eprint!("(call {name}[");
                 for (i, generic) in generics.iter().enumerate() {
                     if i != 0 {
                         eprint!(" ");
                     }
                     types.dump_type(compiler, generic);
                 }
-                eprint!(")");
+                eprint!("]");
                 for arg in args.iter() {
                     eprint!(" ");
                     self.dump(arg, compiler, types, indent_count);

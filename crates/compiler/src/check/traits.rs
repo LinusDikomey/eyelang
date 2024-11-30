@@ -36,7 +36,7 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
     let impls = def
         .impls
         .iter()
-        .map(|impl_| {
+        .filter_map(|impl_| {
             let impl_generics =
                 compiler.resolve_generics(&impl_.generics, module, impl_.scope, &ast);
 
@@ -47,9 +47,23 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
                 .map(|generic| compiler.resolve_type(generic, module, impl_.scope))
                 .collect();
 
+            if trait_generics.len() as u8 != generics.count() {
+                compiler.errors.emit_err(
+                    Error::InvalidGenericCount {
+                        expected: generics.count(),
+                        found: trait_generics.len() as _,
+                    }
+                    .at_span(impl_.trait_generics.1.in_mod(module)),
+                );
+                return None;
+            }
+
             let impl_ty = compiler.resolve_type(&impl_.implemented_type, module, impl_.scope);
             let impl_tree = ImplTree::from_type(&impl_ty, compiler);
             let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
+            let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
+                .chain(trait_generics.clone())
+                .collect();
             for &(name_span, function) in &impl_.functions {
                 let name = &ast[name_span];
                 let Some(&function_idx) = functions_by_name.get(name) else {
@@ -72,15 +86,11 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
 
                 let signature = compiler.get_signature(module, function);
                 let trait_signature = &functions[function_idx as usize];
-                let base_generic = |i: u8| match i {
-                    0 => &impl_ty,
-                    i => &trait_generics[(i - 1) as usize],
-                };
                 let compatible = signature.compatible_with(
                     trait_signature,
                     impl_generics.count(),
                     base_offset,
-                    base_generic,
+                    &base_generics,
                 );
                 match compatible {
                     Ok(None) | Err(()) => {}
@@ -102,13 +112,13 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
                         .at_span(ast[impl_.scope].span.in_mod(module)),
                 );
             }
-            Impl {
+            Some(Impl {
                 generics: impl_generics,
                 trait_generics,
                 impl_ty: impl_tree,
                 impl_module: module,
                 functions: function_ids,
-            }
+            })
         })
         .collect();
     CheckedTrait {
