@@ -367,6 +367,7 @@ impl HIR {
                 args,
                 arg_types,
                 return_ty,
+                noreturn: _,
             } => {
                 eprint!("(call ");
                 self.dump(function, compiler, types, indent_count);
@@ -760,6 +761,7 @@ pub enum Node {
         args: NodeIds,
         arg_types: LocalTypeIds,
         return_ty: LocalTypeId,
+        noreturn: bool,
     },
     TraitCall {
         trait_id: (ModuleId, TraitId),

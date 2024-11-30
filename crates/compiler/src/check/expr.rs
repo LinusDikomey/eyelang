@@ -1283,6 +1283,7 @@ fn check_call(
                         args,
                         return_ty: expected,
                         arg_types,
+                        noreturn: call_noreturn,
                     }
                 }
                 Err(err) => {
@@ -1360,6 +1361,8 @@ fn check_call(
             params,
             return_type,
         } => {
+            // check the partially inferred type. If we know it is uninhabited, the function is noreturn
+            let call_noreturn = ctx.hir.types.is_uninhabited(ctx.hir.types[return_type]);
             ctx.unify(expected, return_type, |_| call_span);
             match check_call_args_inner(
                 ctx,
@@ -1378,10 +1381,9 @@ fn check_call(
                     if *noreturn {
                         return Node::Invalid;
                     }
-                    // TODO: check if partially inferred return type is noreturn
-                    // if call_noreturn {
-                    //     *noreturn = true;
-                    // }
+                    if call_noreturn {
+                        *noreturn = true;
+                    }
                     let function = ctx.hir.add(called_node);
 
                     Node::Call {
@@ -1389,6 +1391,7 @@ fn check_call(
                         args,
                         return_ty: expected,
                         arg_types,
+                        noreturn: call_noreturn,
                     }
                 }
                 Err(err) => {
@@ -1444,6 +1447,7 @@ fn check_call(
                         args,
                         return_ty: expected,
                         arg_types,
+                        noreturn: call_noreturn,
                     }
                 }
                 Err(err) => {

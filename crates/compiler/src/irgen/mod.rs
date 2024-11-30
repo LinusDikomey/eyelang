@@ -736,6 +736,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             args,
             arg_types,
             return_ty,
+            noreturn,
         } => {
             let arg_refs = args
                 .iter()
@@ -759,7 +760,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ctx.builder
                     .build_call_ptr(func, arg_refs, arg_types, return_ty)
             };
-            let noreturn = ctx.types.is_uninhabited(return_info);
             if noreturn {
                 ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
                 return Err(NoReturn);
