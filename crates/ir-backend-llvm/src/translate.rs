@@ -428,22 +428,30 @@ unsafe fn build_func(
                     if let (Some(l), Some(r)) = (l, r) {
                         match ty {
                             t if t.is_int() => {
-                                let tag = if tag == ir::Tag::Eq {
+                                let pred = if tag == ir::Tag::Eq {
                                     LLVMIntPredicate::LLVMIntEQ
                                 } else {
                                     LLVMIntPredicate::LLVMIntNE
                                 };
-                                LLVMBuildICmp(builder, tag, l, r, NONE)
+                                LLVMBuildICmp(builder, pred, l, r, NONE)
                             }
                             t if t.is_float() => {
-                                let tag = if tag == ir::Tag::Eq {
+                                let pred = if tag == ir::Tag::Eq {
                                     LLVMRealPredicate::LLVMRealUEQ
                                 } else {
                                     LLVMRealPredicate::LLVMRealUNE
                                 };
-                                LLVMBuildFCmp(builder, tag, l, r, NONE)
+                                LLVMBuildFCmp(builder, pred, l, r, NONE)
                             }
-                            _ => panic!("invalid type for eq/ne"),
+                            IrType::Ptr => {
+                                let pred = if tag == ir::Tag::Eq {
+                                    LLVMIntPredicate::LLVMIntEQ
+                                } else {
+                                    LLVMIntPredicate::LLVMIntNE
+                                };
+                                LLVMBuildICmp(builder, pred, l, r, NONE)
+                            }
+                            t => panic!("invalid type for eq/ne: {t:?}"),
                         }
                     } else {
                         ptr::null_mut()
@@ -463,7 +471,10 @@ unsafe fn build_func(
                         t if t.is_float() => {
                             LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLT, l, r, NONE)
                         }
-                        _ => panic!("invalid type for lt"),
+                        IrType::Ptr => {
+                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULT, l, r, NONE)
+                        }
+                        t => panic!("invalid type for lt {t:?}"),
                     }
                 }
                 ir::Tag::GT => {
@@ -480,7 +491,10 @@ unsafe fn build_func(
                         t if t.is_float() => {
                             LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGT, l, r, NONE)
                         }
-                        _ => panic!("invalid type for gt"),
+                        IrType::Ptr => {
+                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGT, l, r, NONE)
+                        }
+                        t => panic!("invalid type for gt {t:?}"),
                     }
                 }
                 ir::Tag::LE => {
@@ -497,7 +511,10 @@ unsafe fn build_func(
                         t if t.is_float() => {
                             LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLE, l, r, NONE)
                         }
-                        _ => panic!("invalid type for le"),
+                        IrType::Ptr => {
+                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULE, l, r, NONE)
+                        }
+                        t => panic!("invalid type for le: {t:?}"),
                     }
                 }
                 ir::Tag::GE => {
@@ -514,7 +531,10 @@ unsafe fn build_func(
                         t if t.is_float() => {
                             LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGE, l, r, NONE)
                         }
-                        _ => panic!("invalid type for le"),
+                        IrType::Ptr => {
+                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGE, l, r, NONE)
+                        }
+                        t => panic!("invalid type for ge: {t:?}"),
                     }
                 }
                 ir::Tag::MemberPtr => {

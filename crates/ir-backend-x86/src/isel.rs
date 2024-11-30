@@ -230,8 +230,7 @@ impl<'a> Gen<'a> {
             Tag::MemberPtr => {
                 let (ptr, elem_types, elem_idx) = inst.data.member_ptr(extra);
                 let offset = ir::offset_in_tuple(elem_types, elem_idx, self.types);
-                dbg!(elem_idx);
-                match dbg!(get_ref(values, ptr)) {
+                match get_ref(values, ptr) {
                     MCValue::None | MCValue::TwoRegs(_, _) => unreachable!(),
                     MCValue::Undef => MCValue::Undef,
                     MCValue::Imm(imm) => MCValue::Imm(imm + offset),
