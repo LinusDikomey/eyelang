@@ -80,24 +80,24 @@ str :: struct {
         ret list
     }
 
-    parse :: fn(this str) -> i64 {
+    parse :: fn[I: Int](this str) -> I {
         ASCII_ZERO: u8 : 48
         ASCII_NINE: u8 : ASCII_ZERO + 9
         ASCII_MINUS: u8 : 45
 
         negate := false
-        x := 0
+        x := Int.zero()
         i := 0
         while i < this.len {
             b := this.byte(i)
-            if b == ASCII_MINUS and x == 0: negate = !negate
+            if b == ASCII_MINUS and Int.eq(x, Int.zero()): negate = !negate
             else if b >= ASCII_ZERO and b <= ASCII_NINE {
-                x *= 10
-                x += (b - ASCII_ZERO) as _
+                x = Int.mul(x, Int.ten())
+                x = Int.add(x, Int.from_u8((b - ASCII_ZERO)))
             }
             i += 1
         }
-        ret if negate: -x else x
+        ret if negate: Int.sub(Int.zero(), x) else x
     }
 
     trim :: fn(this str) -> str {

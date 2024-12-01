@@ -83,4 +83,14 @@ List :: struct[T] {
         }
         ret ptr_add(this.buf, this.len)
     }
+
+    iter :: fn(this *List[T]) -> ListIter[T] {
+        ret ListIter(current: this.buf, end: root.ptr_add(this.buf, this.len))
+    }
 }
+
+ListIter :: struct[T] {
+    current *T
+    end *T
+}
+

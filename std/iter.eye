@@ -1,3 +1,4 @@
+use root.list.ListIter
 
 range :: fn(start u64, end u64) -> Range: Range(start: start, end: end)
 
@@ -29,7 +30,7 @@ Iterator :: trait[Item] {
         next :: fn(self *ListIter[T]) -> Option[T] {
             if self.current >= self.end: ret .None
             v := self.current
-            self.current = std.ptr_add(self.current, 1)
+            self.current = root.ptr_add(self.current, 1)
             ret .Some(v^)
         }
     }
@@ -59,6 +60,23 @@ Iterator :: trait[Item] {
     }
 }
 
+# doesn't work yet
+#-
+FromIterator :: trait[Item] {
+    from_iter :: fn[I: Iterator[Item]](iter I) -> Self
+} for {
+    impl[T] _[T] for List[T] {
+        from_iter :: fn[I: Iterator[Item]](iter I) -> Self {
+            l := List.new()
+            while .Some(item) := Iterator.next(&it) {
+                l.push(item)
+            }
+            ret l
+        }
+    }
+}
+-#
+
 Filter :: struct[T, I] {
     it I
     filter fn(*T) -> bool  
@@ -74,14 +92,5 @@ Map :: struct[T, U, I] {
 Range :: struct {
     start u64
     end u64
-}
-
-ListIter :: struct[T] {
-    current *T
-    end *T
-
-    new :: fn(list *List[T]) -> ListIter[T] {
-        ret ListIter(current: list.buf, end: std.ptr_add(list.buf, list.len))
-    }
 }
 

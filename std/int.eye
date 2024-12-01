@@ -13,6 +13,7 @@ Int :: trait {
     mod :: fn(this Self, other Self) -> Self
     eq :: fn(this Self, other Self) -> bool
     as_u8 :: fn(this Self) -> u8
+    from_u8 :: fn(x u8) -> Self
 } for {
     impl _ for u8 {
         zero :: fn -> u8: 0
@@ -26,6 +27,7 @@ Int :: trait {
         mod :: fn(a u8, b u8) -> u8: a % b
         eq :: fn(a u8, b u8) -> bool: a == b
         as_u8 :: fn(x u8) -> u8: x
+        from_u8 :: fn(x u8) -> u8: x
     }
 
     impl _ for u16 {
@@ -40,6 +42,7 @@ Int :: trait {
         mod :: fn(a u16, b u16) -> u16: a % b
         eq :: fn(a u16, b u16) -> bool: a == b
         as_u8 :: fn(x u16) -> u8: x as u8
+        from_u8 :: fn(x u8) -> u16: x as _
     }
 
     impl _ for u32 {
@@ -54,6 +57,7 @@ Int :: trait {
         mod :: fn(a u32, b u32) -> u32: a % b
         eq :: fn(a u32, b u32) -> bool: a == b
         as_u8 :: fn(x u32) -> u8: x as u8
+        from_u8 :: fn(x u8) -> u32: x as _
     }
 
     impl _ for u64 {
@@ -68,6 +72,7 @@ Int :: trait {
         mod :: fn(a u64, b u64) -> u64: a % b
         eq :: fn(a u64, b u64) -> bool: a == b
         as_u8 :: fn(x u64) -> u8: x as u8
+        from_u8 :: fn(x u8) -> u64: x as _
     }
 
     impl _ for i8 {
@@ -82,6 +87,7 @@ Int :: trait {
         mod :: fn(a i8, b i8) -> i8: a % b
         eq :: fn(a i8, b i8) -> bool: a == b
         as_u8 :: fn(x i8) -> u8: x as u8
+        from_u8 :: fn(x u8) -> i8: x as _
     }
 
     impl _ for i16 {
@@ -96,6 +102,7 @@ Int :: trait {
         mod :: fn(a i16, b i16) -> i16: a % b
         eq :: fn(a i16, b i16) -> bool: a == b
         as_u8 :: fn(x i16) -> u8: x as u8
+        from_u8 :: fn(x u8) -> i16: x as _
     }
 
     impl _ for i32 {
@@ -110,6 +117,7 @@ Int :: trait {
         mod :: fn(a i32, b i32) -> i32: a % b
         eq :: fn(a i32, b i32) -> bool: a == b
         as_u8 :: fn(x i32) -> u8: x as u8
+        from_u8 :: fn(x u8) -> i32: x as _
     }
 
     impl _ for i64 {
@@ -124,5 +132,6 @@ Int :: trait {
         mod :: fn(a i64, b i64) -> i64: a % b
         eq :: fn(a i64, b i64) -> bool: a == b
         as_u8 :: fn(x i64) -> u8: x as u8
+        from_u8 :: fn(x u8) -> i64: x as _
     }
 }
