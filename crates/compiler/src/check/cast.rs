@@ -8,7 +8,7 @@ use crate::{
 pub fn check(
     from_ty: LocalTypeId,
     to_ty: LocalTypeId,
-    compiler: &Compiler,
+    compiler: &mut Compiler,
     types: &TypeTable,
 ) -> (CastType, Option<Error>) {
     let mut error = None;

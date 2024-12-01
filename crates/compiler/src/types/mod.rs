@@ -449,6 +449,9 @@ impl TypeTable {
     }
 
     pub fn compatible_with_type(&self, info: TypeInfo, ty: &Type) -> bool {
+        if let Type::Generic(_) = ty {
+            return true;
+        }
         #[allow(unused)]
         match info {
             TypeInfo::Unknown => true,
@@ -804,7 +807,27 @@ impl TypeTable {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
-            TypeInfo::Unknown | TypeInfo::UnknownSatisfying { .. } => s.push_str("<unknown>"),
+            TypeInfo::Unknown => s.push_str("<unknown>"),
+            TypeInfo::UnknownSatisfying(bounds) => {
+                s.push_str("<unknown>: ");
+                for (i, bound) in self.get_bounds(bounds).iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    s.push_str(compiler.get_trait_name(bound.trait_id.0, bound.trait_id.1));
+                    if bound.generics.count != 0 {
+                        s.push_str("[");
+                        for (i, generic) in bound.generics.iter().enumerate() {
+                            if i != 0 {
+                                s.push_str(", ");
+                            }
+                            self.type_to_string(compiler, self[generic], s);
+                        }
+
+                        s.push_str("]");
+                    }
+                }
+            }
             TypeInfo::Primitive(p) => s.push_str(p.into()),
             TypeInfo::Integer => s.push_str("<integer>"),
             TypeInfo::Float => s.push_str("<float>"),

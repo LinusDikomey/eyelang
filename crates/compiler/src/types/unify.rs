@@ -49,6 +49,8 @@ pub fn unify(
                     return Some(TypeInfo::Invalid);
                 };
                 let checked_trait = Rc::clone(checked_trait);
+                let mut s = String::new();
+                types.type_to_string(compiler, chosen_ty, &mut s);
                 let candidates = traits::get_impl_candidates(
                     chosen_ty,
                     bound.generics,

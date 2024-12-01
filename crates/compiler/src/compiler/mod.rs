@@ -678,9 +678,10 @@ impl Compiler {
         }
     }
 
-    pub fn get_trait_name(&mut self, module: ModuleId, id: ast::TraitId) -> &str {
-        self.get_checked_trait(module, id)
-            .map_or("<unknown trait>", |checked| &checked.name)
+    pub fn get_trait_name(&self, module: ModuleId, id: ast::TraitId) -> &str {
+        let parsed = self.modules[module.idx()].ast.as_ref().unwrap();
+        let trait_def = &parsed.ast[id];
+        &parsed.ast.src()[trait_def.associated_name.range()]
     }
 
     pub fn get_trait_generic_count(&mut self, trait_id: (ModuleId, TraitId)) -> u8 {

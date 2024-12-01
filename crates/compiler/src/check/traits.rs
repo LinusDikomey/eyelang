@@ -141,6 +141,7 @@ use crate::{
 
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
+#[derive(Debug)]
 pub enum Candidates<'a> {
     None,
     Multiple,
@@ -168,16 +169,24 @@ pub fn get_impl_candidates<'t>(
     let mut found = None;
     'candidates: for (i, trait_impl) in checked.impls.iter().enumerate() {
         debug_assert_eq!(trait_generics.count, trait_impl.trait_generics.len() as u32);
+        // eprintln!(
+        //     "  candidate: impl _{:?} for {:?}",
+        //     trait_impl.trait_generics, trait_impl.impl_ty
+        // );
         for (idx, ty) in trait_generics.iter().zip(&trait_impl.trait_generics) {
             if !types.compatible_with_type(types[idx], ty) {
+                //eprintln!("  -> incompatible trait generic {:?} {:?}", types[idx], ty);
                 continue 'candidates;
             }
+            //eprintln!("  -> compatible trait generic {:?} {:?}", types[idx], ty);
         }
         if trait_impl.impl_ty.matches_type_info(ty, types) {
             if found.is_some() {
                 return Candidates::Multiple;
             }
             found = Some(i);
+        } else {
+            // eprintln!("  -> incompatible impl ty");
         }
     }
     if let Some(found) = found {
