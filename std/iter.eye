@@ -1,4 +1,18 @@
 
+range :: fn(start u64, end u64) -> Range: Range(start: start, end: end)
+
+filter :: fn[T, I: Iterator[T]](it I, filter fn(*T) -> bool) -> Filter[T, I]: Filter(it: it, filter: filter)
+
+map :: fn[T, U, I: Iterator[T]](it I, map fn(T) -> U) -> Map[T, U, I]: Map(it: it, map: map)
+
+collect :: fn[T, I: Iterator[T]](it I) -> List[T] {
+    l := List.new()
+    while .Some(item) := Iterator.next(&it) {
+        l.push(item)
+    }
+    ret l
+}
+
 Iterator :: trait[Item] {
     next :: fn(self *Self) -> Option[Item]
 } for {
@@ -39,16 +53,18 @@ Iterator :: trait[Item] {
             }
         }
     }
-}
 
-filter :: fn[T, I: Iterator[T]](it I, filter fn(*T) -> bool) -> Filter[T, I]: Filter(it: it, filter: filter)
+    impl _[str] for root.string.Split {
+        next :: fn (self *root.string.Split) -> Option[str]: self.next()
+    }
+}
 
 Filter :: struct[T, I] {
     it I
     filter fn(*T) -> bool  
 }
 
-map :: fn[T, U, I: Iterator[T]](it I, map fn(T) -> U) -> Map[T, U, I]: Filter(it: it, map: map)
+
 
 Map :: struct[T, U, I] {
     it I

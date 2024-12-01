@@ -191,6 +191,13 @@ is_whitespace :: fn(c u8) -> bool: match c {
     _: false,
 }
 
+# append a string to a list of bytes
+push_str :: fn(l *List[i8], s str) {
+    p := l.reserve(s.len)
+    memcpy(p, s.ptr, s.len)
+    l.len += s.len
+}
+
 ToString :: trait {
     to_string :: fn(this *Self) -> str
 } for {
@@ -199,30 +206,45 @@ ToString :: trait {
     }
 
     impl _ for u8 {
-        to_string ::fn(this *u8) -> str: int_to_string(this^)
+        to_string :: fn(this *u8) -> str: int_to_string(this^)
     }
     impl _ for u16 {
-        to_string ::fn(this *u16) -> str: int_to_string(this^)
+        to_string :: fn(this *u16) -> str: int_to_string(this^)
     }
     impl _ for u32 {
-        to_string ::fn(this *u32) -> str: int_to_string(this^)
+        to_string :: fn(this *u32) -> str: int_to_string(this^)
     }
     impl _ for u64 {
-        to_string ::fn(this *u64) -> str: int_to_string(this^)
+        to_string :: fn(this *u64) -> str: int_to_string(this^)
     }
     impl _ for i8 {
-        to_string ::fn(this *i8) -> str: int_to_string(this^)
+        to_string :: fn(this *i8) -> str: int_to_string(this^)
     }
     impl _ for i16 {
-        to_string ::fn(this *i16) -> str: int_to_string(this^)
+        to_string :: fn(this *i16) -> str: int_to_string(this^)
     }
     impl _ for i32 {
-        to_string ::fn(this *i32) -> str: int_to_string(this^)
+        to_string :: fn(this *i32) -> str: int_to_string(this^)
     }
     impl _ for i64 {
-        to_string ::fn(this *i64) -> str: int_to_string(this^)
+        to_string :: fn(this *i64) -> str: int_to_string(this^)
     }
-
+    impl[T: ToString] _ for List[T] {
+        to_string :: fn(this *List[T]) -> str {
+            s := List.new()
+            push_str(&s, "[")
+            i := 0
+            while i < this.len {
+                if i != 0: push_str(&s, ", ")
+                item_str := ToString.to_string(&this.get(i))
+                push_str(&s, item_str)
+                root.c.free(item_str.ptr)
+                i += 1
+            }
+            push_str(&s, "]")
+            ret str(ptr: s.buf, len: s.len)
+        }
+    }
 }
 
 int_to_string :: fn[T: Int](x T) -> str {
