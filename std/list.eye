@@ -53,6 +53,13 @@ List :: struct[T] {
         ret ptr_add(this^.buf, idx)^
     }
 
+    put :: fn(this *List[T], idx u64, value T) {
+        if this^.len <= idx {
+            root.panic("List index out of bounds")
+        }
+        ptr_add(this^.buf, idx)^ = value
+    }
+
     get_ptr :: fn(this *List[T], idx u64) -> *T {
         if this^.len <= idx {
             root.panic("List index out of bounds")

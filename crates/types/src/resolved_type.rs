@@ -15,7 +15,7 @@ pub enum Type {
     /// A generic type that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
     /// a local enum that will only be created from inference
-    LocalEnum(Box<[Box<[Type]>]>),
+    LocalEnum(Box<[(u32, Box<[Type]>)]>),
     Function(FunctionType),
     /// Self type (only used in trait definitions)
     Invalid,
@@ -93,11 +93,14 @@ impl Type {
             Type::LocalEnum(variants) => Type::LocalEnum(
                 variants
                     .iter()
-                    .map(|variant| {
-                        variant
-                            .iter()
-                            .map(|ty| ty.instantiate_generics(generics))
-                            .collect()
+                    .map(|(ordinal, variant)| {
+                        (
+                            *ordinal,
+                            variant
+                                .iter()
+                                .map(|ty| ty.instantiate_generics(generics))
+                                .collect(),
+                        )
                     })
                     .collect(),
             ),

@@ -133,6 +133,7 @@ impl TypeTable {
             TypeInfo::Unknown
             | TypeInfo::Integer
             | TypeInfo::Float
+            | TypeInfo::UnknownSatisfying { .. }
             | TypeInfo::Array {
                 element: _,
                 count: None,
@@ -153,6 +154,27 @@ impl TypeTable {
                 element,
                 count: Some(count),
             } => Type::Array(Box::new((self.to_resolved(self[element], generics), count))),
+            TypeInfo::Tuple(elems) => Type::Tuple(
+                elems
+                    .iter()
+                    .map(|elem| self.to_resolved(self[elem], generics))
+                    .collect(),
+            ),
+            TypeInfo::Enum(id) => Type::LocalEnum(
+                self.get_enum_variants(id)
+                    .iter()
+                    .map(|&variant| {
+                        (
+                            self[variant].ordinal,
+                            self[variant]
+                                .args
+                                .iter()
+                                .map(|arg| self.to_resolved(self[arg], generics))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            ),
             _ => todo!("type to resolved: {info:?}"),
         }
     }
@@ -494,7 +516,18 @@ impl TypeTable {
             TypeInfo::Pointer(_) => todo!(),
             TypeInfo::Array { element, count } => todo!(),
             TypeInfo::Enum(_) => todo!(),
-            TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::Tuple(elem_tys) => {
+                let Type::Tuple(elems) = ty else {
+                    return false;
+                };
+                if elem_tys.count as usize != elems.len() {
+                    return false;
+                }
+                elem_tys
+                    .iter()
+                    .zip(elems.iter())
+                    .all(|(idx, ty)| self.compatible_with_type(self[idx], ty))
+            }
             TypeInfo::Function {
                 params,
                 return_type,
