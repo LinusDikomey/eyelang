@@ -16,6 +16,7 @@ use root.list.List
 use root.iter.Iterator
 use root.iter.filter
 use root.iter.map
+use root.iter.zip
 use root.iter.range
 use root.iter.collect
 

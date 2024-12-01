@@ -6,6 +6,8 @@ filter :: fn[T, I: Iterator[T]](it I, filter fn(*T) -> bool) -> Filter[T, I]: Fi
 
 map :: fn[T, U, I: Iterator[T]](it I, map fn(T) -> U) -> Map[T, U, I]: Map(it: it, map: map)
 
+zip :: fn[T1, T2, I1: Iterator[T1], I2: Iterator[T2]](i1 I1, i2 I2) -> Zip[T1, T2, I1, I2]: Zip(i1: i1, i2: i2)
+
 collect :: fn[T, I: Iterator[T]](it I) -> List[T] {
     l := List.new()
     while .Some(item) := Iterator.next(&it) {
@@ -55,8 +57,17 @@ Iterator :: trait[Item] {
         }
     }
 
+    impl[T1, T2, I1: Iterator[T1], I2: Iterator[T2]] _[(T1, T2)] for Zip[T1, T2, I1, I2] {
+        next :: fn(self *Zip[T1, T2, I1, I2]) -> Option[(T1, T2)] {
+            ret match (Iterator.next(&self.i1), Iterator.next(&self.i2)) {
+                (.Some(a), .Some(b)): .Some((a, b)),
+                _: .None
+            }
+        }
+    }
+
     impl _[str] for root.string.Split {
-        next :: fn (self *root.string.Split) -> Option[str]: self.next()
+        next :: fn(self *root.string.Split) -> Option[str]: self.next()
     }
 }
 
@@ -82,11 +93,14 @@ Filter :: struct[T, I] {
     filter fn(*T) -> bool  
 }
 
-
-
 Map :: struct[T, U, I] {
     it I
     map fn(T) -> U
+}
+
+Zip :: struct[T1, T2, I1, I2] {
+    i1 I1
+    i2 I2
 }
 
 Range :: struct {
