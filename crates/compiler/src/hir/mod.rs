@@ -103,7 +103,7 @@ impl HIR {
                 types.dump_type(compiler, enum_ty);
             }
             Node::StringLiteral(s) => eprint!("(string {s:?})"),
-            Node::InferredEnumOrdinal(id) => eprint!("(enum-ordinal {})", id.0),
+            Node::InferredEnumOrdinal(id) => eprint!("(enum-ordinal #{})", id.0),
             &Node::Declare { pattern } => {
                 eprint!("(decl ");
                 self.dump_pattern(pattern, compiler, types);

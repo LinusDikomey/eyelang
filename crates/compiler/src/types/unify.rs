@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     check::expr::int_ty_from_variant_count,
     compiler::{Generics, ResolvedTypeDef},
-    types::{traits, TypeInfoOrIdx},
+    types::{traits, InferredEnumVariant, TypeInfoOrIdx},
     Compiler,
 };
 
@@ -161,8 +161,60 @@ pub fn unify(
             TypeInfo::TypeDef(id, generics)
         }
         (Enum(a), Enum(b)) => {
-            _ = (a, b);
-            todo!("unify enums")
+            // always merge into a_variants which becomes the longer variant list to try to avoid
+            // having to create new variants if one list is a subset of the other
+            let (a, b) = if types.get_enum_variants(a).len() >= types.get_enum_variants(b).len() {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            let Some(&first_a) = types.get_enum_variants(a).first() else {
+                // if a is empty, both enums are empty and just returning one is fine
+                return Some(TypeInfo::Enum(a));
+            };
+            let ordinal_type_idx = types[first_a].args.idx;
+            let b_variant_count = types.get_enum_variants(b).len();
+            for i in 0..b_variant_count {
+                let b_variants = types.get_enum_variants(b);
+                debug_assert_eq!(
+                    b_variants.len(),
+                    b_variant_count,
+                    "b_variant_count shouldn't change"
+                );
+                let b_id = b_variants[i];
+                let a_variants = types.get_enum_variants(a);
+                let variant = &types[b_id];
+                let a_variant = a_variants
+                    .iter()
+                    .copied()
+                    .find(|&id| types[id].name == variant.name);
+                if let Some(a_variant) = a_variant {
+                    let a_variant = &types[a_variant];
+                    let ordinal = a_variant.ordinal;
+                    // TODO: better errors
+                    if a_variant.args.count != variant.args.count {
+                        return None;
+                    }
+                    let a_args = a_variant.args;
+                    let b_args = variant.args;
+                    if !a_args
+                        .iter()
+                        .zip(b_args.iter())
+                        .skip(1) // skip the ordinal argument
+                        .all(|(a, b)| types.try_unify(a, b, function_generics, compiler))
+                    {
+                        return None;
+                    }
+                    types[b_id].ordinal = ordinal;
+                    types.types[b_args.idx as usize] =
+                        TypeInfoOrIdx::Idx(LocalTypeId(ordinal_type_idx));
+                } else {
+                    let a_id = types.append_enum_variant(a, variant.name.clone(), variant.args);
+                    let ordinal = types[a_id].ordinal;
+                    types[b_id].ordinal = ordinal;
+                }
+            }
+            TypeInfo::Enum(a)
         }
         (Pointer(a), Pointer(b)) => {
             if !types.try_unify(a, b, function_generics, compiler) {

@@ -1,4 +1,7 @@
-use std::{ops::Index, rc::Rc};
+use std::{
+    ops::{Index, IndexMut},
+    rc::Rc,
+};
 
 use id::{ModuleId, TypeId};
 use span::{Span, TSpan};
@@ -45,6 +48,11 @@ impl Index<VariantId> for TypeTable {
 
     fn index(&self, index: VariantId) -> &Self::Output {
         &self.variants[index.idx()]
+    }
+}
+impl IndexMut<VariantId> for TypeTable {
+    fn index_mut(&mut self, index: VariantId) -> &mut Self::Output {
+        &mut self.variants[index.idx()]
     }
 }
 impl TypeTable {

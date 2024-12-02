@@ -1056,7 +1056,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                     Some(TokenType::Dot) => {
-                        let dot = self.toks.step_assert(TokenType::Dot);
+                        self.toks.step_assert(TokenType::Dot);
                         step_or_unexpected! {self,
                             Ident #as tok => {
                                 Expr::MemberAccess {
@@ -1067,20 +1067,6 @@ impl<'a> Parser<'a> {
                             IntLiteral #as tok => {
                                 let idx = self.src[tok.span().range()].parse().unwrap();
                                 Expr::TupleIdx { left: self.ast.expr(expr), idx, end: tok.end }
-                            },
-                            LBrace => {
-                                if dot.new_line {
-                                    // record literal on new line, ignore
-                                    self.toks.step_back();
-                                    self.toks.step_back();
-                                    break Ok(expr);
-                                }
-                                /*Expr::Record {
-                                    span,
-                                    names,
-                                    values,
-                                }*/
-                                todo!("record parsing")
                             }
                         }
                     }

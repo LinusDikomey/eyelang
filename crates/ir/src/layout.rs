@@ -90,7 +90,6 @@ pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
             }
             layout
         }
-        IrType::Const(_) => todo!("const IrType layout"),
     }
 }
 

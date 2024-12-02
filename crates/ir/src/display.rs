@@ -2,7 +2,7 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{ir_types::ConstIrType, BlockInfo};
+use crate::BlockInfo;
 
 use super::{
     instruction::DataVariant, ir_types::IrTypes, Data, Function, FunctionIr, Instruction, Module,
@@ -214,9 +214,6 @@ fn display_type(
             cwrite!(f, "#m<)>")?;
             return Ok(());
         }
-        IrType::Const(ConstIrType::Int) => "{const: int}",
-        IrType::Const(ConstIrType::Float) => "{const: float}",
-        IrType::Const(ConstIrType::Enum) => "{const: enum}",
     };
     cwrite!(f, "#m<{name}>")
 }

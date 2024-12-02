@@ -140,7 +140,6 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LL
                 FALSE,
             ))
         }
-        T::Const(_) => panic!("const type in llvm backend found"),
     }
 }
 

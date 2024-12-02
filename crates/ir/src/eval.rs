@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::{
-    ir_types::{ConstIrType, IrType, IrTypes},
+    ir_types::{IrType, IrTypes},
     layout::{type_layout, Layout},
     BlockIndex, Function, FunctionId, FunctionIr, Ref,
 };
@@ -265,17 +265,12 @@ pub fn eval<E: Environment>(
                         let Val::Int(r_val) = r else { panic!() };
                         Val::Int(l_val $op r_val)
                     }
-                    IrType::Const(ConstIrType::Int) => {
-                        let Val::Int(l_val) = l else { panic!() };
-                        let Val::Int(r_val) = r else { panic!() };
-                        Val::Int(l_val $op r_val)
-                    }
                     IrType::F32 => {
                         let Val::F32(l_val) = l else { panic!() };
                         let Val::F32(r_val) = r else { panic!() };
                         Val::F32(l_val $op r_val)
                     }
-                    IrType::F64 | IrType::Const(ConstIrType::Float) => {
+                    IrType::F64 => {
                         let Val::F64(l_val) = l else { panic!() };
                         let Val::F64(r_val) = r else { panic!() };
                         Val::F64(l_val $op r_val)
@@ -752,7 +747,6 @@ impl Values {
                     self.visit_primitives_inner(i, types[elem], types, visit)?;
                 }
             }
-            IrType::Const(_) => todo!(),
         }
         Ok(())
     }
@@ -843,7 +837,6 @@ impl Values {
                     layout.accumulate(types.layout(types[elem]));
                 }
             }
-            IrType::Const(_) => todo!(),
         }
         Ok(())
     }
@@ -932,7 +925,6 @@ impl Values {
                     .map(|elem| self.load_inner(i, types[elem], types))
                     .collect(),
             ),
-            IrType::Const(_) => todo!("load const values"),
         }
     }
 }

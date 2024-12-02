@@ -31,7 +31,7 @@ impl IrTypes {
 
     pub fn layout(&self, ty: IrType) -> Layout {
         match ty {
-            IrType::Unit | IrType::Const(_) | IrType::Array(_, 0) => Layout::EMPTY,
+            IrType::Unit | IrType::Array(_, 0) => Layout::EMPTY,
             IrType::U1 | IrType::I8 | IrType::U8 => Layout {
                 size: 1,
                 align: NonZeroU64::new(1).unwrap(),
@@ -99,12 +99,6 @@ impl IrTypes {
                     .zip(b.iter())
                     .all(|(a, b)| self.are_equal(self[a], self[b]))
             }
-            IrType::Const(a) => {
-                let IrType::Const(b) = b else {
-                    return false;
-                };
-                a == b
-            }
         }
     }
 }
@@ -139,9 +133,6 @@ pub enum IrType {
     // ---------- aggregate types ----------
     Array(TypeRef, u32),
     Tuple(TypeRefs),
-
-    /// constant type, used only during const evaluation (might get removed)
-    Const(ConstIrType),
 }
 impl IrType {
     pub fn is_int(self) -> bool {
@@ -171,13 +162,6 @@ impl IrType {
     pub fn is_float(self) -> bool {
         matches!(self, IrType::F32 | IrType::F64)
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConstIrType {
-    Int,
-    Float,
-    Enum,
 }
 
 #[derive(Clone, Copy, Debug)]

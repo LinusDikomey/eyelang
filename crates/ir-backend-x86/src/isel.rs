@@ -120,7 +120,6 @@ fn block_arg_regs(ty: IrType, types: &ir::IrTypes) -> ZeroToTwo<RegClass> {
             9..=16 => ZeroToTwo::Two(RegClass::GP64, RegClass::GP64),
             _ => todo!("large block args"),
         },
-        IrType::Const(_) => unreachable!(),
     }
 }
 
@@ -220,7 +219,6 @@ impl<'a> Gen<'a> {
                                 .inst(Inst::movrm64, [loaded.op(), r.op(), Op::Imm(offset as u64)]);
                             MCValue::Reg(MCReg::Virtual(loaded))
                         }
-                        IrType::Const(_) => unreachable!(),
                         ty => todo!("load value of type {ty:?}"),
                     },
                     MCValue::PtrOffset(r, offset) => MCValue::Indirect(r, offset),
@@ -469,7 +467,7 @@ impl<'a> Gen<'a> {
             MCValue::None | MCValue::Undef => {}
             MCValue::Imm(val) => {
                 let inst = match ty {
-                    IrType::Unit | IrType::Const(_) | IrType::Tuple(_) | IrType::Array(_, _) => {
+                    IrType::Unit | IrType::Tuple(_) | IrType::Array(_, _) => {
                         unreachable!()
                     }
                     IrType::U1 | IrType::I8 | IrType::U8 => Inst::movmi8,

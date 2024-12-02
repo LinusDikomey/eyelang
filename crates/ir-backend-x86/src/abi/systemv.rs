@@ -95,7 +95,6 @@ impl Abi for FunctionAbi {
                     }
                 }
                 IrType::F32 | IrType::F64 => todo!("handle floating point params"),
-                IrType::Const(_) => unreachable!(),
             })
             .collect();
 
