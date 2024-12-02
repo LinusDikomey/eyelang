@@ -141,9 +141,12 @@ print_fruit :: fn(f Fruit): match f {
 
 ## Build Instructions
 
-You will need LLVM 15 to build this project. The environment variable `LLVM_SYS_150_PREFIX` should be set to the path of your LLVM installation. Look at the [llvm-sys](https://crates.io/crates/llvm-sys) crate
-for detailed instructions on how to build llvm.
+You will need LLVM to build this project. Look at the [llvm-sys](https://crates.io/crates/llvm-sys)
+crate for detailed instructions on how to build or install llvm.
 
 Nightly rust will also be required. I will try to stay mostly up to date with the newest nightly version.
 
 To run a program, use `cargo +nightly run -- run example.eye`
+or install the compiler with `cargo install` and use
+`eye run example.eye` allthough this will require the std library to be present in the same
+directory as the binary or the working directory (for now).
