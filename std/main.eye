@@ -90,3 +90,22 @@ ptr_add :: fn[T](ptr *T, offset u64) -> *T: (ptr as u64 + offset * T.size) as *T
 
 ## returns a null pointer
 null :: fn[T] -> *T: 0 as u64 as *T
+
+# TODO: should be generic over the element type and probably work on slices
+sort :: fn(l *List[u64]) {
+    if l.len < 2: ret
+    i := 0
+    while i < l.len {
+        j := 0
+        while j < l.len - 1 - i {
+            a := l.get(j)
+            b := l.get(j+1)
+            if a > b {
+                l.put(j+1, a)
+                l.put(j, b)
+            }
+            j += 1
+        }
+        i += 1
+    }
+}

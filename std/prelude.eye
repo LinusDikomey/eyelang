@@ -13,6 +13,8 @@ use root.string.ToString
 
 use root.list.List
 
+use root.int.abs
+
 use root.iter.Iterator
 use root.iter.filter
 use root.iter.map
