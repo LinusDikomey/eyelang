@@ -1,4 +1,5 @@
 use root.list.ListIter
+use root.int.Int
 
 range :: fn(start u64, end u64) -> Range: Range(start: start, end: end)
 
@@ -14,6 +15,14 @@ collect :: fn[T, I: Iterator[T]](it I) -> List[T] {
         l.push(item)
     }
     ret l
+}
+
+sum :: fn[T: Int, I: Iterator[T]](it I) -> T {
+    s := Int.zero()
+    while .Some(x) := Iterator.next(&it) {
+        s = Int.add(s, x)
+    }
+    ret s
 }
 
 Iterator :: trait[Item] {

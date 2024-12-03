@@ -21,4 +21,4 @@ use root.iter.map
 use root.iter.zip
 use root.iter.range
 use root.iter.collect
-
+use root.iter.sum
