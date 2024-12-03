@@ -229,6 +229,13 @@ ToString :: trait {
     impl _ for i64 {
         to_string :: fn(this *i64) -> str: int_to_string(this^)
     }
+    impl _ for bool {
+        to_string :: fn(this *bool) -> str: match this^ {
+            false: "false".clone(),
+            true: "true".clone(),
+        }
+    }
+
     impl[T: ToString] _ for List[T] {
         to_string :: fn(this *List[T]) -> str {
             s := List.new()

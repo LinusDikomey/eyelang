@@ -3,7 +3,7 @@ use std::fmt;
 use crate::{
     ir_types::{IrType, IrTypes},
     layout::{type_layout, Layout},
-    BlockIndex, Function, FunctionId, FunctionIr, Ref,
+    BlockIndex, Function, FunctionId, FunctionIr, Ref, Tag,
 };
 
 pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
@@ -481,6 +481,48 @@ pub fn eval<E: Environment>(
                 super::Tag::GT => cmp_op!(> , inst),
                 super::Tag::LE => cmp_op!(<=, inst),
                 super::Tag::GE => cmp_op!(>=, inst),
+                super::Tag::Xor => {
+                    let (l, r) = inst.data.bin_op();
+                    let (Val::Int(l), Val::Int(r)) = (get_ref(&values, l), get_ref(&values, r))
+                    else {
+                        panic!("invalid types for xor");
+                    };
+                    Val::Int(match types[inst.ty] {
+                        IrType::I8 | IrType::U8 => ((l as u8) ^ (r as u8)) as u64,
+                        IrType::I16 | IrType::U16 => ((l as u16) ^ (r as u16)) as u64,
+                        IrType::I32 | IrType::U32 => ((l as u32) ^ (r as u32)) as u64,
+                        IrType::I64 | IrType::U64 => ((l as u64) ^ (r as u64)) as u64,
+                        _ => panic!("invalid resulting type for xor"),
+                    })
+                }
+
+                super::Tag::Rol | super::Tag::Ror => {
+                    let (Val::Int(l), Val::Int(r)) = (
+                        get_ref(&values, inst.data.bin_op().0),
+                        get_ref(&values, inst.data.bin_op().1),
+                    ) else {
+                        panic!("invalid types for rol/ror");
+                    };
+                    let r = r as u32;
+                    let res = if inst.tag == Tag::Rol {
+                        match types[inst.ty] {
+                            IrType::I8 | IrType::U8 => (l as u8).rotate_left(r) as u64,
+                            IrType::I16 | IrType::U16 => (l as u16).rotate_left(r) as u64,
+                            IrType::I32 | IrType::U32 => (l as u32).rotate_left(r) as u64,
+                            IrType::I64 | IrType::U64 => (l as u64).rotate_left(r) as u64,
+                            _ => panic!("invalid resulting type for rol"),
+                        }
+                    } else {
+                        match types[inst.ty] {
+                            IrType::I8 | IrType::U8 => (l as u8).rotate_right(r) as u64,
+                            IrType::I16 | IrType::U16 => (l as u16).rotate_right(r) as u64,
+                            IrType::I32 | IrType::U32 => (l as u16).rotate_right(r) as u64,
+                            IrType::I64 | IrType::U64 => (l as u16).rotate_right(r) as u64,
+                            _ => panic!("invalid resulting type for ror"),
+                        }
+                    };
+                    Val::Int(res)
+                }
                 super::Tag::MemberPtr => {
                     let (ptr, elem_types, i) = inst.data.member_ptr(&ir.extra);
                     let ptr = values.load_ptr(ptr);

@@ -1,5 +1,6 @@
 pub mod const_value;
 mod entry_point;
+mod intrinsics;
 pub mod types;
 
 pub use entry_point::entry_point;
@@ -12,7 +13,7 @@ use ir::{BlockArgs, BlockIndex, RefVal};
 
 use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
-use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
+use crate::hir::{CastType, LValue, LValueId, Node, NodeIds, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
 use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
@@ -738,6 +739,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
+            // PERF: we probably need to collect here but reusing the Vec might be better
+            // if possible (difficult because calls can be inside the argument list etc.)
             let arg_refs = args
                 .iter()
                 .map(|arg| lower(ctx, arg))
@@ -745,6 +748,13 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let return_info = ctx.types[return_ty];
             let return_ty = ctx.get_type(return_info)?;
             let res = if let Node::FunctionItem(module, id, call_generics) = ctx.hir[function] {
+                if (module, id) == builtins::get_intrinsic(ctx.compiler) {
+                    let Node::StringLiteral(intrinsic) = &ctx.hir[args.iter().next().unwrap()]
+                    else {
+                        panic!("expected string literal passed to intrinsic call");
+                    };
+                    return intrinsics::call_intrinsic(ctx, intrinsic, &arg_refs[1..], return_ty);
+                }
                 let call_generics = call_generics
                     .iter()
                     .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))

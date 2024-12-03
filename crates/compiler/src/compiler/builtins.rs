@@ -13,6 +13,7 @@ pub struct Builtins {
     str_eq: Option<(ModuleId, FunctionId)>,
     prelude: Option<ModuleId>,
     panic: Option<(ModuleId, FunctionId)>,
+    intrinsic: Option<(ModuleId, FunctionId)>,
 }
 impl Builtins {
     pub fn set_std(&mut self, std: ProjectId) {
@@ -100,4 +101,22 @@ pub fn get_panic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
     };
     compiler.builtins.panic = Some((panic_mod, panic_func));
     (panic_mod, panic_func)
+}
+
+pub fn get_intrinsic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
+    if let Some(intrinsic) = compiler.builtins.intrinsic {
+        return intrinsic;
+    }
+    let std = compiler.builtins.std;
+    let root = compiler.get_project(std).root_module;
+    let def = compiler.resolve_in_module(root, "intrinsics", Span::MISSING);
+    let Def::Module(intrinsics_module) = def else {
+        panic!("expected a module for std.intrinsics but found {def:?}")
+    };
+    let def = compiler.resolve_in_module(intrinsics_module, "intrinsic", Span::MISSING);
+    let Def::Function(module, id) = def else {
+        panic!("expected a module for std.intrinsics but found {def:?}")
+    };
+    compiler.builtins.intrinsic = Some((module, id));
+    (module, id)
 }

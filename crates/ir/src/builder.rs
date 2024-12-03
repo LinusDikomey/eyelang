@@ -25,6 +25,10 @@ pub enum BinOp {
     GT,
     LE,
     GE,
+
+    Xor,
+    Rol,
+    Ror,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -394,6 +398,9 @@ impl<'a> IrBuilder<'a> {
             BinOp::GT => Tag::GT,
             BinOp::LE => Tag::LE,
             BinOp::GE => Tag::GE,
+            BinOp::Xor => Tag::Xor,
+            BinOp::Rol => Tag::Rol,
+            BinOp::Ror => Tag::Ror,
         };
         self.add(Data { bin_op: (l, r) }, tag, ty)
     }

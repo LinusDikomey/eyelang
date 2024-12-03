@@ -64,6 +64,28 @@ impl IrTypes {
         }
     }
 
+    pub fn is_zero_sized(&self, ty: IrType) -> bool {
+        match ty {
+            IrType::Unit | IrType::Array(_, 0) => true,
+            IrType::Array(elem, _) => self.is_zero_sized(self[elem]),
+            IrType::Tuple(elems) => elems.iter().all(|elem| self.is_zero_sized(self[elem])),
+            IrType::I8
+            | IrType::I16
+            | IrType::I32
+            | IrType::I64
+            | IrType::I128
+            | IrType::U8
+            | IrType::U16
+            | IrType::U32
+            | IrType::U64
+            | IrType::U128
+            | IrType::F32
+            | IrType::F64
+            | IrType::U1
+            | IrType::Ptr => false,
+        }
+    }
+
     pub fn are_equal(&self, a: IrType, b: IrType) -> bool {
         match a {
             IrType::Unit => matches!(b, IrType::Unit),

@@ -241,6 +241,11 @@ pub enum Tag {
     LE,
     GE,
 
+    // bitwise ops
+    Xor,
+    Rol,
+    Ror,
+
     // casts
     CastInt,
     CastFloat,
@@ -291,7 +296,10 @@ impl Tag {
             | Tag::LT
             | Tag::GT
             | Tag::LE
-            | Tag::GE => V::BinOp,
+            | Tag::GE
+            | Tag::Xor
+            | Tag::Rol
+            | Tag::Ror => V::BinOp,
 
             Tag::MemberValue => V::RefInt,
             Tag::InsertMember => V::RefIntRef,
@@ -344,6 +352,9 @@ impl Tag {
             | Tag::GT
             | Tag::LE
             | Tag::GE
+            | Tag::Xor
+            | Tag::Rol
+            | Tag::Ror
             | Tag::CastInt
             | Tag::CastFloat
             | Tag::CastIntToFloat

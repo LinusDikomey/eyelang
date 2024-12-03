@@ -95,7 +95,10 @@ pub fn function(function: &Function) {
                 | Tag::LT
                 | Tag::GT
                 | Tag::LE
-                | Tag::GE => {
+                | Tag::GE
+                | Tag::Xor
+                | Tag::Rol
+                | Tag::Ror => {
                     let (lhs, rhs) = inst.data.bin_op();
                     assert!(dom_tree.dominates(ir, i, lhs));
                     assert!(dom_tree.dominates(ir, i, rhs));

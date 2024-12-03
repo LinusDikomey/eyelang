@@ -109,3 +109,36 @@ sort :: fn(l *List[u64]) {
         i += 1
     }
 }
+
+Eq :: trait {
+    eq :: fn(this Self, other Self) -> bool 
+} for {
+    impl _ for u8 { eq :: fn(this u8, other u8) -> bool: this == other }
+    impl _ for u16 { eq :: fn(this u16, other u16) -> bool: this == other }
+    impl _ for u32 { eq :: fn(this u32, other u32) -> bool: this == other }
+    impl _ for u64 { eq :: fn(this u64, other u64) -> bool: this == other }
+
+    impl _ for i8 { eq :: fn(this i8, other i8) -> bool: this == other }
+    impl _ for i16 { eq :: fn(this i16, other i16) -> bool: this == other }
+    impl _ for i32 { eq :: fn(this i32, other i32) -> bool: this == other }
+    impl _ for i64 { eq :: fn(this i64, other i64) -> bool: this == other }
+}
+
+Ordering :: enum {
+    Less
+    Equal
+    Greater
+}
+
+Ord :: trait {
+    ord :: fn(this Self, other Self) -> Ordering
+} for {
+    impl[T: int.Int + Eq] _ for T {
+        ord :: fn(this T, other T) -> Ordering {
+            ret if int.Int.lt(this, other): .Less
+            else if int.Int.eq(this, other): .Equal
+            else .Greater
+        }
+    }
+}
+

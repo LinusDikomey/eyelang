@@ -312,7 +312,8 @@ unsafe fn build_func(
                         let ptr = LLVMBuildAlloca(builder, ty, NONE);
                         ptr
                     } else {
-                        ptr::null_mut()
+                        // return a null pointer if a declaration has a zero-sized type
+                        core::LLVMConstPointerNull(LLVMPointerTypeInContext(ctx, 0))
                     }
                 }
                 ir::Tag::Load => {
@@ -326,11 +327,11 @@ unsafe fn build_func(
                     }
                 }
                 ir::Tag::Store => {
-                    let val = get_ref(&instructions, data.bin_op.1);
-                    if let Some(val) = val {
-                        if let Some(ptr) = get_ref(&instructions, data.bin_op.0) {
-                            LLVMBuildStore(builder, val, ptr);
-                        }
+                    let (ptr, val) = data.bin_op();
+                    let (val, ty) = get_ref_and_type(&instructions, val);
+                    if !func.types.is_zero_sized(ty) {
+                        let ptr = get_ref(&instructions, ptr).unwrap();
+                        LLVMBuildStore(builder, val.unwrap(), ptr);
                     }
                     ptr::null_mut()
                 }
@@ -567,6 +568,28 @@ unsafe fn build_func(
                         }
                         t => panic!("invalid type for ge: {t:?}"),
                     }
+                }
+                ir::Tag::Xor => {
+                    let (l, r) = inst.data.bin_op();
+                    core::LLVMBuildXor(
+                        builder,
+                        get_ref(&instructions, l).unwrap(),
+                        get_ref(&instructions, r).unwrap(),
+                        NONE,
+                    )
+                }
+                ir::Tag::Rol | ir::Tag::Ror => {
+                    todo!("implement Rol/Ror")
+                    /*
+                    let (l, r) = inst.data.bin_op();
+                    llvm_sys::core::LLVMGetIntrinsicDeclaration(llvm_module, , , )
+                    core::LLVMBuildXor(
+                        builder,
+                        get_ref(&instructions, l).unwrap(),
+                        get_ref(&instructions, r).unwrap(),
+                        NONE,
+                    )
+                    */
                 }
                 ir::Tag::MemberPtr => {
                     let (ptr, extra_idx) = data.ref_int;

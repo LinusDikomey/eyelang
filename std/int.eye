@@ -147,3 +147,5 @@ Int :: trait {
 
 # TODO: should only work on signed integers
 abs :: fn[T: Int](x T) -> T: if Int.lt(x, Int.zero()): Int.sub(Int.zero(), x) else x
+
+absdiff ::fn[T: Int](x T, y T) -> T: if Int.lt(x, y): Int.sub(y, x) else Int.sub(x, y)
