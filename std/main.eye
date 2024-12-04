@@ -122,6 +122,12 @@ Eq :: trait {
     impl _ for i16 { eq :: fn(this i16, other i16) -> bool: this == other }
     impl _ for i32 { eq :: fn(this i32, other i32) -> bool: this == other }
     impl _ for i64 { eq :: fn(this i64, other i64) -> bool: this == other }
+
+    impl[T: Eq, U: Eq] _ for (T, U) {
+        eq :: fn(this (T, U), other (T, U)) -> bool {
+            ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1)
+        }
+    }
 }
 
 Ordering :: enum {

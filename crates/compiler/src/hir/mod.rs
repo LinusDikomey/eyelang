@@ -225,10 +225,19 @@ impl HIR {
                     Comparison::GT => ">",
                     Comparison::LE => "<=",
                     Comparison::GE => ">=",
-                    Comparison::And => "and",
-                    Comparison::Or => "or",
                 };
                 eprint!("({cmp} ");
+                self.dump(l, compiler, types, indent_count);
+                eprint!(" ");
+                self.dump(r, compiler, types, indent_count);
+                eprint!(")");
+            }
+            &Node::Logic { l, r, logic } => {
+                let logic = match logic {
+                    Logic::And => "and",
+                    Logic::Or => "or",
+                };
+                eprint!("({logic} ");
                 self.dump(l, compiler, types, indent_count);
                 eprint!(" ");
                 self.dump(r, compiler, types, indent_count);
@@ -713,6 +722,11 @@ pub enum Node {
         cmp: Comparison,
         compared: LocalTypeId,
     },
+    Logic {
+        l: NodeId,
+        r: NodeId,
+        logic: Logic,
+    },
     Arithmetic(NodeId, NodeId, Arithmetic, LocalTypeId),
 
     Element {
@@ -885,6 +899,10 @@ pub enum Comparison {
     GT,
     LE,
     GE,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Logic {
     And,
     Or,
 }

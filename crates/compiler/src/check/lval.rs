@@ -1,10 +1,12 @@
 use std::rc::Rc;
 
+use span::TSpan;
+
 use crate::{
     compiler::{Def, LocalItem, LocalScope, ResolvedTypeDef},
     error::Error,
     hir::{LValue, Node},
-    parser::ast::{Expr, ExprId, UnOp},
+    parser::ast::{Ast, Expr, ExprId, UnOp},
     types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
@@ -40,9 +42,9 @@ pub fn check(
             left,
             name: name_span,
         } => {
-            let name = &ctx.ast.src()[name_span.range()];
             let left_ty = ctx.hir.types.add_unknown();
             let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
+            let name = &ctx.ast.src()[name_span.range()];
             match ctx.hir.types[left_ty] {
                 TypeInfo::ModuleItem(id) => {
                     let def =
@@ -52,108 +54,99 @@ pub fn check(
                 }
                 _ => {}
             }
-            let mut pointer_count = 0;
-            let mut current_ty = left_ty;
-            loop {
-                match ctx.hir.types[current_ty] {
-                    TypeInfo::Unknown => {
-                        ctx.compiler.errors.emit_err(
-                            Error::TypeMustBeKnownHere { needed_bound: None }
-                                .at_span(ctx.span(left)),
-                        );
-                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                    }
-                    TypeInfo::UnknownSatisfying(bounds) => {
-                        let needed_bound = bounds.iter().next().map(|bound| {
-                            let id = ctx.hir.types.get_bound(bound).trait_id;
-                            ctx.compiler.get_trait_name(id.0, id.1).to_owned()
-                        });
-                        ctx.compiler.errors.emit_err(
-                            Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)),
-                        );
-                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                    }
-                    TypeInfo::Invalid => {
-                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                    }
-                    TypeInfo::Pointer(pointee) => {
-                        current_ty = pointee;
-                        pointer_count += 1;
-                    }
-                    TypeInfo::TypeDef(id, generics) => {
-                        let ty = ctx.compiler.get_resolved_type_def(id);
-                        // TODO differentiate between nonexistant member and 'can't assign to
-                        // member' in the case of methods, enum variants etc.
-                        let def = Rc::clone(&ty.def);
-                        match &*def {
-                            ResolvedTypeDef::Struct(struct_) => {
-                                let (indexed_field, elem_types) =
-                                    struct_.get_indexed_field(ctx, generics, name);
-                                let Some((index, field_ty)) = indexed_field else {
-                                    ctx.compiler.errors.emit_err(
-                                        Error::NonexistantMember(None)
-                                            .at_span(name_span.in_mod(ctx.module)),
-                                    );
-                                    return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                                };
-                                // perform auto deref while checking the lhs is an lvalue
-                                let left_lval = if pointer_count == 0 {
-                                    let Some(lval) = LValue::try_from_node(&left_val, &mut ctx.hir)
-                                    else {
-                                        ctx.compiler
-                                            .errors
-                                            .emit_err(Error::CantAssignTo.at_span(ctx.span(left)));
-                                        return (
-                                            LValue::Invalid,
-                                            ctx.hir.types.add(TypeInfo::Invalid),
-                                        );
-                                    };
-                                    lval
-                                } else {
-                                    let mut current_val = left_val;
-                                    let mut current_ty = left_ty;
-                                    // perform additional derefs and keep the last one as an LValue
-                                    while pointer_count > 1 {
-                                        let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty]
-                                        else {
-                                            unreachable!()
-                                        };
-                                        current_val = Node::Deref {
-                                            value: ctx.hir.add(current_val),
-                                            deref_ty: pointee,
-                                        };
-                                        current_ty = pointee;
-                                    }
-                                    LValue::Deref(ctx.hir.add(current_val))
-                                };
-                                return (
-                                    LValue::Member {
-                                        tuple: ctx.hir.add_lvalue(left_lval),
-                                        index,
-                                        elem_types,
-                                    },
-                                    field_ty,
-                                );
-                            }
-                            ResolvedTypeDef::Enum(_) => {
+            let Some((dereffed_left_ty, pointer_count)) =
+                auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
+            else {
+                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+            };
+
+            match dereffed_left_ty {
+                TypeInfo::TypeDef(id, generics) => {
+                    let ty = ctx.compiler.get_resolved_type_def(id);
+                    // TODO differentiate between nonexistant member and 'can't assign to
+                    // member' in the case of methods, enum variants etc.
+                    let def = Rc::clone(&ty.def);
+                    match &*def {
+                        ResolvedTypeDef::Struct(struct_) => {
+                            let (indexed_field, elem_types) =
+                                struct_.get_indexed_field(ctx, generics, name);
+                            let Some((index, field_ty)) = indexed_field else {
                                 ctx.compiler.errors.emit_err(
                                     Error::NonexistantMember(None)
                                         .at_span(name_span.in_mod(ctx.module)),
                                 );
                                 return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                            }
+                            };
+
+                            let left_lval =
+                                dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
+                                    ast[left].span(ast)
+                                });
+                            return (
+                                LValue::Member {
+                                    tuple: ctx.hir.add_lvalue(left_lval),
+                                    index,
+                                    elem_types,
+                                },
+                                field_ty,
+                            );
+                        }
+                        ResolvedTypeDef::Enum(_) => {
+                            ctx.compiler.errors.emit_err(
+                                Error::NonexistantMember(None)
+                                    .at_span(name_span.in_mod(ctx.module)),
+                            );
+                            return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
                         }
                     }
-                    _ => {
-                        ctx.compiler.errors.emit_err(
-                            Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)),
-                        );
-                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
-                    }
+                }
+                _ => {
+                    // TODO(error): better error why the type doesn't have named members
+                    ctx.compiler.errors.emit_err(
+                        Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)),
+                    );
+                    return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
                 }
             }
         }
-        Expr::TupleIdx { .. } => todo!("lvalue tuple indexing"),
+        &Expr::TupleIdx { left, idx, .. } => {
+            let left_ty = ctx.hir.types.add_unknown();
+            let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
+            let Some((dereffed_ty, pointer_count)) =
+                auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
+            else {
+                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+            };
+            match dereffed_ty {
+                TypeInfo::Tuple(elem_types) => {
+                    let Some(elem_ty) = elem_types.nth(idx) else {
+                        ctx.compiler
+                            .errors
+                            .emit_err(Error::NonexistantMember(None).at_span(ctx.span(expr)));
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    };
+                    let lval = dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
+                        ast[left].span(ast)
+                    });
+                    (
+                        LValue::Member {
+                            tuple: ctx.hir.add_lvalue(lval),
+                            index: idx,
+                            elem_types,
+                        },
+                        elem_ty,
+                    )
+                }
+                _ => {
+                    // TODO(error): use span of the idx, not of the whole expr
+                    // TODO(error): better error why the type doesn't have tuple members
+                    ctx.compiler
+                        .errors
+                        .emit_err(Error::NonexistantMember(None).at_span(ctx.span(expr)));
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                }
+            }
+        }
         &Expr::Index { expr, idx, .. } => {
             let element_type = ctx.hir.types.add_unknown();
             let (array, array_ty) = check(ctx, expr, scope, return_ty, noreturn);
@@ -182,6 +175,76 @@ pub fn check(
                 .emit_err(Error::CantAssignTo.at_span(ctx.span(expr)));
             (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
         }
+    }
+}
+
+fn auto_deref(
+    ctx: &mut Ctx<'_>,
+    ty: LocalTypeId,
+    span: impl Fn(&Ast) -> TSpan,
+) -> Option<(TypeInfo, u32)> {
+    let mut pointer_count = 0;
+    let mut current_ty = ty;
+    loop {
+        match ctx.hir.types[current_ty] {
+            TypeInfo::Pointer(pointee) => {
+                current_ty = pointee;
+                pointer_count += 1;
+            }
+            TypeInfo::Unknown => {
+                ctx.compiler.errors.emit_err(
+                    Error::TypeMustBeKnownHere { needed_bound: None }
+                        .at_span(span(ctx.ast).in_mod(ctx.module)),
+                );
+                return None;
+            }
+            TypeInfo::UnknownSatisfying(bounds) => {
+                let needed_bound = bounds.iter().next().map(|bound| {
+                    let id = ctx.hir.types.get_bound(bound).trait_id;
+                    ctx.compiler.get_trait_name(id.0, id.1).to_owned()
+                });
+                ctx.compiler.errors.emit_err(
+                    Error::TypeMustBeKnownHere { needed_bound }
+                        .at_span(span(ctx.ast).in_mod(ctx.module)),
+                );
+                return None;
+            }
+            TypeInfo::Invalid => return None,
+            ty => return Some((ty, pointer_count)),
+        }
+    }
+}
+fn dereffed_to_lvalue(
+    ctx: &mut Ctx,
+    node: Node,
+    ty: LocalTypeId,
+    pointer_count: u32,
+    span: impl Fn(&Ast) -> TSpan,
+) -> LValue {
+    if pointer_count == 0 {
+        if let Some(lval) = LValue::try_from_node(&node, &mut ctx.hir) {
+            lval
+        } else {
+            ctx.compiler
+                .errors
+                .emit_err(Error::CantAssignTo.at_span(span(ctx.ast).in_mod(ctx.module)));
+            LValue::Invalid
+        }
+    } else {
+        let mut current_val = node;
+        let mut current_ty = ty;
+        // perform additional derefs and keep the last one as an LValue
+        while pointer_count > 1 {
+            let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
+                unreachable!()
+            };
+            current_val = Node::Deref {
+                value: ctx.hir.add(current_val),
+                deref_ty: pointee,
+            };
+            current_ty = pointee;
+        }
+        LValue::Deref(ctx.hir.add(current_val))
     }
 }
 

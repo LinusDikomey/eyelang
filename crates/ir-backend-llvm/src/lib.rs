@@ -28,6 +28,7 @@ pub struct Backend {
     log: bool,
     context: LLVMContextRef,
     attribs: Attribs,
+    intrinsics: Intrinsics,
 }
 
 const NONE: *const i8 = "\0".as_ptr().cast();
@@ -51,6 +52,7 @@ impl Backend {
             log: false,
             context,
             attribs,
+            intrinsics: Intrinsics::lookup(),
         }
     }
 
@@ -94,11 +96,13 @@ impl Backend {
             unsafe {
                 translate::function(
                     self.context,
+                    llvm_module,
                     &llvm_funcs,
                     &llvm_globals,
                     llvm_func,
                     builder,
                     func,
+                    &self.intrinsics,
                     self.log,
                 )?
             };
@@ -131,5 +135,18 @@ impl Backend {
         unsafe { emit::emit(llvm_module, target_triple, out_cstr.as_ptr())? };
 
         Ok(())
+    }
+}
+
+struct Intrinsics {
+    fshl: u32,
+}
+impl Intrinsics {
+    fn lookup() -> Self {
+        let lookup =
+            |s: &CStr| unsafe { core::LLVMLookupIntrinsicID(s.as_ptr(), s.to_bytes().len() as _) };
+        Self {
+            fshl: lookup(c"llvm.fshl"),
+        }
     }
 }

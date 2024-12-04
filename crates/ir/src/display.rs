@@ -344,9 +344,7 @@ fn display_data(
             let b_count = blocks[b.idx() as usize].arg_count;
             cwrite!(f, " #b!<{a}>")?;
             write_block_args(f, a_count, extra, i)?;
-            cwrite!(f, " #g<or> ")?;
-            write_block_args(f, a_count, extra, i)?;
-            cwrite!(f, "#b!<{}>", b)?;
+            cwrite!(f, " #g<or> #b!<{}>", b)?;
             write_block_args(f, b_count, extra, i + a_count as usize * 4)
         }
         DataVariant::RefInt => {

@@ -448,9 +448,9 @@ patterns!(match_patterns ir types inst
     ne_false:
         (NE l false) => Match::Delete(l)
     eq_false:
-        (Eq l false) => Match::Replace(Instruction::neg(l, inst.ty))
+        (Eq l false) => Match::Replace(Instruction::not(l, inst.ty))
     ne_true:
-        (NE l true) => Match::Replace(Instruction::neg(l, inst.ty))
+        (NE l true) => Match::Replace(Instruction::not(l, inst.ty))
 
     ne_trivial:
         (NE l r) if ref_value_eq(ir, l, r) => Match::Delete(Ref::bool(false))

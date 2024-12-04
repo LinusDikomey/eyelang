@@ -395,7 +395,7 @@ impl Error {
                 }
                 text
             }
-            Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint().to_owned()),
+            Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint()),
             Error::TypeMustBeKnownHere { needed_bound: Some(bound) } => {
                 cformat!("#c<hint>: a type satisfying #m<{bound}> is needed")
             },
@@ -630,14 +630,17 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
 #[derive(Clone, Copy, Debug)]
 pub enum MemberHint {
     InferredEnum,
+    TupleOfLength(u32),
 }
 impl MemberHint {
-    fn hint(&self) -> &'static str {
+    fn hint(&self) -> String {
         match self {
-            Self::InferredEnum => {
-                "you are trying to access a member of an inferred enum, \
+            Self::InferredEnum => "you are trying to access a member of an inferred enum, \
                 you might have to annotate the type of an explicit enum to be able to access \
                 it's members"
+                .to_owned(),
+            Self::TupleOfLength(n) => {
+                cformat!("the tuple you are accessing only has #b<{n}> elements")
             }
         }
     }

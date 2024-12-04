@@ -10,7 +10,7 @@ use crate::{
     },
     error::Error,
     eval::ConstValue,
-    hir::{self, Comparison, LValue, Node, NodeId, NodeIds},
+    hir::{self, Comparison, LValue, Logic, Node, NodeId, NodeIds},
     parser::{
         ast::{Ast, Call, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
@@ -298,17 +298,12 @@ pub fn check(
                     let r = check(ctx, r, scope, expected, return_ty, noreturn);
                     let l = ctx.hir.add(l);
                     let r = ctx.hir.add(r);
-                    let cmp = if op == Operator::Or {
-                        Comparison::Or
+                    let logic = if op == Operator::Or {
+                        Logic::Or
                     } else {
-                        Comparison::And
+                        Logic::And
                     };
-                    Node::Comparison {
-                        l,
-                        r,
-                        cmp,
-                        compared: expected,
-                    }
+                    Node::Logic { l, r, logic }
                 }
                 Operator::Equals | Operator::NotEquals => {
                     ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));

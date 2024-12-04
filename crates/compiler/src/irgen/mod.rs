@@ -13,7 +13,7 @@ use ir::{BlockArgs, BlockIndex, RefVal};
 
 use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
-use crate::hir::{CastType, LValue, LValueId, Node, NodeIds, Pattern, PatternId};
+use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
 use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
@@ -528,8 +528,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 Comparison::GT => BinOp::GT,
                 Comparison::LE => BinOp::LE,
                 Comparison::GE => BinOp::GE,
-                Comparison::And => BinOp::And,
-                Comparison::Or => BinOp::Or,
             };
             if is_equality {
                 match ctx.types[compared] {
@@ -560,6 +558,31 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 }
             }
             ctx.builder.build_bin_op(op, l, r, IrType::U1)
+        }
+        &Node::Logic { l, r, logic } => {
+            let l = lower(ctx, l)?;
+            let rhs = ctx.builder.create_block();
+            let res = ctx.builder.create_block();
+            let terminator = match logic {
+                crate::hir::Logic::And => Terminator::Branch {
+                    cond: l,
+                    on_true: (rhs, &[]),
+                    on_false: (res, &[Ref::val(RefVal::False)]),
+                },
+                crate::hir::Logic::Or => Terminator::Branch {
+                    cond: l,
+                    on_true: (res, &[Ref::val(RefVal::True)]),
+                    on_false: (rhs, &[]),
+                },
+            };
+            ctx.builder.terminate_block(terminator);
+            ctx.builder.begin_block(rhs);
+            if let Ok(r) = lower(ctx, r) {
+                ctx.builder.terminate_block(Terminator::Goto(res, &[r]));
+            }
+            let res_types = ctx.builder.types.add_multiple([IrType::U1]);
+            let args = ctx.builder.begin_block_with_args(res, res_types);
+            args.nth(0)
         }
         &Node::Arithmetic(l, r, op, ty) => {
             let l = lower(ctx, l)?;
@@ -797,11 +820,13 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ctx.compiler
                     .get_checked_trait_impl(trait_id, &self_ty, &trait_generics)
             else {
+                dbg!("a");
                 crash_point!(ctx)
             };
             let function = (impl_.impl_module, impl_.functions[method_index as usize]);
             // TODO: handle impl/method generics
             let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
+                dbg!("b");
                 crash_point!(ctx)
             };
             let return_ty = ctx.get_type(ctx.types[return_ty])?;

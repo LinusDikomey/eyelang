@@ -1,4 +1,10 @@
-use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
+use std::{
+    any::Any,
+    collections::VecDeque,
+    ffi::{CStr, CString},
+    io::Write,
+    ptr,
+};
 
 use ir::{BlockIndex, ConstValue, IrType, IrTypes, TypeRefs};
 use llvm_sys::{
@@ -19,7 +25,7 @@ use llvm_sys::{
     LLVMIntPredicate, LLVMRealPredicate,
 };
 
-use crate::{llvm_bool, Error, FALSE, NONE};
+use crate::{llvm_bool, Error, Intrinsics, FALSE, NONE};
 
 pub unsafe fn add_function(
     ctx: LLVMContextRef,
@@ -78,16 +84,27 @@ pub unsafe fn add_global(
 
 pub unsafe fn function(
     ctx: LLVMContextRef,
+    llvm_module: LLVMModuleRef,
     llvm_funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
     llvm_func: LLVMValueRef,
     builder: LLVMBuilderRef,
     function: &ir::Function,
+    intrinsics: &Intrinsics,
     log: bool,
 ) -> Result<(), Error> {
     if let Some(ir) = &function.ir {
         build_func(
-            function, llvm_funcs, globals, ir, ctx, builder, llvm_func, log,
+            function,
+            llvm_module,
+            llvm_funcs,
+            globals,
+            ir,
+            ctx,
+            builder,
+            llvm_func,
+            intrinsics,
+            log,
         );
     }
     Ok(())
@@ -145,12 +162,14 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: IrType, types: &IrTypes) -> Option<LL
 
 unsafe fn build_func(
     func: &ir::Function,
+    llvm_module: LLVMModuleRef,
     llvm_funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
     ir: &ir::FunctionIr,
     ctx: LLVMContextRef,
     builder: LLVMBuilderRef,
     llvm_func: LLVMValueRef,
+    intrinsics: &Intrinsics,
     log: bool,
 ) {
     if log {
@@ -578,19 +597,40 @@ unsafe fn build_func(
                         NONE,
                     )
                 }
-                ir::Tag::Rol | ir::Tag::Ror => {
-                    todo!("implement Rol/Ror")
-                    /*
+                ir::Tag::Rol => {
                     let (l, r) = inst.data.bin_op();
-                    llvm_sys::core::LLVMGetIntrinsicDeclaration(llvm_module, , , )
-                    core::LLVMBuildXor(
+                    let ((Some(l), l_ty), Some(r)) = (
+                        get_ref_and_type(&instructions, l),
+                        get_ref(&instructions, r),
+                    ) else {
+                        panic!("invalid types for rol/ror")
+                    };
+                    let l_ty = llvm_ty(ctx, l_ty, &func.types).unwrap();
+                    let mut fshl_args = [l_ty];
+                    let fshl = core::LLVMGetIntrinsicDeclaration(
+                        llvm_module,
+                        intrinsics.fshl,
+                        fshl_args.as_mut_ptr(),
+                        fshl_args.len(),
+                    );
+                    let ty = core::LLVMIntrinsicGetType(
+                        ctx,
+                        intrinsics.fshl,
+                        fshl_args.as_mut_ptr(),
+                        fshl_args.len(),
+                    );
+                    let mut args = [l, l, r];
+                    LLVMBuildCall2(
                         builder,
-                        get_ref(&instructions, l).unwrap(),
-                        get_ref(&instructions, r).unwrap(),
+                        ty,
+                        fshl,
+                        args.as_mut_ptr(),
+                        args.len() as u32,
                         NONE,
                     )
-                    */
                 }
+
+                ir::Tag::Ror => todo!(),
                 ir::Tag::MemberPtr => {
                     let (ptr, extra_idx) = data.ref_int;
                     let i = extra_idx as usize;
@@ -750,7 +790,7 @@ unsafe fn build_func(
                     handle_successor(
                         ir,
                         &instructions,
-                        a,
+                        b,
                         extra_idx + 4 * ir.get_block_args(a).count(),
                     );
 
