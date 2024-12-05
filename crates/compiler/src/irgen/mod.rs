@@ -820,13 +820,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ctx.compiler
                     .get_checked_trait_impl(trait_id, &self_ty, &trait_generics)
             else {
-                dbg!("a");
                 crash_point!(ctx)
             };
             let function = (impl_.impl_module, impl_.functions[method_index as usize]);
             // TODO: handle impl/method generics
             let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
-                dbg!("b");
                 crash_point!(ctx)
             };
             let return_ty = ctx.get_type(ctx.types[return_ty])?;

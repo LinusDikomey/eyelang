@@ -5,8 +5,7 @@ use root.c.printf
 use root.c.malloc
 use root.c.memcpy
 
-# FIRST_CAPACITY :: 4
-
+FIRST_CAPACITY :: 4
 new_cap :: fn(cap u64) -> u64: if cap == 0: 4 else cap * 2
 
 List :: struct[T] {

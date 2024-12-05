@@ -123,9 +123,25 @@ Eq :: trait {
     impl _ for i32 { eq :: fn(this i32, other i32) -> bool: this == other }
     impl _ for i64 { eq :: fn(this i64, other i64) -> bool: this == other }
 
-    impl[T: Eq + ToString, U: Eq + ToString] _ for (T, U) {
+    impl[T: Eq, U: Eq] _ for (T, U) {
         eq :: fn(this (T, U), other (T, U)) -> bool {
-            ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1)
+            ret Eq.eq(this.0, other.0)
+                and Eq.eq(this.1, other.1)
+        }
+    }
+    impl[T: Eq, U: Eq, V: Eq] _ for (T, U, V) {
+        eq :: fn(this (T, U, V), other (T, U, V)) -> bool {
+            ret Eq.eq(this.0, other.0)
+                and Eq.eq(this.1, other.1)
+                and Eq.eq(this.2, other.2)
+        }
+    }
+    impl[T: Eq, U: Eq, V: Eq, W: Eq] _ for (T, U, V, W) {
+        eq :: fn(this (T, U, V, W), other (T, U, V, W)) -> bool {
+            ret Eq.eq(this.0, other.0)
+                and Eq.eq(this.1, other.1)
+                and Eq.eq(this.2, other.2)
+                and Eq.eq(this.3, other.3)
         }
     }
 }

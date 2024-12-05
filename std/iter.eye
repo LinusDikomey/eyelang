@@ -1,4 +1,5 @@
 use root.list.ListIter
+use root.hash.MapIter
 use root.int.Int
 
 range :: fn(start u64, end u64) -> Range: Range(start: start, end: end)
@@ -45,6 +46,11 @@ Iterator :: trait[Item] {
             ret .Some(v^)
         }
     }
+
+    impl[K, V] _[(*K, *V)] for MapIter[K, V] {
+        next :: fn(self *MapIter[K, V]) -> Option[(*K, *V)]: self.next()
+    }
+    
 
     impl[T, I: Iterator[T]] _[T] for Filter[T, I] {
         next :: fn(self *Filter[T, I]) -> Option[T] {
