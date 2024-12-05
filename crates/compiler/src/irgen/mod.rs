@@ -965,6 +965,7 @@ fn lower_pattern(
                 on_true: (on_true, &[]),
                 on_false: (on_false, &[]),
             });
+            ctx.builder.begin_block(on_match);
         }
         Pattern::String(s) => {
             let str_eq = builtins::get_str_eq(ctx.compiler);

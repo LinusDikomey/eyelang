@@ -86,7 +86,7 @@ assert :: fn(b bool, message str) {
 
 ## Adds an offset to the pointer and returns the offset pointer.
 ## The offset is element-wise, so the number of bytes added will be multiplied by the size of T.
-ptr_add :: fn[T](ptr *T, offset u64) -> *T: (ptr as u64 + offset * T.size) as *T
+ptr_add :: fn[T](ptr *T, offset u64) -> *T: (ptr as u64 + offset * T.stride) as *T
 
 ## returns a null pointer
 null :: fn[T] -> *T: 0 as u64 as *T
@@ -123,7 +123,7 @@ Eq :: trait {
     impl _ for i32 { eq :: fn(this i32, other i32) -> bool: this == other }
     impl _ for i64 { eq :: fn(this i64, other i64) -> bool: this == other }
 
-    impl[T: Eq, U: Eq] _ for (T, U) {
+    impl[T: Eq + ToString, U: Eq + ToString] _ for (T, U) {
         eq :: fn(this (T, U), other (T, U)) -> bool {
             ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1)
         }
@@ -148,3 +148,15 @@ Ord :: trait {
     }
 }
 
+
+max :: fn[T: Ord](a T, b T) -> T: match Ord.ord(a, b) {
+    .Less: b,
+    .Equal: a,
+    .Greater: a,
+}
+
+min :: fn[T: Ord](a T, b T) -> T: match Ord.ord(a, b) {
+    .Less: a,
+    .Equal: a,
+    .Greater: b,
+}

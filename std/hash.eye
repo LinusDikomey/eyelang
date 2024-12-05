@@ -43,6 +43,8 @@ Slot :: struct[K, V] {
     state SlotState
 }
 
+stride_of_ptr :: fn[T](ptr *T) -> u64: ret T.stride
+
 Map :: struct[K: Hash + Eq, V] {
 
     table *Slot[K, V]
@@ -53,7 +55,7 @@ Map :: struct[K: Hash + Eq, V] {
 
     insert :: fn(this *Map[K, V], key K, value V) {
         if this.cap == 0 {
-            this.table = root.c.malloc(Slot.size * 4) as _
+            this.table = root.c.malloc(stride_of_ptr(this.table) * 4) as _
             this.len = 0
             this.cap = 4
             i := 0
@@ -70,13 +72,16 @@ Map :: struct[K: Hash + Eq, V] {
             slot = (slot + 1) % this.cap
         }
         ptr_add(this.table, slot)^ = Slot(key: key, value: value, state: .Occupied)
+        this.len += 1
     }
 
     get :: fn(this *Map[K, V], key K) -> Option[*V] {
+        if this.len == 0: ret .None
         h := Hasher.new()
         Hash.hash(&key, &h)
         hash := h.finish()
         slot := hash % this.cap
+        initial_slot := slot
         while true {
             entry := ptr_add(this.table, slot)
             match entry.state {
@@ -87,6 +92,9 @@ Map :: struct[K: Hash + Eq, V] {
                 }
             }
             slot = (slot + 1) % this.cap
+            if slot == initial_slot {
+                ret .None
+            }
         }
         # unreachable but no loop {} yet
         ret .None
