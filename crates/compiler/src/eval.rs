@@ -7,6 +7,7 @@ use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 use crate::{
     compiler::{mangle_name, Generics, ResolvedPrimitive},
     error::Error,
+    hir::HIRBuilder,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
@@ -288,16 +289,18 @@ pub fn value_expr(
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);
+    let hir = HIRBuilder::new(types);
     let (hir, types) = crate::check::check(
         compiler,
         ast,
         module,
-        types,
         &Generics::EMPTY,
         scope,
+        hir,
         [],
         expr,
         expected,
+        crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
     let mut ir_types = ir::IrTypes::new();

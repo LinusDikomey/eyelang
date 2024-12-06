@@ -22,6 +22,7 @@ pub struct HIR {
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
+    params: Box<[VarId]>,
     casts: Vec<Cast>,
     pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
 }
@@ -619,6 +620,10 @@ impl NodeIds {
             count: self.count - i,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 }
 impl Index<NodeIds> for HIR {
     type Output = [Node];
@@ -955,6 +960,7 @@ impl HIRBuilder {
         compiler: &mut Compiler,
         generics: &Generics,
         module: ModuleId,
+        params: Box<[VarId]>,
     ) -> (HIR, TypeTable) {
         self.nodes.push(root);
         self.types.finish(compiler, generics, module);
@@ -964,6 +970,7 @@ impl HIRBuilder {
                 lvalues: self.lvalues,
                 patterns: self.patterns,
                 vars: self.vars,
+                params,
                 casts: self.casts,
                 trait_calls: Vec::new(),
             },

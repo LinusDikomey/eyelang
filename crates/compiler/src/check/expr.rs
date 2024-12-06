@@ -6,7 +6,8 @@ use types::{Primitive, Type};
 
 use crate::{
     compiler::{
-        builtins, Def, LocalItem, LocalScope, ResolvedStructDef, ResolvedTypeDef, Signature,
+        builtins, Def, LocalItem, LocalScope, LocalScopeParent, ResolvedStructDef, ResolvedTypeDef,
+        Signature, VarId,
     },
     error::Error,
     eval::ConstValue,
@@ -18,7 +19,7 @@ use crate::{
     types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 
-use super::{exhaust::Exhaustion, lval, pattern, Ctx};
+use super::{closure::closure, exhaust::Exhaustion, lval, pattern, Ctx};
 
 pub fn check(
     ctx: &mut Ctx,
@@ -39,7 +40,7 @@ pub fn check(
             items,
         } => {
             let mut scope = LocalScope {
-                parent: Some(scope),
+                parent: LocalScopeParent::Some(scope),
                 variables: dmap::new(),
                 module: scope.module,
                 static_scope: Some(static_scope),
@@ -152,7 +153,8 @@ pub fn check(
             check_enum_literal(ctx, scope, expected, return_ty, span, ident, args, noreturn)
         }
         &Expr::Function { id } => {
-            function_item(ctx, ctx.module, id, expected, ctx.ast[expr].span(ctx.ast))
+            //function_item(ctx, ctx.module, id, expected, ctx.ast[expr].span(ctx.ast))
+            closure(ctx, id, expected, scope, ctx.ast[expr].span(ctx.ast))
         }
         &Expr::Primitive { primitive, .. } => {
             // PERF @TypeInfoReuse
@@ -492,7 +494,7 @@ pub fn check(
             let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
                 module: scope.module,
-                parent: Some(scope),
+                parent: LocalScopeParent::Some(scope),
                 static_scope: None,
                 variables: dmap::new(),
             };
@@ -528,7 +530,7 @@ pub fn check(
             let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
                 module: scope.module,
-                parent: Some(scope),
+                parent: LocalScopeParent::Some(scope),
                 static_scope: None,
                 variables: dmap::new(),
             };
@@ -596,7 +598,7 @@ pub fn check(
                 ctx.hir
                     .modify_pattern(hir::PatternId(patterns.index + i), pat);
                 let mut scope = LocalScope {
-                    parent: Some(scope),
+                    parent: LocalScopeParent::Some(scope),
                     variables: vars,
                     module: scope.module,
                     static_scope: None,
@@ -651,7 +653,7 @@ pub fn check(
             let value_ty = ctx.hir.types.add_unknown();
             let val = check(ctx, val, scope, value_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
-                parent: Some(scope),
+                parent: LocalScopeParent::Some(scope),
                 module: scope.module,
                 variables: dmap::new(),
                 static_scope: None,
@@ -695,6 +697,15 @@ fn check_ident(
             Node::Variable(var)
         }
         LocalItem::Def(def) => def_to_node(ctx, def, expected, span),
+        LocalItem::Capture(id) => {
+            let var = ctx.hir.add(Node::Variable(VarId(0)));
+            let elem_types = LocalTypeIds::EMPTY; // TODO
+            Node::Element {
+                tuple_value: var,
+                index: id.0,
+                elem_types,
+            }
+        }
         LocalItem::Invalid => {
             ctx.specify(expected, TypeInfo::Invalid, |_| span);
             ctx.invalidate(expected);
@@ -1428,9 +1439,14 @@ fn check_call(
                     }
                     ctx.hir
                         .modify_node(args.iter().next().unwrap(), called_node);
-                    //ctx.hir
-                    //    .types
-                    //    .replace(arg_types.iter().next().unwrap(), self_type);
+                    let self_type = ctx.hir.types.from_generic_resolved(
+                        ctx.compiler,
+                        &signature.params[0].1,
+                        generics,
+                    );
+                    ctx.hir
+                        .types
+                        .replace(arg_types.iter().next().unwrap(), self_type);
                     let call_noreturn =
                         matches!(signature.return_type, Type::Primitive(Primitive::Never));
                     if call_noreturn {
@@ -1607,6 +1623,7 @@ fn call_arg_types(
     named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     generics: LocalTypeIds,
     varargs: bool,
+    extra_arg_slot: bool,
 ) -> Result<LocalTypeIds, Error> {
     // TODO: this function probably breaks with varargs and named args, properly define what combinations are allowed and how
     let invalid_arg_count = if varargs {
@@ -1625,12 +1642,12 @@ fn call_arg_types(
     let arg_types = ctx
         .hir
         .types
-        .add_multiple_unknown(arg_count + named_params.len() as u32);
+        .add_multiple_unknown(extra_arg_slot as u32 + arg_count + named_params.len() as u32);
     for (ty, idx) in params
         .iter()
         .map(|(_, ty)| ty)
         .chain(named_params.iter().map(|(_, ty, _)| ty))
-        .zip(arg_types.iter())
+        .zip(arg_types.iter().skip(extra_arg_slot as usize))
     {
         let ty = ctx.type_from_resolved(ty, generics);
         ctx.hir.types.replace(idx, ty);
@@ -1652,8 +1669,16 @@ fn check_call_args(
     varargs: bool,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
-    let arg_types = call_arg_types(args.count, ctx, params, named_params, generics, varargs)
-        .map_err(|err| err.at_span(span.in_mod(ctx.module)))?;
+    let arg_types = call_arg_types(
+        args.count,
+        ctx,
+        params,
+        named_params,
+        generics,
+        varargs,
+        extra_arg_slot,
+    )
+    .map_err(|err| err.at_span(span.in_mod(ctx.module)))?;
     check_call_args_inner(
         ctx,
         scope,
@@ -1682,14 +1707,14 @@ fn check_call_args_inner(
     arg_types: LocalTypeIds,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
-    let all_arg_nodes = ctx
-        .hir
-        .add_invalid_nodes(extra_arg_slot as u32 + arg_types.count);
+    let all_arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
     let arg_nodes = if extra_arg_slot {
         all_arg_nodes.skip(1)
     } else {
         all_arg_nodes
     };
+
+    let param_arg_types = arg_types.skip(extra_arg_slot as u32);
 
     // iterating over the signature, all extra arguments in case of vararg
     // arguments will stay unknown which is intended
@@ -1703,8 +1728,8 @@ fn check_call_args_inner(
             ),
         )
         .zip(
-            arg_types.iter().take(param_count as usize).chain(
-                arg_types
+            param_arg_types.iter().take(param_count as usize).chain(
+                param_arg_types
                     .iter()
                     .skip(param_count as usize + named_args.len()),
             ),
@@ -1712,7 +1737,7 @@ fn check_call_args_inner(
     {
         let node = check(ctx, arg, scope, ty, return_ty, noreturn);
         if *noreturn {
-            return Ok((all_arg_nodes, arg_types));
+            return Ok((all_arg_nodes, param_arg_types));
         }
         ctx.hir.modify_node(node_idx, node);
     }
@@ -1735,7 +1760,7 @@ fn check_call_args_inner(
             continue;
         };
         let node_idx = arg_nodes.iter().nth(param_count as usize + i).unwrap();
-        let ty = arg_types.nth(param_count + i as u32).unwrap();
+        let ty = param_arg_types.nth(param_count + i as u32).unwrap();
         let node = check(ctx, *value, scope, ty, return_ty, noreturn);
         if *noreturn {
             return Ok((all_arg_nodes, arg_types));
@@ -1747,7 +1772,7 @@ fn check_call_args_inner(
     for ((name, _, default_val), (node_id, ty)) in named_params.iter().zip(
         arg_nodes
             .iter()
-            .zip(arg_types.iter())
+            .zip(param_arg_types.iter())
             .skip(param_count as usize),
     ) {
         if matches!(ctx.hir[node_id], Node::Invalid) {
@@ -1770,7 +1795,7 @@ fn check_call_args_inner(
         }
         .at_span(span.in_mod(ctx.module)));
     }
-    debug_assert_eq!(all_arg_nodes.count, arg_types.count + extra_arg_slot as u32);
+    debug_assert_eq!(all_arg_nodes.count, arg_types.count);
     Ok((all_arg_nodes, arg_types))
 }
 

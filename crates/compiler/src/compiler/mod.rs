@@ -1,6 +1,7 @@
 pub mod builtins;
 
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     path::{Path, PathBuf},
     rc::Rc,
@@ -8,6 +9,7 @@ use std::{
 
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
+use indexmap::IndexMap;
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, Primitive, Type, UnresolvedType};
 
@@ -19,7 +21,7 @@ use crate::{
     irgen,
     parser::{
         self,
-        ast::{self, Ast, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
+        ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     ProjectId,
@@ -236,7 +238,7 @@ impl Compiler {
                 s
             };
             let source = match contents {
-                Ok(source) => source,
+                Ok(source) => source.into_boxed_str(),
                 Err(err) => panic!(
                     "compiler failed to open the file {}: {:?}",
                     self.modules[module_id.idx()].path.display(),
@@ -304,22 +306,57 @@ impl Compiler {
     }
 
     pub fn get_scope_def(&mut self, module: ModuleId, scope: ScopeId, name: &str) -> Option<Def> {
-        let ast = self.get_module_ast(module).clone();
-        let Some(def) = ast[scope].definitions.get(name) else {
+        let ast = self.get_module_ast(module);
+        let Some(&def) = ast[scope].definitions.get(name) else {
             return None;
         };
         let def = match def {
-            ast::Definition::Expr { value, ty } => {
-                let value = *value;
-                // TODO: cache results
-                eval::def_expr(self, module, scope, &ast, value, name, &ty)
-            }
-            &ast::Definition::Path(path) => self.resolve_path(module, scope, path),
-            ast::Definition::Global(id) => Def::Global(module, *id),
-            &ast::Definition::Module(id) => Def::Module(id),
-            &ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
+            // PERF: return reference here instead of cloning if possible
+            ast::Definition::Expr(id) => self.get_def_expr(module, scope, name, id).clone(),
+            ast::Definition::Path(path) => self.resolve_path(module, scope, path),
+            ast::Definition::Global(id) => Def::Global(module, id),
+            ast::Definition::Module(id) => Def::Module(id),
+            ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
         };
         Some(def)
+    }
+
+    pub fn get_def_expr(
+        &mut self,
+        module: ModuleId,
+        scope: ScopeId,
+        name: &str,
+        id: DefExprId,
+    ) -> &Def {
+        let parsed = self.get_parsed_module(module);
+        let def_expr = &mut parsed.symbols.def_exprs[id.0 as usize];
+        match def_expr {
+            Resolvable::Resolved(_) => {
+                // borrowing bullshit
+                let Resolvable::Resolved(def) =
+                    &self.get_parsed_module(module).symbols.def_exprs[id.0 as usize]
+                else {
+                    unreachable!()
+                };
+                return def;
+            }
+            Resolvable::Resolving => {
+                let ast = self.get_module_ast(module);
+                let (value, _) = ast[id];
+                let span = ast[value].span(ast).in_mod(module);
+                self.errors
+                    .emit_err(Error::RecursiveDefinition.at_span(span));
+                return &Def::Invalid;
+            }
+            Resolvable::Unresolved => {
+                *def_expr = Resolvable::Resolving;
+            }
+        }
+        let ast = Rc::clone(&parsed.ast);
+        let (value, ty) = &ast[id];
+        let value = *value;
+        let def = eval::def_expr(self, module, scope, &ast, value, name, &ty);
+        self.get_parsed_module(module).symbols.def_exprs[id.0 as usize].put(def)
     }
 
     pub fn resolve_path(&mut self, module: ModuleId, scope: ScopeId, path: IdentPath) -> Def {
@@ -469,8 +506,9 @@ impl Compiler {
     }
 
     pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<Signature> {
-        let parsed = self.modules[module.idx()].ast.as_ref().unwrap();
-        match &parsed.symbols.function_signatures[id.idx()] {
+        let parsed = self.modules[module.idx()].ast.as_mut().unwrap();
+        let signature = &mut parsed.symbols.function_signatures[id.idx()];
+        match signature {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
                 let Resolvable::Resolved(signature) = &self.modules[module.idx()]
@@ -486,8 +524,10 @@ impl Compiler {
             }
             Resolvable::Resolving => panic!("function signature depends on itself recursively"),
             Resolvable::Unresolved => {
+                *signature = Resolvable::Resolving;
                 let ast = parsed.ast.clone();
                 let function = &ast[id];
+                // TODO: don't always allow inferring function
                 let signature = self.check_signature(function, module, &ast);
                 self.modules[module.idx()]
                     .ast
@@ -777,84 +817,7 @@ impl Compiler {
             }
             Resolvable::Resolving => panic!("checked function depends on itself recursively"),
             Resolvable::Unresolved => {
-                let resolving = &mut self.modules[module.idx()]
-                    .ast
-                    .as_mut()
-                    .unwrap()
-                    .symbols
-                    .functions[id.idx()];
-                *resolving = Resolvable::Resolving;
-                let ast = self.modules[module.idx()].ast.as_ref().unwrap().ast.clone();
-
-                let function = &ast[id];
-
-                let name = if function.associated_name != TSpan::EMPTY {
-                    ast.src()[function.associated_name.range()].to_owned()
-                } else {
-                    // If no name is associated, assign a name based on unique ids.
-                    // This will be the case for lambdas right now, maybe a better name is possible
-                    format!("function_{}_{}", module.idx(), id.idx())
-                };
-
-                self.get_signature(module, id);
-                // signature is resolved above
-                let Resolvable::Resolved(signature) = &self.modules[module.idx()]
-                    .ast
-                    .as_ref()
-                    .unwrap()
-                    .symbols
-                    .function_signatures[id.idx()]
-                else {
-                    unreachable!()
-                };
-
-                let signature = Rc::clone(signature);
-
-                let mut types = TypeTable::new();
-
-                let param_types = types.add_multiple_unknown(signature.total_arg_count() as u32);
-                for ((_, param), r) in signature.all_params().zip(param_types.iter()) {
-                    let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(self, param));
-                    types.replace(r, i);
-                }
-
-                let return_type = types.generic_info_from_resolved(self, &signature.return_type);
-                let return_type = types.add(return_type);
-
-                let generic_count = signature.generics.count();
-                let varargs = signature.varargs;
-
-                let (body, types) = if let Some(body) = function.body {
-                    let params = signature
-                        .all_params()
-                        .map(|(name, _ty)| name.into())
-                        .zip(param_types.iter());
-
-                    let (hir, types) = check::check(
-                        self,
-                        &ast,
-                        module,
-                        types,
-                        &signature.generics,
-                        function.scope,
-                        params,
-                        body,
-                        return_type,
-                    );
-                    (Some(hir), types)
-                } else {
-                    (None, types)
-                };
-
-                let checked = CheckedFunction {
-                    name,
-                    types,
-                    params: param_types,
-                    varargs,
-                    return_type,
-                    generic_count,
-                    body,
-                };
+                let checked = check::function(self, module, id);
                 self.modules[module.idx()]
                     .ast
                     .as_mut()
@@ -1035,16 +998,18 @@ impl Compiler {
             let ast = self.get_module_ast(module).clone();
             for scope in ast.scope_ids() {
                 for (name, def) in &ast[scope].definitions {
-                    match def {
-                        &ast::Definition::Path(path) => {
-                            // TODO: cache results
+                    match *def {
+                        ast::Definition::Path(path) => {
+                            // TODO: cache results to prevent duplicate errors/avoid duplicate resolval
                             self.resolve_path(module, scope, path);
                         }
-                        ast::Definition::Expr { value, ty } => {
-                            // TODO: cache results
-                            eval::def_expr(self, module, scope, &ast, *value, name, ty);
+                        ast::Definition::Expr(id) => {
+                            let def = self.get_def_expr(module, scope, name, id);
+                            if let &Def::Function(module, id) = def {
+                                self.get_hir(module, id);
+                            }
                         }
-                        &ast::Definition::Module(id) => {
+                        ast::Definition::Module(id) => {
                             // when checking std, each module still gets a reference to std. To
                             // prevent an infinite loop when checking the std library, check that
                             // this isn't the case by comparing against the root module
@@ -1055,10 +1020,6 @@ impl Compiler {
                         ast::Definition::Global(_) | ast::Definition::Generic(_) => {}
                     }
                 }
-            }
-
-            for id in ast.function_ids() {
-                self.get_hir(module, id);
             }
 
             for id in ast.type_ids() {
@@ -1277,7 +1238,7 @@ pub enum ProjectError {
     NonexistentPath(PathBuf),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum Resolvable<T> {
     #[default]
     Unresolved,
@@ -1285,7 +1246,8 @@ pub enum Resolvable<T> {
     Resolved(T),
 }
 impl<T> Resolvable<T> {
-    fn put(&mut self, resolved: T) -> &mut T {
+    pub fn put(&mut self, resolved: T) -> &mut T {
+        debug_assert!(!matches!(self, Self::Resolved(_)), "put Resolved twice");
         *self = Self::Resolved(resolved);
         let Self::Resolved(resolved) = self else {
             // SAFETY: was just set to resolved variant and we have unique access
@@ -1296,10 +1258,19 @@ impl<T> Resolvable<T> {
 }
 
 id::id!(VarId);
+id::id!(CaptureId);
 
-#[derive(Debug)]
+pub enum LocalScopeParent<'p> {
+    Some(&'p LocalScope<'p>),
+    ClosedOver {
+        scope: &'p LocalScope<'p>,
+        captures: &'p RefCell<IndexMap<VarId, CaptureId>>,
+    },
+    None,
+}
+
 pub struct LocalScope<'p> {
-    pub parent: Option<&'p LocalScope<'p>>,
+    pub parent: LocalScopeParent<'p>,
     pub variables: DHashMap<Box<str>, VarId>,
     pub module: ModuleId,
     /// should only be none if this scope has a parent
@@ -1308,6 +1279,7 @@ pub struct LocalScope<'p> {
 pub enum LocalItem {
     Var(VarId),
     Def(Def),
+    Capture(CaptureId),
     Invalid,
 }
 impl<'p> LocalScope<'p> {
@@ -1319,23 +1291,40 @@ impl<'p> LocalScope<'p> {
             .and_then(|static_scope| compiler.get_scope_def(self.module, static_scope, name))
         {
             LocalItem::Def(def)
-        } else if let Some(parent) = self.parent {
-            parent.resolve(name, name_span, compiler)
-        } else if let Some(static_parent) = self
-            .static_scope
-            .and_then(|static_scope| compiler.get_module_ast(self.module)[static_scope].parent)
-        {
-            LocalItem::Def(compiler.resolve_in_scope(
-                self.module,
-                static_parent,
-                name,
-                name_span.in_mod(self.module),
-            ))
         } else {
-            compiler
-                .errors
-                .emit_err(Error::UnknownIdent(name.into()).at_span(name_span.in_mod(self.module)));
-            LocalItem::Invalid
+            match &self.parent {
+                LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler),
+                LocalScopeParent::ClosedOver { scope, captures } => {
+                    let local = scope.resolve(name, name_span, compiler);
+                    match local {
+                        LocalItem::Var(id) => {
+                            let mut captures = captures.borrow_mut();
+                            let next_id = CaptureId(captures.len() as _);
+                            LocalItem::Capture(*captures.entry(id).or_insert_with(|| next_id))
+                        }
+                        LocalItem::Def(def) => LocalItem::Def(def),
+                        LocalItem::Capture(_) => todo!("capture captures"),
+                        LocalItem::Invalid => LocalItem::Invalid,
+                    }
+                }
+                LocalScopeParent::None => {
+                    if let Some(static_parent) = self.static_scope.and_then(|static_scope| {
+                        compiler.get_module_ast(self.module)[static_scope].parent
+                    }) {
+                        LocalItem::Def(compiler.resolve_in_scope(
+                            self.module,
+                            static_parent,
+                            name,
+                            name_span.in_mod(self.module),
+                        ))
+                    } else {
+                        compiler.errors.emit_err(
+                            Error::UnknownIdent(name.into()).at_span(name_span.in_mod(self.module)),
+                        );
+                        LocalItem::Invalid
+                    }
+                }
+            }
         }
     }
 
@@ -1347,9 +1336,11 @@ impl<'p> LocalScope<'p> {
             }
             // a local scope has to have a parent scope if it doesn't have a static scope
             // associated with it
-            current_local = current_local
-                .parent
-                .unwrap_or_else(|| panic!("{current_local:?}, {self:?}"));
+            current_local = match &current_local.parent {
+                LocalScopeParent::Some(parent) => parent,
+                LocalScopeParent::ClosedOver { scope, captures: _ } => scope,
+                LocalScopeParent::None => unreachable!(),
+            };
         }
     }
 }
@@ -1775,11 +1766,12 @@ pub struct ResolvableTypeDef {
 
 #[derive(Debug)]
 pub struct ModuleSymbols {
-    pub function_signatures: Vec<Resolvable<Rc<Signature>>>,
-    pub functions: Vec<Resolvable<Rc<CheckedFunction>>>,
-    pub types: Vec<Option<TypeId>>,
-    pub globals: Vec<Resolvable<(Type, ConstValue)>>,
-    pub traits: Vec<Resolvable<Rc<CheckedTrait>>>,
+    pub function_signatures: Box<[Resolvable<Rc<Signature>>]>,
+    pub functions: Box<[Resolvable<Rc<CheckedFunction>>]>,
+    pub types: Box<[Option<TypeId>]>,
+    pub globals: Box<[Resolvable<(Type, ConstValue)>]>,
+    pub traits: Box<[Resolvable<Rc<CheckedTrait>>]>,
+    pub def_exprs: Box<[Resolvable<Def>]>,
 }
 impl ModuleSymbols {
     fn empty(ast: &Ast) -> Self {
@@ -1790,11 +1782,14 @@ impl ModuleSymbols {
             functions: (0..ast.function_count())
                 .map(|_| Resolvable::Unresolved)
                 .collect(),
-            types: vec![None; ast.type_count()],
+            types: vec![None; ast.type_count()].into_boxed_slice(),
             globals: (0..ast.global_count())
                 .map(|_| Resolvable::Unresolved)
                 .collect(),
             traits: (0..ast.trait_count())
+                .map(|_| Resolvable::Unresolved)
+                .collect(),
+            def_exprs: (0..ast.def_expr_count())
                 .map(|_| Resolvable::Unresolved)
                 .collect(),
         }
@@ -1919,4 +1914,19 @@ pub fn mangle_name(checked: &CheckedFunction, generics: &[Type]) -> String {
         name.push(']');
     }
     name
+}
+
+pub fn function_name(
+    ast: &Ast,
+    function: &ast::Function,
+    module: ModuleId,
+    id: FunctionId,
+) -> String {
+    if function.associated_name != TSpan::EMPTY {
+        ast.src()[function.associated_name.range()].to_owned()
+    } else {
+        // If no name is associated, assign a name based on unique ids.
+        // This will be the case for lambdas right now, maybe a better name is possible
+        format!("function_{}_{}", module.idx(), id.idx())
+    }
 }

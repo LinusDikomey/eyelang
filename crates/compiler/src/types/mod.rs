@@ -14,7 +14,7 @@ use unify::unify;
 use crate::{
     check::{expr::int_ty_from_variant_count, traits},
     compiler::{Def, Generics, ResolvedTypeDef},
-    error::Error,
+    error::{Error, Errors},
     parser::ast::{self, TraitId},
     Compiler,
 };
@@ -185,6 +185,53 @@ impl TypeTable {
             ),
             _ => todo!("type to resolved: {info:?}"),
         }
+    }
+
+    pub fn to_generic_resolved(&self, info: TypeInfo) -> Result<Type, ()> {
+        Ok(match info {
+            TypeInfo::Unknown
+            | TypeInfo::UnknownSatisfying(_)
+            | TypeInfo::Integer
+            | TypeInfo::Float
+            | TypeInfo::Array {
+                element: _,
+                count: None,
+            } => return Err(()),
+            TypeInfo::Primitive(primitive) => Type::Primitive(primitive),
+            TypeInfo::TypeDef(id, generics) => Type::DefId {
+                id,
+                generics: generics
+                    .iter()
+                    .map(|id| self.to_generic_resolved(self[id]))
+                    .collect::<Result<_, _>>()?,
+            },
+            TypeInfo::Pointer(id) => Type::Pointer(Box::new(self.to_generic_resolved(self[id])?)),
+            TypeInfo::Array {
+                element,
+                count: Some(count),
+            } => Type::Array(Box::new((self.to_generic_resolved(self[element])?, count))),
+            TypeInfo::Enum(_) => todo!(),
+            TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::Function {
+                params,
+                return_type,
+            } => Type::Function(types::FunctionType {
+                params: params
+                    .iter()
+                    .map(|id| self.to_generic_resolved(self[id]))
+                    .collect::<Result<_, ()>>()?,
+                return_type: Box::new(self.to_generic_resolved(self[return_type])?),
+            }),
+            TypeInfo::TypeItem { .. }
+            | TypeInfo::TraitItem { .. }
+            | TypeInfo::FunctionItem { .. }
+            | TypeInfo::ModuleItem(_)
+            | TypeInfo::MethodItem { .. }
+            | TypeInfo::TraitMethodItem { .. }
+            | TypeInfo::EnumVariantItem { .. } => todo!(),
+            TypeInfo::Generic(i) => Type::Generic(i),
+            TypeInfo::Invalid => Type::Invalid,
+        })
     }
 
     pub fn add_multiple(&mut self, infos: impl IntoIterator<Item = TypeInfo>) -> LocalTypeIds {
@@ -473,7 +520,22 @@ impl TypeTable {
 
                 TypeInfo::Tuple(ids)
             }
-            types::UnresolvedType::Function { .. } => todo!("fn TypeInfo"),
+            types::UnresolvedType::Function {
+                span_and_return_type,
+                params,
+            } => {
+                let param_ids = self.add_multiple_unknown(params.len() as _);
+                for (param, r) in params.iter().zip(param_ids.iter()) {
+                    let info = self.info_from_unresolved(param, compiler, module, scope);
+                    self.types[r.idx()] = TypeInfoOrIdx::TypeInfo(info);
+                }
+                let return_type =
+                    self.info_from_unresolved(&span_and_return_type.1, compiler, module, scope);
+                TypeInfo::Function {
+                    params: param_ids,
+                    return_type: self.add(return_type),
+                }
+            }
             types::UnresolvedType::Infer(_) => TypeInfo::Unknown,
         }
     }
@@ -1145,6 +1207,13 @@ impl LocalTypeIds {
 
     pub fn nth(self, i: u32) -> Option<LocalTypeId> {
         (i < self.count).then_some(LocalTypeId(self.idx + i))
+    }
+
+    pub fn skip(&self, n: u32) -> Self {
+        Self {
+            idx: self.idx + n,
+            count: self.count - n,
+        }
     }
 }
 impl From<LocalTypeId> for LocalTypeIds {

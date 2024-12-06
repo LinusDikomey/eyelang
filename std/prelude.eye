@@ -22,3 +22,4 @@ use root.iter.zip
 use root.iter.range
 use root.iter.collect
 use root.iter.sum
+use root.iter.for_each

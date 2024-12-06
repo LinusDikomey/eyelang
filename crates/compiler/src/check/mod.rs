@@ -1,18 +1,21 @@
 mod cast;
+mod closure;
 mod exhaust;
 pub mod expr;
 mod lval;
 mod pattern;
 pub mod traits;
 
+use std::rc::Rc;
+
 pub use traits::check_trait;
 
-use id::ModuleId;
+use id::{ConstValueId, ModuleId};
 use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{Generics, Signature},
+    compiler::{CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId},
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, LValue, Node, HIR},
     parser::ast::{Ast, ExprId, ScopeId},
@@ -22,24 +25,118 @@ use crate::{
 
 use self::exhaust::Exhaustion;
 
+pub(crate) fn function(
+    compiler: &mut Compiler,
+    module: ModuleId,
+    id: crate::parser::ast::FunctionId,
+) -> crate::compiler::CheckedFunction {
+    let resolving = &mut compiler.modules[module.idx()]
+        .ast
+        .as_mut()
+        .unwrap()
+        .symbols
+        .functions[id.idx()];
+    *resolving = Resolvable::Resolving;
+    let ast = compiler.modules[module.idx()]
+        .ast
+        .as_ref()
+        .unwrap()
+        .ast
+        .clone();
+
+    let function = &ast[id];
+
+    compiler.get_signature(module, id);
+    // signature is resolved above
+    let Resolvable::Resolved(signature) = &compiler.modules[module.idx()]
+        .ast
+        .as_ref()
+        .unwrap()
+        .symbols
+        .function_signatures[id.idx()]
+    else {
+        unreachable!()
+    };
+
+    let signature = Rc::clone(signature);
+
+    let mut types = TypeTable::new();
+
+    let param_types = types.add_multiple_unknown(signature.total_arg_count() as u32);
+    for ((_, param), r) in signature.all_params().zip(param_types.iter()) {
+        let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(compiler, param));
+        types.replace(r, i);
+    }
+
+    let return_type = types.generic_info_from_resolved(compiler, &signature.return_type);
+    let return_type = types.add(return_type);
+
+    let generic_count = signature.generics.count();
+    let varargs = signature.varargs;
+
+    let (body, types) = if let Some(body) = function.body {
+        let params = signature
+            .all_params()
+            .map(|(name, _ty)| name.into())
+            .zip(param_types.iter());
+
+        let hir = HIRBuilder::new(types);
+
+        let (hir, types) = check(
+            compiler,
+            &ast,
+            module,
+            &signature.generics,
+            function.scope,
+            hir,
+            params,
+            body,
+            return_type,
+            LocalScopeParent::None,
+        );
+        (Some(hir), types)
+    } else {
+        (None, types)
+    };
+
+    // TODO: factor potential closed_over_scope into name
+    let name = crate::compiler::function_name(&ast, function, module, id);
+
+    CheckedFunction {
+        name,
+        types,
+        params: param_types,
+        varargs,
+        return_type,
+        generic_count,
+        body,
+    }
+}
+
 pub fn check(
     compiler: &mut Compiler,
     ast: &Ast,
     module: ModuleId,
-    types: TypeTable,
     generics: &Generics,
     scope: ScopeId,
-    args: impl IntoIterator<Item = (Box<str>, LocalTypeId)>,
+    mut hir: HIRBuilder,
+    params: impl IntoIterator<Item = (Box<str>, LocalTypeId)>,
     expr: ExprId,
     expected: LocalTypeId,
+    parent_scope: LocalScopeParent,
 ) -> (HIR, TypeTable) {
-    let mut hir = HIRBuilder::new(types);
-    let variables = args
+    let params = params.into_iter();
+    let mut param_vars = Vec::with_capacity(params.size_hint().0);
+    let variables = params
         .into_iter()
-        .map(|(name, ty)| (name, hir.add_var(ty)))
+        .map(|(name, ty)| {
+            let var = hir.add_var(ty);
+            param_vars.push(var);
+            (name, var)
+        })
         .collect();
     let mut scope = crate::compiler::LocalScope {
-        parent: None,
+        parent: parent_scope,
         variables,
         module,
         static_scope: Some(scope),
@@ -61,7 +158,7 @@ pub fn check(
         expected,
         &mut false,
     );
-    let (hir, types) = check_ctx.finish(root);
+    let (hir, types) = check_ctx.finish(root, param_vars.into_boxed_slice());
     (hir, types)
 }
 
@@ -187,10 +284,10 @@ impl<'a> Ctx<'a> {
         value
     }
 
-    pub(crate) fn finish(self, root: Node) -> (HIR, TypeTable) {
-        let (mut hir, types) = self
-            .hir
-            .finish(root, self.compiler, self.generics, self.module);
+    pub(crate) fn finish(self, root: Node, params: Box<[VarId]>) -> (HIR, TypeTable) {
+        let (mut hir, types) =
+            self.hir
+                .finish(root, self.compiler, self.generics, self.module, params);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
                 let error =

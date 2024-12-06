@@ -26,6 +26,12 @@ sum :: fn[T: Int, I: Iterator[T]](it I) -> T {
     ret s
 }
 
+for_each :: fn[T, I: Iterator[T], U](it I, f fn(T) -> U) {
+    while .Some(x) := Iterator.next(&it) {
+        f(x)
+    }
+}
+
 Iterator :: trait[Item] {
     next :: fn(self *Self) -> Option[Item]
 } for {

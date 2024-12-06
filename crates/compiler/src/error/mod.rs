@@ -229,6 +229,9 @@ pub enum Error {
     TrivialCast,
     EvalFailed(ir::eval::Error),
     EvalReturnedStackPointer,
+    CantInferFromBody {
+        ty: String,
+    },
     NameExpected,
 }
 impl Error {
@@ -345,6 +348,7 @@ impl Error {
                 "evaluation returned an invalid pointer to the stack"
             }
             Error::NameExpected => "expected a name",
+            Error::CantInferFromBody { .. } => "type can't be inferred from function body",
         }
     }
     pub fn details(&self) -> Option<String> {
@@ -474,6 +478,7 @@ impl Error {
             Error::EvalFailed(ir::eval::Error::ExternCallFailed(s)) => {
                 cformat!("#r<error>: {s}")
             }
+            Error::CantInferFromBody { ty } => cformat!("got: {ty}"),
             _ => return None
         })
     }

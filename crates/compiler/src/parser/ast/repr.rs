@@ -102,7 +102,8 @@ impl Definition {
                 c.write_add(" as ");
                 c.write_add(name);
             }
-            Self::Expr { value, ty } => {
+            &Self::Expr(id) => {
+                let (value, ty) = &c.ast()[id];
                 if let UnresolvedType::Infer(_) = ty {
                     c.write_add(" :: ");
                 } else {

@@ -30,7 +30,7 @@ use self::{
 };
 
 pub fn parse(
-    source: String,
+    source: Box<str>,
     errors: &mut Errors,
     module: ModuleId,
     definitions: DHashMap<String, Definition>,
@@ -207,10 +207,8 @@ impl<'a> Parser<'a> {
                             ));
                         }
                         Entry::Vacant(vacant_entry) => {
-                            vacant_entry.insert(Definition::Expr {
-                                value,
-                                ty: annotated_ty,
-                            });
+                            vacant_entry
+                                .insert(Definition::Expr(self.ast.def_expr(value, annotated_ty)));
                         }
                     }
                 }
@@ -578,8 +576,8 @@ impl<'a> Parser<'a> {
                 self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                     if varargs {
                         // can't be an RParen since parse_delimited would have returned otherwise
-                        p.toks.step_expect(TokenType::RParen)?;
-                        unreachable!()
+                        let err = p.toks.step_expect(TokenType::RParen).unwrap_err();
+                        return Err(err);
                     }
                     if p.toks.step_if(TokenType::TripleDot).is_some() {
                         varargs = true;
@@ -589,8 +587,13 @@ impl<'a> Parser<'a> {
                         let equals = p.toks.step_if(TokenType::Equals);
                         let ty = if let Some(equals) = equals {
                             UnresolvedType::Infer(equals.span())
-                        } else {
+                        } else if !matches!(
+                            p.toks.peek().map(|t| t.ty),
+                            Some(TokenType::RParen | TokenType::Comma)
+                        ) {
                             p.parse_type()?
+                        } else {
+                            UnresolvedType::Infer(name_span)
                         };
                         if equals.is_some() || p.toks.step_if(TokenType::Equals).is_some() {
                             let default_value = p.parse_expr(scope)?;

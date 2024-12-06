@@ -19,19 +19,21 @@ id::id!(TraitId);
 id::id!(GlobalId);
 id::id!(IdentId);
 id::id!(MemberAccessId);
+id::id!(DefExprId);
 
 /// Ast for a single file
 #[derive(Debug)]
 pub struct Ast {
-    src: String,
-    scopes: Vec<Scope>,
+    src: Box<str>,
     top_level_scope: ScopeId,
-    pub exprs: Vec<Expr>,
-    calls: Vec<Call>,
-    functions: Vec<Function>,
-    types: Vec<TypeDef>,
-    traits: Vec<TraitDefinition>,
-    globals: Vec<Global>,
+    scopes: Box<[Scope]>,
+    pub exprs: Box<[Expr]>,
+    def_exprs: Box<[(ExprId, UnresolvedType)]>,
+    calls: Box<[Call]>,
+    functions: Box<[Function]>,
+    types: Box<[TypeDef]>,
+    traits: Box<[TraitDefinition]>,
+    globals: Box<[Global]>,
 }
 impl Ast {
     pub fn src(&self) -> &str {
@@ -39,7 +41,7 @@ impl Ast {
     }
 
     pub fn scope_ids(&self) -> impl Iterator<Item = ScopeId> {
-        (0..self.scopes.len()).map(|i| ScopeId(i as _))
+        (0..self.scopes.len() as _).map(ScopeId)
     }
 
     pub fn scopes(&self) -> &[Scope] {
@@ -69,6 +71,10 @@ impl Ast {
     pub fn top_level_scope(&self) -> &Scope {
         // the last scope is guaranteed to exist and to represent the top level scope of this Ast
         &self[self.top_level_scope]
+    }
+
+    pub fn def_expr_count(&self) -> u32 {
+        self.def_exprs.len() as _
     }
 
     pub fn function_count(&self) -> usize {
@@ -103,6 +109,12 @@ impl Index<ExprId> for Ast {
     type Output = Expr;
     fn index(&self, index: ExprId) -> &Self::Output {
         &self.exprs[index.idx()]
+    }
+}
+impl Index<DefExprId> for Ast {
+    type Output = (ExprId, UnresolvedType);
+    fn index(&self, index: DefExprId) -> &Self::Output {
+        &self.def_exprs[index.0 as usize]
     }
 }
 impl Index<ExprExtra> for Ast {
@@ -149,6 +161,7 @@ impl Index<GlobalId> for Ast {
 pub struct AstBuilder {
     scopes: Vec<Scope>,
     exprs: Vec<Expr>,
+    def_exprs: Vec<(ExprId, UnresolvedType)>,
     calls: Vec<Call>,
     functions: Vec<Function>,
     types: Vec<TypeDef>,
@@ -160,6 +173,7 @@ impl AstBuilder {
         Self {
             scopes: Vec::new(),
             exprs: Vec::new(),
+            def_exprs: Vec::new(),
             calls: Vec::new(),
             functions: Vec::new(),
             types: Vec::new(),
@@ -181,6 +195,12 @@ impl AstBuilder {
     pub fn expr(&mut self, expr: Expr) -> ExprId {
         let id = ExprId(self.exprs.len() as _);
         self.exprs.push(expr);
+        id
+    }
+
+    pub fn def_expr(&mut self, value: ExprId, ty: UnresolvedType) -> DefExprId {
+        let id = DefExprId(self.def_exprs.len() as _);
+        self.def_exprs.push((value, ty));
         id
     }
 
@@ -228,17 +248,18 @@ impl AstBuilder {
         &self.exprs[expr.idx()]
     }
 
-    pub fn finish_with_top_level_scope(self, src: String, top_level_scope: ScopeId) -> Ast {
+    pub fn finish_with_top_level_scope(self, src: Box<str>, top_level_scope: ScopeId) -> Ast {
         Ast {
             src,
-            scopes: self.scopes,
             top_level_scope,
-            exprs: self.exprs,
-            calls: self.calls,
-            functions: self.functions,
-            types: self.types,
-            traits: self.traits,
-            globals: self.globals,
+            scopes: self.scopes.into_boxed_slice(),
+            exprs: self.exprs.into_boxed_slice(),
+            def_exprs: self.def_exprs.into_boxed_slice(),
+            calls: self.calls.into_boxed_slice(),
+            functions: self.functions.into_boxed_slice(),
+            types: self.types.into_boxed_slice(),
+            traits: self.traits.into_boxed_slice(),
+            globals: self.globals.into_boxed_slice(),
         }
     }
 
@@ -302,9 +323,9 @@ impl Scope {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Definition {
-    Expr { value: ExprId, ty: UnresolvedType },
+    Expr(DefExprId),
     Path(IdentPath),
     Global(GlobalId),
     Module(ModuleId),
