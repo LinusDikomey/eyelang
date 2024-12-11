@@ -33,7 +33,7 @@ struct Lexer<'a> {
     newline: bool,
 }
 
-impl<'a> Lexer<'a> {
+impl Lexer<'_> {
     fn parse(mut self, errors: &mut Errors) -> Vec<Token> {
         while self.index < self.chars.len() {
             self.newline |= self.skip_junk();

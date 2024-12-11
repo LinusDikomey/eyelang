@@ -19,8 +19,8 @@ pub fn check(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
 ) -> (LValue, LocalTypeId) {
-    match &ctx.ast[expr] {
-        &Expr::Ident { span } => {
+    match ctx.ast[expr] {
+        Expr::Ident { span } => {
             match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
                 LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
                     (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
@@ -33,27 +33,24 @@ pub fn check(
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }
-        &Expr::UnOp(_, UnOp::Deref, inner) => {
+        Expr::UnOp(_, UnOp::Deref, inner) => {
             let pointee = ctx.hir.types.add_unknown();
             let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
             let node = expr::check(ctx, inner, scope, pointer, return_ty, noreturn);
             (LValue::Deref(ctx.hir.add(node)), pointee)
         }
-        &Expr::MemberAccess {
+        Expr::MemberAccess {
             left,
             name: name_span,
         } => {
             let left_ty = ctx.hir.types.add_unknown();
             let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
             let name = &ctx.ast.src()[name_span.range()];
-            match ctx.hir.types[left_ty] {
-                TypeInfo::ModuleItem(id) => {
-                    let def =
-                        ctx.compiler
-                            .resolve_in_module(id, name, name_span.in_mod(ctx.module));
-                    return def_lvalue(ctx, expr, def);
-                }
-                _ => {}
+            if let TypeInfo::ModuleItem(id) = ctx.hir.types[left_ty] {
+                let def = ctx
+                    .compiler
+                    .resolve_in_module(id, name, name_span.in_mod(ctx.module));
+                return def_lvalue(ctx, expr, def);
             }
             let Some((dereffed_left_ty, pointer_count)) =
                 auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
@@ -83,21 +80,21 @@ pub fn check(
                                 dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
                                     ast[left].span(ast)
                                 });
-                            return (
+                            (
                                 LValue::Member {
                                     tuple: ctx.hir.add_lvalue(left_lval),
                                     index,
                                     elem_types,
                                 },
                                 field_ty,
-                            );
+                            )
                         }
                         ResolvedTypeDef::Enum(_) => {
                             ctx.compiler.errors.emit_err(
                                 Error::NonexistantMember(None)
                                     .at_span(name_span.in_mod(ctx.module)),
                             );
-                            return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
                         }
                     }
                 }
@@ -106,11 +103,11 @@ pub fn check(
                     ctx.compiler.errors.emit_err(
                         Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)),
                     );
-                    return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
                 }
             }
         }
-        &Expr::TupleIdx { left, idx, .. } => {
+        Expr::TupleIdx { left, idx, .. } => {
             let left_ty = ctx.hir.types.add_unknown();
             let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
             let Some((dereffed_ty, pointer_count)) =
@@ -148,7 +145,7 @@ pub fn check(
                 }
             }
         }
-        &Expr::Index { expr, idx, .. } => {
+        Expr::Index { expr, idx, .. } => {
             let element_type = ctx.hir.types.add_unknown();
             let (array, array_ty) = check(ctx, expr, scope, return_ty, noreturn);
             ctx.specify(
@@ -219,7 +216,7 @@ fn dereffed_to_lvalue(
     ctx: &mut Ctx,
     node: Node,
     ty: LocalTypeId,
-    pointer_count: u32,
+    mut pointer_count: u32,
     span: impl Fn(&Ast) -> TSpan,
 ) -> LValue {
     if pointer_count == 0 {
@@ -244,6 +241,7 @@ fn dereffed_to_lvalue(
                 deref_ty: pointee,
             };
             current_ty = pointee;
+            pointer_count -= 1;
         }
         LValue::Deref(ctx.hir.add(current_val))
     }

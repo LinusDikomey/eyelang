@@ -2,13 +2,13 @@ use std::{num::NonZeroU64, ops::Index};
 
 use crate::Layout;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct IrTypes {
     types: Vec<IrType>,
 }
 impl IrTypes {
     pub fn new() -> Self {
-        Self { types: vec![] }
+        Self::default()
     }
 
     pub fn add(&mut self, ty: IrType) -> TypeRef {
@@ -110,7 +110,7 @@ impl IrTypes {
                 if size_a != size_b {
                     return false;
                 }
-                return self.are_equal(self[elem_a], self[elem_b]);
+                self.are_equal(self[elem_a], self[elem_b])
             }
             IrType::Tuple(a) => {
                 let IrType::Tuple(b) = b else { return false };

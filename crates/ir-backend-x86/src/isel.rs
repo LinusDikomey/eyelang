@@ -173,7 +173,7 @@ struct Gen<'a> {
     stack_setup_indices: Vec<u32>,
     block_map: Box<[(MirBlock, VRegs)]>,
 }
-impl<'a> Gen<'a> {
+impl Gen<'_> {
     fn create_epilogue(&mut self, builder: &mut Builder) {
         self.stack_setup_indices.push(builder.next_inst_index());
         builder.inst(Inst::addri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
@@ -199,7 +199,7 @@ impl<'a> Gen<'a> {
                 MCValue::PtrOffset(MCReg::Register(Reg::rbp), offset)
             }
             Tag::Load => {
-                let ptr = get_ref(&values, inst.data.un_op());
+                let ptr = get_ref(values, inst.data.un_op());
                 match ptr {
                     MCValue::None | MCValue::TwoRegs(_, _) => unreachable!(),
                     MCValue::Undef => MCValue::Undef,
@@ -308,7 +308,7 @@ impl<'a> Gen<'a> {
             Tag::Rem => todo!(),
             Tag::Ret => {
                 let val = inst.data.un_op();
-                let val = get_ref(&values, val);
+                let val = get_ref(values, val);
                 match self.function.return_type {
                     IrType::Unit => {
                         self.create_epilogue(builder);
@@ -392,7 +392,7 @@ impl<'a> Gen<'a> {
                 let mir_f = self.block_map[f.idx() as usize].0;
                 builder.register_successor(mir_t);
                 builder.register_successor(mir_f);
-                match get_ref(&values, cond) {
+                match get_ref(values, cond) {
                     MCValue::Reg(r) => {
                         builder.inst(Inst::cmpri8, [r.op(), Op::Imm(0)]);
                         // TODO: generate true block next, create false block label
@@ -460,9 +460,9 @@ impl<'a> Gen<'a> {
         values: &[MCValue],
         (ptr, val): (Ref, Ref),
     ) -> MCValue {
-        let ptr = get_ref(&values, ptr);
-        let ty = self.body.get_ref_ty(val, &self.types);
-        let val = get_ref(&values, val);
+        let ptr = get_ref(values, ptr);
+        let ty = self.body.get_ref_ty(val, self.types);
+        let val = get_ref(values, val);
         let MCValue::PtrOffset(ptr, off) = ptr else {
             todo!("handle store into {ptr:?}")
         };
@@ -482,7 +482,7 @@ impl<'a> Gen<'a> {
                 builder.inst(inst, [ptr.op(), offset_op(off), Op::Imm(val)])
             }
             MCValue::Reg(r) => {
-                let layout = ir::type_layout(ty, &self.types);
+                let layout = ir::type_layout(ty, self.types);
                 let inst = match layout.size {
                     0 => unreachable!(),
                     1 => Inst::movmr8,
@@ -497,7 +497,7 @@ impl<'a> Gen<'a> {
                 builder.inst(inst, [ptr.op(), offset_op(off), r.op()])
             }
             MCValue::TwoRegs(r1, r2) => {
-                let layout = ir::type_layout(ty, &self.types);
+                let layout = ir::type_layout(ty, self.types);
                 match layout.size {
                     9..=15 => todo!(),
                     16 => {
@@ -528,8 +528,8 @@ impl<'a> Gen<'a> {
         insts32: BinOpInsts,
         fold: impl Fn(u64, u64) -> u64,
     ) -> MCValue {
-        let lhs = get_ref(&values, lhs);
-        let rhs = get_ref(&values, rhs);
+        let lhs = get_ref(values, lhs);
+        let rhs = get_ref(values, rhs);
         let (insts, class, movrm) = match ty {
             IrType::I32 | IrType::U32 => (insts32, RegClass::GP32, Inst::movrm32),
             _ => todo!(),

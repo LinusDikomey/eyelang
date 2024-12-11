@@ -7,7 +7,6 @@ pub use regalloc::regalloc;
 use std::fmt;
 use std::ops::BitAnd;
 use std::ops::Not;
-use std::usize;
 
 use crate::block_graph::Block;
 use crate::FunctionId;
@@ -20,8 +19,8 @@ pub struct MachineIR<I: Instruction> {
     stack_slots: Vec<StackSlot>,
     stack_offset: u32,
 }
-impl<I: Instruction> MachineIR<I> {
-    pub fn new() -> Self {
+impl<I: Instruction> Default for MachineIR<I> {
+    fn default() -> Self {
         Self {
             insts: Vec::new(),
             extra_ops: Vec::new(),
@@ -35,6 +34,11 @@ impl<I: Instruction> MachineIR<I> {
             stack_slots: Vec::new(),
             stack_offset: 0,
         }
+    }
+}
+impl<I: Instruction> MachineIR<I> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn create_block(
@@ -55,7 +59,7 @@ impl<I: Instruction> MachineIR<I> {
         (block, block_args)
     }
 
-    pub fn begin_block<'a>(&'a mut self, block: MirBlock) -> BlockBuilder<'a, I> {
+    pub fn begin_block(&'_ mut self, block: MirBlock) -> BlockBuilder<'_, I> {
         let info = &mut self.blocks[block.0 as usize];
         debug_assert!(
             info.start == 0 && info.len == 0,

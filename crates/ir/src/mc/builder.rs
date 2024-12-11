@@ -8,7 +8,7 @@ pub struct BlockBuilder<'a, I: Instruction> {
     pub(super) mir: &'a mut MachineIR<I>,
     pub(super) block: MirBlock,
 }
-impl<'a, I: Instruction> BlockBuilder<'a, I> {
+impl<I: Instruction> BlockBuilder<'_, I> {
     pub fn next_inst_index(&self) -> u32 {
         self.mir.insts.len() as u32
     }

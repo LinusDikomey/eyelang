@@ -2,6 +2,7 @@ use dmap::DHashMap;
 use types::Primitive;
 
 use crate::{
+    compiler::ResolvedTypeDef,
     types::{TypeInfo, TypeTable},
     Compiler,
 };
@@ -61,10 +62,23 @@ impl Exhaustion {
                 TypeInfo::Primitive(Primitive::Never) => true,
                 TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
                 TypeInfo::TypeDef(id, _) => {
-                    match compiler.get_resolved_type_def(id) {
+                    match &*compiler.get_resolved_type_def(id).def {
                         // TODO: empty enum case
                         // crate::compiler::ResolvedTypeDef::Enum(def) => if def.variants.is_empty() => true,
-                        _ => false,
+                        ResolvedTypeDef::Enum(enum_def) => {
+                            enum_def.variants.iter().try_fold(true, |b, (_, args)| {
+                                Some(
+                                    b && args.iter().try_fold(false, |b, arg| {
+                                        Some(b || arg.uninhabited().ok()?)
+                                    })?,
+                                )
+                            })?
+                        }
+                        ResolvedTypeDef::Struct(def) => {
+                            def.all_fields().try_fold(false, |b, (_, field)| {
+                                Some(b || field.uninhabited().ok()?)
+                            })?
+                        }
                     }
                 }
                 _ => false,

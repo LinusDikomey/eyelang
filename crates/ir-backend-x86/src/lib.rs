@@ -15,12 +15,13 @@ pub enum Error {
     IO(std::io::Error),
 }
 
+#[derive(Default)]
 pub struct Backend {
     log: bool,
 }
 impl Backend {
     pub fn new() -> Self {
-        Self { log: false }
+        Self::default()
     }
 
     pub fn enable_logging(&mut self) {

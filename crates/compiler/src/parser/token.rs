@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr, u128};
+use std::{fmt, str::FromStr};
 
 use color_format::cwrite;
 use span::TSpan;

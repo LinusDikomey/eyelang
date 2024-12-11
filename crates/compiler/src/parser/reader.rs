@@ -61,10 +61,6 @@ impl TokenReader {
         }
     }
 
-    pub fn step_back(&mut self) {
-        self.index -= 1;
-    }
-
     /// Steps over the current token and returns it. Token type checks only happen in debug mode.
     /// This should only be used if the type is known.
     pub fn step_assert(&mut self, ty: impl Into<TokenType>) -> Token {
@@ -145,6 +141,7 @@ macro_rules! step_or_unexpected {
         let tok = $parser.toks.try_step();
         match tok.map(|t| (t, t.ty)) {
             $(
+                #[allow(clippy::redundant_pattern)]
                 Some(($($tok @)* _, TokenType::$tok_ty $((Keyword::$kw $(($kw_val))* ))* )) => $res,
             )*
             Some((tok, _)) => {
@@ -175,6 +172,7 @@ macro_rules! step_or_unexpected_value {
         let tok = $parser.toks.try_step();
         match tok.map(|t| (t, t.ty)) {
             $(
+                #[allow(clippy::redundant_pattern)]
                 Some(($($tok @)* _, TokenType::$tok_ty $((Keyword::$kw $(($kw_val))* ))* )) => $res,
             )*
             Some((tok, _)) => {

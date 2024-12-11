@@ -518,7 +518,7 @@ fn encode_modrm_rr(reg_a: Reg, reg_b: Reg, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_reg(reg_a);
     let (modrm_b, b) = encode_reg(reg_b);
     let rex = if wide || r || b {
-        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | ((b as u8) << 0)
+        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | (b as u8)
     } else {
         0
     };
@@ -532,7 +532,7 @@ fn encode_modrm_rm(reg_val: Reg, reg_ptr: Reg, off: OffsetClass, wide: bool) -> 
     let (modrm_a, r) = encode_reg(reg_val);
     let (modrm_b, b) = encode_reg(reg_ptr);
     let rex = if wide || r || b {
-        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | ((b as u8) << 0)
+        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | (b as u8)
     } else {
         0
     };
@@ -546,7 +546,7 @@ fn encode_modrm_mr(reg_ptr: Reg, off: OffsetClass, reg_val: Reg, wide: bool) -> 
     let (modrm_a, r) = encode_reg(reg_ptr);
     let (modrm_b, b) = encode_reg(reg_val);
     let rex = if wide || r || b {
-        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | ((b as u8) << 0)
+        0b_0100_0000 | ((wide as u8) << 3) | ((r as u8) << 2) | (b as u8)
     } else {
         0
     };

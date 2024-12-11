@@ -43,6 +43,11 @@ pub struct Mem {
     stack: Vec<u8>,
     heap: Vec<u8>,
 }
+impl Default for Mem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl Mem {
     pub fn new() -> Self {
         Self {
@@ -72,7 +77,7 @@ impl Mem {
         self.stack.truncate(sp as usize);
     }
     pub fn malloc(&mut self, layout: Layout) -> Result<Ptr, OomError> {
-        if self.heap.len() as u64 + layout.size as u64 >= STACK_BIT as u64 {
+        if self.heap.len() as u64 + layout.size >= STACK_BIT as u64 {
             return Err(OomError);
         }
         let addr = Ptr {
@@ -154,8 +159,8 @@ impl Ptr {
         (self.addr as u64) << 32 | self.size as u64
     }
 
-    #[must_use]
-    pub fn add(self, offset: u32) -> Result<Self, ProvenanceError> {
+    #[must_use = "returns a new pointer"]
+    pub fn add_offset(self, offset: u32) -> Result<Self, ProvenanceError> {
         let size = self.size.checked_sub(offset).ok_or(ProvenanceError)?;
         Ok(Self {
             addr: self.addr + offset,
@@ -330,13 +335,13 @@ pub fn eval<E: Environment>(
                     _ => panic!("invalid type"),
                 },
                 super::Tag::Decl => {
-                    let layout = type_layout(types[inst.data.ty()], &types);
+                    let layout = type_layout(types[inst.data.ty()], types);
                     Val::Ptr(mem.stack_alloc(layout)?)
                 }
                 super::Tag::Load => {
                     let ptr = values.load_ptr(inst.data.un_op());
                     values.load_primitives(pc, types[inst.ty], types, |size, offset| {
-                        let ptr = ptr.add(offset)?;
+                        let ptr = ptr.add_offset(offset)?;
                         let val = match size {
                             PrimitiveSize::S8 => u8::from_le_bytes(mem.load_n(ptr)) as u64,
                             PrimitiveSize::S16 => u16::from_le_bytes(mem.load_n(ptr)) as u64,
@@ -360,22 +365,22 @@ pub fn eval<E: Environment>(
                         //eprintln!("  storing {p:?} {ptr:?}");
                         match p {
                             PrimitiveVal::I8(x) => {
-                                let new_ptr = ptr.add(1)?;
+                                let new_ptr = ptr.add_offset(1)?;
                                 mem.store(ptr, &[x]);
                                 ptr = new_ptr;
                             }
                             PrimitiveVal::I16(x) => {
-                                let new_ptr = ptr.add(2)?;
+                                let new_ptr = ptr.add_offset(2)?;
                                 mem.store(ptr, &x.to_le_bytes());
                                 ptr = new_ptr;
                             }
                             PrimitiveVal::I32(x) => {
-                                let new_ptr = ptr.add(4)?;
+                                let new_ptr = ptr.add_offset(4)?;
                                 mem.store(ptr, &x.to_le_bytes());
                                 ptr = new_ptr;
                             }
                             PrimitiveVal::I64(x) => {
-                                let new_ptr = ptr.add(8)?;
+                                let new_ptr = ptr.add_offset(8)?;
                                 mem.store(ptr, &x.to_le_bytes());
                                 ptr = new_ptr;
                             }
@@ -422,7 +427,7 @@ pub fn eval<E: Environment>(
                     } else {
                         let res = env
                             .call_extern(func_id, &args, &mut mem)
-                            .map_err(|s| Error::ExternCallFailed(s))?;
+                            .map_err(Error::ExternCallFailed)?;
                         values.store(pc, &res);
                         pc += 1;
                         continue 'outer;
@@ -491,7 +496,7 @@ pub fn eval<E: Environment>(
                         IrType::I8 | IrType::U8 => ((l as u8) ^ (r as u8)) as u64,
                         IrType::I16 | IrType::U16 => ((l as u16) ^ (r as u16)) as u64,
                         IrType::I32 | IrType::U32 => ((l as u32) ^ (r as u32)) as u64,
-                        IrType::I64 | IrType::U64 => ((l as u64) ^ (r as u64)) as u64,
+                        IrType::I64 | IrType::U64 => l ^ r,
                         _ => panic!("invalid resulting type for xor"),
                     })
                 }
@@ -509,7 +514,7 @@ pub fn eval<E: Environment>(
                             IrType::I8 | IrType::U8 => (l as u8).rotate_left(r) as u64,
                             IrType::I16 | IrType::U16 => (l as u16).rotate_left(r) as u64,
                             IrType::I32 | IrType::U32 => (l as u32).rotate_left(r) as u64,
-                            IrType::I64 | IrType::U64 => (l as u64).rotate_left(r) as u64,
+                            IrType::I64 | IrType::U64 => l.rotate_left(r),
                             _ => panic!("invalid resulting type for rol"),
                         }
                     } else {
@@ -527,7 +532,7 @@ pub fn eval<E: Environment>(
                     let (ptr, elem_types, i) = inst.data.member_ptr(&ir.extra);
                     let ptr = values.load_ptr(ptr);
                     let offset = crate::offset_in_tuple(elem_types, i, types);
-                    Val::Ptr(ptr.add(offset.try_into().unwrap())?)
+                    Val::Ptr(ptr.add_offset(offset.try_into().unwrap())?)
                 }
                 super::Tag::MemberValue => {
                     let (tuple, i) = inst.data.ref_int();
@@ -690,11 +695,11 @@ struct StackFrame {
     values: Values,
 }
 
-fn decode_block_args<'a>(
-    ir: &'a FunctionIr,
+fn decode_block_args(
+    ir: &'_ FunctionIr,
     target: BlockIndex,
     extra_idx: usize,
-) -> impl 'a + ExactSizeIterator<Item = Ref> {
+) -> impl ExactSizeIterator<Item = Ref> + use<'_> {
     let block_arg_count = ir.blocks[target.idx() as usize].arg_count;
     let mut bytes = [0; 4];
     (0..block_arg_count).map(move |i| {

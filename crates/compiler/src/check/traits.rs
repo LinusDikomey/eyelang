@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use id::{ModuleId, TypeId};
 use span::TSpan;
-use types::{Primitive, Type};
+use types::{InvalidTypeError, Primitive, Type};
 
 use crate::{
     compiler::Signature,
@@ -59,7 +59,7 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
             }
 
             let impl_ty = compiler.resolve_type(&impl_.implemented_type, module, impl_.scope);
-            let impl_tree = ImplTree::from_type(&impl_ty, compiler);
+            let impl_tree = ImplTree::from_type(&impl_ty);
             let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
             let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
                 .chain(trait_generics.clone())
@@ -93,7 +93,7 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
                     &base_generics,
                 );
                 match compatible {
-                    Ok(None) | Err(()) => {}
+                    Ok(None) | Err(InvalidTypeError) => {}
                     Ok(Some(incompat)) => compiler.errors.emit_err(
                         Error::TraitSignatureMismatch(incompat).at_span(name_span.in_mod(module)),
                     ),
@@ -202,31 +202,24 @@ pub enum ImplTree {
     Base(BaseType, Box<[ImplTree]>),
 }
 impl ImplTree {
-    pub fn from_type(ty: &Type, compiler: &mut Compiler) -> Self {
+    pub fn from_type(ty: &Type) -> Self {
         match ty {
             Type::Invalid => Self::Base(BaseType::Invalid, Box::new([])),
             &Type::Primitive(p) => Self::Base(BaseType::Primitive(p), Box::new([])),
             Type::DefId { id, generics } => Self::Base(
                 BaseType::TypeId(*id),
-                generics
-                    .iter()
-                    .map(|g| Self::from_type(g, compiler))
-                    .collect(),
+                generics.iter().map(Self::from_type).collect(),
             ),
-            Type::Pointer(pointee) => Self::Base(
-                BaseType::Pointer,
-                Box::new([Self::from_type(pointee, compiler)]),
-            ),
+            Type::Pointer(pointee) => {
+                Self::Base(BaseType::Pointer, Box::new([Self::from_type(pointee)]))
+            }
             Type::Array(b) => Self::Base(
                 BaseType::Array { count: b.1 },
-                Box::new([Self::from_type(&b.0, compiler)]),
+                Box::new([Self::from_type(&b.0)]),
             ),
             Type::Tuple(elements) => Self::Base(
                 BaseType::Tuple,
-                elements
-                    .iter()
-                    .map(|e| Self::from_type(e, compiler))
-                    .collect(),
+                elements.iter().map(Self::from_type).collect(),
             ),
             &Type::Generic(generic) => Self::Any { generic },
             Type::LocalEnum(_) => unreachable!(),
@@ -462,7 +455,7 @@ impl Impl {
         compiler: &mut Compiler,
         span: TSpan,
     ) -> TypeInfoOrIdx {
-        let impl_generics = self.generics.instantiate(types, compiler, span);
+        let impl_generics = self.generics.instantiate(types, span);
         debug_assert_eq!(trait_generics.count, self.trait_generics.len() as u32);
         for (idx, ty) in trait_generics.iter().zip(&self.trait_generics) {
             types.specify_resolved(
@@ -476,7 +469,6 @@ impl Impl {
                 || unreachable!(),
             );
         }
-        let impl_ty = self.impl_ty.instantiate(impl_generics, types);
-        impl_ty
+        self.impl_ty.instantiate(impl_generics, types)
     }
 }

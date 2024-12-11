@@ -53,9 +53,7 @@ pub fn link(
 }
 
 fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
-    let Some(os) = OS else {
-        return None;
-    };
+    let os = OS?;
     Some(match os {
         Os::Linux => {
             let mut cmd = Command::new("ld");
@@ -65,6 +63,8 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
                 "/lib64/ld-linux-x86-64.so.2",
                 "-lc",
                 "help/linux/entry.o",
+                "-static",
+                "--no-dynamic-linker",
                 "-o",
                 out,
             ]);

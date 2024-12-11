@@ -10,22 +10,16 @@ pub struct Layout {
     pub size: u64,
     pub align: NonZeroU64,
 }
-/// can't have shit
-const fn fucking_unwrap(option: Option<NonZeroU64>) -> NonZeroU64 {
-    match option {
-        Some(value) => value,
-        None => loop {}, // fuck you
-    }
-}
+
 impl Layout {
     // TODO: architecture dependent
     pub const PTR: Self = Self {
         size: 8,
-        align: fucking_unwrap(NonZeroU64::new(8)),
+        align: NonZeroU64::new(8).unwrap(),
     };
     pub const EMPTY: Self = Self {
         size: 0,
-        align: fucking_unwrap(NonZeroU64::new(1)),
+        align: NonZeroU64::new(1).unwrap(),
     };
 
     pub fn stride(&self) -> u64 {
@@ -55,7 +49,7 @@ impl Layout {
     }
 }
 
-pub fn type_layout<'a>(ty: IrType, types: &IrTypes) -> Layout {
+pub fn type_layout(ty: IrType, types: &IrTypes) -> Layout {
     use IrType as T;
     match ty {
         T::I8 | T::U8 | T::U1 => Layout {

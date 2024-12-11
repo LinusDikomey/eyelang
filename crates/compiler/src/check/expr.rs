@@ -201,7 +201,7 @@ pub fn check(
             });
             let mut exhaustion = Exhaustion::None;
             let ty = ctx.hir.types.info_from_unresolved(
-                &annotated_ty,
+                annotated_ty,
                 ctx.compiler,
                 ctx.module,
                 scope.get_innermost_static_scope(),
@@ -729,7 +729,7 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             Node::Invalid
         }
         Def::Type(ty) => {
-            let ty = ctx.hir.types.generic_info_from_resolved(ctx.compiler, &ty);
+            let ty = ctx.hir.types.generic_info_from_resolved(&ty);
             let ty = ctx.hir.types.add(ty);
             ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
             Node::Invalid
@@ -841,7 +841,7 @@ fn check_enum_literal(
                 let ty = ctx.hir.types.add_unknown();
                 check(ctx, arg, scope, ty, return_ty, noreturn);
             }
-            return Node::Invalid;
+            Node::Invalid
         }
     }
 }
@@ -854,9 +854,7 @@ fn function_item(
     span: TSpan,
 ) -> Node {
     let signature = Rc::clone(ctx.compiler.get_signature(function_module, function));
-    let generics = signature
-        .generics
-        .instantiate(&mut ctx.hir.types, ctx.compiler, span);
+    let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
@@ -1080,9 +1078,7 @@ fn check_is_instance_method(
     ctx: &mut Ctx,
     span: impl Copy + FnOnce(&Ast) -> TSpan,
 ) -> Option<(u32, LocalTypeIds)> {
-    let Some((_, self_param_ty)) = signature.all_params().next() else {
-        return None;
-    };
+    let (_, self_param_ty) = signature.all_params().next()?;
     let call_generics = create_method_call_generics(&mut ctx.hir.types, signature, generics);
     let mut required_pointer_count = 0;
     let mut current_ty = self_param_ty;
@@ -1098,7 +1094,7 @@ fn check_is_instance_method(
                 for (ty, signature_ty) in generics.iter().zip(signature_generics) {
                     ctx.hir.types.specify_resolved(
                         ty,
-                        &signature_ty,
+                        signature_ty,
                         generics,
                         ctx.generics,
                         ctx.compiler,
@@ -1109,7 +1105,7 @@ fn check_is_instance_method(
             }
             Type::Pointer(inner) => {
                 required_pointer_count += 1;
-                current_ty = &*inner;
+                current_ty = inner;
             }
             _ => {
                 return None;
@@ -1208,7 +1204,7 @@ fn check_type_item_member_access(
                                 TypeInfo::EnumVariantItem {
                                     enum_type: id,
                                     generics,
-                                    ordinal: ordinal as u32,
+                                    ordinal,
                                     arg_types,
                                 },
                                 span,
@@ -1321,13 +1317,7 @@ fn check_call(
                     ResolvedTypeDef::Struct(struct_def) => {
                         ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
                         check_struct_initializer(
-                            ctx,
-                            &struct_def,
-                            generics,
-                            call,
-                            scope,
-                            return_ty,
-                            noreturn,
+                            ctx, struct_def, generics, call, scope, return_ty, noreturn,
                         )
                         .unwrap_or_else(|_| {
                             ctx.invalidate(expected);
@@ -1439,11 +1429,10 @@ fn check_call(
                     }
                     ctx.hir
                         .modify_node(args.iter().next().unwrap(), called_node);
-                    let self_type = ctx.hir.types.from_generic_resolved(
-                        ctx.compiler,
-                        &signature.params[0].1,
-                        generics,
-                    );
+                    let self_type = ctx
+                        .hir
+                        .types
+                        .from_generic_resolved(&signature.params[0].1, generics);
                     ctx.hir
                         .types
                         .replace(arg_types.iter().next().unwrap(), self_type);
@@ -1520,11 +1509,9 @@ fn check_call(
             let checked_trait = Rc::clone(checked_trait);
             let signature = &checked_trait.functions[method_index as usize];
             let span = ctx.ast[expr].span(ctx.ast);
-            let generics = signature
-                .generics
-                .instantiate(&mut ctx.hir.types, ctx.compiler, span);
+            let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
             debug_assert!(
-                signature.generics.count() >= checked_trait.generics.count() + 1,
+                signature.generics.count() > checked_trait.generics.count(),
                 "the method should at least have the trait's and the self type's generics {} >= {}",
                 signature.generics.count(),
                 checked_trait.generics.count() + 1,
@@ -1597,7 +1584,7 @@ fn check_call(
                 Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
             );
             ctx.invalidate(expected);
-            return Node::Invalid;
+            Node::Invalid
         }
         TypeInfo::Unknown => {
             ctx.compiler.errors.emit_err(

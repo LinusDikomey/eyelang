@@ -1,4 +1,9 @@
 #![deny(unused_must_use)]
+#![allow(
+    clippy::new_without_default,
+    clippy::too_many_arguments,
+    clippy::wrong_self_convention
+)]
 
 /// typechecking and emitting hir from the ast
 pub mod check;

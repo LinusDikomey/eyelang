@@ -14,7 +14,7 @@ use unify::unify;
 use crate::{
     check::{expr::int_ty_from_variant_count, traits},
     compiler::{Def, Generics, ResolvedTypeDef},
-    error::{Error, Errors},
+    error::Error,
     parser::ast::{self, TraitId},
     Compiler,
 };
@@ -211,7 +211,11 @@ impl TypeTable {
                 count: Some(count),
             } => Type::Array(Box::new((self.to_generic_resolved(self[element])?, count))),
             TypeInfo::Enum(_) => todo!(),
-            TypeInfo::Tuple(_) => todo!(),
+            TypeInfo::Tuple(ids) => Type::Tuple(
+                ids.iter()
+                    .map(|id| self.to_generic_resolved(self[id]))
+                    .collect::<Result<_, _>>()?,
+            ),
             TypeInfo::Function {
                 params,
                 return_type,
@@ -250,7 +254,7 @@ impl TypeTable {
         infos: impl IntoIterator<Item = TypeInfoOrIdx>,
     ) -> LocalTypeIds {
         let start = self.types.len();
-        self.types.extend(infos.into_iter());
+        self.types.extend(infos);
         let count = self.types.len() - start;
         LocalTypeIds {
             idx: start as _,
@@ -320,8 +324,8 @@ impl TypeTable {
         }
     }
 
-    pub fn generic_info_from_resolved(&mut self, compiler: &mut Compiler, ty: &Type) -> TypeInfo {
-        let ty = self.from_generic_resolved_internal(compiler, ty, None);
+    pub fn generic_info_from_resolved(&mut self, ty: &Type) -> TypeInfo {
+        let ty = self.from_generic_resolved_internal(ty, None);
         let TypeInfoOrIdx::TypeInfo(info) = ty else {
             // we can't get back a generic since we don't pass in any generics
             unreachable!()
@@ -329,8 +333,8 @@ impl TypeTable {
         info
     }
 
-    pub fn info_from_resolved(&mut self, compiler: &mut Compiler, ty: &Type) -> TypeInfo {
-        let ty = self.from_generic_resolved(compiler, ty, LocalTypeIds::EMPTY);
+    pub fn info_from_resolved(&mut self, ty: &Type) -> TypeInfo {
+        let ty = self.from_generic_resolved(ty, LocalTypeIds::EMPTY);
         let TypeInfoOrIdx::TypeInfo(info) = ty else {
             // we can't get back a generic since we don't pass in any generics
             unreachable!()
@@ -338,19 +342,13 @@ impl TypeTable {
         info
     }
 
-    pub fn from_generic_resolved(
-        &mut self,
-        compiler: &mut Compiler,
-        ty: &Type,
-        generics: LocalTypeIds,
-    ) -> TypeInfoOrIdx {
-        self.from_generic_resolved_internal(compiler, ty, Some(generics))
+    pub fn from_generic_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+        self.from_generic_resolved_internal(ty, Some(generics))
     }
     /// Only produces an Index instead of a TypeInfo when the Type is Type::Generic
     /// generics: None will produce generic TypeInfos for generic functions
     fn from_generic_resolved_internal(
         &mut self,
-        compiler: &mut Compiler,
         ty: &Type,
         generics: Option<LocalTypeIds>,
     ) -> TypeInfoOrIdx {
@@ -364,19 +362,19 @@ impl TypeTable {
                 let count = inner_generics.len();
                 let generics_ids = self.add_multiple_unknown(count as u32);
                 for (resolved, id) in inner_generics.iter().zip(generics_ids.iter()) {
-                    let ty = self.from_generic_resolved_internal(compiler, resolved, generics);
+                    let ty = self.from_generic_resolved_internal(resolved, generics);
                     self.replace(id, ty)
                 }
                 TypeInfo::TypeDef(*id, generics_ids)
             }
             Type::Pointer(pointee) => {
-                let pointee = self.from_generic_resolved_internal(compiler, pointee, generics);
+                let pointee = self.from_generic_resolved_internal(pointee, generics);
                 let pointee = self.add_info_or_idx(pointee);
                 TypeInfo::Pointer(pointee)
             }
             Type::Array(b) => {
                 let (elem_ty, count) = &**b;
-                let element = self.from_generic_resolved_internal(compiler, elem_ty, generics);
+                let element = self.from_generic_resolved_internal(elem_ty, generics);
                 let element = self.add_info_or_idx(element);
                 TypeInfo::Array {
                     element,
@@ -386,8 +384,7 @@ impl TypeTable {
             Type::Tuple(elements) => {
                 let element_ids = self.add_multiple_unknown(elements.len() as _);
                 for (element, id) in elements.iter().zip(element_ids.iter()) {
-                    self.types[id.idx()] =
-                        self.from_generic_resolved_internal(compiler, element, generics);
+                    self.types[id.idx()] = self.from_generic_resolved_internal(element, generics);
                 }
                 TypeInfo::Tuple(element_ids)
             }
@@ -399,11 +396,9 @@ impl TypeTable {
             Type::Function(func) => {
                 let params = self.add_multiple_unknown(func.params.len() as _);
                 for (param, id) in func.params.iter().zip(params.iter()) {
-                    self.types[id.idx()] =
-                        self.from_generic_resolved_internal(compiler, param, generics);
+                    self.types[id.idx()] = self.from_generic_resolved_internal(param, generics);
                 }
-                let return_type =
-                    self.from_generic_resolved_internal(compiler, &func.return_type, generics);
+                let return_type = self.from_generic_resolved_internal(&func.return_type, generics);
                 TypeInfo::Function {
                     params,
                     return_type: self.add_info_or_idx(return_type),
@@ -473,7 +468,7 @@ impl TypeTable {
                             generic_infos
                         });
                         let TypeInfoOrIdx::TypeInfo(info) =
-                            self.from_generic_resolved_internal(compiler, &ty, generics)
+                            self.from_generic_resolved_internal(&ty, generics)
                         else {
                             unreachable!()
                         };
@@ -755,9 +750,7 @@ impl TypeTable {
             idx = next;
         }
         match self[idx] {
-            TypeInfo::Invalid => {
-                return Err(None);
-            }
+            TypeInfo::Invalid => Err(None),
             TypeInfo::Enum(id) => {
                 let variants = self.get_enum_variants(id);
                 if let Some(variant) = variants
@@ -785,7 +778,7 @@ impl TypeTable {
                 if let ResolvedTypeDef::Enum(enum_) = &*def {
                     let variant = enum_.variants.iter().zip(0..).find_map(
                         |((variant_name, arg_types), i)| {
-                            (variant_name == name).then_some((i, &*arg_types))
+                            (variant_name == name).then_some((i, arg_types))
                         },
                     );
                     if let Some((variant_index, arg_types)) = variant {
@@ -804,7 +797,7 @@ impl TypeTable {
                                 int_ty_from_variant_count(enum_.variants.len() as u32),
                             );
                             for (r, ty) in arg_type_iter.zip(arg_types.iter()) {
-                                let ty = self.from_generic_resolved(compiler, ty, generics);
+                                let ty = self.from_generic_resolved(ty, generics);
                                 self.replace(r, ty);
                             }
 
@@ -852,7 +845,7 @@ impl TypeTable {
         compiler: &mut Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         // PERF:could special-case this function to avoid instantiating the Type
-        let resolved_info = self.from_generic_resolved(compiler, resolved, generics);
+        let resolved_info = self.from_generic_resolved(resolved, generics);
         match resolved_info {
             TypeInfoOrIdx::TypeInfo(info) => {
                 self.try_specify(id, info, function_generics, compiler)
@@ -919,15 +912,14 @@ impl TypeTable {
                     }
                     s.push_str(compiler.get_trait_name(bound.trait_id.0, bound.trait_id.1));
                     if bound.generics.count != 0 {
-                        s.push_str("[");
+                        s.push('[');
                         for (i, generic) in bound.generics.iter().enumerate() {
                             if i != 0 {
                                 s.push_str(", ");
                             }
                             self.type_to_string(compiler, self[generic], s);
                         }
-
-                        s.push_str("]");
+                        s.push(']');
                     }
                 }
             }

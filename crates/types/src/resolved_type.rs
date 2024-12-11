@@ -116,9 +116,9 @@ impl Type {
         }
     }
 
-    pub fn is_same_as<'a>(&self, other: &Type) -> Result<bool, ()> {
+    pub fn is_same_as(&self, other: &Type) -> Result<bool, InvalidTypeError> {
         Ok(match (self, other) {
-            (Self::Invalid, _) | (_, Self::Invalid) => return Err(()),
+            (Self::Invalid, _) | (_, Self::Invalid) => return Err(InvalidTypeError),
             (Self::Primitive(a), Self::Primitive(b)) => a == b,
             (
                 Self::DefId {
@@ -158,6 +158,27 @@ impl Type {
             (Self::LocalEnum(_), Self::LocalEnum(_)) => unreachable!(),
             (Self::Function(a), Self::Function(b)) => a.is_same_as(b)?,
             _ => false,
+        })
+    }
+
+    pub fn uninhabited(&self) -> Result<bool, InvalidTypeError> {
+        Ok(match self {
+            Self::Primitive(Primitive::Never) => true,
+            Self::Primitive(_) => false,
+            Self::DefId { .. } => false, // TODO
+            Self::Pointer(_) => false,
+            Self::Array(arr) => arr.1 != 0 && arr.0.uninhabited()?,
+            Self::Tuple(fields) => fields
+                .iter()
+                .try_fold(false, |b, field| Ok(b || field.uninhabited()?))?,
+            Self::Generic(_) => false, // TODO
+            Self::LocalEnum(variants) => variants.iter().try_fold(true, |b, (_, args)| {
+                Ok(b && args
+                    .iter()
+                    .try_fold(false, |b, arg| Ok(b || arg.uninhabited()?))?)
+            })?,
+            Self::Function(_) => false,
+            Self::Invalid => return Err(InvalidTypeError),
         })
     }
 }
@@ -221,7 +242,7 @@ pub struct FunctionType {
     pub return_type: Box<Type>,
 }
 impl FunctionType {
-    pub fn is_same_as<'a>(&self, b: &Self) -> Result<bool, ()> {
+    pub fn is_same_as(&self, b: &Self) -> Result<bool, InvalidTypeError> {
         if self.params.len() != b.params.len() {
             return Ok(false);
         }
@@ -233,3 +254,5 @@ impl FunctionType {
         self.return_type.is_same_as(&b.return_type)
     }
 }
+
+pub struct InvalidTypeError;

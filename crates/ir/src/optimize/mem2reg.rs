@@ -2,6 +2,8 @@
 //! locally inside each Block and thus won't create any new block arguments. It will fail to
 //! eliminate many kinds of stack allocations.
 
+#![allow(clippy::disallowed_types)] // fine for now
+
 use std::collections::{hash_map::Entry, HashMap};
 
 use crate::{Bitmap, IrType, Ref, Tag};

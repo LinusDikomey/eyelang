@@ -363,7 +363,7 @@ pub fn value_expr(
 struct LazyEvalEnv<'a> {
     compiler: &'a mut Compiler,
 }
-impl<'a> ir::eval::Environment for LazyEvalEnv<'a> {
+impl ir::eval::Environment for LazyEvalEnv<'_> {
     fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
         &self.compiler.ir_module.funcs[id.0 as usize]
     }

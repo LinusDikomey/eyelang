@@ -167,7 +167,7 @@ impl ElfObjectWriter {
 
         file.write_all(self.strtab.as_bytes())?;
         for (_, content) in &self.sections {
-            file.write_all(&content)?;
+            file.write_all(content)?;
         }
 
         Ok(())

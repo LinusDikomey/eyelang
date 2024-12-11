@@ -204,13 +204,13 @@ fn main() -> Result<(), MainError> {
                         .emit_module(
                             &compiler.ir_module,
                             args.backend_ir,
-                            args.target.as_ref().map(String::as_str),
+                            args.target.as_deref(),
                             Path::new(&obj_file),
                         )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
                 }
                 #[cfg(feature = "llvm-backend")]
-                Backend::LLVM => {
+                Backend::Llvm => {
                     let mut backend = ir_backend_llvm::Backend::new();
                     if args.log {
                         backend.enable_logging();
@@ -222,7 +222,7 @@ fn main() -> Result<(), MainError> {
                         .emit_module(
                             &compiler.ir_module,
                             args.backend_ir,
-                            target.as_ref().map(|s| s.as_c_str()),
+                            target.as_deref(),
                             Path::new(&obj_file),
                         )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
@@ -268,7 +268,7 @@ fn list_targets(backend: args::Backend) {
     match backend {
         Backend::C => todo!(),
         #[cfg(feature = "llvm-backend")]
-        Backend::LLVM => {
+        Backend::Llvm => {
             let targets = ir_backend_llvm::list_targets();
             println!("Available LLVM targets: (total: {})", targets.len());
             for target in targets {

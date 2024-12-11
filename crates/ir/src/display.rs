@@ -102,14 +102,14 @@ pub struct FunctionDisplay<'a> {
     func: &'a Function,
     info: Info<'a>,
 }
-impl<'a> fmt::Display for FunctionDisplay<'a> {
+impl fmt::Display for FunctionDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { func, info } = self;
         write!(f, "(")?;
         write_delimited_with(
             f,
             func.params.iter(),
-            |f, param| display_type(f, func.types[param], &func.types, *info),
+            |f, param| display_type(f, func.types[param], &func.types),
             ", ",
         )?;
         if func.varargs {
@@ -119,7 +119,7 @@ impl<'a> fmt::Display for FunctionDisplay<'a> {
             write!(f, "...")?;
         }
         cwrite!(f, ") -#> ")?;
-        display_type(f, func.return_type, &func.types, *info)?;
+        display_type(f, func.return_type, &func.types)?;
 
         if let Some(ir) = &func.ir {
             write!(f, "\n{}", ir.display(*info, &func.types))?;
@@ -153,7 +153,7 @@ pub struct InstructionDisplay<'a> {
     blocks: &'a [BlockInfo],
 }
 
-impl<'a> fmt::Display for InstructionDisplay<'a> {
+impl fmt::Display for InstructionDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let InstructionDisplay {
             inst,
@@ -165,10 +165,8 @@ impl<'a> fmt::Display for InstructionDisplay<'a> {
         write!(f, "{} ", inst.tag)?;
         display_data(inst, f, extra, self.types, *info, blocks)?;
         if inst.ty.is_present() {
-            match inst.tag {
-                _ => cwrite!(f, " :: ")?,
-            };
-            display_type(f, types[inst.ty], types, self.info)?;
+            cwrite!(f, " :: ")?;
+            display_type(f, types[inst.ty], types)?;
         }
         Ok(())
     }
@@ -177,7 +175,6 @@ fn display_type(
     f: &mut fmt::Formatter<'_>,
     ty: super::ir_types::IrType,
     types: &IrTypes,
-    info: Info,
 ) -> fmt::Result {
     use super::ir_types::IrType;
 
@@ -199,7 +196,7 @@ fn display_type(
         IrType::Ptr => "ptr",
         IrType::Array(inner, count) => {
             cwrite!(f, "#m<[>")?;
-            display_type(f, types[inner], types, info)?;
+            display_type(f, types[inner], types)?;
             cwrite!(f, "#m<; {count}]>")?;
             return Ok(());
         }
@@ -208,7 +205,7 @@ fn display_type(
             write_delimited_with(
                 f,
                 elems.iter(),
-                |f, ty| display_type(f, types[ty], types, info),
+                |f, ty| display_type(f, types[ty], types),
                 ", ",
             )?;
             cwrite!(f, "#m<)>")?;
@@ -273,7 +270,7 @@ fn display_data(
             write_delimited_with(
                 f,
                 elem_refs.iter(),
-                |f, elem| display_type(f, types[elem], types, info),
+                |f, elem| display_type(f, types[elem], types),
                 ", ",
             )?;
             cwrite!(f, "#m<)>, #y<{elem_idx}>")
@@ -282,7 +279,7 @@ fn display_data(
             let (array_ptr, elem_ty, index_ref) = inst.data.array_index(extra);
             write_ref(f, array_ptr)?;
             cwrite!(f, " #g<as> #m<*[>")?;
-            display_type(f, types[elem_ty], types, info)?;
+            display_type(f, types[elem_ty], types)?;
             cwrite!(f, "#m<]>, ")?;
             write_ref(f, index_ref)
         }
@@ -316,7 +313,7 @@ fn display_data(
             write_delimited_with(
                 f,
                 arg_types.iter(),
-                |f, ty| display_type(f, types[ty], types, info),
+                |f, ty| display_type(f, types[ty], types),
                 ", ",
             )?;
             write!(f, "(")?;
@@ -324,7 +321,7 @@ fn display_data(
             write!(f, ")")
         }
         DataVariant::Float => cwrite!(f, "#y<{}>", inst.data.float()),
-        DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty()], types, info),
+        DataVariant::TypeTableIdx => display_type(f, types[inst.data.ty()], types),
         DataVariant::UnOp => write_ref(f, inst.data.un_op()),
         DataVariant::BinOp => {
             write_ref(f, inst.data.bin_op().0)?;
@@ -335,7 +332,7 @@ fn display_data(
             let (block, extra_idx) = inst.data.goto();
             let arg_count = blocks[block.idx() as usize].arg_count;
             cwrite!(f, "{}", block)?;
-            write_block_args(f, arg_count, &extra, extra_idx)
+            write_block_args(f, arg_count, extra, extra_idx)
         }
         DataVariant::Branch => {
             let (r, a, b, i) = inst.data.branch(extra);

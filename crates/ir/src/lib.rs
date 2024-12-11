@@ -1,5 +1,3 @@
-#![feature(variant_count)]
-
 use color_format::*;
 use std::{
     collections::BTreeMap,
@@ -122,10 +120,10 @@ impl FunctionIr {
         self.inst.len() as u32
     }
 
-    pub fn get_block<'a>(
-        &'a self,
+    pub fn get_block(
+        &'_ self,
         block: BlockIndex,
-    ) -> impl 'a + ExactSizeIterator<Item = (u32, Instruction)> {
+    ) -> impl ExactSizeIterator<Item = (u32, Instruction)> + use<'_> {
         let info = &self.blocks[block.idx() as usize];
         (info.start..info.start + info.len).map(|i| (i, self.inst[i as usize]))
     }
@@ -203,8 +201,6 @@ pub struct Global {
     pub value: ConstValue,
 }
 
-const INDEX_OFFSET: u32 = std::mem::variant_count::<RefVal>() as u32;
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Ref(u32);
 impl Ref {
@@ -263,6 +259,7 @@ pub enum RefVal {
     Unit,
     Undef,
 }
+const INDEX_OFFSET: u32 = 4;
 impl fmt::Display for RefVal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

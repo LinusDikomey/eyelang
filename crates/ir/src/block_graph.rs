@@ -110,7 +110,7 @@ impl<B: Blocks> BlockGraph<B> {
         self.preds[block.idx()].contains(&pred)
     }
 
-    pub fn preds<'a>(&'a self, block: B::Block) -> impl 'a + Iterator<Item = B::Block> {
+    pub fn preds(&self, block: B::Block) -> impl Iterator<Item = B::Block> + use<'_, B> {
         self.preds[block.idx()].iter().copied()
     }
 
@@ -148,11 +148,13 @@ fn calculate_postorder_and_preds<B: Blocks>(ir: &B) -> (Vec<B::Block>, Box<[Hash
                 stack.push((Event::Exit, block));
                 let succs = ir.successors(block);
                 for &succ in succs.iter() {
-                    preds[succ.idx() as usize].insert(block);
+                    preds[succ.idx()].insert(block);
                 }
+                // suggestion doesn't work because seen is borrowed twice
+                #[allow(clippy::filter_map_bool_then)]
                 stack.extend(succs.iter().filter_map(|&block| {
-                    (!seen.get(block.idx() as usize)).then(|| {
-                        seen.set(block.idx() as usize, true);
+                    (!seen.get(block.idx())).then(|| {
+                        seen.set(block.idx(), true);
                         (Event::Enter, block)
                     })
                 }));

@@ -1,10 +1,4 @@
-use std::{
-    any::Any,
-    collections::VecDeque,
-    ffi::{CStr, CString},
-    io::Write,
-    ptr,
-};
+use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
 
 use ir::{BlockIndex, ConstValue, IrType, IrTypes, TypeRefs};
 use llvm_sys::{
@@ -72,7 +66,7 @@ pub unsafe fn add_global(
     ty: IrType,
     value: &ConstValue,
 ) -> Result<LLVMValueRef, Error> {
-    let Some(ty) = llvm_ty(ctx, ty, &types) else {
+    let Some(ty) = llvm_ty(ctx, ty, types) else {
         return Ok(ptr::null_mut());
     };
     let name = CString::new(name.to_owned()).map_err(|_| Error::NulByte)?;
@@ -273,7 +267,7 @@ unsafe fn build_func(
                 .zip((extra_idx..).step_by(4))
             {
                 let r = ir::Ref::from_bytes(ir.extra[extra_idx..extra_idx + 4].try_into().unwrap());
-                if let Some(mut llvm_val) = get_ref(&instructions, r) {
+                if let Some(mut llvm_val) = get_ref(instructions, r) {
                     let phi = instructions[block_arg_idx as usize];
                     if !phi.is_null() {
                         let mut block = llvm_block;
@@ -328,8 +322,7 @@ unsafe fn build_func(
                 ir::Tag::Float => LLVMConstReal(table_ty(ty).unwrap(), data.float),
                 ir::Tag::Decl => {
                     if let Some(ty) = table_ty(data.ty) {
-                        let ptr = LLVMBuildAlloca(builder, ty, NONE);
-                        ptr
+                        LLVMBuildAlloca(builder, ty, NONE)
                     } else {
                         // return a null pointer if a declaration has a zero-sized type
                         core::LLVMConstPointerNull(LLVMPointerTypeInContext(ctx, 0))
@@ -339,8 +332,7 @@ unsafe fn build_func(
                     let val = get_ref(&instructions, data.un_op);
                     if let Some(pointee_ty) = llvm_ty(ctx, func.types[ty], &func.types) {
                         let val = val.unwrap();
-                        let loaded = LLVMBuildLoad2(builder, pointee_ty, val, NONE);
-                        loaded
+                        LLVMBuildLoad2(builder, pointee_ty, val, NONE)
                     } else {
                         ptr::null_mut()
                     }

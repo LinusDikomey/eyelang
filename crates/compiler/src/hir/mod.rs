@@ -17,16 +17,16 @@ use crate::{
 /// contains all resolved identifiers and type information.
 /// nodes must be non-empty and the last node is the root node
 #[derive(Debug, Clone)]
-pub struct HIR {
+pub struct Hir {
     nodes: Vec<Node>,
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
-    params: Box<[VarId]>,
+    pub params: Box<[VarId]>,
     casts: Vec<Cast>,
     pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
 }
-impl HIR {
+impl Hir {
     pub fn root_id(&self) -> NodeId {
         NodeId((self.nodes.len() - 1) as _)
     }
@@ -582,7 +582,7 @@ impl HIR {
     }
 }
 id!(NodeId);
-impl Index<NodeId> for HIR {
+impl Index<NodeId> for Hir {
     type Output = Node;
 
     fn index(&self, index: NodeId) -> &Self::Output {
@@ -590,14 +590,14 @@ impl Index<NodeId> for HIR {
     }
 }
 id!(CastId);
-impl Index<CastId> for HIR {
+impl Index<CastId> for Hir {
     type Output = Cast;
 
     fn index(&self, index: CastId) -> &Self::Output {
         &self.casts[index.idx()]
     }
 }
-impl IndexMut<CastId> for HIR {
+impl IndexMut<CastId> for Hir {
     fn index_mut(&mut self, index: CastId) -> &mut Self::Output {
         &mut self.casts[index.idx()]
     }
@@ -625,21 +625,21 @@ impl NodeIds {
         self.count == 0
     }
 }
-impl Index<NodeIds> for HIR {
+impl Index<NodeIds> for Hir {
     type Output = [Node];
     fn index(&self, index: NodeIds) -> &Self::Output {
         &self.nodes[index.index as usize..index.index as usize + index.count as usize]
     }
 }
 id!(LValueId);
-impl Index<LValueId> for HIR {
+impl Index<LValueId> for Hir {
     type Output = LValue;
     fn index(&self, index: LValueId) -> &Self::Output {
         &self.lvalues[index.idx()]
     }
 }
 id!(PatternId);
-impl Index<PatternId> for HIR {
+impl Index<PatternId> for Hir {
     type Output = Pattern;
 
     fn index(&self, index: PatternId) -> &Self::Output {
@@ -961,11 +961,11 @@ impl HIRBuilder {
         generics: &Generics,
         module: ModuleId,
         params: Box<[VarId]>,
-    ) -> (HIR, TypeTable) {
+    ) -> (Hir, TypeTable) {
         self.nodes.push(root);
         self.types.finish(compiler, generics, module);
         (
-            HIR {
+            Hir {
                 nodes: self.nodes,
                 lvalues: self.lvalues,
                 patterns: self.patterns,

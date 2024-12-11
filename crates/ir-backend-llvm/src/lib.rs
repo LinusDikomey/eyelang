@@ -31,7 +31,7 @@ pub struct Backend {
     intrinsics: Intrinsics,
 }
 
-const NONE: *const i8 = "\0".as_ptr().cast();
+const NONE: *const i8 = c"".as_ptr().cast();
 const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
 
@@ -42,9 +42,8 @@ fn llvm_bool(b: bool) -> LLVMBool {
         FALSE
     }
 }
-
-impl Backend {
-    pub fn new() -> Self {
+impl Default for Backend {
+    fn default() -> Self {
         let context = unsafe { llvm::core::LLVMContextCreate() };
         let attribs = Attribs::lookup();
 
@@ -54,6 +53,11 @@ impl Backend {
             attribs,
             intrinsics: Intrinsics::lookup(),
         }
+    }
+}
+impl Backend {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn enable_logging(&mut self) {
@@ -68,7 +72,7 @@ impl Backend {
         out_file: &Path,
     ) -> Result<(), Error> {
         let llvm_module: LLVMModuleRef =
-            unsafe { LLVMModuleCreateWithNameInContext("main\0".as_ptr().cast(), self.context) };
+            unsafe { LLVMModuleCreateWithNameInContext(c"main".as_ptr(), self.context) };
         let builder = unsafe { core::LLVMCreateBuilderInContext(self.context) };
         let llvm_funcs = module
             .funcs

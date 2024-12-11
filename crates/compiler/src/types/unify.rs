@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     check::expr::int_ty_from_variant_count,
     compiler::{Generics, ResolvedTypeDef},
-    types::{traits, InferredEnumVariant, TypeInfoOrIdx},
+    types::{traits, TypeInfoOrIdx},
     Compiler,
 };
 
@@ -56,7 +56,7 @@ pub fn unify(
                     bound.generics,
                     types,
                     function_generics,
-                    &*checked_trait,
+                    &checked_trait,
                 );
                 match candidates {
                     traits::Candidates::None => return None, // TODO: better errors

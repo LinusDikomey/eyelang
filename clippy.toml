@@ -1,4 +1,5 @@
 too-many-arguments-threshold = 11
+type-complexity-threshold = 500
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "use DHashMap and dmap::new() to prevent non-determinism" },
 ]

@@ -11,19 +11,19 @@ use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
 use span::{IdentPath, Span, TSpan};
-use types::{FunctionType, Primitive, Type, UnresolvedType};
+use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
 use crate::{
     check::{self, traits},
     error::{CompileError, Error, Errors, ImplIncompatibility},
     eval::{self, ConstValue},
-    hir::HIR,
+    hir::Hir,
     irgen,
     parser::{
         self,
         ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
-    types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
+    types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
     ProjectId,
 };
 
@@ -307,9 +307,7 @@ impl Compiler {
 
     pub fn get_scope_def(&mut self, module: ModuleId, scope: ScopeId, name: &str) -> Option<Def> {
         let ast = self.get_module_ast(module);
-        let Some(&def) = ast[scope].definitions.get(name) else {
-            return None;
-        };
+        let &def = ast[scope].definitions.get(name)?;
         let def = match def {
             // PERF: return reference here instead of cloning if possible
             ast::Definition::Expr(id) => self.get_def_expr(module, scope, name, id).clone(),
@@ -355,7 +353,7 @@ impl Compiler {
         let ast = Rc::clone(&parsed.ast);
         let (value, ty) = &ast[id];
         let value = *value;
-        let def = eval::def_expr(self, module, scope, &ast, value, name, &ty);
+        let def = eval::def_expr(self, module, scope, &ast, value, name, ty);
         self.get_parsed_module(module).symbols.def_exprs[id.0 as usize].put(def)
     }
 
@@ -496,12 +494,12 @@ impl Compiler {
         primitive: Primitive,
         module: ModuleId,
         scope: ScopeId,
-    ) -> Result<bool, ()> {
+    ) -> Result<bool, InvalidTypeError> {
         match self.unresolved_primitive(ty, module, scope) {
             ResolvedPrimitive::Infer => Ok(true),
             ResolvedPrimitive::Primitive(p) => Ok(p == primitive),
             ResolvedPrimitive::Other => Ok(false),
-            ResolvedPrimitive::Invalid => Err(()),
+            ResolvedPrimitive::Invalid => Err(InvalidTypeError),
         }
     }
 
@@ -547,7 +545,7 @@ impl Compiler {
         scope: ScopeId,
         ty_module: ModuleId,
         func_span: Span,
-    ) -> Result<(), ()> {
+    ) -> Result<(), SignatureError> {
         let signature = self.get_signature(func_id.0, func_id.1);
         match ty {
             UnresolvedType::Infer(_) => Ok(()),
@@ -558,7 +556,7 @@ impl Compiler {
             UnresolvedType::Unresolved(path, generics) => {
                 let signature = Rc::clone(signature);
                 match self.resolve_path(ty_module, scope, *path) {
-                    Def::Invalid => Err(()),
+                    Def::Invalid => Err(SignatureError),
                     Def::Type(ty) => {
                         if let Some((generics, generics_span)) = generics {
                             if !generics.is_empty() {
@@ -566,7 +564,7 @@ impl Compiler {
                                     Error::UnexpectedGenerics
                                         .at_span(generics_span.in_mod(ty_module)),
                                 );
-                                return Err(());
+                                return Err(SignatureError);
                             }
                         }
                         let Type::Function(function_ty) = &ty else {
@@ -577,7 +575,7 @@ impl Compiler {
                                 }
                                 .at_span(func_span),
                             );
-                            return Err(());
+                            return Err(SignatureError);
                         };
                         match signature.fits_function_type(function_ty) {
                             Ok(true) => Ok(()),
@@ -589,15 +587,15 @@ impl Compiler {
                                     }
                                     .at_span(func_span),
                                 );
-                                Err(())
+                                Err(SignatureError)
                             }
-                            Err(()) => Err(()),
+                            Err(InvalidTypeError) => Err(SignatureError),
                         }
                     }
                     _ => {
                         self.errors
                             .emit_err(Error::TypeExpected.at_span(path.span().in_mod(ty_module)));
-                        Err(())
+                        Err(SignatureError)
                     }
                 }
             }
@@ -611,7 +609,7 @@ impl Compiler {
                     }
                     .at_span(func_span),
                 );
-                Err(())
+                Err(SignatureError)
             }
         }
     }
@@ -690,7 +688,7 @@ impl Compiler {
             .map(|(name_span, ty, default_value)| {
                 let name = ast[*name_span].into();
                 let (ty, default_value) = match default_value.map(|default_value| {
-                    match eval::value_expr(self, module, scope, ast, default_value, &ty) {
+                    match eval::value_expr(self, module, scope, ast, default_value, ty) {
                         Ok(val) => val,
                         Err(err) => {
                             self.errors.emit_err(
@@ -1282,7 +1280,7 @@ pub enum LocalItem {
     Capture(CaptureId),
     Invalid,
 }
-impl<'p> LocalScope<'p> {
+impl LocalScope<'_> {
     pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
@@ -1373,13 +1371,11 @@ impl Def {
                 UnresolvedType::Infer(_) => Ok(self),
                 _ => Err(Some("a function")),
             },
-            Def::Type(_) => {
-                return compiler
-                    .unresolved_matches_primitive(ty, Primitive::Type, module, scope)
-                    .map_or(Ok(Def::Invalid), |matches| {
-                        matches.then_some(self).ok_or(Some("type"))
-                    })
-            }
+            Def::Type(_) => compiler
+                .unresolved_matches_primitive(ty, Primitive::Type, module, scope)
+                .map_or(Ok(Def::Invalid), |matches| {
+                    matches.then_some(self).ok_or(Some("type"))
+                }),
             Def::Trait(_, _) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
                 _ => Err(Some("a trait")),
@@ -1469,10 +1465,12 @@ pub struct ParsedModule {
     pub instances: IrInstances,
 }
 
+type NamedParams = Box<[(Box<str>, Type, Option<ConstValueId>)]>;
+
 #[derive(Debug)]
 pub struct Signature {
     pub params: Box<[(Box<str>, Type)]>,
-    pub named_params: Box<[(Box<str>, Type, Option<ConstValueId>)]>,
+    pub named_params: NamedParams,
     pub varargs: bool,
     pub return_type: Type,
     pub generics: Generics,
@@ -1490,7 +1488,7 @@ impl Signature {
             .chain(self.named_params.iter().map(|(name, ty, _)| (&**name, ty)))
     }
 
-    pub fn fits_function_type(&self, ty: &FunctionType) -> Result<bool, ()> {
+    pub fn fits_function_type(&self, ty: &FunctionType) -> Result<bool, InvalidTypeError> {
         if self.generics.count() != 0 {
             return Ok(false);
         }
@@ -1519,7 +1517,7 @@ impl Signature {
         generics_offset: u8,
         base_generics_offset: u8,
         base_generics: &[Type],
-    ) -> Result<Option<ImplIncompatibility>, ()> {
+    ) -> Result<Option<ImplIncompatibility>, InvalidTypeError> {
         if !self.generics.compatible_with(
             &base.generics,
             generics_offset,
@@ -1590,7 +1588,7 @@ impl Generics {
         found.is_some_and(|found| {
             debug_assert_eq!(found.generics.len() as u8, bound.generics.count as u8);
             for (id, ty) in bound.generics.iter().zip(found.generics.iter()) {
-                let info = types.generic_info_from_resolved(compiler, ty);
+                let info = types.generic_info_from_resolved(ty);
                 if types.try_specify(id, info, self, compiler).is_err() {
                     return false;
                 }
@@ -1599,12 +1597,7 @@ impl Generics {
         })
     }
 
-    pub fn instantiate(
-        &self,
-        types: &mut TypeTable,
-        compiler: &mut Compiler,
-        span: TSpan,
-    ) -> LocalTypeIds {
+    pub fn instantiate(&self, types: &mut TypeTable, span: TSpan) -> LocalTypeIds {
         let generics = types.add_multiple_unknown(self.generics.len() as _);
         for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
             let info = if bounds.is_empty() {
@@ -1615,7 +1608,7 @@ impl Generics {
                     // TODO: generic trait bounds, assuming no generics for now
                     let trait_generics = types.add_multiple_unknown(bound.generics.len() as _);
                     for (ty, r) in bound.generics.iter().zip(trait_generics.iter()) {
-                        let ty = types.from_generic_resolved(compiler, ty, generics);
+                        let ty = types.from_generic_resolved(ty, generics);
                         types.replace(r, ty);
                     }
                     let bound = crate::types::Bound {
@@ -1632,13 +1625,13 @@ impl Generics {
         generics
     }
 
-    pub fn compatible_with<'a>(
+    pub fn compatible_with(
         &self,
         base: &Self,
         offset: u8,
         base_offset: u8,
         base_generics: &[Type],
-    ) -> Result<bool, ()> {
+    ) -> Result<bool, InvalidTypeError> {
         if self.generics.len() as u8 - offset != base.generics.len() as u8 - base_offset {
             return Ok(false);
         }
@@ -1693,7 +1686,7 @@ pub enum ResolvedTypeDef {
 #[derive(Debug)]
 pub struct ResolvedStructDef {
     pub fields: Box<[(Box<str>, Type)]>,
-    pub named_fields: Box<[(Box<str>, Type, Option<ConstValueId>)]>,
+    pub named_fields: NamedParams,
 }
 impl ResolvedStructDef {
     pub fn all_fields(&self) -> impl Iterator<Item = (&str, &Type)> {
@@ -1804,7 +1797,7 @@ pub struct CheckedFunction {
     pub varargs: bool,
     pub return_type: LocalTypeId,
     pub generic_count: u8,
-    pub body: Option<HIR>,
+    pub body: Option<Hir>,
 }
 impl CheckedFunction {
     pub fn dump(&self, compiler: &Compiler) {
@@ -1930,3 +1923,5 @@ pub fn function_name(
         format!("function_{}_{}", module.idx(), id.idx())
     }
 }
+
+pub struct SignatureError;

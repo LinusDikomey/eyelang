@@ -47,7 +47,7 @@ impl Lsp {
 
     pub fn handle_request(&mut self, method: &str, _params: Value) -> Result<Value, ResponseError> {
         Ok(match method {
-            "textDocument/hover" => serde_json::to_value(&self.handle_hover()).unwrap(),
+            "textDocument/hover" => serde_json::to_value(self.handle_hover()).unwrap(),
             _ => {
                 return Err(ResponseError {
                     code: ERROR_FAILED,

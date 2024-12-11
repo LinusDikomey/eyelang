@@ -20,7 +20,7 @@ use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
 use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
-    hir::{NodeId, HIR},
+    hir::{Hir, NodeId},
     types::{TypeInfo, TypeTable},
 };
 
@@ -87,7 +87,7 @@ macro_rules! crash_point {
 
 pub fn lower_hir(
     mut builder: ir::builder::IrBuilder,
-    hir: &HIR,
+    hir: &Hir,
     hir_types: &TypeTable,
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
@@ -121,8 +121,9 @@ pub fn lower_hir(
         Ok(vars) => vars,
         Err(NoReturn) => return builder.finish(),
     };
-    for (i, param) in params.iter().enumerate() {
-        builder.build_store(vars[i].0, Ref::index(param));
+    debug_assert_eq!(params.count(), hir.params.len());
+    for (param, &var) in params.iter().zip(&hir.params) {
+        builder.build_store(vars[var.idx()].0, Ref::index(param));
     }
     let mut ctx = Ctx {
         compiler,
@@ -145,14 +146,14 @@ pub fn lower_hir(
 struct Ctx<'a> {
     compiler: &'a mut Compiler,
     to_generate: &'a mut Vec<FunctionToGenerate>,
-    hir: &'a HIR,
+    hir: &'a Hir,
     types: &'a TypeTable,
     generics: &'a [Type],
     generic_types: &'a [Type],
     builder: IrBuilder<'a>,
     vars: &'a [(Ref, ir::TypeRef)],
 }
-impl<'a> Ctx<'a> {
+impl Ctx<'_> {
     fn get_ir_id(
         &mut self,
         module: ModuleId,
@@ -214,7 +215,7 @@ impl<'a> Ctx<'a> {
             let ty = ty.clone();
             let value = const_value::translate(value);
             let mut types = ir::IrTypes::new();
-            let ty = types::get(&mut self.compiler, &mut types, &ty, types::Generics::Empty)?;
+            let ty = types::get(self.compiler, &mut types, &ty, types::Generics::Empty)?;
             let global_id = ir::GlobalId(self.compiler.ir_module.globals.len() as _);
             self.compiler.ir_module.globals.push(ir::Global {
                 name,
@@ -841,7 +842,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             res
         }
         &Node::TypeProperty(ty, property) => {
-            let layout = ir::type_layout(ctx.get_type(ctx.types[ty])?, &ctx.builder.types);
+            let layout = ir::type_layout(ctx.get_type(ctx.types[ty])?, ctx.builder.types);
             use crate::hir::TypeProperty;
             let value = match property {
                 TypeProperty::Size => layout.size,

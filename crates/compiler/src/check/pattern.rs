@@ -148,7 +148,7 @@ pub fn check(
             let res = ctx
                 .hir
                 .types
-                .specify_enum_literal(expected, &name, args.count, ctx.compiler);
+                .specify_enum_literal(expected, name, args.count, ctx.compiler);
             match res {
                 Ok((ordinal, arg_types)) => {
                     debug_assert_eq!(arg_types.count, args.count + 1);

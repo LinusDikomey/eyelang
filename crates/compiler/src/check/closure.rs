@@ -9,13 +9,13 @@ use crate::{
     compiler::{CheckedFunction, LocalScope, LocalScopeParent, Signature},
     error::Error,
     hir::{HIRBuilder, Node},
-    parser::ast::{Ast, FunctionId},
+    parser::ast::FunctionId,
     types::{LocalTypeId, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use super::Ctx;
 
-pub fn closure<'p>(
+pub fn closure(
     ctx: &mut Ctx<'_>,
     id: FunctionId,
     expected: LocalTypeId,
@@ -28,10 +28,10 @@ pub fn closure<'p>(
         .expect("TODO: handle/error on extern closures");
     let generics =
         ctx.compiler
-            .resolve_generics(&function.generics, ctx.module, function.scope, &ctx.ast);
+            .resolve_generics(&function.generics, ctx.module, function.scope, ctx.ast);
     let mut types = TypeTable::new();
 
-    let name = crate::compiler::function_name(&ctx.ast, function, ctx.module, id);
+    let name = crate::compiler::function_name(ctx.ast, function, ctx.module, id);
 
     let param_types = types
         .add_multiple_unknown(1 + (function.params.len() + function.named_params.len()) as u32);
@@ -77,7 +77,7 @@ pub fn closure<'p>(
     let mut captures = RefCell::new(IndexMap::new());
     let (hir, types) = super::check(
         ctx.compiler,
-        &ctx.ast,
+        ctx.ast,
         ctx.module,
         &generics,
         function.scope,
@@ -176,7 +176,7 @@ pub fn closure<'p>(
             );
             Type::Invalid
         });
-    let generic_instance = generics.instantiate(&mut ctx.hir.types, ctx.compiler, closure_span);
+    let generic_instance = generics.instantiate(&mut ctx.hir.types, closure_span);
     let symbols = &mut ctx.compiler.get_parsed_module(ctx.module).symbols;
     symbols.functions[id.0 as usize].put(Rc::new(CheckedFunction {
         name,

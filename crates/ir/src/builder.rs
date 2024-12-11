@@ -189,9 +189,9 @@ impl<'a> IrBuilder<'a> {
         }
     }
 
-    /// --------------------------------------------------------------
-    /// -------------------- instruction builders --------------------
-    /// --------------------------------------------------------------
+    // --------------------------------------------------------------
+    // -------------------- instruction builders --------------------
+    // --------------------------------------------------------------
 
     pub fn terminate_block(&mut self, terminator: Terminator) {
         let (tag, data) = match terminator {
@@ -288,7 +288,7 @@ impl<'a> IrBuilder<'a> {
     pub fn build_string(&mut self, string: &[u8], null_terminate: bool) -> Ref {
         let extra = self.extra_data(string);
         let len = if null_terminate {
-            self.extra_data(&[b'\0']);
+            self.extra_data(b"\0");
             string.len() + 1
         } else {
             string.len()

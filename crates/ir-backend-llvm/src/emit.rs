@@ -31,8 +31,8 @@ pub unsafe fn emit(
         target_machine::LLVMCreateTargetMachine(
             target,
             target_triple,
-            "generic\0".as_ptr().cast(), // cpu
-            NONE,                        // features
+            c"generic".as_ptr(), // cpu
+            NONE,                // features
             opt_level,
             target_machine::LLVMRelocMode::LLVMRelocDefault,
             target_machine::LLVMCodeModel::LLVMCodeModelDefault,

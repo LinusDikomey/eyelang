@@ -43,11 +43,9 @@ fn analyze_liveness<I: Instruction>(
         let (block_insts, extra_ops) = mir.block_insts_mut(block);
         analyze_block_liveness(&mut live, intersecting_precolored, block_insts, extra_ops);
         for pred in graph.preds(block) {
-            if liveouts[pred.idx()].union_with(&live) {
-                if !workqueue_set.get(pred.idx()) {
-                    workqueue_set.set(pred.idx(), true);
-                    workqueue.push_back(pred);
-                }
+            if liveouts[pred.idx()].union_with(&live) && !workqueue_set.get(pred.idx()) {
+                workqueue_set.set(pred.idx(), true);
+                workqueue.push_back(pred);
             }
         }
         liveins[block.idx()] = live;
@@ -202,7 +200,7 @@ fn perform_regalloc<I: Instruction>(
                     (RegType::Virtual(a), RegType::Virtual(b)) => {
                         let b_reg = chosen[b.0 as usize];
                         if !b_reg.get_bit(&intersecting_precolored[a.0 as usize]) {
-                            debug_assert_eq!(b_reg.get_bit(&mut free), false, "{block:?}:{i}");
+                            debug_assert!(!b_reg.get_bit(&free), "{block:?}:{i}");
                             chosen[a.0 as usize] = b_reg;
                             let encoded = PHYSICAL_BIT | b_reg.encode() as u64;
                             inst.ops[0] = encoded;

@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 mod lsp;
 mod types;
 
@@ -66,6 +68,7 @@ const ERROR_FAILED: i64 = -32803;
 const ERROR_SERVER_NOT_INITIALIZED: i64 = -32002;
 const ERROR_INVALID_REQUEST: i64 = -32600;
 
+#[allow(clippy::large_enum_variant)]
 enum State {
     Ready,
     Running { lsp: Lsp },
@@ -102,13 +105,13 @@ pub fn run() -> Result<(), LspError> {
             .and_then(|s| s.strip_suffix("\r\n"))
             .and_then(|s| s.parse().ok())
         else {
-            log(format!("invalid content-length header"));
+            log("invalid content-length header".to_owned());
             continue;
         };
         buf.clear();
         stdin.read_line(&mut buf)?;
         if buf != "\r\n" {
-            log(format!("invalid line after content-length header"));
+            log("invalid line after content-length header".to_owned());
             continue;
         }
         log(format!("reading a request of length {len}"));

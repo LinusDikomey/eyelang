@@ -57,7 +57,9 @@ struct Parser<'a> {
     errors: &'a mut Errors,
 }
 
-impl<'a> Parser<'a> {
+type TraitFunctions = Box<[(TSpan, ast::FunctionId)]>;
+
+impl Parser<'_> {
     /// Parses a delimited list. The `item` function parses an item and is supposed to handle the result itself.
     /// `delim` is a delimiter. Trailing delimiters are allowed, but optional here.
     /// `end` is the ending token. It will be returned from this function once parsed.
@@ -192,9 +194,9 @@ impl<'a> Parser<'a> {
                 } => {
                     // try to assign names of definitions
                     // this is a bit hacky but works for now
-                    match self.ast.get_expr(value) {
-                        &Expr::Function { id } => self.ast.assign_function_name(id, name_span),
-                        &Expr::Trait { id } => self.ast.assign_trait_name(id, name_span),
+                    match *self.ast.get_expr(value) {
+                        Expr::Function { id } => self.ast.assign_function_name(id, name_span),
+                        Expr::Trait { id } => self.ast.assign_trait_name(id, name_span),
                         _ => {}
                     }
                     match scope.definitions.entry(name) {
@@ -427,7 +429,7 @@ impl<'a> Parser<'a> {
 
     fn attach_func_body(&mut self, func: &mut Function, body: ExprId) {
         func.body = Some(body);
-        let new_end = self.ast.get_expr(body).span_builder(&self.ast).end;
+        let new_end = self.ast.get_expr(body).span_builder(self.ast).end;
         self.ast.get_scope_mut(func.scope).span.end = new_end;
     }
 
@@ -737,7 +739,7 @@ impl<'a> Parser<'a> {
         lbrace: Token,
         scope: ScopeId,
         impl_generics: &[GenericDef],
-    ) -> ParseResult<(Box<[(TSpan, ast::FunctionId)]>, u32)> {
+    ) -> ParseResult<(TraitFunctions, u32)> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut functions = Vec::new();
         let last = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
@@ -830,7 +832,7 @@ impl<'a> Parser<'a> {
             },
             LBrace #as first => {
                 let block = self.parse_block_from_lbrace(first, scope);
-                return Ok(self.parse_factor_postfix(block, true, scope)?);
+                return self.parse_factor_postfix(block, true, scope);
             },
             LBracket #as first => {
                 let mut elems = Vec::new();
@@ -1209,7 +1211,7 @@ impl<'a> Parser<'a> {
                 })
             },
             LParen #as lparen => {
-                if let Some(_) = self.toks.step_if(TokenType::RParen) {
+                if self.toks.step_if(TokenType::RParen).is_some() {
                     return Ok(UnresolvedType::Primitive {
                         ty: Primitive::Unit,
                         span_start: lparen.start,

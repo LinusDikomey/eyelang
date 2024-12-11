@@ -82,7 +82,7 @@ pub enum Type {
     Section = 0x03,
     File = 0x04,
     Common = 0x05,
-    TLS = 0x06,
+    Tls = 0x06,
     NumTypes = 0x07,
 }
 

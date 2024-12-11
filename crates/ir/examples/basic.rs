@@ -57,7 +57,7 @@ fn main() {
 
     eprintln!("{display}");
     let value = ir::eval::eval(
-        &function.ir.as_ref().unwrap(),
+        function.ir.as_ref().unwrap(),
         &function.types,
         &[],
         &mut ir::eval::EmptyEnv,
@@ -76,7 +76,7 @@ fn main() {
     eprintln!("{display}");
     let args = [ir::eval::Val::Int(5), ir::eval::Val::Int(3)];
     let result = ir::eval::eval(
-        &mul.ir.as_ref().unwrap(),
+        mul.ir.as_ref().unwrap(),
         &mul.types,
         &args,
         &mut ir::eval::EmptyEnv,

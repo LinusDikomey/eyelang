@@ -10,14 +10,14 @@ use std::rc::Rc;
 
 pub use traits::check_trait;
 
-use id::{ConstValueId, ModuleId};
+use id::ModuleId;
 use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
     compiler::{CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId},
     error::{CompileError, Error},
-    hir::{CastId, HIRBuilder, LValue, Node, HIR},
+    hir::{CastId, HIRBuilder, Hir, LValue, Node},
     parser::ast::{Ast, ExprId, ScopeId},
     types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     Compiler,
@@ -64,11 +64,11 @@ pub(crate) fn function(
 
     let param_types = types.add_multiple_unknown(signature.total_arg_count() as u32);
     for ((_, param), r) in signature.all_params().zip(param_types.iter()) {
-        let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(compiler, param));
+        let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(param));
         types.replace(r, i);
     }
 
-    let return_type = types.generic_info_from_resolved(compiler, &signature.return_type);
+    let return_type = types.generic_info_from_resolved(&signature.return_type);
     let return_type = types.add(return_type);
 
     let generic_count = signature.generics.count();
@@ -124,7 +124,7 @@ pub fn check(
     expr: ExprId,
     expected: LocalTypeId,
     parent_scope: LocalScopeParent,
-) -> (HIR, TypeTable) {
+) -> (Hir, TypeTable) {
     let params = params.into_iter();
     let mut param_vars = Vec::with_capacity(params.size_hint().0);
     let variables = params
@@ -173,7 +173,7 @@ pub struct Ctx<'a> {
     /// from, to, cast_expr
     pub deferred_casts: Vec<(LocalTypeId, LocalTypeId, ExprId, CastId)>,
 }
-impl<'a> Ctx<'a> {
+impl Ctx<'_> {
     fn span(&self, expr: ExprId) -> span::Span {
         self.ast[expr].span_in(self.ast, self.module)
     }
@@ -219,9 +219,7 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn type_from_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
-        self.hir
-            .types
-            .from_generic_resolved(self.compiler, ty, generics)
+        self.hir.types.from_generic_resolved(ty, generics)
     }
 
     pub fn types_from_resolved<'t>(
@@ -231,7 +229,7 @@ impl<'a> Ctx<'a> {
     ) -> LocalTypeIds {
         let hir_types = self.hir.types.add_multiple_unknown(types.len() as u32);
         for (r, ty) in hir_types.iter().zip(types) {
-            let ty = self.type_from_resolved(&ty, generics);
+            let ty = self.type_from_resolved(ty, generics);
             self.hir.types.replace(r, ty);
         }
         hir_types
@@ -284,14 +282,14 @@ impl<'a> Ctx<'a> {
         value
     }
 
-    pub(crate) fn finish(self, root: Node, params: Box<[VarId]>) -> (HIR, TypeTable) {
+    pub(crate) fn finish(self, root: Node, params: Box<[VarId]>) -> (Hir, TypeTable) {
         let (mut hir, types) =
             self.hir
                 .finish(root, self.compiler, self.generics, self.module, params);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
                 let error =
-                    Error::Inexhaustive.at_span(self.ast[pat].span_in(&self.ast, self.module));
+                    Error::Inexhaustive.at_span(self.ast[pat].span_in(self.ast, self.module));
                 self.compiler.errors.emit_err(error)
             }
         }
@@ -323,14 +321,12 @@ pub fn verify_main_signature(
         ));
     }
     match &signature.return_type {
-        Type::Invalid => return Err(None),
+        Type::Invalid => Err(None),
         Type::Primitive(p) if p.is_int() | matches!(p, Primitive::Unit) => Ok(()),
-        ty => {
-            return Err(Some(
-                Error::InvalidMainReturnType(ty.to_string())
-                    .at_span(signature.span.in_mod(main_module)),
-            ))
-        }
+        ty => Err(Some(
+            Error::InvalidMainReturnType(ty.to_string())
+                .at_span(signature.span.in_mod(main_module)),
+        )),
     }
 }
 
