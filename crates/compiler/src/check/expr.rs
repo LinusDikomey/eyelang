@@ -408,13 +408,14 @@ pub fn check(
                     // TODO: could add TupleCountMode and stuff again to unify with tuple with
                     // Size::AtLeast. Not doing that for now since it is very rare.
                     ctx.compiler.errors.emit_err(
-                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(expr)),
+                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
                     );
+                    ctx.invalidate(expected);
                     return Node::Invalid;
                 }
             };
             if let Some(elem_ty) = elem_types.nth(idx) {
-                ctx.unify(elem_ty, expected, |ast| ast[expr].span(ast));
+                ctx.unify(expected, elem_ty, |ast| ast[expr].span(ast));
                 Node::Element {
                     tuple_value: ctx.hir.add(tuple_value),
                     index: idx,
