@@ -382,11 +382,7 @@ impl TypeTable {
                 }
             }
             Type::Tuple(elements) => {
-                let element_ids = self.add_multiple_unknown(elements.len() as _);
-                for (element, id) in elements.iter().zip(element_ids.iter()) {
-                    self.types[id.idx()] = self.from_generic_resolved_internal(element, generics);
-                }
-                TypeInfo::Tuple(element_ids)
+                TypeInfo::Tuple(self.multiple_from_generic_resolved_internal(elements, generics))
             }
             &Type::Generic(i) => match generics {
                 Some(generics) => return TypeInfoOrIdx::Idx(generics.nth(i.into()).unwrap()),
@@ -406,6 +402,18 @@ impl TypeTable {
             }
         };
         TypeInfoOrIdx::TypeInfo(info)
+    }
+
+    pub fn multiple_from_generic_resolved_internal(
+        &mut self,
+        types: &[Type],
+        generics: Option<LocalTypeIds>,
+    ) -> LocalTypeIds {
+        let type_ids = self.add_multiple_unknown(types.len() as _);
+        for (element, id) in types.iter().zip(type_ids.iter()) {
+            self.types[id.idx()] = self.from_generic_resolved_internal(element, generics);
+        }
+        type_ids
     }
 
     pub fn info_from_unresolved(
@@ -966,7 +974,7 @@ impl TypeTable {
                     }
                     self.type_to_string(compiler, self[member], s);
                 }
-                if members.iter().count() == 1 {
+                if members.iter().count() < 2 {
                     s.push_str(",)");
                 } else {
                     s.push(')');

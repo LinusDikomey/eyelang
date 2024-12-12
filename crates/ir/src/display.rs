@@ -309,14 +309,14 @@ fn display_data(
         DataVariant::CallPtr => {
             let (func, arg_types, args) = inst.data.call_ptr(extra);
             write_ref(f, func)?;
-            cwrite!(f, " #g<as> ")?;
+            cwrite!(f, " #g<as> #m<fn>(")?;
             write_delimited_with(
                 f,
                 arg_types.iter(),
                 |f, ty| display_type(f, types[ty], types),
                 ", ",
             )?;
-            write!(f, "(")?;
+            write!(f, ") (")?;
             write_delimited_with(f, args, write_ref, ", ")?;
             write!(f, ")")
         }

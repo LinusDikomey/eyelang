@@ -1,3 +1,4 @@
+mod call;
 mod cast;
 mod closure;
 mod exhaust;
@@ -17,7 +18,7 @@ use types::{Primitive, Type};
 use crate::{
     compiler::{CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId},
     error::{CompileError, Error},
-    hir::{CastId, HIRBuilder, Hir, LValue, Node},
+    hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
     parser::ast::{Ast, ExprId, ScopeId},
     types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
     Compiler,
@@ -75,12 +76,11 @@ pub(crate) fn function(
     let varargs = signature.varargs;
 
     let (body, types) = if let Some(body) = function.body {
+        let hir = HIRBuilder::new(types);
         let params = signature
             .all_params()
-            .map(|(name, _ty)| name.into())
-            .zip(param_types.iter());
-
-        let hir = HIRBuilder::new(types);
+            .zip(param_types.iter())
+            .map(|((name, _), id)| (name.into(), id));
 
         let (hir, types) = check(
             compiler,
@@ -128,13 +128,13 @@ pub fn check(
     let params = params.into_iter();
     let mut param_vars = Vec::with_capacity(params.size_hint().0);
     let variables = params
-        .into_iter()
         .map(|(name, ty)| {
             let var = hir.add_var(ty);
             param_vars.push(var);
             (name, var)
         })
         .collect();
+
     let mut scope = crate::compiler::LocalScope {
         parent: parent_scope,
         variables,
@@ -149,6 +149,7 @@ pub fn check(
         hir,
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
+        capture_elements_to_replace: Vec::new(),
     };
     let root = expr::check(
         &mut check_ctx,
@@ -158,7 +159,11 @@ pub fn check(
         expected,
         &mut false,
     );
-    let (hir, types) = check_ctx.finish(root, param_vars.into_boxed_slice());
+    debug_assert!(
+        check_ctx.capture_elements_to_replace.is_empty(),
+        "non-closure tried to capture something"
+    );
+    let (hir, types) = check_ctx.finish(root, param_vars);
     (hir, types)
 }
 
@@ -172,6 +177,7 @@ pub struct Ctx<'a> {
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
     /// from, to, cast_expr
     pub deferred_casts: Vec<(LocalTypeId, LocalTypeId, ExprId, CastId)>,
+    pub capture_elements_to_replace: Vec<NodeId>,
 }
 impl Ctx<'_> {
     fn span(&self, expr: ExprId) -> span::Span {
@@ -184,9 +190,13 @@ impl Ctx<'_> {
         info: impl Into<TypeInfo>,
         span: impl FnOnce(&Ast) -> TSpan,
     ) {
+        let info = info.into();
+        if matches!(info, TypeInfo::Tuple(ids) if ids.count == 0) {
+            panic!("bruh");
+        }
         self.hir
             .types
-            .specify(ty, info.into(), self.generics, self.compiler, || {
+            .specify(ty, info, self.generics, self.compiler, || {
                 span(self.ast).in_mod(self.module)
             })
     }
@@ -282,7 +292,7 @@ impl Ctx<'_> {
         value
     }
 
-    pub(crate) fn finish(self, root: Node, params: Box<[VarId]>) -> (Hir, TypeTable) {
+    pub(crate) fn finish(self, root: Node, params: Vec<VarId>) -> (Hir, TypeTable) {
         let (mut hir, types) =
             self.hir
                 .finish(root, self.compiler, self.generics, self.module, params);

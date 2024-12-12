@@ -10,7 +10,7 @@ use crate::{
     error::Error,
     hir::{HIRBuilder, Node},
     parser::ast::FunctionId,
-    types::{LocalTypeId, TypeInfo, TypeInfoOrIdx, TypeTable},
+    types::{TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use super::Ctx;
@@ -18,10 +18,9 @@ use super::Ctx;
 pub fn closure(
     ctx: &mut Ctx<'_>,
     id: FunctionId,
-    expected: LocalTypeId,
     closed_over: &mut LocalScope,
     closure_span: TSpan,
-) -> Node {
+) -> (Node, TypeInfo) {
     let function = &ctx.ast[id];
     let body = function
         .body
@@ -58,7 +57,8 @@ pub fn closure(
     );
     let return_type = types.add(return_type);
     let varargs = function.varargs;
-    let params = function
+
+    let param_names = function
         .params
         .iter()
         .map(|(name_span, _)| name_span)
@@ -70,19 +70,22 @@ pub fn closure(
         )
         .map(|name_span| ctx.ast.src()[name_span.range()].to_owned().into_boxed_str())
         .zip(param_types.iter().skip(1));
-    // TODO: replace with proper type?
-    let captures_ty = param_types.nth(0).unwrap();
+
     let mut hir = HIRBuilder::new(types);
-    let _captures_arg = hir.add_var(captures_ty);
+
+    let captures_ty = param_types.nth(0).unwrap();
+    let captures_param = hir.add_var(captures_ty);
+
     let mut captures = RefCell::new(IndexMap::new());
-    let (hir, types) = super::check(
+
+    let (mut hir, mut types) = super::check(
         ctx.compiler,
         ctx.ast,
         ctx.module,
         &generics,
         function.scope,
         hir,
-        params,
+        param_names,
         body,
         return_type,
         LocalScopeParent::ClosedOver {
@@ -94,15 +97,17 @@ pub fn closure(
     let captures = captures.into_inner();
     let capture_count = captures.len() as _;
     let capture_nodes = ctx.hir.add_invalid_nodes(capture_count);
-    let capture_infos = ctx.hir.types.add_multiple_unknown(capture_count);
+    let outside_capture_infos = ctx.hir.types.add_multiple_unknown(capture_count);
     let capture_types: Box<[Type]> = captures
         .into_iter()
         .zip(capture_nodes.iter())
-        .zip(capture_infos.iter())
-        .map(|(((var, _), node), ty)| {
+        .zip(outside_capture_infos.iter())
+        .map(|(((var, _), node), outside_id)| {
             ctx.hir.modify_node(node, Node::Variable(var));
             let idx = ctx.hir.get_var(var);
-            ctx.hir.types.replace(ty, TypeInfoOrIdx::Idx(idx));
+            ctx.hir.types.replace(outside_id, TypeInfoOrIdx::Idx(idx));
+            // TODO: probably don't want a type with outer generics here or have to handle it
+            // properly by allowing the closure to inherit outer generics
             ctx.hir
                 .types
                 .to_generic_resolved(ctx.hir.types[idx])
@@ -117,6 +122,10 @@ pub fn closure(
                 })
         })
         .collect();
+    let inside_capture_infos = types.multiple_from_generic_resolved_internal(&capture_types, None);
+    types.replace(captures_ty, TypeInfo::Tuple(inside_capture_infos));
+    let mut s = String::new();
+    types.type_to_string(ctx.compiler, types[captures_ty], &mut s);
 
     let other_params = param_types
         .iter()
@@ -135,14 +144,19 @@ pub fn closure(
             });
             (name, ty)
         });
-    let params = if capture_types.is_empty() {
-        other_params.collect()
+
+    let (params, param_types) = if capture_types.is_empty() {
+        (other_params.collect(), param_types.skip(1))
     } else {
-        let captures_parameter = Type::Tuple(capture_types);
-        std::iter::once((String::new().into_boxed_str(), captures_parameter))
-            .chain(other_params)
-            .collect()
+        hir.params.insert(0, captures_param);
+        let captures_parameter = Type::Tuple(capture_types.clone());
+        let params_including_captures =
+            std::iter::once((String::new().into_boxed_str(), captures_parameter))
+                .chain(other_params)
+                .collect();
+        (params_including_captures, param_types)
     };
+
     let named_params = param_types
         .iter()
         .skip(1 + function.params.len())
@@ -196,29 +210,29 @@ pub fn closure(
         span: function.signature_span,
     }));
     if capture_nodes.is_empty() {
-        ctx.specify(
-            expected,
+        (
+            Node::FunctionItem(ctx.module, id, generic_instance),
             TypeInfo::FunctionItem {
                 module: ctx.module,
                 function: id,
                 generics: generic_instance,
             },
-            |_| closure_span,
-        );
-        Node::Unit
+        )
     } else {
-        ctx.specify(
-            expected,
+        let capture_infos = ctx
+            .hir
+            .types
+            .multiple_from_generic_resolved_internal(&capture_types, Some(generic_instance));
+        (
+            Node::TupleLiteral {
+                elems: capture_nodes,
+                elem_types: capture_infos,
+            },
             TypeInfo::MethodItem {
                 module: ctx.module,
                 function: id,
                 generics: generic_instance,
             },
-            |_| closure_span,
-        );
-        Node::TupleLiteral {
-            elems: capture_nodes,
-            elem_types: capture_infos,
-        }
+        )
     }
 }

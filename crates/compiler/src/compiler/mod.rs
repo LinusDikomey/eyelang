@@ -1820,6 +1820,12 @@ impl CheckedFunction {
             eprint!("(var {i}): ");
             self.types.dump_type(compiler, param);
         }
+        if self.varargs {
+            if self.params.count != 0 {
+                eprint!(", ");
+            }
+            eprint!("...");
+        }
         eprint!(") -> ");
         self.types.dump_type(compiler, self.return_type);
         eprint!("\n  ");

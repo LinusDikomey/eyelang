@@ -248,12 +248,22 @@ fn main() -> Result<(), MainError> {
                 println!("Running {}...", name);
                 // make sure to clean up compiler resources before running
                 drop(compiler);
-                let exit_code = std::process::Command::new(exe_file)
-                    .status()
-                    .map_err(MainError::RunningProgramFailed)?
-                    .code()
-                    .unwrap_or(0);
-                std::process::exit(exit_code);
+                let mut command = std::process::Command::new(exe_file);
+
+                #[cfg(target_family = "unix")]
+                {
+                    let err = std::os::unix::process::CommandExt::exec(&mut command);
+                    return Err(MainError::RunningProgramFailed(err));
+                }
+                #[cfg(not(target_family = "unix"))]
+                {
+                    let exit_code = command
+                        .status()
+                        .map_err(MainError::RunningProgramFailed)?
+                        .code()
+                        .unwrap_or(0);
+                    std::process::exit(exit_code);
+                }
             }
         }
         args::Cmd::ListTargets => unreachable!(),

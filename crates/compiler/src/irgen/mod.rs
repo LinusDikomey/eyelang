@@ -861,6 +861,16 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             };
             ctx.builder.build_function_ptr(id)
         }
+        &Node::Capture(i) => {
+            let (captures, captures_ty) = ctx.vars[ctx.hir.params[0].idx()];
+            let IrType::Tuple(capture_types) = ctx.builder.types[captures_ty] else {
+                unreachable!()
+            };
+            return Ok(ValueOrPlace::Place {
+                ptr: ctx.builder.build_member_ptr(captures, i.0, capture_types),
+                value_ty: capture_types.nth(i.0),
+            });
+        }
     };
     Ok(ValueOrPlace::Value(value))
 }

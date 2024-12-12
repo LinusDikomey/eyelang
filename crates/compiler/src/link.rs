@@ -59,12 +59,10 @@ fn link_cmd(obj: &str, out: &str, link: &[String]) -> Option<Command> {
             let mut cmd = Command::new("ld");
             cmd.args([
                 obj,
-                "-dynamic-linker",
-                "/lib64/ld-linux-x86-64.so.2",
+                //"-dynamic-linker",
+                //"/lib64/ld-linux-x86-64.so.2",
                 "-lc",
                 "help/linux/entry.o",
-                "-static",
-                "--no-dynamic-linker",
                 "-o",
                 out,
             ]);

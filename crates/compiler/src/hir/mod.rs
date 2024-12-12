@@ -4,7 +4,7 @@ use id::{id, ConstValueId, ModuleId};
 use types::{FloatType, IntType, Primitive};
 
 use crate::{
-    compiler::{Generics, VarId},
+    compiler::{CaptureId, Generics, VarId},
     parser::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
@@ -22,7 +22,7 @@ pub struct Hir {
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
-    pub params: Box<[VarId]>,
+    pub params: Vec<VarId>,
     casts: Vec<Cast>,
     pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
 }
@@ -440,6 +440,7 @@ impl Hir {
                 }
                 eprint!("])");
             }
+            &Node::Capture(id) => eprint!("(capture {})", id.0),
         }
     }
 
@@ -793,6 +794,7 @@ pub enum Node {
     },
     TypeProperty(LocalTypeId, TypeProperty),
     FunctionItem(ModuleId, FunctionId, LocalTypeIds),
+    Capture(CaptureId),
 }
 
 #[derive(Debug, Clone)]
@@ -960,7 +962,7 @@ impl HIRBuilder {
         compiler: &mut Compiler,
         generics: &Generics,
         module: ModuleId,
-        params: Box<[VarId]>,
+        params: Vec<VarId>,
     ) -> (Hir, TypeTable) {
         self.nodes.push(root);
         self.types.finish(compiler, generics, module);
