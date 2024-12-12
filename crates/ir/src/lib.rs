@@ -94,7 +94,7 @@ impl FunctionIr {
         match r.into_val() {
             Some(RefVal::True | RefVal::False) => IrType::U1,
             Some(RefVal::Unit) => IrType::Unit,
-            Some(RefVal::Undef) => todo!(), // maybe remove undef because it's untyped
+            Some(RefVal::Undef) => todo!("get type for Undef"), // maybe remove undef because it's untyped
             None => types[self.inst[r.into_ref().unwrap() as usize].ty],
         }
     }

@@ -273,7 +273,7 @@ impl Hir {
                     }
                     types.dump_type(compiler, elem);
                 }
-                eprint!(")");
+                eprint!("))");
             }
             &Node::ArrayIndex {
                 array,
@@ -405,7 +405,10 @@ impl Hir {
                 );
                 if trait_generics.count > 0 {
                     eprint!("[");
-                    for generic in trait_generics.iter() {
+                    for (i, generic) in trait_generics.iter().enumerate() {
+                        if i != 0 {
+                            eprint!(", ");
+                        }
                         types.dump_type(compiler, generic);
                     }
                     eprint!("]");

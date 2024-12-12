@@ -325,6 +325,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::TupleLiteral { elems, elem_types } => {
             debug_assert_eq!(elems.count, elem_types.count);
+            if elems.count == 0 {
+                return Ok(ValueOrPlace::Value(Ref::UNIT));
+            }
             let elem_types = ctx.get_multiple_types(elem_types)?;
             let tuple_ty = ctx.builder.types.add(IrType::Tuple(elem_types));
             let mut tuple = Ref::UNDEF;
