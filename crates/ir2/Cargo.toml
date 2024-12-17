@@ -1,0 +1,8 @@
+[package]
+name = "ir2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+color-format = { git = "https://github.com/LinusDikomey/color-format", version = "0.1.0" }
+strum = { version = "0.26.3", features = ["derive"] }

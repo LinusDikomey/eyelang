@@ -8,6 +8,7 @@ members = [
     "crates/id",
     "crates/dmap",
     "crates/ir",
+    "crates/ir2",
     "crates/eye-lsp",
     "crates/ir-backend-llvm",
     "crates/ir-backend-x86",
