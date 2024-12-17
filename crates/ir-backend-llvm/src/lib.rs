@@ -66,7 +66,8 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        module: &ir::Module,
+        env: &ir2::Environment,
+        module: &ir2::Module,
         print_ir: bool,
         target: Option<&CStr>,
         out_file: &Path,
