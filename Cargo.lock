@@ -244,6 +244,7 @@ name = "ir2"
 version = "0.1.0"
 dependencies = [
  "color-format",
+ "dmap",
  "strum",
 ]
 

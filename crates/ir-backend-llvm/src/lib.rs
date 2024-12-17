@@ -3,6 +3,7 @@ use std::{
     path::Path,
 };
 
+use ir2::ModuleOf;
 use llvm::{
     core::{self, LLVMModuleCreateWithNameInContext},
     prelude::{LLVMBool, LLVMContextRef, LLVMModuleRef},
@@ -76,34 +77,45 @@ impl Backend {
             unsafe { LLVMModuleCreateWithNameInContext(c"main".as_ptr(), self.context) };
         let builder = unsafe { core::LLVMCreateBuilderInContext(self.context) };
         let llvm_funcs = module
-            .funcs
+            .functions()
             .iter()
             .map(|func| unsafe {
                 translate::add_function(self.context, llvm_module, func, &self.attribs)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let llvm_globals = module
-            .globals
-            .iter()
-            .map(|global| unsafe {
-                translate::add_global(
-                    self.context,
-                    llvm_module,
-                    &global.name,
-                    &global.types,
-                    global.ty,
-                    &global.value,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
-        for (func, (llvm_func, _)) in module.funcs.iter().zip(llvm_funcs.iter().copied()) {
+        let dialects = Dialects {
+            arith: env.get_dialect_module().unwrap(),
+            tuple: env.get_dialect_module().unwrap(),
+            mem: env.get_dialect_module().unwrap(),
+            cf: env.get_dialect_module().unwrap(),
+        };
+        // TODO: reimplement globals
+        /*let llvm_globals = module
+        .globals()
+        .iter()
+        .map(|global| unsafe {
+            translate::add_global(
+                self.context,
+                llvm_module,
+                global.name(),
+                &global.types,
+                global.ty,
+                &global.value,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        */
+
+        for (func, (llvm_func, _)) in module.functions().iter().zip(llvm_funcs.iter().copied()) {
             unsafe {
                 translate::function(
+                    env,
                     self.context,
+                    &dialects,
                     llvm_module,
                     &llvm_funcs,
-                    &llvm_globals,
+                    &[], // TODO: globals
                     llvm_func,
                     builder,
                     func,
@@ -141,6 +153,13 @@ impl Backend {
 
         Ok(())
     }
+}
+
+struct Dialects {
+    arith: ModuleOf<ir2::dialect::Arith>,
+    tuple: ModuleOf<ir2::dialect::Tuple>,
+    mem: ModuleOf<ir2::dialect::Mem>,
+    cf: ModuleOf<ir2::dialect::Cf>,
 }
 
 struct Intrinsics {

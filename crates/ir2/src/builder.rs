@@ -45,7 +45,9 @@ impl<'a> Builder<'a> {
         let count: usize = params.iter().map(|p| p.slot_count()).sum();
         let mut args = args.zip(params.iter()).flat_map(|(arg, param)| {
             let (a, b) = match (arg, param) {
-                (Argument::Ref(r), crate::Parameter::Ref) => (r.0, None),
+                (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => {
+                    (r.0, None)
+                }
                 (Argument::Block(block_id), crate::Parameter::BlockId) => (block_id.0, None),
                 (Argument::Int(i), crate::Parameter::Int) => (i, None),
                 (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
@@ -112,7 +114,7 @@ impl<'a> Builder<'a> {
         id
     }
 
-    pub fn finish(self) -> Function {
+    pub fn finish(self, return_type: TypeId) -> Function {
         let ir = crate::FunctionIr {
             blocks: self.blocks,
             insts: self.insts,
@@ -124,7 +126,7 @@ impl<'a> Builder<'a> {
             params: vec![],
             varargs: false,
             terminator: false,
-            return_type: None,
+            return_type: Some(return_type),
             ir: Some(ir),
         }
     }

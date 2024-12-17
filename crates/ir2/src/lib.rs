@@ -7,13 +7,17 @@ use std::{
 
 use color_format::cwrite;
 
+pub mod block_graph;
 pub mod builder;
 pub mod dialect;
 
 mod argument;
+mod bitmap;
 mod environment;
 
 pub use argument::{Argument, IntoArgs};
+pub use bitmap::Bitmap;
+pub use block_graph::BlockGraph;
 pub use environment::Environment;
 
 pub struct ModuleOf<I>(ModuleId, PhantomData<*const I>);
@@ -46,6 +50,19 @@ pub struct Module {
     functions: Vec<Function>,
     globals: Vec<Global>,
 }
+impl Module {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn functions(&self) -> &[Function] {
+        &self.functions
+    }
+
+    pub fn globals(&self) -> &[Global] {
+        &self.globals
+    }
+}
 impl Index<LocalFunctionId> for Module {
     type Output = Function;
 
@@ -76,13 +93,40 @@ pub struct GlobalId {
 pub struct TypeId(u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TypeIds {
+    idx: u32,
+    count: u32,
+}
+impl TypeIds {
+    pub fn count(self) -> u32 {
+        self.count
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = TypeId> {
+        (self.idx..self.idx + self.count).map(TypeId)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Ref(u32);
+impl Ref {
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(u32);
+impl BlockId {
+    pub const ENTRY: Self = Self(0);
+
+    pub fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
 
 pub struct Function {
     pub name: Box<str>,
@@ -104,7 +148,7 @@ impl Function {
         Self {
             name: name.into(),
             types,
-            params: params.iter().map(|_| Parameter::Ref).collect(),
+            params: params.iter().copied().map(Parameter::RefOf).collect(),
             varargs: false,
             terminator: false,
             return_type: Some(return_type),
@@ -139,6 +183,13 @@ impl Types {
         id
     }
 
+    pub fn add_multiple(&mut self, types: impl IntoIterator<Item = Type>) -> TypeIds {
+        let idx = self.types.len() as u32;
+        self.types.extend(types);
+        let count = self.types.len() as u32 - idx;
+        TypeIds { idx, count }
+    }
+
     pub fn display_type<'a>(
         &'a self,
         ty: TypeId,
@@ -170,10 +221,18 @@ impl fmt::Display for TypeDisplay<'_> {
             Type::Primitive(primitive_id) => {
                 cwrite!(f, "#m<{}>", self.primitives[primitive_id.0 as usize].name)
             }
-            Type::Tuple { idx, count } => {
+            Type::Array(elem, count) => {
+                let elem_display = TypeDisplay {
+                    types: self.types,
+                    primitives: self.primitives,
+                    id: elem,
+                };
+                cwrite!(f, "[{elem_display}; #y<{count}>]")
+            }
+            Type::Tuple(elems) => {
                 write!(f, "(")?;
-                for i in idx..idx + count {
-                    if i != idx {
+                for i in elems.idx..elems.idx + elems.count {
+                    if i != elems.idx {
                         write!(f, ", ")?;
                     }
                     let display = TypeDisplay {
@@ -195,10 +254,11 @@ impl Default for Types {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Type {
     Primitive(PrimitiveId),
-
-    Tuple { idx: u32, count: u32 },
+    Array(TypeId, u32),
+    Tuple(TypeIds),
 }
 
 pub struct FunctionIr {
@@ -207,17 +267,39 @@ pub struct FunctionIr {
     extra: Vec<u32>,
 }
 impl FunctionIr {
-    pub fn block_ids(&self) -> impl Iterator<Item = BlockId> {
+    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> {
         (0..self.blocks.len() as u32).map(BlockId)
+    }
+
+    pub fn block_count(&self) -> u32 {
+        self.blocks.len() as _
+    }
+
+    pub fn inst_count(&self) -> u32 {
+        self.insts.len() as _
+    }
+
+    pub fn get_block_args(&self, id: BlockId) -> impl Iterator<Item = Ref> {
+        let block = &self.blocks[id.0 as usize];
+        (block.idx..block.idx + block.arg_count).map(Ref)
     }
 
     pub fn get_block(&self, id: BlockId) -> impl Iterator<Item = (Ref, &Instruction)> + use<'_> {
         let block = &self.blocks[id.0 as usize];
-        (block.idx..block.idx + block.len).map(|i| (Ref(i), &self.insts[i as usize]))
+        let i = block.idx + block.arg_count;
+        (i..i + block.len).map(|i| (Ref(i), &self.insts[i as usize]))
+    }
+
+    pub fn get_inst(&self, r: Ref) -> &Instruction {
+        &self.insts[r.idx()]
     }
 
     pub fn extra(&self) -> &[u32] {
         &self.extra
+    }
+
+    pub fn get_ref_ty(&self, arg: Ref) -> TypeId {
+        self.insts[arg.idx()].ty
     }
 }
 
@@ -227,6 +309,7 @@ struct BlockInfo {
     len: u32,
 }
 
+#[derive(Debug)]
 pub struct Instruction {
     function: FunctionId,
     args: [u32; 2],
@@ -239,6 +322,10 @@ impl Instruction {
 
     pub fn function(&self) -> LocalFunctionId {
         self.function.function
+    }
+
+    pub fn ty(&self) -> TypeId {
+        self.ty
     }
 
     pub fn args<'a>(
@@ -276,7 +363,7 @@ fn decode_args<'a>(
     let mut arg = move || args.next().unwrap();
 
     params.iter().map(move |param| match param {
-        Parameter::Ref => Argument::Ref(Ref(arg())),
+        Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
         Parameter::BlockId => Argument::Block(BlockId(arg())),
         Parameter::Int => Argument::Int(arg()),
         Parameter::TypeId => Argument::TypeId(TypeId(arg())),
@@ -301,6 +388,10 @@ impl<I: Inst> TypedInstruction<I> {
         self.inst
     }
 
+    pub fn ty(&self) -> TypeId {
+        self.ty
+    }
+
     pub fn args<'a>(&'a self, extra: &'a [u32]) -> impl Iterator<Item = Argument> + use<'a, I> {
         let params = self.inst.params();
         decode_args(&self.args, params, extra)
@@ -320,6 +411,7 @@ pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy {
 #[macro_export]
 macro_rules! primitives {
     ($($primitive: ident = $size: literal)*) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, $crate::__FromRepr)]
         pub enum Primitive {
             $($primitive,)*
         }
@@ -343,6 +435,13 @@ macro_rules! primitives {
                 Self::Primitive(value.id())
             }
         }
+        impl TryFrom<$crate::PrimitiveId> for Primitive {
+            type Error = $crate::InvalidPrimitive;
+
+            fn try_from(value: $crate::PrimitiveId) -> ::core::result::Result<Self, Self::Error> {
+                Self::from_repr(value.0 as usize).ok_or($crate::InvalidPrimitive)
+            }
+        }
     };
 }
 
@@ -351,6 +450,7 @@ pub type Int = u32;
 #[derive(Debug, Clone, Copy)]
 pub enum Parameter {
     Ref,
+    RefOf(TypeId),
     BlockId,
     Int,
     TypeId,
@@ -360,7 +460,11 @@ pub enum Parameter {
 impl Parameter {
     pub fn slot_count(self) -> usize {
         match self {
-            Parameter::Ref | Parameter::BlockId | Parameter::Int | Parameter::TypeId => 1,
+            Parameter::Ref
+            | Parameter::RefOf(_)
+            | Parameter::BlockId
+            | Parameter::Int
+            | Parameter::TypeId => 1,
             Parameter::FunctionId | Parameter::GlobalId => 2,
         }
     }
@@ -368,6 +472,9 @@ impl Parameter {
 
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidInstruction;
+
+#[derive(Debug, Clone, Copy)]
+pub struct InvalidPrimitive;
 
 #[doc(hidden)]
 pub use strum::FromRepr as __FromRepr;

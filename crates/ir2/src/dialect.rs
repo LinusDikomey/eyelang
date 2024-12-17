@@ -8,7 +8,20 @@ primitives! {
     I32 = 4
     I64 = 8
     F32 = 4
+    F64 = 8
     Ptr = 8
+}
+impl Primitive {
+    pub fn is_int(self) -> bool {
+        matches!(
+            self,
+            Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64
+        )
+    }
+
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::F32 | Self::F64)
+    }
 }
 
 instructions! {
@@ -21,8 +34,10 @@ instructions! {
     Add l: Ref r: Ref;
     Sub l: Ref r: Ref;
     Mul l: Ref r: Ref;
-    Div l: Ref r: Ref;
-    Rem l: Ref r: Ref;
+    UDiv l: Ref r: Ref;
+    SDiv l: Ref r: Ref;
+    URem l: Ref r: Ref;
+    SRem l: Ref r: Ref;
 
     Or  l: Ref r: Ref;
     And l: Ref r: Ref;

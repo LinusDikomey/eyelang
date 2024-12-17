@@ -6,9 +6,9 @@ use ir2::{
 
 fn main() {
     let mut env = Environment::new(Primitive::create_infos());
-    let arith = env.add_inst_module::<Arith>();
-    let cf = env.add_inst_module::<Cf>();
-    let mem = env.add_inst_module::<Mem>();
+    let arith = env.add_dialect_module::<Arith>();
+    let cf = env.add_dialect_module::<Cf>();
+    let mem = env.add_dialect_module::<Mem>();
     let main = env.create_module("main");
     let my_function = env.add_function(
         main,

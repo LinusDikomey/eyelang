@@ -11,6 +11,7 @@ use crate::{
 pub struct Environment {
     modules: Vec<Module>,
     primitives: Vec<PrimitiveInfo>,
+    modules_by_type: dmap::DHashMap<std::any::TypeId, ModuleId>,
 }
 impl Index<ModuleId> for Environment {
     type Output = Module;
@@ -31,6 +32,7 @@ impl Environment {
         Self {
             modules: Vec::new(),
             primitives,
+            modules_by_type: dmap::new(),
         }
     }
 
@@ -58,9 +60,15 @@ impl Environment {
         id
     }
 
-    pub fn add_inst_module<I: Inst>(&mut self) -> ModuleOf<I> {
+    pub fn add_dialect_module<I: Inst + 'static>(&mut self) -> ModuleOf<I> {
         let id = self.create_module_from_functions(I::MODULE_NAME, I::functions());
+        self.modules_by_type.insert(std::any::TypeId::of::<I>(), id);
         ModuleOf(id, PhantomData)
+    }
+
+    pub fn get_dialect_module<I: Inst + 'static>(&self) -> Option<ModuleOf<I>> {
+        let id = *self.modules_by_type.get(&std::any::TypeId::of::<I>())?;
+        Some(ModuleOf(id, PhantomData))
     }
 
     pub fn add_function(&mut self, module: ModuleId, function: Function) -> FunctionId {
