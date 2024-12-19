@@ -7,16 +7,28 @@ primitives! {
     I16 = 2
     I32 = 4
     I64 = 8
+    U8 = 1
+    U16 = 2
+    U32 = 4
+    U64 = 8
     F32 = 4
     F64 = 8
     Ptr = 8
 }
 impl Primitive {
     pub fn is_int(self) -> bool {
+        self.is_signed_int() || self.is_unsigned_int()
+    }
+
+    pub fn is_signed_int(self) -> bool {
         matches!(
             self,
             Self::I1 | Self::I8 | Self::I16 | Self::I32 | Self::I64
         )
+    }
+
+    pub fn is_unsigned_int(self) -> bool {
+        matches!(self, Self::U8 | Self::U16 | Self::U32 | Self::U64)
     }
 
     pub fn is_float(self) -> bool {
@@ -34,10 +46,8 @@ instructions! {
     Add l: Ref r: Ref;
     Sub l: Ref r: Ref;
     Mul l: Ref r: Ref;
-    UDiv l: Ref r: Ref;
-    SDiv l: Ref r: Ref;
-    URem l: Ref r: Ref;
-    SRem l: Ref r: Ref;
+    Div l: Ref r: Ref;
+    Rem l: Ref r: Ref;
 
     Or  l: Ref r: Ref;
     And l: Ref r: Ref;
@@ -53,8 +63,9 @@ instructions! {
     Ror l: Ref r: Ref;
 
     CastInt value: Ref;
-    IntToPtr value: Ref;
-    PtrToInt value: Ref;
+    CastFloat value: Ref;
+    CastIntToFloat value: Ref;
+    CastFloatToInt value: Ref;
 }
 
 instructions! {
@@ -71,6 +82,8 @@ instructions! {
     Load ptr: Ref;
     Store ptr: Ref value: Ref;
     MemberPtr;
+    IntToPtr value: Ref;
+    PtrToInt value: Ref;
     FunctionPtr function: FunctionId;
     Global global: GlobalId;
     // CallPtr  (TODO: dynamic argument list)
@@ -80,7 +93,7 @@ instructions! {
 instructions! {
     Cf "cf" CfInsts
 
-    Goto target: BlockId !terminator true;
-    Branch cond: Ref on_true: BlockId on_false: BlockId !terminator true;
+    Goto target: BlockTarget<'static> !terminator true;
+    Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator true;
     Ret value: Ref !terminator true;
 }

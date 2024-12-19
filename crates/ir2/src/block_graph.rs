@@ -108,10 +108,10 @@ impl Blocks for FunctionIr {
         let params = &func.params;
         debug_assert!(func.terminator);
         terminator
-            .args(params, self.extra())
+            .args(params, self.blocks(), self.extra())
             .filter_map(|arg| {
-                if let Argument::Block(id) = arg {
-                    Some(id)
+                if let Argument::BlockTarget(target) = arg {
+                    Some(target.0)
                 } else {
                     None
                 }
