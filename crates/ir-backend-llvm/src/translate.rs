@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
 
-use ir2::{dialect::Primitive, Argument, BlockId, Environment, Ref, Type, TypeId, Types};
+use ir2::{
+    dialect::Primitive, Argument, BlockId, BlockTarget, Environment, Ref, Type, TypeId, Types,
+};
 use llvm_sys::{
     core::{
         self, LLVMAddFunction, LLVMAddGlobal, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca,
@@ -140,7 +142,6 @@ impl Attribs {
 
 /// Converts an ir type to it's corresponding llvm type. Returns `None` if the type was zero-sized
 unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTypeRef> {
-    use Type as T;
     match ty {
         Type::Primitive(id) if id == Primitive::Unit.id() => None,
         Type::Primitive(id) if id == Primitive::I1.id() => Some(core::LLVMInt8TypeInContext(ctx)),
@@ -244,29 +245,22 @@ unsafe fn build_func(
     for block in block_graph.postorder().iter().copied().rev() {
         let llvm_block = blocks[block.idx() as usize];
 
-        /*
-        let mut handle_successor = |ir: &ir2::FunctionIr,
-                                    instructions: &[LLVMValueRef],
-                                    successor: BlockId,
-                                    extra_idx: usize| {
-            for (block_arg_idx, extra_idx) in
-                ir.get_block_args(successor).zip((extra_idx..).step_by(4))
-            {
-                let r = ir::Ref::from_bytes(ir.extra[extra_idx..extra_idx + 4].try_into().unwrap());
-                if let Some(mut llvm_val) = get_ref(instructions, r) {
-                    let phi = instructions[block_arg_idx as usize];
-                    if !phi.is_null() {
-                        let mut block = llvm_block;
-                        LLVMAddIncoming(phi, &mut llvm_val, &mut block, 1);
+        let mut handle_successor =
+            |ir: &ir2::FunctionIr, instructions: &[LLVMValueRef], successor: BlockTarget| {
+                for (block_arg_ref, &r) in ir.get_block_args(successor.0).zip(successor.1.iter()) {
+                    if let Some(mut llvm_val) = get_ref(instructions, r) {
+                        let phi = instructions[block_arg_ref.idx()];
+                        if !phi.is_null() {
+                            let mut block = llvm_block;
+                            LLVMAddIncoming(phi, &mut llvm_val, &mut block, 1);
+                        }
                     }
                 }
-            }
-            if !queued_blocks[successor.idx() as usize] {
-                queued_blocks[successor.idx() as usize] = true;
-                block_queue.push_back(successor);
-            }
-        };
-        */
+                if !queued_blocks[successor.0.idx()] {
+                    queued_blocks[successor.0.idx()] = true;
+                    block_queue.push_back(successor.0);
+                }
+            };
 
         LLVMPositionBuilderAtEnd(builder, llvm_block);
         for (i, inst) in ir.get_block(block) {
@@ -276,19 +270,40 @@ unsafe fn build_func(
             }
             let val: LLVMValueRef = if let Some(inst) = inst.as_module(dialects.arith) {
                 use ir2::dialect::Arith as I;
-                let mut args = inst.args(ir.extra());
+                let mut args = inst.args(ir.blocks(), ir.extra());
                 let un_op = || {
-                    let mut args = inst.args(ir.extra());
+                    let mut args = ir.args(&inst);
                     match (args.next(), args.next()) {
                         (Some(Argument::Ref(a)), None) => a,
                         _ => unreachable!("un_op expected"),
                     }
                 };
                 let bin_op = || {
-                    let mut args = inst.args(ir.extra());
+                    let mut args = ir.args(&inst);
                     match (args.next(), args.next(), args.next()) {
                         (Some(Argument::Ref(a)), Some(Argument::Ref(b)), None) => (a, b),
                         _ => unreachable!("bin_op expected"),
+                    }
+                };
+                let comparison = |builder: LLVMBuilderRef,
+                                  instructions: &[LLVMValueRef],
+                                  (a, b): (Ref, Ref),
+                                  preds: (
+                    LLVMIntPredicate,
+                    LLVMIntPredicate,
+                    LLVMRealPredicate,
+                )| {
+                    let (l, ty) = get_ref_and_type(instructions, a);
+                    let l = l.unwrap();
+                    let r = get_ref(instructions, b).unwrap();
+                    match ty {
+                        t if is_unsigned_int(t) => LLVMBuildICmp(builder, preds.0, l, r, NONE),
+                        t if is_signed_int(t) => LLVMBuildICmp(builder, preds.1, l, r, NONE),
+                        t if is_float(t) => LLVMBuildFCmp(builder, preds.2, l, r, NONE),
+                        Type::Primitive(p) if p == Primitive::Ptr.id() => {
+                            LLVMBuildICmp(builder, preds.0, l, r, NONE)
+                        }
+                        t => panic!("invalid type for lt {t:?}"),
                     }
                 };
                 match inst.op() {
@@ -296,7 +311,7 @@ unsafe fn build_func(
                         let Some(Argument::Int(int)) = args.next() else {
                             unreachable!()
                         };
-                        LLVMConstInt(table_ty(inst.ty()).unwrap(), int.into(), FALSE)
+                        LLVMConstInt(table_ty(inst.ty()).unwrap(), int, FALSE)
                     }
                     I::Neg => {
                         let r = get_ref(&instructions, un_op()).unwrap();
@@ -309,15 +324,7 @@ unsafe fn build_func(
                             _ => panic!("invalid type for neg"),
                         }
                     }
-                    I::Add
-                    | I::Sub
-                    | I::Mul
-                    | I::UDiv
-                    | I::SDiv
-                    | I::URem
-                    | I::SRem
-                    | I::Or
-                    | I::And => {
+                    I::Add | I::Sub | I::Mul | I::Div | I::Rem | I::Or | I::And => {
                         let (l, r) = bin_op();
                         let l = get_ref(&instructions, l).unwrap();
                         let r = get_ref(&instructions, r).unwrap();
@@ -338,55 +345,212 @@ unsafe fn build_func(
                                 t if is_float(t) => LLVMBuildFMul(builder, l, r, NONE),
                                 _ => panic!("invalid type for mul"),
                             },
-                            I::UDiv => match func.types[inst.ty()] {
-                                t if is_int(t) => LLVMBuildUDiv(builder, l, r, NONE),
+                            I::Div => match func.types[inst.ty()] {
+                                t if is_unsigned_int(t) => LLVMBuildUDiv(builder, l, r, NONE),
+                                t if is_signed_int(t) => LLVMBuildSDiv(builder, l, r, NONE),
+                                t if is_float(t) => LLVMBuildFDiv(builder, l, r, NONE),
                                 _ => panic!("invalid type for udiv"),
                             },
-                            I::SDiv => match func.types[inst.ty()] {
-                                t if is_int(t) => LLVMBuildSDiv(builder, l, r, NONE),
-                                t if is_float(t) => LLVMBuildFDiv(builder, l, r, NONE),
-                                _ => panic!("invalid type for sdiv"),
-                            },
-                            I::URem => match func.types[inst.ty()] {
-                                t if is_int(t) => LLVMBuildURem(builder, l, r, NONE),
-                                _ => panic!("invalid type for urem"),
-                            },
-                            I::SRem => match func.types[inst.ty()] {
-                                t if is_int(t) => LLVMBuildSRem(builder, l, r, NONE),
+                            I::Rem => match func.types[inst.ty()] {
+                                t if is_unsigned_int(t) => LLVMBuildURem(builder, l, r, NONE),
+                                t if is_signed_int(t) => LLVMBuildSRem(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFRem(builder, l, r, NONE),
-                                _ => panic!("invalid type for srem"),
+                                _ => panic!("invalid type for urem"),
                             },
                             I::Or => LLVMBuildOr(builder, l, r, NONE),
                             I::And => LLVMBuildAnd(builder, l, r, NONE),
                             _ => unreachable!(),
                         }
                     }
-                    /*
-                    I::Eq => {}
-                    I::NE => {}
-                    I::LT => {}
-                    I::GT => {}
-                    I::LE => {}
-                    I::GE => {}
-                    I::Xor => {}
-                    I::Rol => {}
-                    I::Ror => {}
-                    I::CastInt => {}
-                    I::IntToPtr => {}
-                    I::PtrToInt => {}
-                    */
-                    _ => todo!(),
+                    I::Eq | I::NE => {
+                        let is_eq = inst.op() == I::Eq;
+                        let (a, b) = bin_op();
+                        let (l, ty) = get_ref_and_type(&instructions, a);
+                        let r = get_ref(&instructions, b);
+
+                        if let (Some(l), Some(r)) = (l, r) {
+                            match ty {
+                                t if is_int(t) => {
+                                    let pred = if is_eq {
+                                        LLVMIntPredicate::LLVMIntEQ
+                                    } else {
+                                        LLVMIntPredicate::LLVMIntNE
+                                    };
+                                    LLVMBuildICmp(builder, pred, l, r, NONE)
+                                }
+                                t if is_float(t) => {
+                                    let pred = if is_eq {
+                                        LLVMRealPredicate::LLVMRealUEQ
+                                    } else {
+                                        LLVMRealPredicate::LLVMRealUNE
+                                    };
+                                    LLVMBuildFCmp(builder, pred, l, r, NONE)
+                                }
+                                Type::Primitive(p) if p == Primitive::Ptr.id() => {
+                                    let pred = if is_eq {
+                                        LLVMIntPredicate::LLVMIntEQ
+                                    } else {
+                                        LLVMIntPredicate::LLVMIntNE
+                                    };
+                                    LLVMBuildICmp(builder, pred, l, r, NONE)
+                                }
+                                t => panic!("invalid type for eq/ne: {t:?}"),
+                            }
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                    I::LT => comparison(
+                        builder,
+                        &instructions,
+                        bin_op(),
+                        (
+                            LLVMIntPredicate::LLVMIntULT,
+                            LLVMIntPredicate::LLVMIntSLT,
+                            LLVMRealPredicate::LLVMRealOLT,
+                        ),
+                    ),
+                    I::GT => comparison(
+                        builder,
+                        &instructions,
+                        bin_op(),
+                        (
+                            LLVMIntPredicate::LLVMIntUGT,
+                            LLVMIntPredicate::LLVMIntSGT,
+                            LLVMRealPredicate::LLVMRealOGT,
+                        ),
+                    ),
+                    I::LE => comparison(
+                        builder,
+                        &instructions,
+                        bin_op(),
+                        (
+                            LLVMIntPredicate::LLVMIntULE,
+                            LLVMIntPredicate::LLVMIntSLE,
+                            LLVMRealPredicate::LLVMRealOLE,
+                        ),
+                    ),
+                    I::GE => comparison(
+                        builder,
+                        &instructions,
+                        bin_op(),
+                        (
+                            LLVMIntPredicate::LLVMIntUGE,
+                            LLVMIntPredicate::LLVMIntSGE,
+                            LLVMRealPredicate::LLVMRealOGE,
+                        ),
+                    ),
+                    I::Xor => {
+                        let (l, r) = bin_op();
+                        core::LLVMBuildXor(
+                            builder,
+                            get_ref(&instructions, l).unwrap(),
+                            get_ref(&instructions, r).unwrap(),
+                            NONE,
+                        )
+                    }
+                    I::Rol | I::Ror => {
+                        let (l, r) = bin_op();
+                        let ((Some(l), l_ty), Some(r)) = (
+                            get_ref_and_type(&instructions, l),
+                            get_ref(&instructions, r),
+                        ) else {
+                            panic!("invalid types for rol/ror")
+                        };
+                        let l_ty = llvm_ty(ctx, l_ty, &func.types).unwrap();
+                        let mut fshl_args = [l_ty];
+                        let intrinsic = if inst.op() == I::Rol {
+                            intrinsics.fshl
+                        } else {
+                            intrinsics.fshr
+                        };
+                        let function = core::LLVMGetIntrinsicDeclaration(
+                            llvm_module,
+                            intrinsic,
+                            fshl_args.as_mut_ptr(),
+                            fshl_args.len(),
+                        );
+                        let ty = core::LLVMIntrinsicGetType(
+                            ctx,
+                            intrinsics.fshl,
+                            fshl_args.as_mut_ptr(),
+                            fshl_args.len(),
+                        );
+                        let mut args = [l, l, r];
+                        LLVMBuildCall2(
+                            builder,
+                            ty,
+                            function,
+                            args.as_mut_ptr(),
+                            args.len() as u32,
+                            NONE,
+                        )
+                    }
+                    I::CastInt => {
+                        let val = get_ref(&instructions, un_op());
+                        // there are no zero-sized integers so unwraps are fine
+                        let val = val.unwrap();
+                        let to_ty = func.types[inst.ty()];
+                        let signed = is_signed_int(to_ty);
+                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
+                    }
+                    I::CastFloat => {
+                        let (val, from_ty) = get_ref_and_type(&instructions, un_op());
+                        // there are no zero-sized floats so unwraps are fine
+                        let val = val.unwrap();
+                        let to_ty = func.types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        let (Type::Primitive(from_ty), Type::Primitive(to_ty)) = (from_ty, to_ty)
+                        else {
+                            panic!()
+                        };
+                        let from_ty = Primitive::try_from(from_ty).unwrap();
+                        let to_ty = Primitive::try_from(to_ty).unwrap();
+                        match (from_ty, to_ty) {
+                            (Primitive::F32, Primitive::F64) => {
+                                core::LLVMBuildFPExt(builder, val, target_ty, NONE)
+                            }
+                            (Primitive::F64, Primitive::F32) => {
+                                core::LLVMBuildFPTrunc(builder, val, target_ty, NONE)
+                            }
+                            _ => panic!("invalid types for CastFloat"),
+                        }
+                    }
+                    I::CastIntToFloat => {
+                        let (val, from_ty) = get_ref_and_type(&instructions, un_op());
+                        // there are no zero-sized ints/floats so unwraps are fine
+                        let val = val.unwrap();
+                        let to_ty = func.types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        if is_unsigned_int(from_ty) {
+                            core::LLVMBuildUIToFP(builder, val, target_ty, NONE)
+                        } else {
+                            core::LLVMBuildSIToFP(builder, val, target_ty, NONE)
+                        }
+                    }
+                    I::CastFloatToInt => {
+                        // there are no zero-sized ints/floats so unwraps are fine
+                        let val = get_ref(&instructions, un_op()).unwrap();
+                        let to_ty = func.types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        if is_unsigned_int(to_ty) {
+                            core::LLVMBuildFPToUI(builder, val, target_ty, NONE)
+                        } else {
+                            core::LLVMBuildFPToSI(builder, val, target_ty, NONE)
+                        }
+                    }
                 }
             } else if let Some(inst) = inst.as_module(dialects.cf) {
-                let mut args = inst.args(ir.extra());
+                let mut args = ir.args(&inst);
                 use ir2::dialect::Cf as I;
                 match inst.op() {
                     I::Goto => {
-                        let Some(Argument::Block(block)) = args.next() else {
+                        let Some(Argument::BlockTarget(target)) = args.next() else {
                             unreachable!()
                         };
-                        //handle_successor(ir, &instructions, block, extra_idx);
-                        LLVMBuildBr(builder, blocks[block.idx() as usize])
+                        handle_successor(ir, &instructions, target);
+                        LLVMBuildBr(builder, blocks[target.0.idx()])
                     }
                     I::Branch => {
                         let (cond, on_true, on_false) = match [
@@ -394,29 +558,19 @@ unsafe fn build_func(
                             args.next(),
                             args.next(),
                         ] {
-                            [Some(Argument::Ref(cond)), Some(Argument::Block(on_true)), Some(Argument::Block(on_false))] => {
+                            [Some(Argument::Ref(cond)), Some(Argument::BlockTarget(on_true)), Some(Argument::BlockTarget(on_false))] => {
                                 (cond, on_true, on_false)
                             }
                             _ => unreachable!(),
                         };
-                        //let (r, a, b, extra_idx) = data.branch(&ir.extra);
-                        // TODO block_args
                         let cond = get_ref(&instructions, cond).unwrap();
-                        /*
-                        handle_successor(ir, &instructions, a, extra_idx);
-                        handle_successor(
-                            ir,
-                            &instructions,
-                            b,
-                            extra_idx + 4 * ir.get_block_args(a).count(),
-                        );
-                        */
-
+                        handle_successor(ir, &instructions, on_true);
+                        handle_successor(ir, &instructions, on_false);
                         LLVMBuildCondBr(
                             builder,
                             cond,
-                            blocks[on_true.idx() as usize],
-                            blocks[on_false.idx() as usize],
+                            blocks[on_true.0.idx()],
+                            blocks[on_false.0.idx()],
                         )
                     }
                     I::Ret => {
@@ -443,8 +597,68 @@ unsafe fn build_func(
                         //}
                     }
                 }
+            } else if let Some(inst) = inst.as_module(dialects.mem) {
+                match inst.op() {
+                    ir2::dialect::Mem::Decl => todo!(),
+                    ir2::dialect::Mem::Load => todo!(),
+                    ir2::dialect::Mem::Store => todo!(),
+                    ir2::dialect::Mem::MemberPtr => todo!(),
+                    ir2::dialect::Mem::IntToPtr => todo!(),
+                    ir2::dialect::Mem::PtrToInt => todo!(),
+                    ir2::dialect::Mem::FunctionPtr => todo!(),
+                    ir2::dialect::Mem::Global => todo!(),
+                    ir2::dialect::Mem::ArrayIndex => todo!(),
+                }
+            } else if let Some(inst) = inst.as_module(dialects.tuple) {
+                use ir2::dialect::Tuple as I;
+                match inst.op() {
+                    I::MemberValue => {
+                        let [Argument::Ref(tuple), Argument::Int(mut idx)] = ir.args_n(&inst)
+                        else {
+                            panic!()
+                        };
+                        if let (Some(val), tuple_ty) = get_ref_and_type(&instructions, tuple) {
+                            let Type::Tuple(ids) = tuple_ty else { panic!() };
+                            for ty in ids.iter().take(idx as usize) {
+                                if func.types.is_zero_sized(func.types[ty], env.primitives()) {
+                                    idx -= 1;
+                                }
+                            }
+                            LLVMBuildExtractValue(builder, val, idx.try_into().unwrap(), NONE)
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                    I::InsertMember => {
+                        let [Argument::Ref(tuple), Argument::Int(mut idx), Argument::Ref(member)] =
+                            ir.args_n(&inst)
+                        else {
+                            panic!()
+                        };
+                        let (tuple, tuple_ty) = get_ref_and_type(&instructions, tuple);
+                        if let Some((tuple, member)) = tuple.and_then(|tuple| {
+                            get_ref(&instructions, member).map(|member| (tuple, member))
+                        }) {
+                            let Type::Tuple(ids) = tuple_ty else { panic!() };
+                            for ty in ids.iter().take(idx as usize) {
+                                if func.types.is_zero_sized(func.types[ty], env.primitives()) {
+                                    idx -= 1;
+                                }
+                            }
+                            core::LLVMBuildInsertValue(
+                                builder,
+                                tuple,
+                                member,
+                                idx.try_into().unwrap(),
+                                NONE,
+                            )
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                }
             } else {
-                panic!("unhandled module")
+                panic!("unknown module")
             };
             /*
             let val: LLVMValueRef = match tag {
@@ -1027,6 +1241,14 @@ fn is_int(t: Type) -> bool {
         Type::Primitive(p) => Primitive::try_from(p).unwrap().is_int(),
         _ => false,
     }
+}
+
+fn is_signed_int(t: Type) -> bool {
+    matches!(t, Type::Primitive(p) if Primitive::try_from(p).unwrap().is_signed_int())
+}
+
+fn is_unsigned_int(t: Type) -> bool {
+    matches!(t, Type::Primitive(p) if Primitive::try_from(p).unwrap().is_unsigned_int())
 }
 
 fn is_float(t: Type) -> bool {

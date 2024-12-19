@@ -1,5 +1,6 @@
 use std::{
-    fmt,
+    any::type_name,
+    arch, fmt,
     marker::PhantomData,
     num::NonZeroU64,
     ops::{Deref, Index},
@@ -13,6 +14,8 @@ pub mod dialect;
 
 mod argument;
 mod bitmap;
+mod builtins;
+mod display;
 mod environment;
 
 pub use argument::{Argument, IntoArgs};
@@ -73,6 +76,9 @@ impl Index<LocalFunctionId> for Module {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModuleId(u32);
+impl ModuleId {
+    pub const BUILTINS: Self = Self(0);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalFunctionId(pub u32);
@@ -111,10 +117,27 @@ impl TypeIds {
 pub struct PrimitiveId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct Ref(u32);
 impl Ref {
     pub fn idx(self) -> usize {
         self.0 as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Refs {
+    idx: u32,
+    count: u32,
+}
+impl Refs {
+    pub fn nth(self, n: u32) -> Ref {
+        assert!(
+            n < self.count,
+            "Refs index out of range, {n} >= {}",
+            self.count
+        );
+        Ref(self.idx + n)
     }
 }
 
@@ -127,6 +150,9 @@ impl BlockId {
         self.0 as usize
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
 
 pub struct Function {
     pub name: Box<str>,
@@ -199,6 +225,17 @@ impl Types {
             types: self,
             primitives,
             id: ty,
+        }
+    }
+
+    pub fn is_zero_sized(&self, ty: Type, primitives: &[PrimitiveInfo]) -> bool {
+        match ty {
+            Type::Primitive(primitive_id) => primitives[primitive_id.0 as usize].size == 0,
+            Type::Array(_, 0) => true,
+            Type::Array(elem, _) => self.is_zero_sized(self[elem], primitives),
+            Type::Tuple(elems) => elems
+                .iter()
+                .all(|elem| self.is_zero_sized(self[elem], primitives)),
         }
     }
 }
@@ -279,7 +316,7 @@ impl FunctionIr {
         self.insts.len() as _
     }
 
-    pub fn get_block_args(&self, id: BlockId) -> impl Iterator<Item = Ref> {
+    pub fn get_block_args(&self, id: BlockId) -> impl ExactSizeIterator<Item = Ref> {
         let block = &self.blocks[id.0 as usize];
         (block.idx..block.idx + block.arg_count).map(Ref)
     }
@@ -294,6 +331,10 @@ impl FunctionIr {
         &self.insts[r.idx()]
     }
 
+    pub fn blocks(&self) -> &[BlockInfo] {
+        &self.blocks
+    }
+
     pub fn extra(&self) -> &[u32] {
         &self.extra
     }
@@ -301,9 +342,26 @@ impl FunctionIr {
     pub fn get_ref_ty(&self, arg: Ref) -> TypeId {
         self.insts[arg.idx()].ty
     }
+
+    pub fn args<'a, I: Inst + 'static>(
+        &'a self,
+        inst: &'a TypedInstruction<I>,
+    ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
+        inst.args(&self.blocks, &self.extra)
+    }
+
+    pub fn args_n<'a, I: Inst + 'static, const N: usize>(
+        &'a self,
+        inst: &'a TypedInstruction<I>,
+    ) -> [Argument<'a>; N] {
+        let mut args = self.args(inst);
+        let args_array = std::array::from_fn(|_| args.next().expect("not enough args"));
+        assert!(args.next().is_none(), "too many args");
+        args_array
+    }
 }
 
-struct BlockInfo {
+pub struct BlockInfo {
     arg_count: u32,
     idx: u32,
     len: u32,
@@ -331,9 +389,10 @@ impl Instruction {
     pub fn args<'a>(
         &'a self,
         params: &'a [Parameter],
+        blocks: &'a [BlockInfo],
         extra: &'a [u32],
-    ) -> impl Iterator<Item = Argument> + use<'a> {
-        decode_args(&self.args, params, extra)
+    ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
+        decode_args(&self.args, params, blocks, extra)
     }
 
     pub fn as_module<I: Inst>(&self, m: ModuleOf<I>) -> Option<TypedInstruction<I>> {
@@ -348,8 +407,9 @@ impl Instruction {
 fn decode_args<'a>(
     args: &'a [u32; 2],
     params: &'a [Parameter],
+    blocks: &'a [BlockInfo],
     extra: &'a [u32],
-) -> impl Iterator<Item = Argument> + use<'a> {
+) -> impl Iterator<Item = Argument<'a>> + use<'a> {
     let count: usize = params.iter().map(|p| p.slot_count()).sum();
     let mut args = if count <= 2 {
         &args[..count]
@@ -364,8 +424,16 @@ fn decode_args<'a>(
 
     params.iter().map(move |param| match param {
         Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
-        Parameter::BlockId => Argument::Block(BlockId(arg())),
-        Parameter::Int => Argument::Int(arg()),
+        Parameter::BlockTarget => {
+            let id = BlockId(arg());
+            let arg_idx = arg();
+            let arg_count = blocks[id.idx()].arg_count;
+            let args: &[u32] = &extra[arg_idx as usize..(arg_idx + arg_count) as usize];
+            // SAFETY: Ref is repr(transparent)
+            let args: &[Ref] = unsafe { std::mem::transmute(args) };
+            Argument::BlockTarget(BlockTarget(id, args))
+        }
+        Parameter::Int => Argument::Int(arg() as u64 | ((arg() as u64) << 32)),
         Parameter::TypeId => Argument::TypeId(TypeId(arg())),
         Parameter::FunctionId => Argument::FunctionId(FunctionId {
             module: ModuleId(arg()),
@@ -392,9 +460,13 @@ impl<I: Inst> TypedInstruction<I> {
         self.ty
     }
 
-    pub fn args<'a>(&'a self, extra: &'a [u32]) -> impl Iterator<Item = Argument> + use<'a, I> {
+    pub fn args<'a>(
+        &'a self,
+        blocks: &'a [BlockInfo],
+        extra: &'a [u32],
+    ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
         let params = self.inst.params();
-        decode_args(&self.args, params, extra)
+        decode_args(&self.args, params, blocks, extra)
     }
 }
 
@@ -445,13 +517,13 @@ macro_rules! primitives {
     };
 }
 
-pub type Int = u32;
+pub type Int = u64;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Parameter {
     Ref,
     RefOf(TypeId),
-    BlockId,
+    BlockTarget,
     Int,
     TypeId,
     FunctionId,
@@ -460,12 +532,11 @@ pub enum Parameter {
 impl Parameter {
     pub fn slot_count(self) -> usize {
         match self {
-            Parameter::Ref
-            | Parameter::RefOf(_)
-            | Parameter::BlockId
-            | Parameter::Int
-            | Parameter::TypeId => 1,
-            Parameter::FunctionId | Parameter::GlobalId => 2,
+            Parameter::Ref | Parameter::RefOf(_) | Parameter::TypeId => 1,
+            Parameter::Int
+            | Parameter::BlockTarget
+            | Parameter::FunctionId
+            | Parameter::GlobalId => 2,
         }
     }
 }
@@ -480,9 +551,19 @@ pub struct InvalidPrimitive;
 pub use strum::FromRepr as __FromRepr;
 
 #[macro_export]
+macro_rules! lifetime_or_static {
+    ($p: path, $lifetime: lifetime) => {
+        $lifetime
+    };
+    () => {
+        'static
+    };
+}
+
+#[macro_export]
 macro_rules! instructions {
-    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $($arg_name: ident: $arg: ident)* $(!terminator $terminator_val: literal)?; )*) => {
-        #[derive(Debug, Clone, Copy, $crate::__FromRepr)]
+    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $($arg_name: ident: $arg: ident $(<$life: lifetime>)?)* $(!terminator $terminator_val: literal)?; )*) => {
+        #[derive(Debug, Clone, Copy, $crate::__FromRepr, PartialEq, Eq, Hash)]
         pub enum $module_name {
             $($instruction,)*
         }
@@ -494,7 +575,7 @@ macro_rules! instructions {
         impl $table_name<$crate::ModuleOf<$module_name>> {
             $(
                 #[inline]
-                pub fn $instruction(self, $($arg_name: $crate::$arg),*) -> ($crate::FunctionId, impl $crate::IntoArgs) {
+                pub fn $instruction<'a>(self, $($arg_name: $crate::$arg $(<$life>)?),*) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>) where 'a: 'static {
                     let id = $crate::FunctionId {
                         module: self.0.id(),
                         function: $module_name::$instruction.into(),

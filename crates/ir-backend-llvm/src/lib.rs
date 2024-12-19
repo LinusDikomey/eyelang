@@ -164,6 +164,7 @@ struct Dialects {
 
 struct Intrinsics {
     fshl: u32,
+    fshr: u32,
 }
 impl Intrinsics {
     fn lookup() -> Self {
@@ -171,6 +172,7 @@ impl Intrinsics {
             |s: &CStr| unsafe { core::LLVMLookupIntrinsicID(s.as_ptr(), s.to_bytes().len() as _) };
         Self {
             fshl: lookup(c"llvm.fshl"),
+            fshr: lookup(c"llvm.fshr"),
         }
     }
 }
