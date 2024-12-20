@@ -638,6 +638,12 @@ pub enum Expr {
         asm_str_span: TSpan,
         args: ExprExtra,
     },
+    Break {
+        start: u32,
+    },
+    Continue {
+        start: u32,
+    },
 }
 impl Expr {
     pub fn is_block(&self) -> bool {
@@ -743,6 +749,8 @@ impl Expr {
             &Expr::Primitive { primitive, start } => {
                 TSpan::new(start, start + <&str>::from(primitive).len() as u32 - 1)
             }
+            &Expr::Break { start } => TSpan::new(start, start + 4),
+            &Expr::Continue { start } => TSpan::new(start, start + 7),
         }
     }
 

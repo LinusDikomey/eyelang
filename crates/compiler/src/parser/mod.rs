@@ -988,7 +988,9 @@ impl Parser<'_> {
                     args.push(self.parse_expr(scope)?);
                 };
                 Expr::Asm { span: TSpan::new(first.start, end), asm_str_span, args: self.ast.exprs(args) }
-            }
+            },
+            Keyword Break #as first => Expr::Break { start: first.start },
+            Keyword Continue #as first => Expr::Continue { start: first.start }
         );
         self.parse_factor_postfix(expr, include_as, scope)
     }

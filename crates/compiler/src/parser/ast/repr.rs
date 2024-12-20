@@ -570,6 +570,8 @@ impl<C: Representer> Repr<C> for Expr {
                 c.char(')');
             }
             Self::Primitive { primitive, .. } => c.write_add(<&str>::from(*primitive)),
+            Self::Break { .. } => c.write_add("break"),
+            Self::Continue { .. } => c.write_add("continue"),
         }
     }
 }

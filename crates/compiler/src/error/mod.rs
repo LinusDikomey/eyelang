@@ -233,6 +233,8 @@ pub enum Error {
         ty: String,
     },
     NameExpected,
+    BreakOutsideLoop,
+    ContinueOutsideLoop,
 }
 impl Error {
     pub fn conclusion(&self) -> &'static str {
@@ -349,6 +351,8 @@ impl Error {
             }
             Error::NameExpected => "expected a name",
             Error::CantInferFromBody { .. } => "type can't be inferred from function body",
+            Error::BreakOutsideLoop => "break used outside a loop",
+            Error::ContinueOutsideLoop => "continue used outside a loop",
         }
     }
     pub fn details(&self) -> Option<String> {

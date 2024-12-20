@@ -134,6 +134,7 @@ pub fn lower_hir(
         generic_types: generics,
         builder,
         vars: &mut vars,
+        control_flow_stack: Vec::new(),
     };
 
     let val = lower(&mut ctx, hir.root_id());
@@ -152,6 +153,7 @@ struct Ctx<'a> {
     generic_types: &'a [Type],
     builder: IrBuilder<'a>,
     vars: &'a [(Ref, ir::TypeRef)],
+    control_flow_stack: Vec<ControlFlowEntry>,
 }
 impl Ctx<'_> {
     fn get_ir_id(
@@ -255,6 +257,12 @@ impl Ctx<'_> {
             NoReturn
         })
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ControlFlowEntry {
+    loop_begin: BlockIndex,
+    loop_after: BlockIndex,
 }
 
 fn lower(ctx: &mut Ctx, node: NodeId) -> Result<Ref> {
@@ -731,6 +739,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let cond = lower(ctx, cond)?;
             let body_block = ctx.builder.create_block();
             let after_block = ctx.builder.create_block();
+            ctx.control_flow_stack.push(ControlFlowEntry {
+                loop_begin: cond_block,
+                loop_after: after_block,
+            });
             ctx.builder.terminate_block(Terminator::Branch {
                 cond,
                 on_true: (body_block, &[]),
@@ -873,6 +885,17 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ptr: ctx.builder.build_member_ptr(captures, i.0, capture_types),
                 value_ty: capture_types.nth(i.0),
             });
+        }
+        &Node::Break(n) | &Node::Continue(n) => {
+            let entry = ctx.control_flow_stack
+                [ctx.control_flow_stack.len() - usize::try_from(n).unwrap() - 1];
+            let target = if matches!(ctx.hir[node], Node::Break(_)) {
+                entry.loop_after
+            } else {
+                entry.loop_begin
+            };
+            ctx.builder.terminate_block(Terminator::Goto(target, &[]));
+            return Err(NoReturn);
         }
     };
     Ok(ValueOrPlace::Value(value))

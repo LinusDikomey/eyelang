@@ -635,10 +635,12 @@ pub fn check(
             cond,
             body,
         } => {
+            ctx.control_flow_stack.push(());
             let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let body_ty = ctx.hir.types.add_unknown();
             let body = check(ctx, body, scope, body_ty, return_ty, &mut false);
+            ctx.control_flow_stack.pop();
             Node::While {
                 cond: ctx.hir.add(cond),
                 body: ctx.hir.add(body),
@@ -680,6 +682,24 @@ pub fn check(
             call::check_call(ctx, &ast[call], expr, scope, expected, return_ty, noreturn)
         }
         Expr::Asm { .. } => todo!("implement inline assembly properly"),
+        Expr::Break { .. } => {
+            if ctx.control_flow_stack.is_empty() {
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::BreakOutsideLoop.at_span(ctx.span(expr)));
+                return Node::Invalid;
+            }
+            Node::Break(0)
+        }
+        Expr::Continue { .. } => {
+            if ctx.control_flow_stack.is_empty() {
+                ctx.compiler
+                    .errors
+                    .emit_err(Error::ContinueOutsideLoop.at_span(ctx.span(expr)));
+                return Node::Invalid;
+            }
+            Node::Continue(0)
+        }
     }
 }
 
@@ -1106,105 +1126,93 @@ fn check_type_item_member_access(
     left: ExprId,
     span: impl Copy + Fn(&Ast) -> TSpan,
 ) -> Node {
-    // first check members on the type itself
-    match name {
-        "size" => {
-            ctx.specify(expected, Primitive::U64, span);
-            return Node::TypeProperty(ty, hir::TypeProperty::Size);
-        }
-        "align" => {
-            ctx.specify(expected, Primitive::U64, span);
-            return Node::TypeProperty(ty, hir::TypeProperty::Align);
-        }
-        "stride" => {
-            ctx.specify(expected, Primitive::U64, span);
-            return Node::TypeProperty(ty, hir::TypeProperty::Stride);
-        }
-        _ => match ctx.hir.types[ty] {
-            TypeInfo::Invalid => return Node::Invalid,
-            TypeInfo::TypeDef(id, generics) => {
-                let ty = ctx.compiler.get_resolved_type_def(id);
-                if let Some(&method) = ty.methods.get(name) {
-                    let module = ty.module;
-                    let signature = ctx.compiler.get_signature(module, method);
-                    let call_generics = create_method_call_generics(
-                        &mut ctx.hir.types,
-                        signature,
-                        generics,
-                        span(ctx.ast),
-                    );
-                    ctx.specify(
-                        expected,
-                        TypeInfo::FunctionItem {
-                            module,
-                            function: method,
-                            generics: call_generics,
-                        },
-                        span,
-                    );
-                    return Node::FunctionItem(module, method, call_generics);
-                }
-                let def = Rc::clone(&ty.def);
-                if let ResolvedTypeDef::Enum(def) = &*def {
-                    if let Some((ordinal, args)) = def.get_by_name(name) {
-                        let ordinal_ty = int_ty_from_variant_count(def.variants.len() as u32);
-                        let node = if args.is_empty() {
-                            ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
-                            let ordinal_ty = ctx.hir.types.add(ordinal_ty);
-                            let elem_types =
-                                ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
-                            let elems = ctx.hir.add_nodes([Node::IntLiteral {
-                                val: ordinal as u128,
-                                ty: ordinal_ty,
-                            }]);
-                            Node::TupleLiteral { elems, elem_types }
-                        } else {
-                            let arg_types =
-                                ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
-                            let mut arg_type_iter = arg_types.iter();
-                            ctx.hir
-                                .types
-                                .replace(arg_type_iter.next().unwrap(), ordinal_ty);
-                            for (r, ty) in arg_type_iter.zip(args.iter()) {
-                                let ty = ctx.type_from_resolved(ty, generics);
-                                ctx.hir.types.replace(r, ty);
-                            }
-                            ctx.specify(
-                                expected,
-                                TypeInfo::EnumVariantItem {
-                                    enum_type: id,
-                                    generics,
-                                    ordinal,
-                                    arg_types,
-                                },
-                                span,
-                            );
-                            Node::Invalid
-                        };
-                        return node;
-                    }
-                }
-            }
-            TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
-            TypeInfo::UnknownSatisfying(bounds) => {
-                let needed_bound = bounds.iter().next().map(|bound| {
-                    let id = ctx.hir.types.get_bound(bound).trait_id;
-                    ctx.compiler.get_trait_name(id.0, id.1).to_owned()
-                });
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
-                return Node::Invalid;
-            }
-            TypeInfo::Unknown => {
-                ctx.compiler.errors.emit_err(
-                    Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
-                );
-                return Node::Invalid;
-            }
-            _ => {}
-        },
+    // first check if the member is a special type property
+    if let Some(property) = hir::TypeProperty::from_name(name) {
+        return Node::TypeProperty(ty, property);
     }
+    match ctx.hir.types[ty] {
+        TypeInfo::Invalid => return Node::Invalid,
+        TypeInfo::TypeDef(id, generics) => {
+            let ty = ctx.compiler.get_resolved_type_def(id);
+            if let Some(&method) = ty.methods.get(name) {
+                let module = ty.module;
+                let signature = ctx.compiler.get_signature(module, method);
+                let call_generics = create_method_call_generics(
+                    &mut ctx.hir.types,
+                    signature,
+                    generics,
+                    span(ctx.ast),
+                );
+                ctx.specify(
+                    expected,
+                    TypeInfo::FunctionItem {
+                        module,
+                        function: method,
+                        generics: call_generics,
+                    },
+                    span,
+                );
+                return Node::FunctionItem(module, method, call_generics);
+            }
+            let def = Rc::clone(&ty.def);
+            if let ResolvedTypeDef::Enum(def) = &*def {
+                if let Some((ordinal, args)) = def.get_by_name(name) {
+                    let ordinal_ty = int_ty_from_variant_count(def.variants.len() as u32);
+                    let node = if args.is_empty() {
+                        ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
+                        let ordinal_ty = ctx.hir.types.add(ordinal_ty);
+                        let elem_types =
+                            ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
+                        let elems = ctx.hir.add_nodes([Node::IntLiteral {
+                            val: ordinal as u128,
+                            ty: ordinal_ty,
+                        }]);
+                        Node::TupleLiteral { elems, elem_types }
+                    } else {
+                        let arg_types = ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
+                        let mut arg_type_iter = arg_types.iter();
+                        ctx.hir
+                            .types
+                            .replace(arg_type_iter.next().unwrap(), ordinal_ty);
+                        for (r, ty) in arg_type_iter.zip(args.iter()) {
+                            let ty = ctx.type_from_resolved(ty, generics);
+                            ctx.hir.types.replace(r, ty);
+                        }
+                        ctx.specify(
+                            expected,
+                            TypeInfo::EnumVariantItem {
+                                enum_type: id,
+                                generics,
+                                ordinal,
+                                arg_types,
+                            },
+                            span,
+                        );
+                        Node::Invalid
+                    };
+                    return node;
+                }
+            }
+        }
+        TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
+        TypeInfo::UnknownSatisfying(bounds) => {
+            let needed_bound = bounds.iter().next().map(|bound| {
+                let id = ctx.hir.types.get_bound(bound).trait_id;
+                ctx.compiler.get_trait_name(id.0, id.1).to_owned()
+            });
+            ctx.compiler
+                .errors
+                .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+            return Node::Invalid;
+        }
+        TypeInfo::Unknown => {
+            ctx.compiler.errors.emit_err(
+                Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
+            );
+            return Node::Invalid;
+        }
+        _ => {}
+    };
     ctx.compiler
         .errors
         .emit_err(Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)));

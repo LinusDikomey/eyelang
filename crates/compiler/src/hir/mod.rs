@@ -444,6 +444,8 @@ impl Hir {
                 eprint!("])");
             }
             &Node::Capture(id) => eprint!("(capture {})", id.0),
+            &Node::Break(n) => eprint!("(break {n})"),
+            &Node::Continue(n) => eprint!("(continue {n})"),
         }
     }
 
@@ -798,6 +800,8 @@ pub enum Node {
     TypeProperty(LocalTypeId, TypeProperty),
     FunctionItem(ModuleId, FunctionId, LocalTypeIds),
     Capture(CaptureId),
+    Break(u32),
+    Continue(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -931,6 +935,16 @@ pub enum TypeProperty {
     Size,
     Align,
     Stride,
+}
+impl TypeProperty {
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "size" => Self::Size,
+            "align" => Self::Align,
+            "stride" => Self::Stride,
+            _ => return None,
+        })
+    }
 }
 
 pub struct HIRBuilder {

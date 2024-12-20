@@ -147,6 +147,7 @@ pub fn check(
         module,
         generics,
         hir,
+        control_flow_stack: Vec::new(),
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
         capture_elements_to_replace: Vec::new(),
@@ -173,6 +174,9 @@ pub struct Ctx<'a> {
     pub module: ModuleId,
     pub generics: &'a Generics,
     pub hir: HIRBuilder,
+    /// tracks a stack of any control flow that break/continue apply to (loops)
+    /// labels will make the Vec actually useful to track labeled break/continue
+    pub control_flow_stack: Vec<()>,
     /// Exhaustion value, type, pattern expr
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
     /// from, to, cast_expr
