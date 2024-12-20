@@ -1,7 +1,6 @@
 use std::{num::NonZeroU64, rc::Rc};
 
 use id::ModuleId;
-use ir::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
@@ -285,7 +284,7 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
-) -> Result<ConstValue, ir::eval::Error> {
+) -> Result<ConstValue, ir2::eval::Error> {
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);
@@ -303,17 +302,9 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
-    let mut ir_types = ir::IrTypes::new();
-    let (builder, params) = ir::builder::IrBuilder::new(&mut ir_types, ir::TypeRefs::EMPTY);
-    let ir = crate::irgen::lower_hir(
-        builder,
-        &hir,
-        &types,
-        compiler,
-        &mut to_generate,
-        &[],
-        params,
-    );
+    let builder = ir2::builder::Builder::new(compiler.env, "");
+    builder.create_and_begin_block([]);
+    let ir = crate::irgen::lower_hir(builder, &hir, &types, compiler, &mut to_generate, &[], []);
     while let Some(to_generate_func) = to_generate.pop() {
         let hir =
             Rc::clone(compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id));

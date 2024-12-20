@@ -69,7 +69,23 @@ impl Environment {
         ModuleOf(id, PhantomData)
     }
 
-    pub fn get_dialect_module<I: Inst + 'static>(&self) -> Option<ModuleOf<I>> {
+    pub fn get_dialect_module<I: Inst + 'static>(&mut self) -> ModuleOf<I> {
+        let id = *self
+            .modules_by_type
+            .entry(std::any::TypeId::of::<I>())
+            .or_insert_with(|| {
+                let id = ModuleId(self.modules.len() as _);
+                self.modules.push(Module {
+                    name: I::MODULE_NAME.into(),
+                    functions: I::functions(),
+                    globals: Vec::new(),
+                });
+                id
+            });
+        ModuleOf(id, PhantomData)
+    }
+
+    pub fn get_dialect_module_if_present<I: Inst + 'static>(&self) -> Option<ModuleOf<I>> {
         let id = *self.modules_by_type.get(&std::any::TypeId::of::<I>())?;
         Some(ModuleOf(id, PhantomData))
     }
@@ -111,6 +127,10 @@ impl Environment {
 
     pub fn primitives(&self) -> &[PrimitiveInfo] {
         &self.primitives
+    }
+
+    pub fn get_module(&self, module: ModuleId) -> &Module {
+        &self.modules[module.0 as usize]
     }
 }
 impl fmt::Display for Environment {

@@ -1,10 +1,10 @@
-use crate::{BlockId, BlockTarget, FunctionId, GlobalId, Int, Ref, TypeId};
+use crate::{BlockId, BlockTarget, FunctionId, GlobalId, Ref, TypeId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Argument<'a> {
     Ref(Ref),
     BlockTarget(BlockTarget<'a>),
-    Int(Int),
+    Int(u64),
     TypeId(TypeId),
     FunctionId(FunctionId),
     GlobalId(GlobalId),
@@ -24,9 +24,14 @@ impl<'a> From<BlockTarget<'a>> for Argument<'a> {
         Self::BlockTarget(value)
     }
 }
-impl From<Int> for Argument<'_> {
-    fn from(value: Int) -> Self {
+impl From<u64> for Argument<'_> {
+    fn from(value: u64) -> Self {
         Self::Int(value)
+    }
+}
+impl From<u32> for Argument<'_> {
+    fn from(value: u32) -> Self {
+        Self::Int(value.into())
     }
 }
 impl From<TypeId> for Argument<'_> {

@@ -81,7 +81,7 @@ instructions! {
     Decl ty: TypeId;
     Load ptr: Ref;
     Store ptr: Ref value: Ref;
-    MemberPtr;
+    MemberPtr ptr: Ref ty: TypeId idx: Int32;
     IntToPtr value: Ref;
     PtrToInt value: Ref;
     FunctionPtr function: FunctionId;

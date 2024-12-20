@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use ir2::ModuleOf;
+use ir2::{ModuleId, ModuleOf};
 use llvm::{
     core::{self, LLVMModuleCreateWithNameInContext},
     prelude::{LLVMBool, LLVMContextRef, LLVMModuleRef},
@@ -68,7 +68,7 @@ impl Backend {
     pub fn emit_module(
         &self,
         env: &ir2::Environment,
-        module: &ir2::Module,
+        module_id: ModuleId,
         print_ir: bool,
         target: Option<&CStr>,
         out_file: &Path,
@@ -76,6 +76,7 @@ impl Backend {
         let llvm_module: LLVMModuleRef =
             unsafe { LLVMModuleCreateWithNameInContext(c"main".as_ptr(), self.context) };
         let builder = unsafe { core::LLVMCreateBuilderInContext(self.context) };
+        let module = env.get_module(module_id);
         let llvm_funcs = module
             .functions()
             .iter()
@@ -85,10 +86,10 @@ impl Backend {
             .collect::<Result<Vec<_>, _>>()?;
 
         let dialects = Dialects {
-            arith: env.get_dialect_module().unwrap(),
-            tuple: env.get_dialect_module().unwrap(),
-            mem: env.get_dialect_module().unwrap(),
-            cf: env.get_dialect_module().unwrap(),
+            arith: env.get_dialect_module_if_present().unwrap(),
+            tuple: env.get_dialect_module_if_present().unwrap(),
+            mem: env.get_dialect_module_if_present().unwrap(),
+            cf: env.get_dialect_module_if_present().unwrap(),
         };
         // TODO: reimplement globals
         /*let llvm_globals = module
@@ -111,6 +112,7 @@ impl Backend {
             unsafe {
                 translate::function(
                     env,
+                    module_id,
                     self.context,
                     &dialects,
                     llvm_module,

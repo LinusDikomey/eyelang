@@ -12,7 +12,6 @@ lsp = ["dep:eye-lsp"]
 [dependencies]
 compiler = { path = "../compiler" }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
-ir = { version = "0.1.0", path = "../ir" }
 clap = { version = "4.4.13", features = ["derive"] }
 eye-lsp = { path = "../eye-lsp", optional = true }
 

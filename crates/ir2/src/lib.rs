@@ -11,17 +11,20 @@ use color_format::cwrite;
 pub mod block_graph;
 pub mod builder;
 pub mod dialect;
+pub mod eval;
 
 mod argument;
 mod bitmap;
 mod builtins;
 mod display;
 mod environment;
+mod layout;
 
 pub use argument::{Argument, IntoArgs};
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use environment::Environment;
+pub use layout::{offset_in_tuple, type_layout, Layout};
 
 pub struct ModuleOf<I>(ModuleId, PhantomData<*const I>);
 impl<I> ModuleOf<I> {
@@ -82,6 +85,11 @@ impl ModuleId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalFunctionId(pub u32);
+impl LocalFunctionId {
+    pub fn idx(&self) -> usize {
+        self.0 as usize
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionId {
@@ -111,15 +119,34 @@ impl TypeIds {
     pub fn iter(self) -> impl Iterator<Item = TypeId> {
         (self.idx..self.idx + self.count).map(TypeId)
     }
+
+    pub fn nth(&self, idx: u32) -> TypeId {
+        assert!(idx < self.count);
+        TypeId(self.idx + idx)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub u32);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Ref(u32);
+impl fmt::Debug for Ref {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::UNIT => write!(f, "Ref(unit)"),
+            Self::FALSE => write!(f, "Ref(false)"),
+            Self::TRUE => write!(f, "Ref(true)"),
+            _ => f.debug_tuple("Ref").field(&self.0).finish(),
+        }
+    }
+}
 impl Ref {
+    pub const UNIT: Self = Self(u32::MAX);
+    pub const FALSE: Self = Self(u32::MAX - 1);
+    pub const TRUE: Self = Self(u32::MAX - 2);
+
     pub fn idx(self) -> usize {
         self.0 as usize
     }
@@ -164,6 +191,18 @@ pub struct Function {
     pub ir: Option<FunctionIr>,
 }
 impl Function {
+    pub fn empty(name: impl Into<Box<str>>) -> Self {
+        Self {
+            name: name.into(),
+            types: Types::new(),
+            params: Vec::new(),
+            varargs: false,
+            terminator: false,
+            return_type: None,
+            ir: None,
+        }
+    }
+
     pub fn new(
         name: impl Into<Box<str>>,
         types: Types,
@@ -193,6 +232,14 @@ pub struct PrimitiveInfo {
     pub name: Box<str>,
     pub size: u64,
     pub align: NonZeroU64,
+}
+impl PrimitiveInfo {
+    pub fn layout(&self) -> Layout {
+        Layout {
+            size: self.size,
+            align: self.align,
+        }
+    }
 }
 
 pub struct Types {
@@ -433,7 +480,8 @@ fn decode_args<'a>(
             let args: &[Ref] = unsafe { std::mem::transmute(args) };
             Argument::BlockTarget(BlockTarget(id, args))
         }
-        Parameter::Int => Argument::Int(arg() as u64 | ((arg() as u64) << 32)),
+        Parameter::Int => Argument::Int(u64::from(arg()) | (u64::from(arg()) << 32)),
+        Parameter::Int32 => Argument::Int(arg().into()),
         Parameter::TypeId => Argument::TypeId(TypeId(arg())),
         Parameter::FunctionId => Argument::FunctionId(FunctionId {
             module: ModuleId(arg()),
@@ -517,7 +565,11 @@ macro_rules! primitives {
     };
 }
 
-pub type Int = u64;
+pub mod parameter_types {
+    pub use super::{BlockTarget, FunctionId, GlobalId, Ref, TypeId};
+    pub type Int = u64;
+    pub type Int32 = u32;
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Parameter {
@@ -525,6 +577,7 @@ pub enum Parameter {
     RefOf(TypeId),
     BlockTarget,
     Int,
+    Int32,
     TypeId,
     FunctionId,
     GlobalId,
@@ -532,7 +585,7 @@ pub enum Parameter {
 impl Parameter {
     pub fn slot_count(self) -> usize {
         match self {
-            Parameter::Ref | Parameter::RefOf(_) | Parameter::TypeId => 1,
+            Parameter::Ref | Parameter::RefOf(_) | Parameter::TypeId | Parameter::Int32 => 1,
             Parameter::Int
             | Parameter::BlockTarget
             | Parameter::FunctionId
@@ -575,7 +628,7 @@ macro_rules! instructions {
         impl $table_name<$crate::ModuleOf<$module_name>> {
             $(
                 #[inline]
-                pub fn $instruction<'a>(self, $($arg_name: $crate::$arg $(<$life>)?),*) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>) where 'a: 'static {
+                pub fn $instruction<'a>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?),*) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>) where 'a: 'static {
                     let id = $crate::FunctionId {
                         module: self.0.id(),
                         function: $module_name::$instruction.into(),
