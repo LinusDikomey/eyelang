@@ -857,6 +857,13 @@ impl Compiler {
                 let ast = Rc::clone(self.get_module_ast(module));
                 let def = &ast[ast_id];
                 let methods;
+                // TODO: just make typedef a struct with enum member for struct/enum to share
+                // common fields
+                let (generics, scope): (&[GenericDef], _) = match def {
+                    ast::TypeDef::Struct(def) => (&def.generics, def.scope),
+                    ast::TypeDef::Enum(def) => (&def.generics, def.scope),
+                };
+                let generics = self.resolve_generics(generics, module, scope, &ast);
                 let def = match def {
                     ast::TypeDef::Struct(struct_def) => {
                         let named_fields = struct_def
@@ -899,6 +906,7 @@ impl Compiler {
                     def: Rc::new(def),
                     module,
                     methods,
+                    generics,
                 };
                 self.types[ty.idx()].resolved.put(resolved)
             }
@@ -1675,6 +1683,7 @@ pub struct ResolvedType {
     pub def: Rc<ResolvedTypeDef>,
     pub module: ModuleId,
     pub methods: DHashMap<String, FunctionId>,
+    pub generics: Generics,
 }
 
 #[derive(Debug)]

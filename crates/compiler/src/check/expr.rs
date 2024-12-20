@@ -169,11 +169,11 @@ pub fn check(
                 ctx.compiler
                     .add_type_def(ctx.module, id, "<anonymous type>".into(), generic_count);
             ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()] = Some(resolved_id);
-            let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
+            let resolved = ctx.compiler.get_resolved_type_def(resolved_id);
+            let span = ctx.ast[expr].span(ast);
+            let generics = resolved.generics.instantiate(&mut ctx.hir.types, span);
             let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));
-            ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| {
-                ast[expr].span(ast)
-            });
+            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
             Node::Invalid
         }
         &Expr::Trait { id } => {
@@ -717,8 +717,8 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
         }
         Def::Function(module, id) => function_item(ctx, module, id, expected, span),
         Def::GenericType(id) => {
-            let generic_count = ctx.compiler.get_resolved_type_generic_count(id);
-            let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
+            let ty = ctx.compiler.get_resolved_type_def(id);
+            let generics = ty.generics.instantiate(&mut ctx.hir.types, span);
             let ty = ctx.hir.types.add(TypeInfo::TypeDef(id, generics));
             ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
             Node::Invalid
@@ -1042,7 +1042,8 @@ fn check_is_instance_method(
     span: impl Copy + FnOnce(&Ast) -> TSpan,
 ) -> Option<(u32, LocalTypeIds)> {
     let (_, self_param_ty) = signature.all_params().next()?;
-    let call_generics = create_method_call_generics(&mut ctx.hir.types, signature, generics);
+    let call_generics =
+        create_method_call_generics(&mut ctx.hir.types, signature, generics, span(ctx.ast));
     let mut required_pointer_count = 0;
     let mut current_ty = self_param_ty;
     loop {
@@ -1081,10 +1082,12 @@ fn create_method_call_generics(
     types: &mut TypeTable,
     signature: &crate::compiler::Signature,
     type_generics: LocalTypeIds,
+    span: TSpan,
 ) -> LocalTypeIds {
     if signature.generics.count() as u32 != type_generics.count {
         debug_assert!(signature.generics.count() as u32 > type_generics.count);
-        let call_generics = types.add_multiple_unknown(signature.generics.count().into());
+        // perf: instantiates the outer type's generics again unnecessarily
+        let call_generics = signature.generics.instantiate(types, span);
         for (r, generic) in call_generics.iter().zip(type_generics.iter()) {
             types.replace(r, generic);
         }
@@ -1124,8 +1127,12 @@ fn check_type_item_member_access(
                 if let Some(&method) = ty.methods.get(name) {
                     let module = ty.module;
                     let signature = ctx.compiler.get_signature(module, method);
-                    let call_generics =
-                        create_method_call_generics(&mut ctx.hir.types, signature, generics);
+                    let call_generics = create_method_call_generics(
+                        &mut ctx.hir.types,
+                        signature,
+                        generics,
+                        span(ctx.ast),
+                    );
                     ctx.specify(
                         expected,
                         TypeInfo::FunctionItem {

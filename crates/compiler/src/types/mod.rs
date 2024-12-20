@@ -453,7 +453,8 @@ impl TypeTable {
                             );
                             return TypeInfo::Invalid;
                         }
-                        let generic_types = self.add_multiple_unknown(count.into());
+                        let required_ty = compiler.get_resolved_type_def(id);
+                        let generic_types = required_ty.generics.instantiate(self, ty.span());
                         for (ty, r) in generics.iter().zip(generic_types.iter()) {
                             let info = self.info_from_unresolved(ty, compiler, module, scope);
                             self.replace(r, TypeInfoOrIdx::TypeInfo(info));
