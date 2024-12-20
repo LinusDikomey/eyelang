@@ -6,7 +6,12 @@ use crate::{Argument, Environment, Module, Ref};
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cwrite!(f, "#c<%{}>", self.0)
+        match *self {
+            Self::UNIT => cwrite!(f, "#m<unit>"),
+            Self::FALSE => cwrite!(f, "#m<false>"),
+            Self::TRUE => cwrite!(f, "#m<true>"),
+            _ => cwrite!(f, "#c<%{}>", self.0),
+        }
     }
 }
 
@@ -60,7 +65,9 @@ impl fmt::Display for ModuleDisplay<'_> {
                             write!(f, "{}", function.types.display_type(ty, &env.primitives))?;
                         }
                         crate::Parameter::BlockTarget => cwrite!(f, "#g<block>")?,
-                        crate::Parameter::Int => cwrite!(f, "#g<intliteral>")?,
+                        crate::Parameter::Int | crate::Parameter::Int32 => {
+                            cwrite!(f, "#g<intliteral>")?
+                        }
                         crate::Parameter::TypeId => cwrite!(f, "#g<type>")?,
                         crate::Parameter::FunctionId => cwrite!(f, "#g<function>")?,
                         crate::Parameter::GlobalId => cwrite!(f, "#g<global>")?,

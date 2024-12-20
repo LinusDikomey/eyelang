@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
 
 use ir2::{
-    dialect::Primitive, Argument, BlockId, BlockTarget, Environment, Ref, Type, TypeId, Types,
+    dialect::Primitive, Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId,
+    Types,
 };
 use llvm_sys::{
     core::{
@@ -96,6 +97,7 @@ pub unsafe fn add_global(
 
 pub unsafe fn function(
     env: &Environment,
+    module_id: ModuleId,
     ctx: LLVMContextRef,
     dialects: &Dialects,
     llvm_module: LLVMModuleRef,
@@ -110,6 +112,7 @@ pub unsafe fn function(
     if let Some(ir) = &function.ir {
         build_func(
             env,
+            module_id,
             function,
             dialects,
             llvm_module,
@@ -177,6 +180,7 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTy
 
 unsafe fn build_func(
     env: &Environment,
+    module: ModuleId,
     func: &ir2::Function,
     dialects: &Dialects,
     llvm_module: LLVMModuleRef,
@@ -223,11 +227,18 @@ unsafe fn build_func(
 
     let get_ref_and_type_ptr =
         |instructions: &[LLVMValueRef], r: Ref| -> (Option<LLVMValueRef>, Type) {
-            let inst = ir.get_inst(r);
+            match r {
+                Ref::UNIT => (None, Type::Primitive(Primitive::Unit.id())),
+                Ref::TRUE => (None, Type::Primitive(Primitive::I1.id())),
+                Ref::FALSE => (None, Type::Primitive(Primitive::I1.id())),
+                _ => {
+                    let inst = ir.get_inst(r);
 
-            let r = instructions[r.idx()];
-            let ty = func.types[inst.ty()];
-            ((!r.is_null()).then_some(r), ty)
+                    let r = instructions[r.idx()];
+                    let ty = func.types[inst.ty()];
+                    ((!r.is_null()).then_some(r), ty)
+                }
+            }
         };
     let get_ref_and_type =
         |instructions: &[LLVMValueRef], r: Ref| get_ref_and_type_ptr(instructions, r);
@@ -240,10 +251,10 @@ unsafe fn build_func(
 
     let mut queued_blocks = vec![false; ir.block_ids().len()];
     let mut block_queue = VecDeque::from([BlockId::ENTRY]);
-    queued_blocks[BlockId::ENTRY.idx() as usize] = true;
+    queued_blocks[BlockId::ENTRY.idx()] = true;
 
     for block in block_graph.postorder().iter().copied().rev() {
-        let llvm_block = blocks[block.idx() as usize];
+        let llvm_block = blocks[block.idx()];
 
         let mut handle_successor =
             |ir: &ir2::FunctionIr, instructions: &[LLVMValueRef], successor: BlockTarget| {
@@ -598,16 +609,101 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.mem) {
+                use ir2::dialect::Mem as I;
                 match inst.op() {
-                    ir2::dialect::Mem::Decl => todo!(),
-                    ir2::dialect::Mem::Load => todo!(),
-                    ir2::dialect::Mem::Store => todo!(),
-                    ir2::dialect::Mem::MemberPtr => todo!(),
-                    ir2::dialect::Mem::IntToPtr => todo!(),
-                    ir2::dialect::Mem::PtrToInt => todo!(),
-                    ir2::dialect::Mem::FunctionPtr => todo!(),
-                    ir2::dialect::Mem::Global => todo!(),
-                    ir2::dialect::Mem::ArrayIndex => todo!(),
+                    I::Decl => {
+                        let [Argument::TypeId(ty)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        if let Some(ty) = table_ty(ty) {
+                            LLVMBuildAlloca(builder, ty, NONE)
+                        } else {
+                            // return a null pointer if a declaration has a zero-sized type
+                            core::LLVMConstPointerNull(LLVMPointerTypeInContext(ctx, 0))
+                        }
+                    }
+                    I::Load => {
+                        let [Argument::Ref(r)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        let val = get_ref(&instructions, r);
+                        if let Some(pointee_ty) = llvm_ty(ctx, func.types[inst.ty()], &func.types) {
+                            let val = val.unwrap();
+                            LLVMBuildLoad2(builder, pointee_ty, val, NONE)
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                    I::Store => {
+                        let [Argument::Ref(ptr), Argument::Ref(val)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        let (val, ty) = get_ref_and_type(&instructions, val);
+                        if !func.types.is_zero_sized(ty, env.primitives()) {
+                            let ptr = get_ref(&instructions, ptr).unwrap();
+                            LLVMBuildStore(builder, val.unwrap(), ptr);
+                        }
+                        ptr::null_mut()
+                    }
+                    I::MemberPtr => {
+                        let [Argument::Ref(ptr), Argument::TypeId(tuple), Argument::Int(idx)] =
+                            ir.args_n(&inst)
+                        else {
+                            unreachable!()
+                        };
+                        let Type::Tuple(elem_types) = func.types[tuple] else {
+                            panic!()
+                        };
+                        let offset = ir2::offset_in_tuple(
+                            elem_types,
+                            idx.try_into().unwrap(),
+                            &func.types,
+                            env.primitives(),
+                        );
+
+                        let i8_ty = LLVMInt8TypeInContext(ctx);
+                        if let Some(llvm_ptr) = get_ref(&instructions, ptr) {
+                            let mut offset =
+                                LLVMConstInt(LLVMInt32TypeInContext(ctx), offset, FALSE);
+                            LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
+                    I::IntToPtr => {
+                        let [Argument::Ref(int)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        // no zero-sized integers so unwrapping is fine
+                        let val = get_ref(&instructions, int).unwrap();
+                        core::LLVMBuildIntToPtr(
+                            builder,
+                            val,
+                            LLVMPointerTypeInContext(ctx, 0),
+                            NONE,
+                        )
+                    }
+                    I::PtrToInt => {
+                        let [Argument::Ref(ptr)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        // no zero-sized integers so unwrapping is fine
+                        let val = get_ref(&instructions, ptr).unwrap();
+                        let ty = llvm_ty(ctx, func.types[inst.ty()], &func.types).unwrap();
+                        core::LLVMBuildPtrToInt(builder, val, ty, NONE)
+                    }
+                    I::FunctionPtr => {
+                        let [Argument::FunctionId(func_id)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        if func_id.module != module {
+                            panic!("unsupported: can't take function pointer of function in different module")
+                        }
+                        let (llvm_func, _) = llvm_funcs[func_id.function.idx()];
+                        llvm_func
+                    }
+                    I::Global => todo!(),
+                    I::ArrayIndex => todo!(),
                 }
             } else if let Some(inst) = inst.as_module(dialects.tuple) {
                 use ir2::dialect::Tuple as I;

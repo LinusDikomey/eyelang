@@ -7,9 +7,6 @@ pub use entry_point::entry_point;
 
 use ::types::{Primitive, Type};
 use id::ModuleId;
-use ir::builder::{BinOp, Terminator};
-use ir::{builder::IrBuilder, IrType, Ref};
-use ir::{BlockArgs, BlockIndex, RefVal};
 
 use crate::compiler::{builtins, FunctionToGenerate};
 use crate::eval::ConstValue;
@@ -30,8 +27,8 @@ pub fn lower_function(
     name: String,
     checked: &CheckedFunction,
     generics: &[Type],
-) -> ir::Function {
-    let mut types = ir::IrTypes::new();
+) -> ir2::Function {
+    let mut types = ir2::Types::new();
     // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
     // longer generate a valid signature
     let param_types = types::get_multiple_infos(
@@ -41,7 +38,11 @@ pub fn lower_function(
         checked.params,
         types::Generics::function_instance(generics),
     )
-    .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| IrType::Unit)));
+    .unwrap_or_else(|| {
+        types.add_multiple(
+            (0..checked.params.count).map(|_| ir2::Type::Primitive(Primitive::Unit.id())),
+        )
+    });
 
     let return_type = checked.types[checked.return_type];
     let return_type = types::get_from_info(
@@ -51,10 +52,10 @@ pub fn lower_function(
         return_type,
         types::Generics::function_instance(generics),
     )
-    .unwrap_or(IrType::Unit);
+    .unwrap_or(Primitive::Unit.into());
 
     let ir = checked.body.as_ref().map(|hir| {
-        let (builder, params) = ir::builder::IrBuilder::new(&mut types, param_types);
+        let (builder, params) = ir2::builder::Builder::new(&mut types, param_types);
         lower_hir(
             builder,
             hir,
@@ -65,7 +66,7 @@ pub fn lower_function(
             params,
         )
     });
-    ir::Function {
+    ir2::Function {
         name,
         types,
         params: param_types,
@@ -86,14 +87,14 @@ macro_rules! crash_point {
 }
 
 pub fn lower_hir(
-    mut builder: ir::builder::IrBuilder,
+    mut builder: ir2::builder::Builder,
     hir: &Hir,
     hir_types: &TypeTable,
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
     generics: &[Type],
     params: BlockArgs,
-) -> ir::FunctionIr {
+) -> ir2::FunctionIr {
     let vars = hir
         .vars
         .iter()
@@ -101,7 +102,7 @@ pub fn lower_hir(
             match types::get_from_info(
                 compiler,
                 hir_types,
-                builder.types,
+                &mut builder.types,
                 hir_types[var_ty],
                 types::Generics::function_instance(generics),
             ) {

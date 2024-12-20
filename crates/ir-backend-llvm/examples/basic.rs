@@ -1,10 +1,7 @@
 //! Example for compiling a function using this backend based on llvm. Creates a module, displays
 //! it and then emits it to an object file called 'out.o'.
 
-use ir2::{
-    dialect::{Arith, Cf, Mem, Primitive},
-    Environment, ModuleOf, Type,
-};
+use ir2::{dialect::Primitive, Environment, ModuleOf};
 
 fn main() {
     let mut env = Environment::new(ir2::dialect::Primitive::create_infos());
@@ -24,13 +21,7 @@ fn main() {
     let mut backend = ir_backend_llvm::Backend::new();
     backend.enable_logging();
     backend
-        .emit_module(
-            &env,
-            &env[module],
-            true,
-            None,
-            std::path::Path::new("out.o"),
-        )
+        .emit_module(&env, module, true, None, std::path::Path::new("out.o"))
         .expect("Backend failed");
 }
 
@@ -54,21 +45,4 @@ fn build_mul(env: &Environment, dialects: &Dialects) -> ir2::Function {
     builder.append(cf.Ret(res), unit);
 
     builder.finish(int_ty)
-}
-
-fn build_main(env: &Environment, dialects: &Dialects) -> ir2::Function {
-    let Dialects {
-        arith,
-        cf,
-        mem,
-        tuple,
-    } = dialects;
-    let mut builder = ir2::builder::Builder::new(env, "main");
-    let unit = builder.types.add(Primitive::Unit);
-    builder.create_and_begin_block([]);
-    let ret = builder.append(, unit);
-    builder.append(builtin.Un, )
-    // TODO: Ref::Unit
-    builder.append(cf.Ret(), )
-    builder.finish(unit)
 }

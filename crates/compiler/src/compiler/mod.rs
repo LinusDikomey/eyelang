@@ -10,6 +10,7 @@ use std::{
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
+use ir2::ModuleOf;
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
@@ -34,22 +35,36 @@ pub struct Compiler {
     pub modules: Vec<Module>,
     pub const_values: Vec<ConstValue>,
     pub types: Vec<ResolvableTypeDef>,
-    pub ir_module: ir::Module,
+    pub ir: ir2::Environment,
+    pub ir_module: ir2::ModuleId,
+    pub dialects: Dialects,
     pub errors: Errors,
     pub builtins: Builtins,
 }
+struct Dialects {
+    arith: ModuleOf<ir2::dialect::Arith>,
+    tuple: ModuleOf<ir2::dialect::Tuple>,
+    mem: ModuleOf<ir2::dialect::Mem>,
+    cf: ModuleOf<ir2::dialect::Cf>,
+}
 impl Compiler {
     pub fn new() -> Self {
+        let ir = ir2::Environment::new(ir2::dialect::Primitive::create_infos());
+        let dialects = Dialects {
+            arith: ir.get_dialect_module_if_present(),
+            tuple: ir.get_dialect_module_if_present(),
+            mem: ir.get_dialect_module_if_present(),
+            cf: ir.get_dialect_module_if_present(),
+        };
+        let ir_module = ir.create_module("main");
         Self {
             projects: Vec::new(),
             modules: Vec::new(),
             const_values: Vec::new(),
             types: Vec::new(),
-            ir_module: ir::Module {
-                name: "main_module".to_owned(),
-                funcs: Vec::new(),
-                globals: Vec::new(),
-            },
+            ir,
+            ir_module,
+            dialects,
             errors: Errors::new(),
             builtins: Builtins::default(),
         }
@@ -992,7 +1007,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_builtin_panic(&mut self) -> ir::FunctionId {
+    pub fn get_builtin_panic(&mut self) -> ir2::FunctionId {
         let (panic_mod, panic_function) = builtins::get_panic(self);
         self.get_ir_function_id(panic_mod, panic_function, Vec::new())
     }
@@ -1063,52 +1078,42 @@ impl Compiler {
         module: ModuleId,
         function: ast::FunctionId,
         generics: Vec<Type>,
-    ) -> ir::FunctionId {
+    ) -> ir2::FunctionId {
         self.get_parsed_module(module);
         let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().instances;
 
-        let potential_id = ir::FunctionId(self.ir_module.funcs.len() as _);
-        match instances.get_or_insert(function, &generics, potential_id) {
-            Some(id) => id,
-            None => {
-                // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-                self.ir_module.funcs.push(ir::Function {
-                    name: String::new(),
-                    types: ir::IrTypes::new(),
-                    params: ir::TypeRefs::EMPTY,
-                    return_type: ir::IrType::Unit,
-                    varargs: false,
-                    ir: None,
-                });
-                let mut to_generate = vec![FunctionToGenerate {
-                    ir_id: potential_id,
-                    module,
-                    ast_function_id: function,
-                    generics,
-                }];
-                while let Some(f) = to_generate.pop() {
-                    self.get_hir(f.module, f.ast_function_id);
-                    // got checked function above
-                    let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
-                    let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()]
-                    else {
-                        unreachable!()
-                    };
-                    let checked = Rc::clone(checked);
-                    assert_eq!(
-                        checked.generic_count as usize,
-                        f.generics.len(),
-                        "a function instance queued for ir generation has an invalid generic count"
-                    );
+        instances.get_or_insert(function, &generics, || {
+            // FIXME: just adding a dummy function right now, stupid solution and might cause issues
+            let id = self
+                .ir
+                .add_function(self.ir_module, ir2::Function::empty(""));
+            let mut to_generate = vec![FunctionToGenerate {
+                ir_id: id,
+                module,
+                ast_function_id: function,
+                generics,
+            }];
+            while let Some(f) = to_generate.pop() {
+                self.get_hir(f.module, f.ast_function_id);
+                // got checked function above
+                let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
+                let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()]
+                else {
+                    unreachable!()
+                };
+                let checked = Rc::clone(checked);
+                assert_eq!(
+                    checked.generic_count as usize,
+                    f.generics.len(),
+                    "a function instance queued for ir generation has an invalid generic count"
+                );
 
-                    let name = mangle_name(&checked, &f.generics);
-                    let func =
-                        irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
-                    self.ir_module[f.ir_id] = func;
-                }
-                potential_id
+                let name = mangle_name(&checked, &f.generics);
+                let func =
+                    irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
+                self.ir_module[f.ir_id] = func;
             }
-        }
+        })
     }
 
     pub fn print_project_hir(&mut self, project: ProjectId) {
@@ -1135,7 +1140,7 @@ impl Compiler {
 
     /// Emit project ir starting from a root function (for example the main function) while
     /// generating all functions recursively that are called by that function
-    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
+    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir2::FunctionId> {
         let mut functions_to_emit = VecDeque::from([(root.0, root.1, vec![])]);
         let mut finished_functions = Vec::new();
         while let Some((module, function, generics)) = functions_to_emit.pop_front() {
@@ -1164,19 +1169,17 @@ impl Compiler {
     pub fn verify_main_and_add_entry_point(
         &mut self,
         main: (ModuleId, FunctionId),
-    ) -> Result<ir::FunctionId, Option<CompileError>> {
+    ) -> Result<ir2::FunctionId, Option<CompileError>> {
         let main_ir_id = self.get_ir_function_id(main.0, main.1, vec![]);
         let main_signature = self.get_signature(main.0, main.1);
         check::verify_main_signature(main_signature, main.0).map(|()| {
             let main_signature = self.get_signature(main.0, main.1);
             let entry_point = irgen::entry_point(main_ir_id, &main_signature.return_type);
-            let id = ir::FunctionId(self.ir_module.funcs.len() as _);
-            self.ir_module.funcs.push(entry_point);
-            id
+            self.ir.add_function(self.ir_module, entry_point)
         })
     }
 
-    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
+    pub fn get_ir_function(&self, id: ir2::FunctionId) -> &ir2::Function {
         if self.ir_module[id].ir.is_none() {
             // might be a function that is not emitted yet
         }
@@ -1861,7 +1864,7 @@ pub struct CheckedTrait {
 
 pub struct IrInstances {
     functions: Vec<FunctionInstances>,
-    pub globals: Vec<Option<ir::GlobalId>>,
+    pub globals: Vec<Option<ir2::GlobalId>>,
 }
 impl IrInstances {
     pub fn new(function_count: usize, global_count: usize) -> Self {
@@ -1875,29 +1878,30 @@ impl IrInstances {
         &mut self,
         id: FunctionId,
         generics: &[Type],
-        potential_ir_id: ir::FunctionId,
-    ) -> Option<ir::FunctionId> {
+        create_function: impl FnOnce() -> FunctionId,
+    ) -> ir2::FunctionId {
         let instances = &mut self.functions[id.idx()].0;
         match instances.get(generics) {
             None => {
                 // PERF: avoid double hashing, maybe with RawEntry
-                instances.insert(generics.to_owned(), potential_ir_id);
-                None
+                let id = create_function();
+                instances.insert(generics.to_owned(), id);
+                id
             }
-            Some(id) => Some(*id),
+            &Some(id) => id,
         }
     }
 }
 
 pub struct FunctionToGenerate {
-    pub ir_id: ir::FunctionId,
+    pub ir_id: ir2::FunctionId,
     pub module: ModuleId,
     pub ast_function_id: ast::FunctionId,
     pub generics: Vec<Type>,
 }
 
 #[derive(Clone)]
-struct FunctionInstances(DHashMap<Vec<Type>, ir::FunctionId>);
+struct FunctionInstances(DHashMap<Vec<Type>, ir2::FunctionId>);
 
 pub fn mangle_name(checked: &CheckedFunction, generics: &[Type]) -> String {
     let mut name = checked.name.clone();

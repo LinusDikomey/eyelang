@@ -218,16 +218,15 @@ fn main() -> Result<(), MainError> {
                     let target = args.target.as_ref().map(|target| {
                         CString::new(target.as_bytes()).expect("invalid target string")
                     });
-                    /*
                     backend
                         .emit_module(
-                            &compiler.ir_module,
+                            &compiler.ir,
+                            compiler.ir_module,
                             args.backend_ir,
                             target.as_deref(),
                             Path::new(&obj_file),
                         )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
-                        */
                     todo!("emit again")
                 }
             }

@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashSet, hash::Hash};
 
-use crate::{Argument, Bitmap, BlockId, Environment, FunctionIr, Ref};
+use crate::{Argument, Bitmap, BlockId, Environment, FunctionIr};
 
 pub trait Block: Copy + Hash + Eq + core::fmt::Debug {
     const ENTRY: Self;

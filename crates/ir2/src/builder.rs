@@ -1,6 +1,6 @@
 use crate::{
     argument::IntoArgs, builtins::Builtin, Argument, BlockId, BlockInfo, Environment, Function,
-    FunctionId, Instruction, Parameter, Ref, Refs, TypeId, TypeIds, Types,
+    FunctionId, Instruction, Parameter, Ref, Refs, TypeId, Types,
 };
 
 pub struct Builder<'a> {
@@ -60,6 +60,9 @@ impl<'a> Builder<'a> {
                     (target.0 .0, Some(idx))
                 }
                 (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
+                (Argument::Int(i), crate::Parameter::Int32) => {
+                    (i.try_into().expect("Int value too large for Int32"), None)
+                }
                 (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
                 (Argument::FunctionId(id), crate::Parameter::TypeId) => {
                     (id.module.0, Some(id.function.0))

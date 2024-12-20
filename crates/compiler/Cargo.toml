@@ -11,6 +11,6 @@ span = { path = "../span" }
 types = { path = "../types" }
 id = { path = "../id" }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
-ir = { version = "0.1.0", path = "../ir" }
+ir2 = { path = "../ir2" }
 pathdiff = "0.2.1"
 indexmap = "2.7.0"
