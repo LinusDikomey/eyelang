@@ -1,6 +1,6 @@
 use crate::{
     argument::IntoArgs, builtins::Builtin, Argument, BlockId, BlockInfo, Environment, Function,
-    FunctionId, Instruction, Parameter, Ref, Refs, TypeId, Types,
+    FunctionId, Instruction, Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
 };
 
 pub struct Builder<'a> {
@@ -28,8 +28,7 @@ impl<'a> Builder<'a> {
     #[track_caller]
     pub fn append<'r>(
         &mut self,
-        (function, args): (FunctionId, impl IntoArgs<'r>),
-        ty: TypeId,
+        (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
     ) -> Ref {
         let Some(current_block) = self.current_block else {
             panic!("tried to append to block while no block was active");
@@ -37,52 +36,7 @@ impl<'a> Builder<'a> {
         debug_assert!(self.current_block.is_some());
         let def = &self.env[function];
         let terminator = def.terminator;
-        let params = &def.params[..];
-        let args = args.into_args();
-        if args.len() != params.len() {
-            panic!(
-                "invalid parameter count, expected {} but found {}",
-                params.len(),
-                args.len()
-            );
-        }
-        let count: usize = params.iter().map(|p| p.slot_count()).sum();
-        let mut args = args.zip(params.iter()).flat_map(|(arg, param)| {
-            let (a, b) = match (arg, param) {
-                (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => {
-                    (r.0, None)
-                }
-                (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
-                    let idx = self.extra.len() as u32;
-                    // TODO: check block has the correct number of arguments
-                    // (currently can't because it is set to 0 before start)
-                    self.extra.extend(target.1.iter().map(|&r| r.0));
-                    (target.0 .0, Some(idx))
-                }
-                (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
-                (Argument::Int(i), crate::Parameter::Int32) => {
-                    (i.try_into().expect("Int value too large for Int32"), None)
-                }
-                (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
-                (Argument::FunctionId(id), crate::Parameter::TypeId) => {
-                    (id.module.0, Some(id.function.0))
-                }
-                (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
-                _ => panic!("argument was of unexpected kind, expected {param:?}"),
-            };
-            std::iter::once(a).chain(b)
-        });
-        let args = if count <= 2 {
-            [
-                args.next().unwrap_or_default(),
-                args.next().unwrap_or_default(),
-            ]
-        } else {
-            let args: Vec<_> = args.collect(); // PERF: no extra collect here
-            let idx = self.extra.len() as u32;
-            self.extra.extend(args);
-            [idx, count as u32]
-        };
+        let args = write_args(&mut self.extra, &def.params, args);
         let r = Ref(self.insts.len() as _);
         self.insts.push(Instruction { function, args, ty });
         self.blocks[current_block.0 as usize].len += 1;
@@ -183,5 +137,55 @@ impl<'a> Builder<'a> {
             return_type: Some(return_type),
             ir: Some(ir),
         }
+    }
+}
+
+pub(crate) fn write_args<'a>(
+    extra: &mut Vec<u32>,
+    params: &[Parameter],
+    args: impl IntoArgs<'a>,
+) -> [u32; INLINE_ARGS] {
+    let args = args.into_args();
+    if args.len() != params.len() {
+        panic!(
+            "invalid parameter count, expected {} but found {}",
+            params.len(),
+            args.len()
+        );
+    }
+    let count: usize = params.iter().map(|p| p.slot_count()).sum();
+    let mut args = args.zip(params.iter()).flat_map(|(arg, param)| {
+        let (a, b) = match (arg, param) {
+            (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => (r.0, None),
+            (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
+                let idx = extra.len() as u32;
+                // TODO: check block has the correct number of arguments
+                // (currently can't because it is set to 0 before start)
+                extra.extend(target.1.iter().map(|&r| r.0));
+                (target.0 .0, Some(idx))
+            }
+            (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
+            (Argument::Int(i), crate::Parameter::Int32) => {
+                (i.try_into().expect("Int value too large for Int32"), None)
+            }
+            (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
+            (Argument::FunctionId(id), crate::Parameter::TypeId) => {
+                (id.module.0, Some(id.function.0))
+            }
+            (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
+            _ => panic!("argument was of unexpected kind, expected {param:?}"),
+        };
+        std::iter::once(a).chain(b)
+    });
+    if count <= INLINE_ARGS {
+        [
+            args.next().unwrap_or_default(),
+            args.next().unwrap_or_default(),
+        ]
+    } else {
+        let args: Vec<_> = args.collect(); // PERF: no extra collect here
+        let idx = extra.len() as u32;
+        extra.extend(args);
+        [idx, count as u32]
     }
 }

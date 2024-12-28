@@ -1,6 +1,5 @@
 use std::{
-    any::type_name,
-    arch, fmt,
+    fmt,
     marker::PhantomData,
     num::NonZeroU64,
     ops::{Deref, Index},
@@ -12,6 +11,7 @@ pub mod block_graph;
 pub mod builder;
 pub mod dialect;
 pub mod eval;
+pub mod rewrite;
 
 mod argument;
 mod bitmap;
@@ -147,6 +147,14 @@ impl Ref {
     pub const FALSE: Self = Self(u32::MAX - 1);
     pub const TRUE: Self = Self(u32::MAX - 2);
 
+    pub fn is_ref(self) -> bool {
+        self.0 < u32::MAX - 2
+    }
+
+    pub fn into_ref(self) -> Option<u32> {
+        self.is_ref().then_some(self.0)
+    }
+
     pub fn idx(self) -> usize {
         self.0 as usize
     }
@@ -158,6 +166,8 @@ pub struct Refs {
     count: u32,
 }
 impl Refs {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+
     pub fn nth(self, n: u32) -> Ref {
         assert!(
             n < self.count,
@@ -344,6 +354,14 @@ pub enum Type {
     Array(TypeId, u32),
     Tuple(TypeIds),
 }
+impl<T> PartialEq<T> for Type
+where
+    for<'a> T: Copy + Into<PrimitiveId>,
+{
+    fn eq(&self, other: &T) -> bool {
+        matches!(self, &Type::Primitive(id) if id == (*other).into())
+    }
+}
 
 pub struct FunctionIr {
     blocks: Vec<BlockInfo>,
@@ -406,6 +424,19 @@ impl FunctionIr {
         assert!(args.next().is_none(), "too many args");
         args_array
     }
+
+    pub fn prepare_instruction<'a>(
+        &mut self,
+        params: &[Parameter],
+        (id, args, ty): (FunctionId, impl IntoArgs<'a>, TypeId),
+    ) -> Instruction {
+        let args = builder::write_args(&mut self.extra, params, args);
+        Instruction {
+            function: id,
+            args,
+            ty,
+        }
+    }
 }
 
 pub struct BlockInfo {
@@ -414,7 +445,7 @@ pub struct BlockInfo {
     len: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     function: FunctionId,
     args: [u32; 2],
@@ -451,14 +482,17 @@ impl Instruction {
     }
 }
 
+/// how many arguments are stored inline with each instruction.
+pub const INLINE_ARGS: usize = 2;
+
 fn decode_args<'a>(
-    args: &'a [u32; 2],
+    args: &'a [u32; INLINE_ARGS],
     params: &'a [Parameter],
     blocks: &'a [BlockInfo],
     extra: &'a [u32],
 ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
     let count: usize = params.iter().map(|p| p.slot_count()).sum();
-    let mut args = if count <= 2 {
+    let mut args = if count <= INLINE_ARGS {
         &args[..count]
     } else {
         let i = args[0] as usize;
@@ -555,6 +589,11 @@ macro_rules! primitives {
                 Self::Primitive(value.id())
             }
         }
+        impl From<Primitive> for $crate::PrimitiveId {
+            fn from(value: Primitive) -> Self {
+                value.id()
+            }
+        }
         impl TryFrom<$crate::PrimitiveId> for Primitive {
             type Error = $crate::InvalidPrimitive;
 
@@ -628,13 +667,13 @@ macro_rules! instructions {
         impl $table_name<$crate::ModuleOf<$module_name>> {
             $(
                 #[inline]
-                pub fn $instruction<'a>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?),*) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>) where 'a: 'static {
+                pub fn $instruction<'a>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>, $crate::TypeId) where 'a: 'static {
                     let id = $crate::FunctionId {
                         module: self.0.id(),
                         function: $module_name::$instruction.into(),
                     };
                     let args = ($($arg_name,)*);
-                    (id, args)
+                    (id, args, ty)
                 }
             )*
         }

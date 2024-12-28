@@ -2,7 +2,7 @@ use core::{fmt, str};
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{Argument, Environment, Module, Ref};
+use crate::{builtins, Argument, Environment, Module, Ref};
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -98,6 +98,12 @@ impl fmt::Display for ModuleDisplay<'_> {
                     }
                     cwriteln!(f, ":")?;
                     for (r, inst) in ir.get_block(block) {
+                        if inst.module() == builtins::BUILTIN.id()
+                            && inst.function() == builtins::Builtin::Nothing.id()
+                        {
+                            // don't show 'Nothing' instructions
+                            continue;
+                        }
                         let called_module = &env.modules[inst.function.module.0 as usize];
                         let called = &called_module.functions[inst.function.function.0 as usize];
 

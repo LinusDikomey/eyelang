@@ -1,11 +1,12 @@
 use core::{fmt, str};
-use std::{marker::PhantomData, ops::Index};
-
-use color_format::{cwrite, cwriteln};
+use std::{
+    marker::PhantomData,
+    ops::{Index, IndexMut},
+};
 
 use crate::{
-    Argument, Function, FunctionId, Global, GlobalId, Inst, LocalFunctionId, Module, ModuleId,
-    ModuleOf, PrimitiveInfo,
+    Function, FunctionId, Global, GlobalId, Inst, LocalFunctionId, Module, ModuleId, ModuleOf,
+    PrimitiveInfo,
 };
 
 pub struct Environment {
@@ -25,6 +26,11 @@ impl Index<FunctionId> for Environment {
 
     fn index(&self, index: FunctionId) -> &Self::Output {
         &self.modules[index.module.0 as usize].functions[index.function.0 as usize]
+    }
+}
+impl IndexMut<FunctionId> for Environment {
+    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
+        &mut self.modules[index.module.0 as usize].functions[index.function.0 as usize]
     }
 }
 impl Environment {
