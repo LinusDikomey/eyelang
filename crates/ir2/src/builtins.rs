@@ -7,6 +7,7 @@ instructions! {
 
     Nothing;
     BlockArg;
+    Undef;
 }
 
 pub const BUILTIN: ModuleOf<Builtin> = ModuleOf(ModuleId::BUILTINS, std::marker::PhantomData);

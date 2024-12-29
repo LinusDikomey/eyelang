@@ -3,6 +3,7 @@ pub mod builtins;
 use std::{
     cell::RefCell,
     collections::VecDeque,
+    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -10,7 +11,7 @@ use std::{
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
-use ir2::ModuleOf;
+use ir2::{builder::HasEnvironment, ModuleOf};
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
@@ -41,20 +42,25 @@ pub struct Compiler {
     pub errors: Errors,
     pub builtins: Builtins,
 }
-struct Dialects {
-    arith: ModuleOf<ir2::dialect::Arith>,
-    tuple: ModuleOf<ir2::dialect::Tuple>,
-    mem: ModuleOf<ir2::dialect::Mem>,
-    cf: ModuleOf<ir2::dialect::Cf>,
+impl ir2::builder::HasEnvironment for &mut Compiler {
+    fn env(&self) -> &ir2::Environment {
+        &self.ir
+    }
+}
+pub struct Dialects {
+    pub arith: ModuleOf<ir2::dialect::Arith>,
+    pub tuple: ModuleOf<ir2::dialect::Tuple>,
+    pub mem: ModuleOf<ir2::dialect::Mem>,
+    pub cf: ModuleOf<ir2::dialect::Cf>,
 }
 impl Compiler {
     pub fn new() -> Self {
-        let ir = ir2::Environment::new(ir2::dialect::Primitive::create_infos());
+        let mut ir = ir2::Environment::new(ir2::dialect::Primitive::create_infos());
         let dialects = Dialects {
-            arith: ir.get_dialect_module_if_present(),
-            tuple: ir.get_dialect_module_if_present(),
-            mem: ir.get_dialect_module_if_present(),
-            cf: ir.get_dialect_module_if_present(),
+            arith: ir.get_dialect_module(),
+            tuple: ir.get_dialect_module(),
+            mem: ir.get_dialect_module(),
+            cf: ir.get_dialect_module(),
         };
         let ir_module = ir.create_module("main");
         Self {
@@ -1082,38 +1088,40 @@ impl Compiler {
         self.get_parsed_module(module);
         let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().instances;
 
-        instances.get_or_insert(function, &generics, || {
+        let mut to_generate = vec![];
+        let id = instances.get_or_insert(function, &generics, |generics| {
             // FIXME: just adding a dummy function right now, stupid solution and might cause issues
             let id = self
                 .ir
                 .add_function(self.ir_module, ir2::Function::empty(""));
-            let mut to_generate = vec![FunctionToGenerate {
+            to_generate.push(FunctionToGenerate {
                 ir_id: id,
                 module,
                 ast_function_id: function,
                 generics,
-            }];
-            while let Some(f) = to_generate.pop() {
-                self.get_hir(f.module, f.ast_function_id);
-                // got checked function above
-                let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
-                let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()]
-                else {
-                    unreachable!()
-                };
-                let checked = Rc::clone(checked);
-                assert_eq!(
-                    checked.generic_count as usize,
-                    f.generics.len(),
-                    "a function instance queued for ir generation has an invalid generic count"
-                );
+            });
+            id
+        });
 
-                let name = mangle_name(&checked, &f.generics);
-                let func =
-                    irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
-                self.ir_module[f.ir_id] = func;
-            }
-        })
+        while let Some(f) = to_generate.pop() {
+            self.get_hir(f.module, f.ast_function_id);
+            // got checked function above
+            let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
+            let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()] else {
+                unreachable!()
+            };
+            let checked = Rc::clone(checked);
+            assert_eq!(
+                checked.generic_count as usize,
+                f.generics.len(),
+                "a function instance queued for ir generation has an invalid generic count"
+            );
+
+            let name = mangle_name(&checked, &f.generics);
+            let func = irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
+            self.ir[f.ir_id] = func;
+        }
+        id
     }
 
     pub fn print_project_hir(&mut self, project: ProjectId) {
@@ -1173,17 +1181,14 @@ impl Compiler {
         let main_ir_id = self.get_ir_function_id(main.0, main.1, vec![]);
         let main_signature = self.get_signature(main.0, main.1);
         check::verify_main_signature(main_signature, main.0).map(|()| {
-            let main_signature = self.get_signature(main.0, main.1);
-            let entry_point = irgen::entry_point(main_ir_id, &main_signature.return_type);
+            let main_signature = Rc::clone(self.get_signature(main.0, main.1));
+            let entry_point = irgen::entry_point(main_ir_id, &main_signature.return_type, &self.ir);
             self.ir.add_function(self.ir_module, entry_point)
         })
     }
 
     pub fn get_ir_function(&self, id: ir2::FunctionId) -> &ir2::Function {
-        if self.ir_module[id].ir.is_none() {
-            // might be a function that is not emitted yet
-        }
-        &self.ir_module[id]
+        &self.ir[id]
     }
 
     /// prints all errors, consuming them and returns true if any fatal errors were present
@@ -1878,17 +1883,17 @@ impl IrInstances {
         &mut self,
         id: FunctionId,
         generics: &[Type],
-        create_function: impl FnOnce() -> FunctionId,
+        create_function: impl FnOnce(Vec<Type>) -> ir2::FunctionId,
     ) -> ir2::FunctionId {
         let instances = &mut self.functions[id.idx()].0;
         match instances.get(generics) {
             None => {
                 // PERF: avoid double hashing, maybe with RawEntry
-                let id = create_function();
+                let id = create_function(generics.to_owned());
                 instances.insert(generics.to_owned(), id);
                 id
             }
-            &Some(id) => id,
+            Some(&id) => id,
         }
     }
 }

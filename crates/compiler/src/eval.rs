@@ -1,6 +1,7 @@
 use std::{num::NonZeroU64, rc::Rc};
 
 use id::ModuleId;
+use ir2::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
@@ -302,9 +303,26 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
-    let builder = ir2::builder::Builder::new(compiler.env, "");
+    let builder = ir2::builder::Builder::new(compiler, "");
     builder.create_and_begin_block([]);
-    let ir = crate::irgen::lower_hir(builder, &hir, &types, compiler, &mut to_generate, &[], []);
+    let Some(return_ty) = crate::irgen::types::get_from_info(
+        builder.env,
+        &types,
+        &mut builder.types,
+        types[expected],
+        crate::irgen::types::Generics::Empty,
+    ) else {
+        return Ok(ConstValue::Undefined);
+    };
+    let ir = crate::irgen::lower_hir(
+        builder,
+        &hir,
+        &types,
+        &mut to_generate,
+        &[],
+        ir2::Refs::EMPTY,
+        return_ty,
+    );
     while let Some(to_generate_func) = to_generate.pop() {
         let hir =
             Rc::clone(compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id));
@@ -316,10 +334,10 @@ pub fn value_expr(
             &hir,
             &to_generate_func.generics,
         );
-        compiler.ir_module.funcs[to_generate_func.ir_id.0 as usize] = ir;
+        compiler.ir[to_generate_func.ir_id] = ir;
     }
     let mut env = LazyEvalEnv { compiler };
-    ir::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| {
+    ir2::eval::eval(&ir.ir.as_ref().unwrap(), &ir.types, &[], &mut env).map(|val| {
         match val {
             Val::Invalid => panic!("internal error during evaluation occured"),
             Val::Unit => ConstValue::Unit,
@@ -354,25 +372,25 @@ pub fn value_expr(
 struct LazyEvalEnv<'a> {
     compiler: &'a mut Compiler,
 }
-impl ir::eval::Environment for LazyEvalEnv<'_> {
-    fn get_function(&mut self, id: ir::FunctionId) -> &ir::Function {
-        &self.compiler.ir_module.funcs[id.0 as usize]
+impl ir2::eval::Environment for LazyEvalEnv<'_> {
+    fn get_function(&mut self, id: ir2::FunctionId) -> &ir2::Function {
+        &self.compiler.ir[id]
     }
 
     fn call_extern(
         &mut self,
-        id: ir::FunctionId,
+        id: ir2::FunctionId,
         args: &[Val],
-        mem: &mut ir::eval::Mem,
+        mem: &mut ir2::eval::Mem,
     ) -> Result<Val, Box<str>> {
-        let func = &self.compiler.ir_module.funcs[id.0 as usize];
-        Ok(match func.name.as_str() {
+        let func = &self.compiler.ir[id];
+        Ok(match &*func.name {
             "malloc" => {
                 let &[Val::Int(size)] = args else {
                     return Err("invalid signature for malloc".into());
                 };
                 let ptr = mem
-                    .malloc(ir::Layout {
+                    .malloc(ir2::Layout {
                         size,
                         align: NonZeroU64::new(16).unwrap(),
                     })

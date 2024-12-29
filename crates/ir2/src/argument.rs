@@ -5,6 +5,7 @@ pub enum Argument<'a> {
     Ref(Ref),
     BlockTarget(BlockTarget<'a>),
     Int(u64),
+    Float(f64),
     TypeId(TypeId),
     FunctionId(FunctionId),
     GlobalId(GlobalId),
@@ -34,6 +35,11 @@ impl From<u32> for Argument<'_> {
         Self::Int(value.into())
     }
 }
+impl From<f64> for Argument<'_> {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
 impl From<TypeId> for Argument<'_> {
     fn from(value: TypeId) -> Self {
         Self::TypeId(value)
@@ -54,6 +60,14 @@ pub trait IntoArgs<'a> {
     type Args: ExactSizeIterator<Item = Argument<'a>>;
 
     fn into_args(self) -> Self::Args;
+}
+impl IntoArgs<'static> for Vec<Ref> {
+    // PERF: specifying function pointer here in Map type might worsen performance since it becomes
+    // a dynamic call
+    type Args = std::iter::Map<std::vec::IntoIter<Ref>, fn(Ref) -> Argument<'static>>;
+    fn into_args(self) -> Self::Args {
+        self.into_iter().map(Argument::Ref)
+    }
 }
 impl IntoArgs<'static> for () {
     type Args = std::array::IntoIter<Argument<'static>, 0>;

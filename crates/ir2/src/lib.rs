@@ -2,7 +2,7 @@ use std::{
     fmt,
     marker::PhantomData,
     num::NonZeroU64,
-    ops::{Deref, Index},
+    ops::{Deref, Index, IndexMut},
 };
 
 use color_format::cwrite;
@@ -23,6 +23,7 @@ mod layout;
 pub use argument::{Argument, IntoArgs};
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
+pub use dialect::Primitive;
 pub use environment::Environment;
 pub use layout::{offset_in_tuple, type_layout, Layout};
 
@@ -147,6 +148,10 @@ impl Ref {
     pub const FALSE: Self = Self(u32::MAX - 1);
     pub const TRUE: Self = Self(u32::MAX - 2);
 
+    pub fn index(idx: u32) -> Self {
+        Self(idx)
+    }
+
     pub fn is_ref(self) -> bool {
         self.0 < u32::MAX - 2
     }
@@ -175,6 +180,14 @@ impl Refs {
             self.count
         );
         Ref(self.idx + n)
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = Ref> {
+        (self.idx..self.idx + self.count).map(Ref)
+    }
+
+    pub fn count(self) -> u32 {
+        self.count
     }
 }
 
@@ -216,18 +229,35 @@ impl Function {
     pub fn new(
         name: impl Into<Box<str>>,
         types: Types,
-        params: Vec<TypeId>,
+        params: impl IntoIterator<Item = TypeId>,
         return_type: TypeId,
         ir: FunctionIr,
     ) -> Self {
         Self {
             name: name.into(),
             types,
-            params: params.iter().copied().map(Parameter::RefOf).collect(),
+            params: params.into_iter().map(Parameter::RefOf).collect(),
             varargs: false,
             terminator: false,
             return_type: Some(return_type),
             ir: Some(ir),
+        }
+    }
+
+    pub fn declare(
+        name: impl Into<Box<str>>,
+        types: Types,
+        params: impl IntoIterator<Item = TypeId>,
+        return_type: TypeId,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            types,
+            params: params.into_iter().map(Parameter::RefOf).collect(),
+            varargs: false,
+            terminator: false,
+            return_type: Some(return_type),
+            ir: None,
         }
     }
 }
@@ -301,6 +331,11 @@ impl Index<TypeId> for Types {
 
     fn index(&self, index: TypeId) -> &Self::Output {
         &self.types[index.0 as usize]
+    }
+}
+impl IndexMut<TypeId> for Types {
+    fn index_mut(&mut self, index: TypeId) -> &mut Self::Output {
+        &mut self.types[index.0 as usize]
     }
 }
 
@@ -515,6 +550,9 @@ fn decode_args<'a>(
             Argument::BlockTarget(BlockTarget(id, args))
         }
         Parameter::Int => Argument::Int(u64::from(arg()) | (u64::from(arg()) << 32)),
+        Parameter::Float => {
+            Argument::Float(f64::from_bits(u64::from(arg()) | (u64::from(arg()) << 32)))
+        }
         Parameter::Int32 => Argument::Int(arg().into()),
         Parameter::TypeId => Argument::TypeId(TypeId(arg())),
         Parameter::FunctionId => Argument::FunctionId(FunctionId {
@@ -607,6 +645,7 @@ macro_rules! primitives {
 pub mod parameter_types {
     pub use super::{BlockTarget, FunctionId, GlobalId, Ref, TypeId};
     pub type Int = u64;
+    pub type Float = f64;
     pub type Int32 = u32;
 }
 
@@ -616,6 +655,7 @@ pub enum Parameter {
     RefOf(TypeId),
     BlockTarget,
     Int,
+    Float,
     Int32,
     TypeId,
     FunctionId,
@@ -626,6 +666,7 @@ impl Parameter {
         match self {
             Parameter::Ref | Parameter::RefOf(_) | Parameter::TypeId | Parameter::Int32 => 1,
             Parameter::Int
+            | Parameter::Float
             | Parameter::BlockTarget
             | Parameter::FunctionId
             | Parameter::GlobalId => 2,

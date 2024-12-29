@@ -68,6 +68,7 @@ impl fmt::Display for ModuleDisplay<'_> {
                         crate::Parameter::Int | crate::Parameter::Int32 => {
                             cwrite!(f, "#g<intliteral>")?
                         }
+                        crate::Parameter::Float => cwrite!(f, "#b<floatliteral>")?,
                         crate::Parameter::TypeId => cwrite!(f, "#g<type>")?,
                         crate::Parameter::FunctionId => cwrite!(f, "#g<function>")?,
                         crate::Parameter::GlobalId => cwrite!(f, "#g<global>")?,
@@ -139,6 +140,7 @@ impl fmt::Display for ModuleDisplay<'_> {
                                     }
                                 }
                                 Argument::Int(n) => cwrite!(f, " #y<{}>", n)?,
+                                Argument::Float(x) => cwrite!(f, "#y<{}>", x)?,
                                 Argument::TypeId(ty) => {
                                     let display = function.types.display_type(ty, &env.primitives);
                                     write!(f, " {display}")?;

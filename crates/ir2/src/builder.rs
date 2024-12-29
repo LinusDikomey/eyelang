@@ -1,10 +1,19 @@
 use crate::{
     argument::IntoArgs, builtins::Builtin, Argument, BlockId, BlockInfo, Environment, Function,
-    FunctionId, Instruction, Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
+    FunctionId, Instruction, ModuleId, Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
 };
 
-pub struct Builder<'a> {
-    env: &'a Environment,
+pub trait HasEnvironment {
+    fn env(&self) -> &Environment;
+}
+impl HasEnvironment for &Environment {
+    fn env(&self) -> &Environment {
+        self
+    }
+}
+
+pub struct Builder<Env: HasEnvironment> {
+    pub env: Env,
     name: Box<str>,
     pub types: Types,
     insts: Vec<Instruction>,
@@ -12,12 +21,16 @@ pub struct Builder<'a> {
     blocks: Vec<BlockInfo>,
     current_block: Option<BlockId>,
 }
-impl<'a> Builder<'a> {
-    pub fn new(env: &'a Environment, name: impl Into<Box<str>>) -> Self {
+impl<Env: HasEnvironment> Builder<Env> {
+    pub fn new(env: Env, name: impl Into<Box<str>>) -> Self {
+        Self::with_types(env, name, Types::new())
+    }
+
+    pub fn with_types(env: Env, name: impl Into<Box<str>>, types: Types) -> Self {
         Self {
             env,
             name: name.into(),
-            types: Types::new(),
+            types,
             insts: Vec::new(),
             extra: Vec::new(),
             blocks: Vec::new(),
@@ -26,6 +39,7 @@ impl<'a> Builder<'a> {
     }
 
     #[track_caller]
+    #[inline]
     pub fn append<'r>(
         &mut self,
         (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
@@ -33,8 +47,7 @@ impl<'a> Builder<'a> {
         let Some(current_block) = self.current_block else {
             panic!("tried to append to block while no block was active");
         };
-        debug_assert!(self.current_block.is_some());
-        let def = &self.env[function];
+        let def = &self.env.env()[function];
         let terminator = def.terminator;
         let args = write_args(&mut self.extra, &def.params, args);
         let r = Ref(self.insts.len() as _);
@@ -44,6 +57,14 @@ impl<'a> Builder<'a> {
             self.current_block = None;
         }
         r
+    }
+
+    pub fn append_undef(&mut self, ty: TypeId) -> Ref {
+        let id = FunctionId {
+            module: ModuleId::BUILTINS,
+            function: Builtin::Undef.id(),
+        };
+        self.append((id, (), ty))
     }
 
     pub fn create_block(&mut self) -> BlockId {
@@ -56,6 +77,7 @@ impl<'a> Builder<'a> {
         id
     }
 
+    #[inline]
     pub fn begin_block(&mut self, id: BlockId, args: impl IntoIterator<Item = TypeId>) -> Refs {
         debug_assert!(
             self.current_block.is_none(),

@@ -124,7 +124,7 @@ pub fn get_def(
 pub fn get_from_info(
     compiler: &mut Compiler,
     types: &TypeTable,
-    ir_types: &mut IrTypes,
+    ir_types: &mut ir2::Types,
     ty: TypeInfo,
     generics: Generics,
 ) -> Option<IrType> {
@@ -197,14 +197,14 @@ pub fn get_from_info(
 pub fn get_multiple_infos(
     compiler: &mut Compiler,
     types: &TypeTable,
-    ir_types: &mut IrTypes,
+    ir_types: &mut ir2::Types,
     ids: LocalTypeIds,
     generics: Generics,
-) -> Option<TypeRefs> {
+) -> Option<ir2::TypeIds> {
     let refs = ir_types.add_multiple((0..ids.count).map(|_| IrType::Unit));
     for (ty, r) in ids.iter().zip(refs.iter()) {
         let ty = get_from_info(compiler, types, ir_types, types[ty], generics)?;
-        ir_types.replace(r, ty);
+        ir_types[r] = ty;
     }
     Some(refs)
 }

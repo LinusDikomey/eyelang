@@ -40,6 +40,7 @@ instructions! {
     Arith "arith" ArithInsts
 
     Int value: Int;
+    Float value: Float;
 
     Neg value: Ref;
 

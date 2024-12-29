@@ -1,4 +1,4 @@
-use ir::{builder::BinOp, IrType, Ref};
+use ir2::{Ref, TypeId};
 
 use super::{Ctx, ValueOrPlace};
 
@@ -6,18 +6,13 @@ pub fn call_intrinsic(
     ctx: &mut Ctx,
     intrinsic: &str,
     args: &[Ref],
-    return_ty: IrType,
+    return_ty: TypeId,
 ) -> super::Result<ValueOrPlace> {
+    let crate::compiler::Dialects { arith, .. } = ctx.builder.env.dialects;
     Ok(ValueOrPlace::Value(match intrinsic {
-        "xor" => ctx
-            .builder
-            .build_bin_op(BinOp::Xor, args[0], args[1], return_ty),
-        "rotate_left" => ctx
-            .builder
-            .build_bin_op(BinOp::Rol, args[0], args[1], return_ty),
-        "rotate_right" => ctx
-            .builder
-            .build_bin_op(BinOp::Ror, args[0], args[1], return_ty),
+        "xor" => ctx.builder.append(arith.Xor(args[0], args[1], return_ty)),
+        "rotate_left" => ctx.builder.append(arith.Rol(args[0], args[1], return_ty)),
+        "rotate_right" => ctx.builder.append(arith.Ror(args[0], args[1], return_ty)),
         _ => panic!("called unknown intrinsic: {intrinsic}"),
     }))
 }

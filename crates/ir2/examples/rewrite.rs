@@ -37,9 +37,7 @@ ir2::rewrite::rewrite_rules! {
     AddZeroRewriter
     // define all the arguments, this should never be changed and is only needed so the variables
     // can be used in pattern code
-    ir
-    types
-    inst
+    ir types inst
 
     // specify that we want to use the Arith dialect in the rules
     use arith: ir2::dialect::Arith;
