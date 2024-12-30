@@ -156,7 +156,10 @@ fn main() -> Result<(), MainError> {
         // functions to be emitted unnecessarily. Could maybe be solved by collecting a list of ir
         // function ids required for compiling main and passing it to the backend.
         compiler.emit_whole_project_ir(project);
-        println!("Displaying IR:\n{}", &compiler.ir_module);
+        println!(
+            "Displaying IR:\n{}",
+            compiler.ir.display_module(compiler.ir_module)
+        );
     }
     if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
@@ -173,11 +176,12 @@ fn main() -> Result<(), MainError> {
                 compiler.emit_whole_project_ir(project);
             }
             #[cfg(debug_assertions)]
-            ir::verify::module(&compiler.ir_module);
+            ir2::verify::module(&compiler.ir, compiler.ir_module);
 
+            /*
             let optimize = true;
             if optimize {
-                let mut pipeline = ir::optimize::Pipeline::default();
+                let mut pipeline = ir2::optimize::Pipeline::default();
                 if args.passes {
                     pipeline.enable_print_passes();
                 }
@@ -186,6 +190,7 @@ fn main() -> Result<(), MainError> {
                 #[cfg(debug_assertions)]
                 ir::verify::module(&compiler.ir_module);
             }
+            */
 
             if compiler.print_errors() && !args.run_with_errors {
                 return Err(MainError::ErrorsFound);
@@ -202,7 +207,8 @@ fn main() -> Result<(), MainError> {
                     }
                     backend
                         .emit_module(
-                            &compiler.ir_module,
+                            &compiler.ir,
+                            compiler.ir_module,
                             args.backend_ir,
                             args.target.as_deref(),
                             Path::new(&obj_file),
@@ -227,7 +233,6 @@ fn main() -> Result<(), MainError> {
                             Path::new(&obj_file),
                         )
                         .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
-                    todo!("emit again")
                 }
             }
             if args.timings {

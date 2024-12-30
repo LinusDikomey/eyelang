@@ -33,6 +33,18 @@ impl IndexMut<FunctionId> for Environment {
         &mut self.modules[index.module.0 as usize].functions[index.function.0 as usize]
     }
 }
+impl Index<GlobalId> for Environment {
+    type Output = Global;
+
+    fn index(&self, index: GlobalId) -> &Self::Output {
+        &self.modules[index.module.0 as usize].globals[index.idx as usize]
+    }
+}
+impl IndexMut<GlobalId> for Environment {
+    fn index_mut(&mut self, index: GlobalId) -> &mut Self::Output {
+        &mut self.modules[index.module.0 as usize].globals[index.idx as usize]
+    }
+}
 impl Environment {
     pub fn new(primitives: Vec<PrimitiveInfo>) -> Self {
         let mut env = Self {
@@ -119,6 +131,7 @@ impl Environment {
             name: name.into(),
             align,
             value,
+            readonly: false,
         });
         GlobalId { module, idx }
     }

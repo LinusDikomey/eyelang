@@ -19,7 +19,7 @@ fn create_add_function(env: &mut ir2::Environment) -> ir2::Function {
     let arith = env.get_dialect_module::<ir2::dialect::Arith>();
     let cf = env.get_dialect_module::<ir2::dialect::Cf>();
 
-    let mut builder = ir2::builder::Builder::new(env, "add");
+    let mut builder = ir2::builder::Builder::new(&*env, "add");
     let int_ty = builder.types.add(Primitive::I32);
     let (_, args) = builder.create_and_begin_block([int_ty; 3]);
     let result = builder.append(arith.Add(args.nth(0), args.nth(1), int_ty));

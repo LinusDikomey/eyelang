@@ -162,6 +162,7 @@ dependencies = [
  "eye-lsp",
  "ir-backend-llvm",
  "ir-backend-x86",
+ "ir2",
  "pathdiff",
 ]
 
@@ -236,6 +237,7 @@ name = "ir-backend-x86"
 version = "0.1.0"
 dependencies = [
  "ir",
+ "ir2",
 ]
 
 [[package]]

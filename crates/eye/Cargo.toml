@@ -14,6 +14,7 @@ compiler = { path = "../compiler" }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
 clap = { version = "4.4.13", features = ["derive"] }
 eye-lsp = { path = "../eye-lsp", optional = true }
+ir2 = { path = "../ir2" }
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }

@@ -47,6 +47,8 @@ impl ir2::builder::HasEnvironment for &mut Compiler {
         &self.ir
     }
 }
+
+#[derive(Clone, Copy)]
 pub struct Dialects {
     pub arith: ModuleOf<ir2::dialect::Arith>,
     pub tuple: ModuleOf<ir2::dialect::Tuple>,
@@ -1182,7 +1184,12 @@ impl Compiler {
         let main_signature = self.get_signature(main.0, main.1);
         check::verify_main_signature(main_signature, main.0).map(|()| {
             let main_signature = Rc::clone(self.get_signature(main.0, main.1));
-            let entry_point = irgen::entry_point(main_ir_id, &main_signature.return_type, &self.ir);
+            let entry_point = irgen::entry_point(
+                main_ir_id,
+                &main_signature.return_type,
+                &self.ir,
+                &self.dialects,
+            );
             self.ir.add_function(self.ir_module, entry_point)
         })
     }

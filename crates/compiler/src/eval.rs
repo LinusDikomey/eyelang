@@ -303,7 +303,7 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
-    let builder = ir2::builder::Builder::new(compiler, "");
+    let mut builder = ir2::builder::Builder::new(&mut *compiler, "");
     builder.create_and_begin_block([]);
     let Some(return_ty) = crate::irgen::types::get_from_info(
         builder.env,
@@ -314,6 +314,7 @@ pub fn value_expr(
     ) else {
         return Ok(ConstValue::Undefined);
     };
+    let return_ty = builder.types.add(return_ty);
     let ir = crate::irgen::lower_hir(
         builder,
         &hir,

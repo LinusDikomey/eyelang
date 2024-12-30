@@ -26,10 +26,14 @@ impl fmt::Display for ModuleDisplay<'_> {
         for global in &module.globals {
             cwrite!(
                 f,
-                "  #m<global> #b<{}> [align {}] = ",
+                "  #m<global> #b<{}> [align {}",
                 global.name,
                 global.align
             )?;
+            if global.readonly {
+                cwrite!(f, ", readonly")?;
+            }
+            write!(f, "] = ")?;
             if let Ok(s) = str::from_utf8(&global.value) {
                 cwriteln!(f, "#y<{s:?}>")?;
             } else {

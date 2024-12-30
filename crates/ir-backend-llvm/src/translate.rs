@@ -324,6 +324,12 @@ unsafe fn build_func(
                         };
                         LLVMConstInt(table_ty(inst.ty()).unwrap(), int, FALSE)
                     }
+                    I::Float => {
+                        let [Argument::Float(float)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        LLVMConstReal(table_ty(inst.ty()).unwrap(), float)
+                    }
                     I::Neg => {
                         let r = get_ref(&instructions, un_op()).unwrap();
                         match func.types[inst.ty()] {
@@ -753,6 +759,26 @@ unsafe fn build_func(
                         }
                     }
                 }
+            } else if inst.module() == module {
+                let (llvm_func, llvm_func_ty) = llvm_funcs[inst.function().idx()];
+                let params = &env[inst.module()][inst.function()].params;
+                let args = inst.args(params, ir.blocks(), ir.extra());
+                let mut args: Vec<_> = args
+                    .filter_map(|arg| {
+                        let Argument::Ref(r) = arg else {
+                            unreachable!()
+                        };
+                        get_ref(&instructions, r)
+                    })
+                    .collect();
+                LLVMBuildCall2(
+                    builder,
+                    llvm_func_ty,
+                    llvm_func,
+                    args.as_mut_ptr(),
+                    args.len() as u32,
+                    NONE,
+                )
             } else {
                 panic!("unknown module")
             };

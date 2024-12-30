@@ -1,5 +1,5 @@
 #![allow(unused)] // TODO: remove when x86 backend is worked on again
-use std::path::Path;
+use std::{ffi::CStr, path::Path};
 
 use elf::{ElfObjectWriter, SectionHeader};
 use ir::mc::Op;
@@ -30,84 +30,88 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        module: &ir::Module,
+        env: &ir2::Environment,
+        module_id: ir2::ModuleId,
         print_ir: bool,
         target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
-        assert!(target.is_none(), "todo: check target");
-        let mut writer = ElfObjectWriter::new();
-        let mut text_section = Vec::new();
-        let mut symtab = elf::symtab::SymtabWriter::new();
+        todo!("implement x86 backend for ir2")
+        /*
+            assert!(target.is_none(), "todo: check target");
+            let mut writer = ElfObjectWriter::new();
+            let mut text_section = Vec::new();
+            let mut symtab = elf::symtab::SymtabWriter::new();
 
-        // file entry
-        let file_name = writer.add_str(&module.name);
-        symtab.entry(elf::symtab::Entry {
-            name_index: file_name,
-            bind: elf::symtab::Bind::Local,
-            ty: elf::symtab::Type::File,
-            visibility: elf::symtab::Visibility::Default,
-            section_index: 0xfff1, // SHN_ABS
-            value: 0,
-            size: 0,
-        });
-        // section entry
-        symtab.entry(elf::symtab::Entry {
-            name_index: 0,
-            bind: elf::symtab::Bind::Local,
-            ty: elf::symtab::Type::Section,
-            visibility: elf::symtab::Visibility::Default,
-            section_index: 2,
-            value: 0,
-            size: 0,
-        });
+            // file entry
+            let file_name = writer.add_str(&module.name);
+            symtab.entry(elf::symtab::Entry {
+                name_index: file_name,
+                bind: elf::symtab::Bind::Local,
+                ty: elf::symtab::Type::File,
+                visibility: elf::symtab::Visibility::Default,
+                section_index: 0xfff1, // SHN_ABS
+                value: 0,
+                size: 0,
+            });
+            // section entry
+            symtab.entry(elf::symtab::Entry {
+                name_index: 0,
+                bind: elf::symtab::Bind::Local,
+                ty: elf::symtab::Type::Section,
+                visibility: elf::symtab::Visibility::Default,
+                section_index: 2,
+                value: 0,
+                size: 0,
+            });
 
-        for func in &module.funcs {
-            if let Some(ir) = &func.ir {
-                let mut mir = isel::codegen(ir, func, &func.types);
-                let offset = text_section.len() as u64;
-                if print_ir {
-                    println!("mir for {}:\n{}\n", func.name, mir);
+            for func in &module.funcs {
+                if let Some(ir) = &func.ir {
+                    let mut mir = isel::codegen(ir, func, &func.types);
+                    let offset = text_section.len() as u64;
+                    if print_ir {
+                        println!("mir for {}:\n{}\n", func.name, mir);
+                    }
+                    ir::mc::regalloc(&mut mir, self.log);
+                    if self.log {
+                        println!("mir for {}: (post-regalloc)\n{}\n", func.name, mir);
+                    }
+                    emit::write(&mir, &mut text_section);
+                    let size = text_section.len() as u64 - offset;
+                    let name_index = writer.add_str(&func.name);
+                    symtab.entry(elf::symtab::Entry {
+                        name_index,
+                        bind: elf::symtab::Bind::Global,
+                        ty: elf::symtab::Type::Function,
+                        visibility: elf::symtab::Visibility::Default,
+                        section_index: 2,
+                        value: offset,
+                        size,
+                    });
                 }
-                ir::mc::regalloc(&mut mir, self.log);
-                if self.log {
-                    println!("mir for {}: (post-regalloc)\n{}\n", func.name, mir);
-                }
-                emit::write(&mir, &mut text_section);
-                let size = text_section.len() as u64 - offset;
-                let name_index = writer.add_str(&func.name);
-                symtab.entry(elf::symtab::Entry {
-                    name_index,
-                    bind: elf::symtab::Bind::Global,
-                    ty: elf::symtab::Type::Function,
-                    visibility: elf::symtab::Visibility::Default,
-                    section_index: 2,
-                    value: offset,
-                    size,
-                });
             }
-        }
-        writer.section(
-            SectionHeader {
-                name: ".text".to_owned(),
-                ty: elf::SectionHeaderType::Progbits,
-                flags: elf::SectionHeaderFlags {
-                    alloc: true,
-                    execinstr: true,
-                    ..Default::default()
+            writer.section(
+                SectionHeader {
+                    name: ".text".to_owned(),
+                    ty: elf::SectionHeaderType::Progbits,
+                    flags: elf::SectionHeaderFlags {
+                        alloc: true,
+                        execinstr: true,
+                        ..Default::default()
+                    },
+                    addr: 0,
+                    link: 0,
+                    info: 0,
+                    addralign: 16,
+                    entsize: 0,
                 },
-                addr: 0,
-                link: 0,
-                info: 0,
-                addralign: 16,
-                entsize: 0,
-            },
-            text_section,
-        );
-        let (symtab_header, symtab_contents) = symtab.finish();
-        writer.section(symtab_header, symtab_contents);
-        writer.write(out_file).map_err(Error::IO)?;
-        Ok(())
+                text_section,
+            );
+            let (symtab_header, symtab_contents) = symtab.finish();
+            writer.section(symtab_header, symtab_contents);
+            writer.write(out_file).map_err(Error::IO)?;
+            Ok(())
+        */
     }
 }
 

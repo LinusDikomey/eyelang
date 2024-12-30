@@ -757,6 +757,12 @@ impl Values {
                     visit(PrimitiveVal::I64(self.slots[*i as usize]))?;
                     *i += 1;
                 }
+                Primitive::I128 | Primitive::U128 => {
+                    let value = ((self.slots[*i as usize] as u128) << 64)
+                        | self.slots[*i as usize + 1] as u128;
+                    visit(PrimitiveVal::I128(value));
+                    *i += 2;
+                }
             },
             Type::Array(elem, len) => {
                 for _ in 0..len {
@@ -977,6 +983,7 @@ enum PrimitiveVal {
     I16(u16),
     I32(u32),
     I64(u64),
+    I128(u128),
 }
 
 #[derive(Debug)]
@@ -985,4 +992,5 @@ enum PrimitiveSize {
     S16,
     S32,
     S64,
+    S128,
 }

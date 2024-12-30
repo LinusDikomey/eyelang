@@ -26,6 +26,10 @@ impl<Env: HasEnvironment> Builder<Env> {
         Self::with_types(env, name, Types::new())
     }
 
+    pub fn current_block(&self) -> Option<BlockId> {
+        self.current_block
+    }
+
     pub fn with_types(env: Env, name: impl Into<Box<str>>, types: Types) -> Self {
         Self {
             env,

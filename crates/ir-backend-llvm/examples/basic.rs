@@ -39,10 +39,10 @@ fn build_mul(env: &Environment, dialects: &Dialects) -> ir2::Function {
     let int_ty = builder.types.add(Primitive::I32);
     let param_types = builder.types.add_multiple([Primitive::I32.into(); 2]);
     let (_, params) = builder.create_and_begin_block(param_types.iter());
-    let five = builder.append(arith.Int(5), int_ty);
-    let res = builder.append(arith.Add(params.nth(0), five), int_ty);
-    let res = builder.append(arith.Mul(res, params.nth(1)), int_ty);
-    builder.append(cf.Ret(res), unit);
+    let five = builder.append(arith.Int(5, int_ty));
+    let res = builder.append(arith.Add(params.nth(0), five, int_ty));
+    let res = builder.append(arith.Mul(res, params.nth(1), int_ty));
+    builder.append(cf.Ret(res, unit));
 
     builder.finish(int_ty)
 }

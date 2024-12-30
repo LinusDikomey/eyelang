@@ -12,6 +12,7 @@ pub mod builder;
 pub mod dialect;
 pub mod eval;
 pub mod rewrite;
+pub mod verify;
 
 mod argument;
 mod bitmap;
@@ -263,9 +264,10 @@ impl Function {
 }
 
 pub struct Global {
-    name: Box<str>,
-    align: u64,
-    value: Box<[u8]>,
+    pub name: Box<str>,
+    pub align: u64,
+    pub value: Box<[u8]>,
+    pub readonly: bool,
 }
 
 pub struct PrimitiveInfo {
@@ -685,17 +687,17 @@ pub use strum::FromRepr as __FromRepr;
 
 #[macro_export]
 macro_rules! lifetime_or_static {
-    ($p: path, $lifetime: lifetime) => {
-        $lifetime
+    ($lifetime: lifetime) => {
+        impl $crate::IntoArgs<$lifetime>
     };
     () => {
-        'static
+        impl $crate::IntoArgs<'static>
     };
 }
 
 #[macro_export]
 macro_rules! instructions {
-    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $($arg_name: ident: $arg: ident $(<$life: lifetime>)?)* $(!terminator $terminator_val: literal)?; )*) => {
+    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $(<$inst_life: lifetime>)? $($arg_name: ident: $arg: ident $(<$life: lifetime>)?)* $(!terminator $terminator_val: literal)?; )*) => {
         #[derive(Debug, Clone, Copy, $crate::__FromRepr, PartialEq, Eq, Hash)]
         pub enum $module_name {
             $($instruction,)*
@@ -708,7 +710,10 @@ macro_rules! instructions {
         impl $table_name<$crate::ModuleOf<$module_name>> {
             $(
                 #[inline]
-                pub fn $instruction<'a>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, impl $crate::IntoArgs<'a>, $crate::TypeId) where 'a: 'static {
+                pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
+                where
+                    $('a: $inst_life)*
+                {
                     let id = $crate::FunctionId {
                         module: self.0.id(),
                         function: $module_name::$instruction.into(),

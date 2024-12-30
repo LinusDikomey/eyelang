@@ -54,10 +54,11 @@ pub fn lower_function(
         return_type,
         types::Generics::function_instance(generics),
     )
-    .unwrap_or(Primitive::Unit.into());
+    .unwrap_or(ir2::Primitive::Unit.into());
+    let return_type = types.add(return_type);
 
-    let function = if let Some(hir) = &checked.body {
-        let builder = ir2::builder::Builder::with_types(compiler, name, types);
+    let mut function = if let Some(hir) = &checked.body {
+        let mut builder = ir2::builder::Builder::with_types(compiler, name, types);
         let (_, params) = builder.create_and_begin_block(param_types.iter());
         lower_hir(
             builder,
@@ -94,7 +95,10 @@ pub fn lower_hir(
     params: ir2::Refs,
     return_ty: ir2::TypeId,
 ) -> ir2::Function {
-    let ptr = builder.types.add(ir2::dialect::Primitive::Ptr);
+    let unit_ty = builder.types.add(ir2::Primitive::Unit);
+    let ptr_ty = builder.types.add(ir2::Primitive::Ptr);
+    let i1_ty = builder.types.add(ir2::Primitive::I1);
+
     let vars = hir
         .vars
         .iter()
@@ -108,11 +112,11 @@ pub fn lower_hir(
             ) {
                 Some(ty) => {
                     let ty = builder.types.add(ty);
-                    let var = builder.append(builder.env.dialects.mem.Decl(ty, ptr));
+                    let var = builder.append(builder.env.dialects.mem.Decl(ty, ptr_ty));
                     Ok((var, ty))
                 }
                 None => {
-                    build_crash_point_inner(&mut builder);
+                    build_crash_point_inner(&mut builder, unit_ty, ptr_ty, return_ty);
                     Err(NoReturn)
                 }
             }
@@ -123,7 +127,6 @@ pub fn lower_hir(
         Err(NoReturn) => return builder.finish(return_ty),
     };
     debug_assert_eq!(params.count(), hir.params.len() as _);
-    let unit_ty = builder.types.add(ir2::Primitive::Unit);
     for (param, &var) in params.iter().zip(&hir.params) {
         builder.append(
             builder
@@ -133,8 +136,6 @@ pub fn lower_hir(
                 .Store(vars[var.idx()].0, param, unit_ty),
         );
     }
-    let ptr_ty = builder.types.add(ir2::Primitive::Ptr);
-    let i1_ty = builder.types.add(ir2::Primitive::I1);
     let mut ctx = Ctx {
         to_generate,
         hir,
@@ -267,6 +268,13 @@ impl Ctx<'_> {
             NoReturn
         })
     }
+
+    fn terminate_noreturn(&mut self) -> Result<std::convert::Infallible> {
+        let value = self.builder.append_undef(self.return_ty);
+        self.builder
+            .append(self.builder.env.dialects.cf.Ret(value, self.unit_ty));
+        Err(NoReturn)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -310,7 +318,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 crash_point!(ctx)
             };
             debug_assert!(p.is_int());
-            let ty = types::get_primitive(p);
+            let ty = ctx.builder.types.add(types::get_primitive(p));
             if let Ok(small) = val.try_into() {
                 ctx.builder.append(arith.Int(small, ty))
             } else {
@@ -323,7 +331,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 crash_point!(ctx)
             };
             debug_assert!(p.is_float());
-            let ty = types::get_primitive(p);
+            let ty = ctx.builder.types.add(types::get_primitive(p));
             ctx.builder.append(arith.Float(val, ty))
         }
         Node::BoolLiteral(true) => Ref::TRUE,
@@ -375,7 +383,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             enum_ty,
         } => {
             debug_assert_eq!(elems.count, elem_types.count);
-            let enum_ty = ctx.builder.types.add(ctx.get_type(ctx.types[enum_ty])?);
+            let ty = ctx.get_type(ctx.types[enum_ty])?;
+            let enum_ty = ctx.builder.types.add(ty);
             let elem_types = ctx.get_multiple_types(elem_types)?;
             let elem_tuple = ctx.builder.types.add(ir2::Type::Tuple(elem_types));
             let var = ctx.builder.append(mem.Decl(enum_ty, ctx.ptr_ty));
@@ -390,7 +399,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             ctx.builder.append(mem.Load(var, enum_ty))
         }
         Node::StringLiteral(str) => {
-            let (s, _value_ty) = lower_string_literal(&mut ctx.builder, str);
+            let (s, _value_ty) = lower_string_literal(ctx, str);
             s
         }
         &Node::InferredEnumOrdinal(variant) => {
@@ -399,7 +408,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             match ty {
                 TypeInfo::Primitive(Primitive::Unit) => Ref::UNIT,
                 _ => {
-                    let ty = ctx.builder.types.add(ctx.get_type(ty)?);
+                    let ty = ctx.get_type(ty)?;
+                    let ty = ctx.builder.types.add(ty);
                     ctx.builder.append(arith.Int(variant.ordinal as u64, ty))
                 }
             }
@@ -408,9 +418,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         Node::Declare { pattern: _ } => todo!("lower declarations without values"),
         &Node::DeclareWithVal { pattern, val } => {
             let val = lower(ctx, val)?;
-            // ENTRY is passed but should never be used because Declare should have infallible
-            // patterns
-            lower_pattern(ctx, pattern, val, BlockId::ENTRY)?;
+            lower_pattern(ctx, pattern, val, None)?;
             Ref::UNIT
         }
         Node::Variable(id) => {
@@ -450,9 +458,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             };
 
             let ty = ctx.types[ty];
-            let ir_ty = ctx.builder.types.add(ctx.get_type(ty)?);
+            let ty = ctx.get_type(ty)?;
+            let ir_ty = ctx.builder.types.add(ty);
             let loaded = ctx.builder.append(mem.Load(lval, ir_ty));
-            let result = build_arithmetic(ctx, loaded, val, arithmetic, ty);
+            let result = build_arithmetic(ctx, loaded, val, arithmetic, ir_ty);
             ctx.builder.append(mem.Store(lval, result, ctx.unit_ty));
             Ref::UNIT
         }
@@ -468,7 +477,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     match ty {
                         TypeInfo::Primitive(p) => {
                             debug_assert!(p.is_int());
-                            ctx.builder.append(arith.Int(num, get_primitive(p)))
+                            let ty = ctx.builder.types.add(get_primitive(p));
+                            ctx.builder.append(arith.Int(num, ty))
                         }
                         TypeInfo::Invalid => crash_point!(ctx),
                         _ => unreachable!(),
@@ -479,7 +489,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     match ty {
                         TypeInfo::Primitive(p) => {
                             debug_assert!(p.is_float());
-                            ctx.builder.append(arith.Float(num, get_primitive(p)))
+                            let ty = ctx.builder.types.add(get_primitive(p));
+                            ctx.builder.append(arith.Float(num, ty))
                         }
                         TypeInfo::Invalid => crash_point!(ctx),
                         _ => unreachable!(),
@@ -525,19 +536,19 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 CastType::Invalid => crash_point!(ctx),
                 CastType::Noop => val,
                 &CastType::Int { from: _, to } => {
-                    let to_ty = types::get_primitive(to.into());
+                    let to_ty = ctx.builder.types.add(types::get_primitive(to.into()));
                     ctx.builder.append(arith.CastInt(val, to_ty))
                 }
                 &CastType::Float { from: _, to } => {
-                    let to_ty = types::get_primitive(to.into());
+                    let to_ty = ctx.builder.types.add(types::get_primitive(to.into()));
                     ctx.builder.append(arith.CastFloat(val, to_ty))
                 }
                 &CastType::FloatToInt { from: _, to } => {
-                    let to_ty = types::get_primitive(to.into());
+                    let to_ty = ctx.builder.types.add(types::get_primitive(to.into()));
                     ctx.builder.append(arith.CastFloatToInt(val, to_ty))
                 }
                 &CastType::IntToFloat { from: _, to } => {
-                    let to_ty = types::get_primitive(to.into());
+                    let to_ty = ctx.builder.types.add(types::get_primitive(to.into()));
                     ctx.builder.append(arith.CastIntToFloat(val, to_ty))
                 }
                 CastType::IntToPtr { from: _ } => ctx.builder.append(mem.IntToPtr(val, ctx.ptr_ty)),
@@ -557,37 +568,23 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let l = lower(ctx, l)?;
             let r = lower(ctx, r)?;
             use crate::hir::Comparison;
-            let mut is_equality = false;
-            let op = match cmp {
-                Comparison::Eq => {
-                    is_equality = true;
-                    BinOp::Eq
-                }
-                Comparison::NE => {
-                    is_equality = true;
-                    BinOp::NE
-                }
-                Comparison::LT => BinOp::LT,
-                Comparison::GT => BinOp::GT,
-                Comparison::LE => BinOp::LE,
-                Comparison::GE => BinOp::GE,
-            };
+            let is_equality = matches!(cmp, Comparison::Eq | Comparison::NE);
             if is_equality {
                 match ctx.types[compared] {
                     TypeInfo::Invalid => crash_point!(ctx),
                     TypeInfo::TypeDef(id, generics) => {
-                        let str_ty = builtins::get_str(ctx.compiler);
+                        let str_ty = builtins::get_str(ctx.builder.env);
                         if id == str_ty {
                             debug_assert!(generics.count == 0);
-                            let string_eq = builtins::get_str_eq(ctx.compiler);
+                            let string_eq = builtins::get_str_eq(ctx.builder.env);
                             let Some(string_eq) =
                                 ctx.get_ir_id(string_eq.0, string_eq.1, Vec::new())
                             else {
                                 crash_point!(ctx);
                             };
-                            let eq = ctx.builder.build_call(string_eq, [l, r], IrType::U1);
+                            let eq = ctx.builder.append((string_eq, (l, r), ctx.i1_ty));
                             return Ok(ValueOrPlace::Value(if cmp == Comparison::NE {
-                                ctx.builder.build_not(eq, IrType::U1)
+                                ctx.builder.append(arith.Neg(eq, ctx.i1_ty))
                             } else {
                                 eq
                             }));
@@ -600,7 +597,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     _ => {}
                 }
             }
-            ctx.builder.build_bin_op(op, l, r, IrType::U1)
+            match cmp {
+                Comparison::Eq => ctx.builder.append(arith.Eq(l, r, ctx.i1_ty)),
+                Comparison::NE => ctx.builder.append(arith.NE(l, r, ctx.i1_ty)),
+                Comparison::LT => ctx.builder.append(arith.LT(l, r, ctx.i1_ty)),
+                Comparison::GT => ctx.builder.append(arith.GT(l, r, ctx.i1_ty)),
+                Comparison::LE => ctx.builder.append(arith.LE(l, r, ctx.i1_ty)),
+                Comparison::GE => ctx.builder.append(arith.GE(l, r, ctx.i1_ty)),
+            }
         }
         &Node::Logic { l, r, logic } => {
             let l = lower(ctx, l)?;
@@ -631,7 +635,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::Arithmetic(l, r, op, ty) => {
             let l = lower(ctx, l)?;
             let r = lower(ctx, r)?;
-            build_arithmetic(ctx, l, r, op, ctx.types[ty])
+            let ty = ctx
+                .get_type(ctx.types[ty])
+                .map(|ty| ctx.builder.types.add(ty))?;
+            build_arithmetic(ctx, l, r, op, ty)
         }
 
         &Node::Element {
@@ -713,7 +720,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         } => {
             let val = lower(ctx, val)?;
             let else_block = ctx.builder.create_block();
-            lower_pattern(ctx, pat, val, else_block)?;
+            lower_pattern(ctx, pat, val, Some(else_block))?;
             lower_if_else_branches(ctx, then, else_, else_block, resulting_ty)?
         }
         &Node::Match {
@@ -737,11 +744,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let is_last = i + 1 == branch_count;
                 let pattern = PatternId(pattern_index + i);
                 let branch = NodeId(branch_index + i);
-                next_block = if is_last {
-                    BlockId::ENTRY // should never be used
-                } else {
-                    ctx.builder.create_block()
-                };
+                next_block = (!is_last).then(|| ctx.builder.create_block());
                 let pattern_noreturn = lower_pattern(ctx, pattern, value, next_block).is_err();
                 if pattern_noreturn {
                     // if any other than the first pattern is noreturn, the match itself might
@@ -757,7 +760,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     ctx.builder
                         .append(cf.Goto(BlockTarget(after, &[val]), ctx.unit_ty));
                 }
-                if is_last {
+                if let Some(next) = next_block {
+                    ctx.builder.begin_block(next, []);
+                } else {
                     // after could still be none if all branches are noreturn, we don't have to
                     // create an after block at all in this case
                     if let Some(after) = after_block {
@@ -766,8 +771,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                         let args = ctx.builder.begin_block(after, [ty]);
                         result_value = Some(args.nth(0));
                     }
-                } else {
-                    ctx.builder.begin_block(next_block, []);
                 }
             }
             result_value.ok_or(NoReturn)?
@@ -805,7 +808,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .append(cf.Goto(BlockTarget(loop_start, &[]), ctx.unit_ty));
             ctx.builder.begin_block(loop_start, []);
             let val = lower(ctx, val)?;
-            lower_pattern(ctx, pat, val, after)?;
+            lower_pattern(ctx, pat, val, Some(after))?;
             if lower(ctx, body).is_ok() {
                 ctx.builder
                     .append(cf.Goto(BlockTarget(loop_start, &[]), ctx.unit_ty));
@@ -844,16 +847,19 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let Some(func) = ctx.get_ir_id(module, id, call_generics) else {
                     crash_point!(ctx)
                 };
+                let return_ty = ctx.builder.types.add(return_ty);
                 ctx.builder.append((func, arg_refs, return_ty))
             } else {
                 debug_assert_eq!(args.count, arg_types.count);
                 let func = lower(ctx, function)?;
                 let arg_types = ctx.get_multiple_types(arg_types)?;
-                ctx.builder
-                    .build_call_ptr(func, arg_refs, arg_types, return_ty)
+                todo!("call_ptr")
+                //ctx.builder.
+                //    .build_call_ptr(func, arg_refs, arg_types, return_ty)
             };
             if noreturn {
-                ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
+                let ret = ctx.builder.append_undef(ctx.return_ty);
+                ctx.builder.append(cf.Ret(ret, ctx.unit_ty));
                 return Err(NoReturn);
             }
             res
@@ -876,7 +882,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .map(|ty| ctx.types.to_resolved(ctx.types[ty], ctx.generics))
                 .collect();
             let Some((impl_, impl_generics)) =
-                ctx.compiler
+                ctx.builder
+                    .env
                     .get_checked_trait_impl(trait_id, &self_ty, &trait_generics)
             else {
                 crash_point!(ctx)
@@ -892,22 +899,27 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let arg = lower(ctx, arg)?;
                 arg_refs.push(arg);
             }
-            let res = ctx.builder.build_call(func, arg_refs, return_ty);
+            let return_ty = ctx.builder.types.add(return_ty);
+            let res = ctx.builder.append((func, arg_refs, return_ty));
             if noreturn {
-                ctx.builder.terminate_block(Terminator::Ret(Ref::UNDEF));
-                return Err(NoReturn);
+                ctx.terminate_noreturn()?;
             }
             res
         }
         &Node::TypeProperty(ty, property) => {
-            let layout = ir::type_layout(ctx.get_type(ctx.types[ty])?, ctx.builder.types);
+            let layout = ir2::type_layout(
+                ctx.get_type(ctx.types[ty])?,
+                &ctx.builder.types,
+                ctx.builder.env.ir.primitives(),
+            );
             use crate::hir::TypeProperty;
             let value = match property {
                 TypeProperty::Size => layout.size,
                 TypeProperty::Align => layout.align.get(),
                 TypeProperty::Stride => layout.stride(),
             };
-            ctx.builder.build_int(value, IrType::U64)
+            let ty = ctx.builder.types.add(ir2::Primitive::I64);
+            ctx.builder.append(arith.Int(value, ty))
         }
         &Node::FunctionItem(module, id, generics) => {
             let generics = generics
@@ -917,15 +929,18 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let Some(id) = ctx.get_ir_id(module, id, generics) else {
                 crash_point!(ctx)
             };
-            ctx.builder.build_function_ptr(id)
+            ctx.builder.append(mem.FunctionPtr(id, ctx.ptr_ty))
         }
         &Node::Capture(i) => {
             let (captures, captures_ty) = ctx.vars[ctx.hir.params[0].idx()];
-            let IrType::Tuple(capture_types) = ctx.builder.types[captures_ty] else {
+            let ir2::Type::Tuple(capture_types) = ctx.builder.types[captures_ty] else {
                 unreachable!()
             };
+
             return Ok(ValueOrPlace::Place {
-                ptr: ctx.builder.build_member_ptr(captures, i.0, capture_types),
+                ptr: ctx
+                    .builder
+                    .append(mem.MemberPtr(captures, captures_ty, i.0, ctx.ptr_ty)),
                 value_ty: capture_types.nth(i.0),
             });
         }
@@ -937,7 +952,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             } else {
                 entry.loop_begin
             };
-            ctx.builder.terminate_block(Terminator::Goto(target, &[]));
+            ctx.builder
+                .append(cf.Goto(BlockTarget(target, &[]), ctx.unit_ty));
             return Err(NoReturn);
         }
     };
@@ -945,6 +961,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 }
 
 fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
+    let Dialects {
+        arith,
+        tuple,
+        mem,
+        cf,
+    } = ctx.builder.env.dialects;
     Ok(match ctx.hir[lval] {
         LValue::Invalid => crash_point!(ctx),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
@@ -952,7 +974,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
             let Some(id) = ctx.get_ir_global(module, id) else {
                 crash_point!(ctx)
             };
-            ctx.builder.build_global(id, IrType::Ptr)
+            ctx.builder.append(mem.Global(id, ctx.ptr_ty))
         }
         LValue::Deref(pointer) => lower(ctx, pointer)?,
         LValue::Member {
@@ -962,7 +984,9 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
         } => {
             let ptr = lower_lval(ctx, tuple)?;
             let types = ctx.get_multiple_types(elem_types)?;
-            ctx.builder.build_member_ptr(ptr, index, types)
+            let ty = ctx.builder.types.add(ir2::Type::Tuple(types));
+            ctx.builder
+                .append(mem.MemberPtr(ptr, ty, index, ctx.ptr_ty))
         }
         LValue::ArrayIndex {
             array,
@@ -973,7 +997,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
             let idx = lower(ctx, index)?;
             let ty = ctx.get_type(ctx.types[element_type])?;
             let ty = ctx.builder.types.add(ty);
-            ctx.builder.build_array_index(ptr, idx, ty)
+            ctx.builder.append(mem.ArrayIndex(ptr, idx, ty))
         }
     })
 }
@@ -984,24 +1008,32 @@ fn lower_pattern(
     ctx: &mut Ctx,
     pattern: PatternId,
     value: Ref,
-    on_mismatch: BlockIndex,
+    on_mismatch: Option<BlockId>,
 ) -> Result<()> {
+    let Dialects {
+        arith,
+        tuple,
+        mem,
+        cf,
+    } = ctx.builder.env.dialects;
     let branch_bool = |ctx: &mut Ctx, cond: Ref| {
-        if on_mismatch == BlockIndex::MISSING {
+        let Some(on_mismatch) = on_mismatch else {
             return;
-        }
+        };
         let on_match = ctx.builder.create_block();
-        ctx.builder.terminate_block(Terminator::Branch {
+        ctx.builder.append(cf.Branch(
             cond,
-            on_true: (on_match, &[]),
-            on_false: (on_mismatch, &[]),
-        });
+            BlockTarget(on_match, &[]),
+            BlockTarget(on_mismatch, &[]),
+            ctx.unit_ty,
+        ));
         ctx.builder.begin_block(on_match, []);
     };
     match &ctx.hir[pattern] {
         Pattern::Invalid => crash_point!(ctx),
         Pattern::Variable(id) => {
-            ctx.builder.build_store(ctx.vars[id.idx()].0, value);
+            ctx.builder
+                .append(mem.Store(ctx.vars[id.idx()].0, value, ctx.unit_ty));
         }
         Pattern::Ignore => {}
         &Pattern::Tuple {
@@ -1012,7 +1044,10 @@ fn lower_pattern(
             for i in 0..member_count {
                 let member_pat = PatternId(patterns + i);
                 let member_ty = ctx.get_type(ctx.types[LocalTypeId(types + i)])?;
-                let member_value = ctx.builder.build_member_value(value, i, member_ty);
+                let member_ty = ctx.builder.types.add(member_ty);
+                let member_value =
+                    ctx.builder
+                        .append(tuple.MemberValue(value, i.into(), member_ty));
                 lower_pattern(ctx, member_pat, member_value, on_mismatch)?;
             }
         }
@@ -1020,39 +1055,38 @@ fn lower_pattern(
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 panic!("integer type expected")
             };
-            let ty = types::get_primitive(p);
+            let ty = ctx.builder.types.add(types::get_primitive(p));
             debug_assert!(p.is_int());
             let pattern_value = int_pat(&mut ctx.builder, sign, val, ty);
             let cond = ctx
                 .builder
-                .build_bin_op(BinOp::Eq, value, pattern_value, ty);
+                .append(arith.Eq(value, pattern_value, ctx.i1_ty));
             branch_bool(ctx, cond);
         }
         &Pattern::Bool(b) => {
-            if on_mismatch == BlockIndex::MISSING {
+            let Some(on_mismatch) = on_mismatch else {
                 return Ok(());
-            }
+            };
             let on_match = ctx.builder.create_block();
             let (on_true, on_false) = if b {
                 (on_match, on_mismatch)
             } else {
                 (on_mismatch, on_match)
             };
-            ctx.builder.terminate_block(Terminator::Branch {
-                cond: value,
-                on_true: (on_true, &[]),
-                on_false: (on_false, &[]),
-            });
+            ctx.builder.append(cf.Branch(
+                value,
+                BlockTarget(on_true, &[]),
+                BlockTarget(on_false, &[]),
+                ctx.unit_ty,
+            ));
             ctx.builder.begin_block(on_match, []);
         }
         Pattern::String(s) => {
-            let str_eq = builtins::get_str_eq(ctx.compiler);
+            let str_eq = builtins::get_str_eq(ctx.builder.env);
             // can unwrap here because we don't pass invalid generics
             let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new()).unwrap();
-            let (expected, _str_ty) = lower_string_literal(&mut ctx.builder, s);
-            let matches = ctx
-                .builder
-                .build_call(str_eq, [value, expected], IrType::U1);
+            let (expected, _str_ty) = lower_string_literal(ctx, s);
+            let matches = ctx.builder.append((str_eq, (value, expected), ctx.i1_ty));
             branch_bool(ctx, matches);
         }
         &Pattern::Range {
@@ -1064,19 +1098,16 @@ fn lower_pattern(
             let TypeInfo::Primitive(p) = ctx.types[ty] else {
                 panic!("integer type expected")
             };
-            let ty = types::get_primitive(p);
+            let ty = ctx.builder.types.add(types::get_primitive(p));
             let min = int_pat(&mut ctx.builder, min_sign, min, ty);
             let max = int_pat(&mut ctx.builder, max_sign, max, ty);
-            let left = ctx
-                .builder
-                .build_bin_op(ir::builder::BinOp::GE, value, min, ty);
+            let left = ctx.builder.append(arith.GE(value, min, ty));
             branch_bool(ctx, left);
-            let right_op = if inclusive {
-                ir::builder::BinOp::LE
+            let right = if inclusive {
+                ctx.builder.append(arith.LE(value, max, ty))
             } else {
-                ir::builder::BinOp::LT
+                ctx.builder.append(arith.LT(value, max, ty))
             };
-            let right = ctx.builder.build_bin_op(right_op, value, max, ty);
             branch_bool(ctx, right);
         }
         &Pattern::EnumVariant {
@@ -1088,13 +1119,14 @@ fn lower_pattern(
                 idx: types,
                 count: args.count + 1,
             })?;
-            let tuple_ty = IrType::Tuple(ir_types);
+            let tuple_ty = ir2::Type::Tuple(ir_types);
             // HACK: right now the value is always stored when checking with an enum variant. In
             // Rust, all patterns get passed a pointer to check their value, which would probably
             // be better. Pointer is needed right now to compare ordinal and variants
             // (implicitly casting the types on load)
-            let var = ctx.builder.build_decl(tuple_ty);
-            ctx.builder.build_store(var, value);
+            let tuple_ty = ctx.builder.types.add(tuple_ty);
+            let var = ctx.builder.append(mem.Decl(tuple_ty, ctx.ptr_ty));
+            ctx.builder.append(mem.Store(var, value, ctx.unit_ty));
             let ordinal_ty = LocalTypeId(types);
             let arg_types = LocalTypeIds {
                 idx: types + 1,
@@ -1105,16 +1137,18 @@ fn lower_pattern(
                 TypeInfo::Primitive(Primitive::Unit) => {}
                 TypeInfo::Primitive(p) => {
                     let int_ty = p.as_int().unwrap();
-                    let ordinal_ty = get_primitive(int_ty.into());
-                    let actual_ordinal = ctx.builder.build_load(var, ordinal_ty);
+                    let ordinal_ty = ctx.builder.types.add(get_primitive(int_ty.into()));
+                    let actual_ordinal = ctx.builder.append(mem.Load(var, ordinal_ty));
                     let ordinal_value = match ordinal {
                         OrdinalType::Known(val) => val,
                         OrdinalType::Inferred(variant) => ctx.types[variant].ordinal,
                     };
-                    let expected = ctx.builder.build_int(ordinal_value as u64, ordinal_ty);
+                    let expected = ctx
+                        .builder
+                        .append(arith.Int(ordinal_value as u64, ordinal_ty));
                     let ordinal_matches =
                         ctx.builder
-                            .build_bin_op(BinOp::Eq, actual_ordinal, expected, IrType::U1);
+                            .append(arith.Eq(actual_ordinal, expected, ctx.i1_ty));
                     branch_bool(ctx, ordinal_matches);
                 }
                 other => unreachable!("invalid ordinal type {other:?}"),
@@ -1122,10 +1156,14 @@ fn lower_pattern(
             if args.count == 0 {
                 return Ok(());
             }
+            let ir_types_tuple = ctx.builder.types.add(ir2::Type::Tuple(ir_types));
             for ((arg, i), ty) in args.iter().zip(1..).zip(arg_types.iter()) {
                 let ty = ctx.get_type(ctx.types[ty])?;
-                let arg_ptr = ctx.builder.build_member_ptr(var, i, ir_types);
-                let arg_value = ctx.builder.build_load(arg_ptr, ty);
+                let ty = ctx.builder.types.add(ty);
+                let arg_ptr = ctx
+                    .builder
+                    .append(mem.MemberPtr(var, ir_types_tuple, i, ctx.ptr_ty));
+                let arg_value = ctx.builder.append(mem.Load(arg_ptr, ty));
                 lower_pattern(ctx, arg, arg_value, on_mismatch)?;
             }
         }
@@ -1133,42 +1171,73 @@ fn lower_pattern(
     Ok(())
 }
 
-fn int_pat(builder: &mut IrBuilder, sign: bool, val: u128, ty: IrType) -> Ref {
+fn int_pat(builder: &mut Builder<&mut Compiler>, sign: bool, val: u128, ty: ir2::TypeId) -> Ref {
+    let arith = builder.env.dialects.arith;
     let mut pattern_value = if let Ok(small) = val.try_into() {
-        builder.build_int(small, ty)
+        builder.append(arith.Int(small, ty))
     } else {
-        builder.build_large_int(val, ty)
+        todo!("large ints")
+        //builder.build_large_int(val, ty)
     };
     if sign {
-        pattern_value = builder.build_neg(pattern_value, ty);
+        pattern_value = builder.append(arith.Neg(pattern_value, ty));
     }
     pattern_value
 }
 
-fn lower_string_literal(builder: &mut IrBuilder, s: &str) -> (Ref, ir::TypeRef) {
+fn lower_string_literal(ctx: &mut Ctx, s: &str) -> (Ref, ir2::TypeId) {
+    lower_string_literal_inner(&mut ctx.builder, ctx.ptr_ty, s)
+}
+
+fn lower_string_literal_inner(
+    builder: &mut Builder<&mut Compiler>,
+    ptr_ty: ir2::TypeId,
+    s: &str,
+) -> (Ref, ir2::TypeId) {
+    let Dialects {
+        arith, tuple, mem, ..
+    } = builder.env.dialects;
     // TODO: cache string ir type to prevent generating it multiple times
-    let elems = builder.types.add_multiple([IrType::Ptr, IrType::U64]);
-    let str_ty = builder.types.add(IrType::Tuple(elems));
-    let str_ptr = builder.build_string(s.as_bytes(), true);
-    let tuple = builder.build_insert_member(Ref::UNDEF, 0, str_ptr, str_ty);
-    let str_len = builder.build_int(s.len() as u64, IrType::U64);
-    let tuple = builder.build_insert_member(tuple, 1, str_len, str_ty);
-    (tuple, str_ty)
+    let elems = builder
+        .types
+        .add_multiple([ir2::Primitive::Ptr, ir2::Primitive::U64].map(Into::into));
+    let str_ty = builder.types.add(ir2::Type::Tuple(elems));
+    let idx = builder.env.ir[builder.env.ir_module].globals().len();
+    let name = format!("str{idx}");
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.push(0);
+    let str_global =
+        builder
+            .env
+            .ir
+            .add_global(builder.env.ir_module, name, 1, bytes.into_boxed_slice());
+    builder.env.ir[str_global].readonly = true;
+    let str_ptr = builder.append(mem.Global(str_global, ptr_ty));
+    let r = builder.append_undef(str_ty);
+    let r = builder.append(tuple.InsertMember(r, 0, str_ptr, str_ty));
+    let u64_ty = builder.types.add(ir2::Primitive::U64);
+    let str_len = builder.append(arith.Int(s.len() as u64, u64_ty));
+    let r = builder.append(tuple.InsertMember(r, 1, str_len, str_ty));
+    (r, str_ty)
 }
 
 fn build_crash_point(ctx: &mut Ctx) {
-    build_crash_point_inner(&mut ctx.builder);
+    build_crash_point_inner(&mut ctx.builder, ctx.unit_ty, ctx.ptr_ty, ctx.return_ty);
 }
 
-fn build_crash_point_inner(builder: &mut Builder<&mut Compiler>) {
+fn build_crash_point_inner(
+    builder: &mut Builder<&mut Compiler>,
+    unit_ty: ir2::TypeId,
+    ptr_ty: ir2::TypeId,
+    return_ty: ir2::TypeId,
+) {
     let msg = "program reached a compile error at runtime";
-    let (msg, _str_ty) = lower_string_literal(builder, msg);
+    let (msg, _str_ty) = lower_string_literal_inner(builder, ptr_ty, msg);
     let panic_function = builder.env.get_builtin_panic();
     let unit = builder.types.add(ir2::Primitive::Unit);
     builder.append((panic_function, (msg), unit));
-
-    builder.append(builder.env.dialects.mem.Ret());
-    builder.terminate_block(Terminator::Ret(Ref::UNDEF));
+    let value = builder.append_undef(return_ty);
+    builder.append(builder.env.dialects.cf.Ret(value, unit_ty));
 }
 
 fn build_arithmetic(
@@ -1176,36 +1245,34 @@ fn build_arithmetic(
     l: Ref,
     r: Ref,
     op: crate::hir::Arithmetic,
-    ty: TypeInfo,
+    ty: ir2::TypeId,
 ) -> Ref {
     use crate::hir::Arithmetic;
-    let op = match op {
-        Arithmetic::Add => BinOp::Add,
-        Arithmetic::Sub => BinOp::Sub,
-        Arithmetic::Mul => BinOp::Mul,
-        Arithmetic::Div => BinOp::Div,
-        Arithmetic::Mod => BinOp::Mod,
-    };
-    let TypeInfo::Primitive(p) = ty else {
-        panic!(
-            "Invalid type {:?} for arithmetic op. Will be handled properly with traits",
-            ty
-        );
-    };
     assert!(
-        p.is_int() || p.is_float(),
-        "Invalid primitive type {p} for arithmetic op. Will be handled properly with traits"
+        matches!(ctx.builder.types[ty], ir2::Type::Primitive(p)
+            if ir2::Primitive::try_from(p).unwrap().is_int()
+            || ir2::Primitive::try_from(p).unwrap().is_float()),
+        "Invalid type {:?} for arithmetic op. Will be handled properly with traits",
+        ctx.builder.types[ty]
     );
-    ctx.builder.build_bin_op(op, l, r, types::get_primitive(p))
+    let arith = ctx.builder.env.dialects.arith;
+    match op {
+        Arithmetic::Add => ctx.builder.append(arith.Add(l, r, ty)),
+        Arithmetic::Sub => ctx.builder.append(arith.Sub(l, r, ty)),
+        Arithmetic::Mul => ctx.builder.append(arith.Mul(l, r, ty)),
+        Arithmetic::Div => ctx.builder.append(arith.Div(l, r, ty)),
+        Arithmetic::Mod => ctx.builder.append(arith.Rem(l, r, ty)),
+    }
 }
 
 fn lower_if_else_branches(
     ctx: &mut Ctx,
     then: NodeId,
     else_: NodeId,
-    else_block: ir::BlockIndex,
+    else_block: ir2::BlockId,
     resulting_ty: LocalTypeId,
 ) -> Result<Ref> {
+    let Dialects { cf, .. } = ctx.builder.env.dialects;
     // after_block is a closure that creates the block lazily and returns it
     let else_is_trival = matches!(ctx.hir[else_], Node::Unit);
     let mut after_block = {
@@ -1218,12 +1285,12 @@ fn lower_if_else_branches(
             })
         }
     };
-    let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<ir::BlockIndex> {
+    let mut check_branch = |ctx: &mut Ctx, value: NodeId| -> Option<ir2::BlockId> {
         lower(ctx, value).ok().map(|val| {
-            let block = ctx.builder.current_block();
+            let block = ctx.builder.current_block().unwrap();
             let after_block = after_block(ctx);
             ctx.builder
-                .terminate_block(Terminator::Goto(after_block, &[val]));
+                .append(cf.Goto(BlockTarget(after_block, &[val]), ctx.unit_ty));
             block
         })
     };
@@ -1239,7 +1306,7 @@ fn lower_if_else_branches(
             let after_block = after_block(ctx);
             let ty = ctx.get_type(ctx.types[resulting_ty])?;
             let types = ctx.builder.types.add_multiple([ty]);
-            let args = ctx.builder.begin_block_with_args(after_block, types);
+            let args = ctx.builder.begin_block(after_block, types.iter());
             Ok(args.nth(0))
         }
     }

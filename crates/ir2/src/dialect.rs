@@ -7,10 +7,12 @@ primitives! {
     I16 = 2
     I32 = 4
     I64 = 8
+    I128 = 16
     U8 = 1
     U16 = 2
     U32 = 4
     U64 = 8
+    U128 = 16
     F32 = 4
     F64 = 8
     Ptr = 8
@@ -94,7 +96,7 @@ instructions! {
 instructions! {
     Cf "cf" CfInsts
 
-    Goto target: BlockTarget<'static> !terminator true;
+    Goto<'a> target: BlockTarget<'a> !terminator true;
     Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator true;
     Ret value: Ref !terminator true;
 }
