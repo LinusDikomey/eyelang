@@ -14,7 +14,6 @@ impl HasEnvironment for &Environment {
 
 pub struct Builder<Env: HasEnvironment> {
     pub env: Env,
-    name: Box<str>,
     pub types: Types,
     insts: Vec<Instruction>,
     extra: Vec<u32>,
@@ -22,24 +21,63 @@ pub struct Builder<Env: HasEnvironment> {
     current_block: Option<BlockId>,
 }
 impl<Env: HasEnvironment> Builder<Env> {
-    pub fn new(env: Env, name: impl Into<Box<str>>) -> Self {
-        Self::with_types(env, name, Types::new())
+    pub fn new(env: Env) -> Self {
+        Self::with_types(env, Types::new())
     }
 
     pub fn current_block(&self) -> Option<BlockId> {
         self.current_block
     }
 
-    pub fn with_types(env: Env, name: impl Into<Box<str>>, types: Types) -> Self {
+    pub fn with_types(env: Env, types: Types) -> Self {
         Self {
             env,
-            name: name.into(),
             types,
             insts: Vec::new(),
             extra: Vec::new(),
             blocks: Vec::new(),
             current_block: None,
         }
+    }
+
+    pub fn begin_function(env: Env, id: FunctionId) -> (Self, Refs) {
+        let func = &env.env()[id];
+        let arg_count = func.params.len() as u32;
+        let insts: Vec<_> = func
+            .params
+            .iter()
+            .map(|p| {
+                let &Parameter::RefOf(ty) = p else {
+                    panic!("Function parameter isn't a typed value, can't create body")
+                };
+                Instruction {
+                    function: crate::FunctionId {
+                        module: crate::ModuleId::BUILTINS,
+                        function: Builtin::BlockArg.id(),
+                    },
+                    args: [0, 0],
+                    ty,
+                }
+            })
+            .collect();
+        let types = func.types.clone();
+        let builder = Self {
+            env,
+            types,
+            insts,
+            extra: Vec::new(),
+            blocks: vec![BlockInfo {
+                arg_count,
+                idx: 0,
+                len: 0,
+            }],
+            current_block: Some(BlockId::ENTRY),
+        };
+        let params = Refs {
+            idx: 0,
+            count: arg_count,
+        };
+        (builder, params)
     }
 
     #[track_caller]
@@ -141,7 +179,7 @@ impl<Env: HasEnvironment> Builder<Env> {
         (id, args)
     }
 
-    pub fn finish(self, return_type: TypeId) -> Function {
+    pub fn finish(self, name: impl Into<Box<str>>, return_type: TypeId) -> Function {
         let ir = crate::FunctionIr {
             blocks: self.blocks,
             insts: self.insts,
@@ -155,7 +193,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             })
             .collect();
         Function {
-            name: self.name,
+            name: name.into(),
             types: self.types,
             params,
             varargs: false,
@@ -164,8 +202,18 @@ impl<Env: HasEnvironment> Builder<Env> {
             ir: Some(ir),
         }
     }
+
+    pub fn finish_body(self) -> (crate::FunctionIr, Types) {
+        let ir = crate::FunctionIr {
+            blocks: self.blocks,
+            insts: self.insts,
+            extra: self.extra,
+        };
+        (ir, self.types)
+    }
 }
 
+#[track_caller]
 pub(crate) fn write_args<'a>(
     extra: &mut Vec<u32>,
     params: &[Parameter],

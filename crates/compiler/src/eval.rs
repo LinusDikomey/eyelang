@@ -5,9 +5,10 @@ use ir2::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
-    compiler::{mangle_name, Generics, ResolvedPrimitive},
+    compiler::{Generics, ResolvedPrimitive},
     error::Error,
     hir::HIRBuilder,
+    irgen,
     parser::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
@@ -303,7 +304,7 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
-    let mut builder = ir2::builder::Builder::new(&mut *compiler, "");
+    let mut builder = ir2::builder::Builder::new(&mut *compiler);
     builder.create_and_begin_block([]);
     let Some(return_ty) = crate::irgen::types::get_from_info(
         builder.env,
@@ -315,7 +316,7 @@ pub fn value_expr(
         return Ok(ConstValue::Undefined);
     };
     let return_ty = builder.types.add(return_ty);
-    let ir = crate::irgen::lower_hir(
+    let (ir, ir_types) = crate::irgen::lower_hir(
         builder,
         &hir,
         &types,
@@ -324,21 +325,26 @@ pub fn value_expr(
         ir2::Refs::EMPTY,
         return_ty,
     );
-    while let Some(to_generate_func) = to_generate.pop() {
-        let hir =
-            Rc::clone(compiler.get_hir(to_generate_func.module, to_generate_func.ast_function_id));
-        let name = mangle_name(&hir, &to_generate_func.generics);
-        let ir = crate::irgen::lower_function(
-            compiler,
-            &mut to_generate,
-            name,
-            &hir,
-            &to_generate_func.generics,
-        );
-        compiler.ir[to_generate_func.ir_id] = ir;
+    while let Some(f) = to_generate.pop() {
+        let checked = Rc::clone(compiler.get_hir(f.module, f.ast_function_id));
+
+        if let Some(body) = &checked.body {
+            let return_type = compiler.ir[f.ir_id].return_type().unwrap();
+            let (builder, params) = ir2::builder::Builder::begin_function(&mut *compiler, f.ir_id);
+            let res = irgen::lower_hir(
+                builder,
+                body,
+                &checked.types,
+                &mut to_generate,
+                &f.generics,
+                params,
+                return_type,
+            );
+            compiler.ir.attach_body(f.ir_id, res);
+        }
     }
     let mut env = LazyEvalEnv { compiler };
-    ir2::eval::eval(&ir.ir.as_ref().unwrap(), &ir.types, &[], &mut env).map(|val| {
+    ir2::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| {
         match val {
             Val::Invalid => panic!("internal error during evaluation occured"),
             Val::Unit => ConstValue::Unit,

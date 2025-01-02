@@ -108,6 +108,12 @@ impl Backend {
         .collect::<Result<Vec<_>, _>>()?;
         */
 
+        let globals: Vec<_> = module
+            .globals()
+            .iter()
+            .map(|global| translate::add_global(self.context, llvm_module, global))
+            .collect::<Result<_, _>>()?;
+
         for (func, (llvm_func, _)) in module.functions().iter().zip(llvm_funcs.iter().copied()) {
             unsafe {
                 translate::function(
@@ -117,7 +123,7 @@ impl Backend {
                     &dialects,
                     llvm_module,
                     &llvm_funcs,
-                    &[], // TODO: globals
+                    &globals,
                     llvm_func,
                     builder,
                     func,

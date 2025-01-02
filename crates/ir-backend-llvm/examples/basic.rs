@@ -9,8 +9,6 @@ fn main() {
     let dialects = Dialects {
         arith: env.add_dialect_module(),
         cf: env.add_dialect_module(),
-        mem: env.add_dialect_module(),
-        tuple: env.add_dialect_module(),
     };
 
     let mul = build_mul(&env, &dialects);
@@ -28,13 +26,11 @@ fn main() {
 struct Dialects {
     arith: ModuleOf<ir2::dialect::Arith>,
     cf: ModuleOf<ir2::dialect::Cf>,
-    mem: ModuleOf<ir2::dialect::Mem>,
-    tuple: ModuleOf<ir2::dialect::Tuple>,
 }
 
 fn build_mul(env: &Environment, dialects: &Dialects) -> ir2::Function {
     let Dialects { arith, cf, .. } = dialects;
-    let mut builder = ir2::builder::Builder::new(env, "my_mul");
+    let mut builder = ir2::builder::Builder::new(env);
     let unit = builder.types.add(Primitive::Unit);
     let int_ty = builder.types.add(Primitive::I32);
     let param_types = builder.types.add_multiple([Primitive::I32.into(); 2]);
@@ -44,5 +40,5 @@ fn build_mul(env: &Environment, dialects: &Dialects) -> ir2::Function {
     let res = builder.append(arith.Mul(res, params.nth(1), int_ty));
     builder.append(cf.Ret(res, unit));
 
-    builder.finish(int_ty)
+    builder.finish("my_mul", int_ty)
 }

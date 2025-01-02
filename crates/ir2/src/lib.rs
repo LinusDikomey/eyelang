@@ -24,6 +24,7 @@ mod layout;
 pub use argument::{Argument, IntoArgs};
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
+pub use builtins::{Builtin, BUILTIN};
 pub use dialect::Primitive;
 pub use environment::Environment;
 pub use layout::{offset_in_tuple, type_layout, Layout};
@@ -83,6 +84,10 @@ impl Index<LocalFunctionId> for Module {
 pub struct ModuleId(u32);
 impl ModuleId {
     pub const BUILTINS: Self = Self(0);
+
+    fn idx(&self) -> usize {
+        self.0 as usize
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -207,12 +212,19 @@ pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
 
 pub struct Function {
     pub name: Box<str>,
-    pub types: Types,
-    pub params: Vec<Parameter>,
-    pub varargs: bool,
-    pub terminator: bool,
-    pub return_type: Option<TypeId>,
-    pub ir: Option<FunctionIr>,
+    types: Types,
+    params: Vec<Parameter>,
+    varargs: bool,
+    terminator: bool,
+    return_type: Option<TypeId>,
+    ir: Option<FunctionIr>,
+}
+impl Index<TypeId> for Function {
+    type Output = Type;
+
+    fn index(&self, index: TypeId) -> &Self::Output {
+        &self.types[index]
+    }
 }
 impl Function {
     pub fn empty(name: impl Into<Box<str>>) -> Self {
@@ -249,17 +261,45 @@ impl Function {
         name: impl Into<Box<str>>,
         types: Types,
         params: impl IntoIterator<Item = TypeId>,
+        varargs: bool,
         return_type: TypeId,
     ) -> Self {
         Self {
             name: name.into(),
             types,
             params: params.into_iter().map(Parameter::RefOf).collect(),
-            varargs: false,
+            varargs,
             terminator: false,
             return_type: Some(return_type),
             ir: None,
         }
+    }
+
+    #[inline]
+    pub fn attach_body(&mut self, body: FunctionIr) {
+        self.ir = Some(body);
+    }
+
+    #[inline]
+    pub fn ir(&self) -> Option<&FunctionIr> {
+        self.ir.as_ref()
+    }
+
+    #[inline]
+    pub fn types(&self) -> &Types {
+        &self.types
+    }
+
+    pub fn params(&self) -> &[Parameter] {
+        &self.params
+    }
+
+    pub fn varargs(&self) -> bool {
+        self.varargs
+    }
+
+    pub fn return_type(&self) -> Option<TypeId> {
+        self.return_type
     }
 }
 
@@ -284,6 +324,7 @@ impl PrimitiveInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct Types {
     types: Vec<Type>,
 }

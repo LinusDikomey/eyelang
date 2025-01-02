@@ -3,6 +3,8 @@ mod entry_point;
 mod intrinsics;
 pub mod types;
 
+use std::rc::Rc;
+
 pub use entry_point::entry_point;
 
 use ::types::{Primitive, Type};
@@ -10,7 +12,7 @@ use id::ModuleId;
 use ir2::builder::Builder;
 use ir2::{BlockId, BlockTarget, Ref};
 
-use crate::compiler::{builtins, Dialects, FunctionToGenerate};
+use crate::compiler::{builtins, mangle_name, Dialects, FunctionToGenerate};
 use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
@@ -23,6 +25,43 @@ use crate::{
     types::{TypeInfo, TypeTable},
 };
 
+pub fn declare_function(
+    compiler: &mut Compiler,
+    checked: &CheckedFunction,
+    generics: &[Type],
+) -> ir2::Function {
+    let name = mangle_name(checked, generics);
+    let mut types = ir2::Types::new();
+    // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
+    // longer generate a valid signature
+    let params = types::get_multiple_infos(
+        compiler,
+        &checked.types,
+        &mut types,
+        checked.params,
+        types::Generics::function_instance(generics),
+    )
+    .unwrap_or_else(|| {
+        types.add_multiple(
+            (0..checked.params.count).map(|_| ir2::Type::Primitive(ir2::Primitive::Unit.id())),
+        )
+    });
+
+    let return_type = checked.types[checked.return_type];
+    let return_type = types::get_from_info(
+        compiler,
+        &checked.types,
+        &mut types,
+        return_type,
+        types::Generics::function_instance(generics),
+    )
+    .unwrap_or(ir2::Primitive::Unit.into());
+    let return_type = types.add(return_type);
+
+    ir2::Function::declare(name, types, params.iter(), checked.varargs, return_type)
+}
+
+/*
 pub fn lower_function(
     compiler: &mut Compiler,
     to_generate: &mut Vec<FunctionToGenerate>,
@@ -31,8 +70,6 @@ pub fn lower_function(
     generics: &[Type],
 ) -> ir2::Function {
     let mut types = ir2::Types::new();
-    // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
-    // longer generate a valid signature
     let param_types = types::get_multiple_infos(
         compiler,
         &checked.types,
@@ -57,8 +94,8 @@ pub fn lower_function(
     .unwrap_or(ir2::Primitive::Unit.into());
     let return_type = types.add(return_type);
 
-    let mut function = if let Some(hir) = &checked.body {
-        let mut builder = ir2::builder::Builder::with_types(compiler, name, types);
+    let function = if let Some(hir) = &checked.body {
+        let mut builder = ir2::builder::Builder::with_types(compiler, types);
         let (_, params) = builder.create_and_begin_block(param_types.iter());
         lower_hir(
             builder,
@@ -70,11 +107,17 @@ pub fn lower_function(
             return_type,
         )
     } else {
-        ir2::Function::declare(name, types, param_types.iter(), return_type)
+        ir2::Function::declare(
+            name,
+            types,
+            param_types.iter(),
+            checked.varargs,
+            return_type,
+        )
     };
-    function.varargs = checked.varargs;
     function
 }
+*/
 
 type Result<T> = std::result::Result<T, NoReturn>;
 struct NoReturn;
@@ -94,7 +137,7 @@ pub fn lower_hir(
     generics: &[Type],
     params: ir2::Refs,
     return_ty: ir2::TypeId,
-) -> ir2::Function {
+) -> (ir2::FunctionIr, ir2::Types) {
     let unit_ty = builder.types.add(ir2::Primitive::Unit);
     let ptr_ty = builder.types.add(ir2::Primitive::Ptr);
     let i1_ty = builder.types.add(ir2::Primitive::I1);
@@ -124,7 +167,7 @@ pub fn lower_hir(
         .collect();
     let mut vars: Vec<_> = match vars {
         Ok(vars) => vars,
-        Err(NoReturn) => return builder.finish(return_ty),
+        Err(NoReturn) => return builder.finish_body(),
     };
     debug_assert_eq!(params.count(), hir.params.len() as _);
     for (param, &var) in params.iter().zip(&hir.params) {
@@ -157,7 +200,7 @@ pub fn lower_hir(
         ctx.builder
             .append(ctx.builder.env.dialects.cf.Ret(val, unit));
     }
-    ctx.builder.finish(return_ty)
+    ctx.builder.finish_body()
 }
 
 struct Ctx<'a> {
@@ -190,7 +233,7 @@ impl Ctx<'_> {
                 return None;
             }
         }
-        let checked = self.builder.env.get_hir(module, id);
+        let checked = Rc::clone(self.builder.env.get_hir(module, id));
         debug_assert_eq!(
             checked.generic_count as usize,
             generics.len(),
@@ -202,20 +245,31 @@ impl Ctx<'_> {
             .unwrap()
             .instances;
 
-        Some(instances.get_or_insert(id, &generics, |generics| {
-            // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-            let ir_id = self.builder.env.ir.add_function(
-                self.builder.env.ir_module,
-                ir2::Function::empty(String::new()),
-            );
-            self.to_generate.push(FunctionToGenerate {
-                ir_id,
-                module,
-                ast_function_id: id,
-                generics,
-            });
-            ir_id
-        }))
+        if let Some(&id) = instances.functions[id.idx()].get(generics.as_slice()) {
+            return Some(id);
+        }
+
+        let func = declare_function(self.builder.env, &checked, &generics);
+        let ir_id = self
+            .builder
+            .env
+            .ir
+            .add_function(self.builder.env.ir_module, func);
+        let prev = self.builder.env.modules[module.idx()]
+            .ast
+            .as_mut()
+            .unwrap()
+            .instances
+            .functions[id.idx()]
+        .insert(generics.clone(), ir_id);
+        debug_assert!(prev.is_none());
+        self.to_generate.push(FunctionToGenerate {
+            ir_id,
+            module,
+            ast_function_id: id,
+            generics,
+        });
+        Some(ir_id)
     }
 
     fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> Option<ir2::GlobalId> {
@@ -226,15 +280,12 @@ impl Ctx<'_> {
             let parsed = self.builder.env.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
             let (ty, value) = self.builder.env.get_checked_global(module, id);
-            let ty = ty.clone();
-            // TODO: translate globals or store as bytes in the first place
-            //let value = const_value::translate(value);
-            let global_id = self.builder.env.ir.add_global(
-                self.builder.env.ir_module,
-                name,
-                1,
-                Box::new([1, 2, 3, 4]),
-            );
+            let (value, align) = const_value::translate(value, ty);
+            let global_id =
+                self.builder
+                    .env
+                    .ir
+                    .add_global(self.builder.env.ir_module, name, align, value);
             self.builder.env.get_parsed_module(module).instances.globals[id.idx()] =
                 Some(global_id);
             Some(global_id)
@@ -353,7 +404,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let index = ctx.builder.append(arith.Int(i, u64_ty));
                 let member_ptr = ctx
                     .builder
-                    .append(mem.ArrayIndex(array_var, index, elem_ir_ty));
+                    .append(mem.ArrayIndex(array_var, elem_ir_ty, index, elem_ir_ty));
                 ctx.builder.append(mem.Store(member_ptr, val, ctx.unit_ty));
             }
             return Ok(ValueOrPlace::Place {
@@ -683,7 +734,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let elem_ir_ty = ctx.get_type(ctx.types[elem_ty])?;
             let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
             return Ok(ValueOrPlace::Place {
-                ptr: ctx.builder.append(mem.ArrayIndex(array, index, elem_ir_ty)),
+                ptr: ctx
+                    .builder
+                    .append(mem.ArrayIndex(array, elem_ir_ty, index, elem_ir_ty)),
                 value_ty: elem_ir_ty,
             });
         }
@@ -961,12 +1014,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 }
 
 fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
-    let Dialects {
-        arith,
-        tuple,
-        mem,
-        cf,
-    } = ctx.builder.env.dialects;
+    let Dialects { mem, .. } = ctx.builder.env.dialects;
     Ok(match ctx.hir[lval] {
         LValue::Invalid => crash_point!(ctx),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
@@ -997,7 +1045,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
             let idx = lower(ctx, index)?;
             let ty = ctx.get_type(ctx.types[element_type])?;
             let ty = ctx.builder.types.add(ty);
-            ctx.builder.append(mem.ArrayIndex(ptr, idx, ty))
+            ctx.builder.append(mem.ArrayIndex(ptr, ty, idx, ty))
         }
     })
 }

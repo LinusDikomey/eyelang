@@ -28,11 +28,6 @@ impl Index<FunctionId> for Environment {
         &self.modules[index.module.0 as usize].functions[index.function.0 as usize]
     }
 }
-impl IndexMut<FunctionId> for Environment {
-    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
-        &mut self.modules[index.module.0 as usize].functions[index.function.0 as usize]
-    }
-}
 impl Index<GlobalId> for Environment {
     type Output = Global;
 
@@ -150,6 +145,16 @@ impl Environment {
 
     pub fn get_module(&self, module: ModuleId) -> &Module {
         &self.modules[module.0 as usize]
+    }
+
+    pub fn attach_body(
+        &mut self,
+        ir_id: FunctionId,
+        (ir, types): (crate::FunctionIr, crate::Types),
+    ) {
+        let func = &mut self.modules[ir_id.module.idx()].functions[ir_id.function.idx()];
+        func.ir = Some(ir);
+        func.types = types;
     }
 }
 impl fmt::Display for Environment {

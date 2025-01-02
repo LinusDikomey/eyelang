@@ -13,10 +13,10 @@ use llvm_sys::{
         LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
         LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
         LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
-        LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName, LLVMGetParam,
-        LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext, LLVMInt8TypeInContext,
-        LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMSetInitializer, LLVMVoidTypeInContext,
+        LLVMConstReal, LLVMConstStringInContext, LLVMFunctionType, LLVMGetEnumAttributeKindForName,
+        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext,
+        LLVMInt8TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
+        LLVMPrintValueToString, LLVMSetInitializer, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -32,31 +32,31 @@ pub unsafe fn add_function(
 ) -> Result<(LLVMValueRef, LLVMTypeRef), Error> {
     let return_ty = llvm_ty(
         ctx,
-        function.types[function
-            .return_type
+        function.types()[function
+            .return_type()
             .expect("function needs explicit return type to be lowered")],
-        &function.types,
+        function.types(),
     )
     .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
     let mut params: Vec<_> = function
-        .params
+        .params()
         .iter()
         .filter_map(|param| {
             let &ir2::Parameter::RefOf(ty) = param else {
                 panic!("invalid parameter kind {param:?}")
             };
-            llvm_ty(ctx, function.types[ty], &function.types)
+            llvm_ty(ctx, function.types()[ty], function.types())
         })
         .collect();
     let llvm_func_ty = LLVMFunctionType(
         return_ty,
         params.as_mut_ptr(),
         params.len() as _,
-        llvm_bool(function.varargs),
+        llvm_bool(function.varargs()),
     );
     let name = CString::from_vec_with_nul(
         // HACK: temporary prefix until proper name mangling is implemented
-        if function.ir.is_some()
+        if function.ir().is_some()
             && function.name.as_ref() != "main"
             && function.name.as_ref() != "_start"
         {
@@ -75,25 +75,37 @@ pub unsafe fn add_function(
     Ok((llvm_func, llvm_func_ty))
 }
 
-/*
-pub unsafe fn add_global(
+pub fn add_global(
     ctx: LLVMContextRef,
     llvm_module: LLVMModuleRef,
-    name: &str,
-    types: &ir2::Types,
-    ty: ir2::Type,
-    value: &ConstValue,
+    global: &ir2::Global,
 ) -> Result<LLVMValueRef, Error> {
-    let Some(ty) = llvm_ty(ctx, ty, types) else {
-        return Ok(ptr::null_mut());
+    let ty = unsafe {
+        core::LLVMArrayType2(
+            LLVMInt8TypeInContext(ctx),
+            global.value.len().try_into().unwrap(),
+        )
     };
-    let name = CString::new(name.to_owned()).map_err(|_| Error::NulByte)?;
-    let global = LLVMAddGlobal(llvm_module, ty, name.as_ptr());
-    let val = const_val(value, ty).unwrap_or_else(|| LLVMGetUndef(ty));
-    LLVMSetInitializer(global, val);
-    Ok(global)
+    let name = CString::new(global.name.as_bytes()).map_err(|_| Error::NulByte)?;
+    let llvm_global = unsafe { LLVMAddGlobal(llvm_module, ty, name.as_ptr()) };
+    unsafe {
+        let value = core::LLVMConstStringInContext2(
+            ctx,
+            global.value.as_ptr().cast(),
+            global.value.len(),
+            1,
+        );
+        LLVMSetInitializer(llvm_global, value);
+        core::LLVMSetAlignment(
+            llvm_global,
+            global.align.try_into().expect("align too large for llvm"),
+        );
+        if global.readonly {
+            core::LLVMSetGlobalConstant(llvm_global, 1);
+        }
+    }
+    Ok(llvm_global)
 }
-*/
 
 pub unsafe fn function(
     env: &Environment,
@@ -109,7 +121,7 @@ pub unsafe fn function(
     intrinsics: &Intrinsics,
     log: bool,
 ) -> Result<(), Error> {
-    if let Some(ir) = &function.ir {
+    if let Some(ir) = function.ir() {
         build_func(
             env,
             module_id,
@@ -146,16 +158,18 @@ impl Attribs {
 /// Converts an ir type to it's corresponding llvm type. Returns `None` if the type was zero-sized
 unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTypeRef> {
     match ty {
-        Type::Primitive(id) if id == Primitive::Unit.id() => None,
-        Type::Primitive(id) if id == Primitive::I1.id() => Some(core::LLVMInt8TypeInContext(ctx)),
-        Type::Primitive(id) if id == Primitive::I8.id() => Some(core::LLVMInt8TypeInContext(ctx)),
-        Type::Primitive(id) if id == Primitive::I16.id() => Some(core::LLVMInt16TypeInContext(ctx)),
-        Type::Primitive(id) if id == Primitive::I32.id() => Some(core::LLVMInt32TypeInContext(ctx)),
-        Type::Primitive(id) if id == Primitive::I64.id() => Some(core::LLVMInt64TypeInContext(ctx)),
-        Type::Primitive(id) if id == Primitive::Ptr.id() => {
-            Some(core::LLVMPointerTypeInContext(ctx, 0))
-        }
-        Type::Primitive(_) => panic!("unknown primitive"),
+        Type::Primitive(id) => match Primitive::try_from(id).unwrap() {
+            Primitive::Unit => None,
+            Primitive::I1 => Some(core::LLVMInt8TypeInContext(ctx)),
+            Primitive::I8 | Primitive::U8 => Some(core::LLVMInt8TypeInContext(ctx)),
+            Primitive::I16 | Primitive::U16 => Some(core::LLVMInt16TypeInContext(ctx)),
+            Primitive::I32 | Primitive::U32 => Some(core::LLVMInt32TypeInContext(ctx)),
+            Primitive::I64 | Primitive::U64 => Some(core::LLVMInt64TypeInContext(ctx)),
+            Primitive::I128 | Primitive::U128 => Some(core::LLVMInt128TypeInContext(ctx)),
+            Primitive::F32 => Some(core::LLVMFloatTypeInContext(ctx)),
+            Primitive::F64 => Some(core::LLVMDoubleTypeInContext(ctx)),
+            Primitive::Ptr => Some(core::LLVMPointerTypeInContext(ctx, 0)),
+        },
         Type::Array(elem, size) => Some(core::LLVMArrayType2(
             llvm_ty(ctx, types[elem], types)?,
             size as u64,
@@ -197,6 +211,8 @@ unsafe fn build_func(
         println!("Translating function {} to LLVM IR", func.name);
     }
 
+    let types = func.types();
+
     let mut instructions = vec![ptr::null_mut(); ir.inst_count() as usize];
 
     // create an LLVM block for each block while also creating a Phi node for each incoming block arg.
@@ -211,8 +227,8 @@ unsafe fn build_func(
                 if block == ir2::BlockId::ENTRY {
                     instructions[arg.idx()] = LLVMGetParam(llvm_func, i as _);
                 } else {
-                    let arg_ty = func.types[ir.get_ref_ty(arg)];
-                    if let Some(ty) = llvm_ty(ctx, arg_ty, &func.types) {
+                    let arg_ty = types[ir.get_ref_ty(arg)];
+                    if let Some(ty) = llvm_ty(ctx, arg_ty, types) {
                         instructions[arg.idx()] = LLVMBuildPhi(builder, ty, NONE);
                     }
                 }
@@ -235,7 +251,7 @@ unsafe fn build_func(
                     let inst = ir.get_inst(r);
 
                     let r = instructions[r.idx()];
-                    let ty = func.types[inst.ty()];
+                    let ty = types[inst.ty()];
                     ((!r.is_null()).then_some(r), ty)
                 }
             }
@@ -247,7 +263,7 @@ unsafe fn build_func(
         (!r.is_null()).then_some(r)
     };
 
-    let table_ty = |ty: TypeId| llvm_ty(ctx, func.types[ty], &func.types);
+    let table_ty = |ty: TypeId| llvm_ty(ctx, types[ty], types);
 
     let mut queued_blocks = vec![false; ir.block_ids().len()];
     let mut block_queue = VecDeque::from([BlockId::ENTRY]);
@@ -279,7 +295,15 @@ unsafe fn build_func(
                 print!("Generating %{i:?} = {:?} ->", inst);
                 std::io::stdout().flush().unwrap();
             }
-            let val: LLVMValueRef = if let Some(inst) = inst.as_module(dialects.arith) {
+            let val: LLVMValueRef = if let Some(inst) = inst.as_module(ir2::BUILTIN) {
+                match inst.op() {
+                    ir2::Builtin::Nothing => ptr::null_mut(),
+                    ir2::Builtin::BlockArg => unreachable!(),
+                    ir2::Builtin::Undef => llvm_ty(ctx, types[inst.ty()], types)
+                        .map(|ty| LLVMGetUndef(ty))
+                        .unwrap_or(ptr::null_mut()),
+                }
+            } else if let Some(inst) = inst.as_module(dialects.arith) {
                 use ir2::dialect::Arith as I;
                 let mut args = inst.args(ir.blocks(), ir.extra());
                 let un_op = || {
@@ -332,7 +356,7 @@ unsafe fn build_func(
                     }
                     I::Neg => {
                         let r = get_ref(&instructions, un_op()).unwrap();
-                        match func.types[inst.ty()] {
+                        match types[inst.ty()] {
                             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
                                 p if p.is_int() => LLVMBuildNeg(builder, r, NONE),
                                 p if p.is_float() => LLVMBuildNeg(builder, r, NONE),
@@ -347,28 +371,28 @@ unsafe fn build_func(
                         let r = get_ref(&instructions, r).unwrap();
 
                         match inst.op() {
-                            I::Add => match func.types[inst.ty()] {
+                            I::Add => match types[inst.ty()] {
                                 t if is_int(t) => LLVMBuildAdd(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFAdd(builder, l, r, NONE),
                                 _ => panic!("invalid type for add"),
                             },
-                            I::Sub => match func.types[inst.ty()] {
+                            I::Sub => match types[inst.ty()] {
                                 t if is_int(t) => LLVMBuildSub(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFSub(builder, l, r, NONE),
                                 _ => panic!("invalid type for sub"),
                             },
-                            I::Mul => match func.types[inst.ty()] {
+                            I::Mul => match types[inst.ty()] {
                                 t if is_int(t) => LLVMBuildMul(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFMul(builder, l, r, NONE),
                                 _ => panic!("invalid type for mul"),
                             },
-                            I::Div => match func.types[inst.ty()] {
+                            I::Div => match types[inst.ty()] {
                                 t if is_unsigned_int(t) => LLVMBuildUDiv(builder, l, r, NONE),
                                 t if is_signed_int(t) => LLVMBuildSDiv(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFDiv(builder, l, r, NONE),
                                 _ => panic!("invalid type for udiv"),
                             },
-                            I::Rem => match func.types[inst.ty()] {
+                            I::Rem => match types[inst.ty()] {
                                 t if is_unsigned_int(t) => LLVMBuildURem(builder, l, r, NONE),
                                 t if is_signed_int(t) => LLVMBuildSRem(builder, l, r, NONE),
                                 t if is_float(t) => LLVMBuildFRem(builder, l, r, NONE),
@@ -474,7 +498,7 @@ unsafe fn build_func(
                         ) else {
                             panic!("invalid types for rol/ror")
                         };
-                        let l_ty = llvm_ty(ctx, l_ty, &func.types).unwrap();
+                        let l_ty = llvm_ty(ctx, l_ty, types).unwrap();
                         let mut fshl_args = [l_ty];
                         let intrinsic = if inst.op() == I::Rol {
                             intrinsics.fshl
@@ -507,17 +531,17 @@ unsafe fn build_func(
                         let val = get_ref(&instructions, un_op());
                         // there are no zero-sized integers so unwraps are fine
                         let val = val.unwrap();
-                        let to_ty = func.types[inst.ty()];
+                        let to_ty = types[inst.ty()];
                         let signed = is_signed_int(to_ty);
-                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        let target_ty = llvm_ty(ctx, to_ty, types).unwrap();
                         LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
                     }
                     I::CastFloat => {
                         let (val, from_ty) = get_ref_and_type(&instructions, un_op());
                         // there are no zero-sized floats so unwraps are fine
                         let val = val.unwrap();
-                        let to_ty = func.types[inst.ty()];
-                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        let to_ty = types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, types).unwrap();
                         let (Type::Primitive(from_ty), Type::Primitive(to_ty)) = (from_ty, to_ty)
                         else {
                             panic!()
@@ -538,8 +562,8 @@ unsafe fn build_func(
                         let (val, from_ty) = get_ref_and_type(&instructions, un_op());
                         // there are no zero-sized ints/floats so unwraps are fine
                         let val = val.unwrap();
-                        let to_ty = func.types[inst.ty()];
-                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        let to_ty = types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, types).unwrap();
                         if is_unsigned_int(from_ty) {
                             core::LLVMBuildUIToFP(builder, val, target_ty, NONE)
                         } else {
@@ -549,8 +573,8 @@ unsafe fn build_func(
                     I::CastFloatToInt => {
                         // there are no zero-sized ints/floats so unwraps are fine
                         let val = get_ref(&instructions, un_op()).unwrap();
-                        let to_ty = func.types[inst.ty()];
-                        let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
+                        let to_ty = types[inst.ty()];
+                        let target_ty = llvm_ty(ctx, to_ty, types).unwrap();
                         if is_unsigned_int(to_ty) {
                             core::LLVMBuildFPToUI(builder, val, target_ty, NONE)
                         } else {
@@ -595,7 +619,7 @@ unsafe fn build_func(
                             unreachable!()
                         };
                         /*if value == ir::Ref::UNDEF {
-                            if let Some(ty) = llvm_ty(ctx, func.return_type, &func.types) {
+                            if let Some(ty) = llvm_ty(ctx, func.return_type, types) {
                                 let val = LLVMGetUndef(ty);
                                 LLVMBuildRet(builder, val)
                             } else {
@@ -605,7 +629,7 @@ unsafe fn build_func(
                         let (r, ty) = get_ref_and_type(&instructions, value);
 
                         if let Some(r) =
-                            r.and_then(|r| llvm_ty(ctx, ty, &func.types).is_some().then_some(r))
+                            r.and_then(|r| llvm_ty(ctx, ty, types).is_some().then_some(r))
                         {
                             LLVMBuildRet(builder, r)
                         } else {
@@ -633,7 +657,7 @@ unsafe fn build_func(
                             unreachable!()
                         };
                         let val = get_ref(&instructions, r);
-                        if let Some(pointee_ty) = llvm_ty(ctx, func.types[inst.ty()], &func.types) {
+                        if let Some(pointee_ty) = llvm_ty(ctx, types[inst.ty()], types) {
                             let val = val.unwrap();
                             LLVMBuildLoad2(builder, pointee_ty, val, NONE)
                         } else {
@@ -645,7 +669,7 @@ unsafe fn build_func(
                             unreachable!()
                         };
                         let (val, ty) = get_ref_and_type(&instructions, val);
-                        if !func.types.is_zero_sized(ty, env.primitives()) {
+                        if !types.is_zero_sized(ty, env.primitives()) {
                             let ptr = get_ref(&instructions, ptr).unwrap();
                             LLVMBuildStore(builder, val.unwrap(), ptr);
                         }
@@ -657,13 +681,13 @@ unsafe fn build_func(
                         else {
                             unreachable!()
                         };
-                        let Type::Tuple(elem_types) = func.types[tuple] else {
+                        let Type::Tuple(elem_types) = types[tuple] else {
                             panic!()
                         };
                         let offset = ir2::offset_in_tuple(
                             elem_types,
                             idx.try_into().unwrap(),
-                            &func.types,
+                            types,
                             env.primitives(),
                         );
 
@@ -695,7 +719,7 @@ unsafe fn build_func(
                         };
                         // no zero-sized integers so unwrapping is fine
                         let val = get_ref(&instructions, ptr).unwrap();
-                        let ty = llvm_ty(ctx, func.types[inst.ty()], &func.types).unwrap();
+                        let ty = llvm_ty(ctx, types[inst.ty()], types).unwrap();
                         core::LLVMBuildPtrToInt(builder, val, ty, NONE)
                     }
                     I::FunctionPtr => {
@@ -708,8 +732,33 @@ unsafe fn build_func(
                         let (llvm_func, _) = llvm_funcs[func_id.function.idx()];
                         llvm_func
                     }
-                    I::Global => todo!(),
-                    I::ArrayIndex => todo!(),
+                    I::Global => {
+                        let [Argument::GlobalId(id)] = ir.args_n(&inst) else {
+                            unreachable!()
+                        };
+                        if id.module != module {
+                            panic!("unsupported: can't take global in in different module")
+                        }
+                        globals[id.idx as usize]
+                    }
+                    I::ArrayIndex => {
+                        let [Argument::Ref(array_ptr), Argument::TypeId(elem_ty), Argument::Ref(idx)] =
+                            ir.args_n(&inst)
+                        else {
+                            unreachable!()
+                        };
+                        let ptr = get_ref(&instructions, array_ptr).unwrap();
+                        let ty = llvm_ty(ctx, func[elem_ty], func.types()).unwrap();
+                        let mut indices = [get_ref(&instructions, idx).unwrap()];
+                        LLVMBuildInBoundsGEP2(
+                            builder,
+                            ty,
+                            ptr,
+                            indices.as_mut_ptr(),
+                            indices.len() as _,
+                            NONE,
+                        )
+                    }
                 }
             } else if let Some(inst) = inst.as_module(dialects.tuple) {
                 use ir2::dialect::Tuple as I;
@@ -722,7 +771,7 @@ unsafe fn build_func(
                         if let (Some(val), tuple_ty) = get_ref_and_type(&instructions, tuple) {
                             let Type::Tuple(ids) = tuple_ty else { panic!() };
                             for ty in ids.iter().take(idx as usize) {
-                                if func.types.is_zero_sized(func.types[ty], env.primitives()) {
+                                if types.is_zero_sized(types[ty], env.primitives()) {
                                     idx -= 1;
                                 }
                             }
@@ -743,7 +792,7 @@ unsafe fn build_func(
                         }) {
                             let Type::Tuple(ids) = tuple_ty else { panic!() };
                             for ty in ids.iter().take(idx as usize) {
-                                if func.types.is_zero_sized(func.types[ty], env.primitives()) {
+                                if types.is_zero_sized(types[ty], env.primitives()) {
                                     idx -= 1;
                                 }
                             }
@@ -761,7 +810,7 @@ unsafe fn build_func(
                 }
             } else if inst.module() == module {
                 let (llvm_func, llvm_func_ty) = llvm_funcs[inst.function().idx()];
-                let params = &env[inst.module()][inst.function()].params;
+                let params = env[inst.module()][inst.function()].params();
                 let args = inst.args(params, ir.blocks(), ir.extra());
                 let mut args: Vec<_> = args
                     .filter_map(|arg| {

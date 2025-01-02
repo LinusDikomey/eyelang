@@ -90,7 +90,7 @@ instructions! {
     FunctionPtr function: FunctionId;
     Global global: GlobalId;
     // CallPtr  (TODO: dynamic argument list)
-    ArrayIndex array_ptr: Ref a: Ref;
+    ArrayIndex array_ptr: Ref elem_ty: TypeId a: Ref;
 }
 
 instructions! {

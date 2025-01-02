@@ -3,7 +3,6 @@ pub mod builtins;
 use std::{
     cell::RefCell,
     collections::VecDeque,
-    ops::Deref,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -11,7 +10,7 @@ use std::{
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
-use ir2::{builder::HasEnvironment, ModuleOf};
+use ir2::ModuleOf;
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
@@ -1088,22 +1087,35 @@ impl Compiler {
         generics: Vec<Type>,
     ) -> ir2::FunctionId {
         self.get_parsed_module(module);
-        let instances = &mut self.modules[module.idx()].ast.as_mut().unwrap().instances;
+        if let Some(&id) = self.modules[module.idx()]
+            .ast
+            .as_mut()
+            .unwrap()
+            .instances
+            .functions[function.idx()]
+        .get(&generics)
+        {
+            return id;
+        }
 
         let mut to_generate = vec![];
-        let id = instances.get_or_insert(function, &generics, |generics| {
-            // FIXME: just adding a dummy function right now, stupid solution and might cause issues
-            let id = self
-                .ir
-                .add_function(self.ir_module, ir2::Function::empty(""));
-            to_generate.push(FunctionToGenerate {
-                ir_id: id,
-                module,
-                ast_function_id: function,
-                generics,
-            });
-            id
+        let checked = Rc::clone(self.get_hir(module, function));
+        let func = irgen::declare_function(self, &checked, &generics);
+        let id = self.ir.add_function(self.ir_module, func);
+        to_generate.push(FunctionToGenerate {
+            ir_id: id,
+            module,
+            ast_function_id: function,
+            generics: generics.clone(),
         });
+        let prev = self.modules[module.idx()]
+            .ast
+            .as_mut()
+            .unwrap()
+            .instances
+            .functions[function.idx()]
+        .insert(generics, id);
+        debug_assert!(prev.is_none());
 
         while let Some(f) = to_generate.pop() {
             self.get_hir(f.module, f.ast_function_id);
@@ -1119,9 +1131,20 @@ impl Compiler {
                 "a function instance queued for ir generation has an invalid generic count"
             );
 
-            let name = mangle_name(&checked, &f.generics);
-            let func = irgen::lower_function(self, &mut to_generate, name, &checked, &f.generics);
-            self.ir[f.ir_id] = func;
+            if let Some(body) = &checked.body {
+                let return_type = self.ir[f.ir_id].return_type().unwrap();
+                let (builder, params) = ir2::builder::Builder::begin_function(&mut *self, f.ir_id);
+                let res = irgen::lower_hir(
+                    builder,
+                    body,
+                    &checked.types,
+                    &mut to_generate,
+                    &f.generics,
+                    params,
+                    return_type,
+                );
+                self.ir.attach_body(f.ir_id, res);
+            }
         }
         id
     }
@@ -1875,32 +1898,14 @@ pub struct CheckedTrait {
 }
 
 pub struct IrInstances {
-    functions: Vec<FunctionInstances>,
+    pub functions: Vec<DHashMap<Vec<Type>, ir2::FunctionId>>,
     pub globals: Vec<Option<ir2::GlobalId>>,
 }
 impl IrInstances {
     pub fn new(function_count: usize, global_count: usize) -> Self {
         Self {
-            functions: vec![FunctionInstances(dmap::new()); function_count],
+            functions: vec![dmap::new(); function_count],
             globals: vec![None; global_count],
-        }
-    }
-
-    pub fn get_or_insert(
-        &mut self,
-        id: FunctionId,
-        generics: &[Type],
-        create_function: impl FnOnce(Vec<Type>) -> ir2::FunctionId,
-    ) -> ir2::FunctionId {
-        let instances = &mut self.functions[id.idx()].0;
-        match instances.get(generics) {
-            None => {
-                // PERF: avoid double hashing, maybe with RawEntry
-                let id = create_function(generics.to_owned());
-                instances.insert(generics.to_owned(), id);
-                id
-            }
-            Some(&id) => id,
         }
     }
 }
@@ -1911,9 +1916,6 @@ pub struct FunctionToGenerate {
     pub ast_function_id: ast::FunctionId,
     pub generics: Vec<Type>,
 }
-
-#[derive(Clone)]
-struct FunctionInstances(DHashMap<Vec<Type>, ir2::FunctionId>);
 
 pub fn mangle_name(checked: &CheckedFunction, generics: &[Type]) -> String {
     let mut name = checked.name.clone();
