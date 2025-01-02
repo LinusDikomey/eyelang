@@ -106,9 +106,10 @@ impl Blocks for FunctionIr {
         let (_, terminator) = self.get_block(block).last().expect("empty block found");
         let func = &env[terminator.function];
         let params = &func.params;
+        let varargs = func.varargs;
         debug_assert!(func.terminator);
         terminator
-            .args(params, self.blocks(), self.extra())
+            .args(params, varargs, self.blocks(), self.extra())
             .filter_map(|arg| {
                 if let Argument::BlockTarget(target) = arg {
                     Some(target.0)

@@ -33,7 +33,7 @@ pub trait IntoRewrite {
 }
 impl<'a, A: IntoArgs<'a>> IntoRewrite for (FunctionId, A, TypeId) {
     fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment) -> Rewrite {
-        Rewrite::Replace(ir.prepare_instruction(&env[self.0].params, self))
+        Rewrite::Replace(ir.prepare_instruction(&env[self.0].params, env[self.0].varargs, self))
     }
 }
 impl IntoRewrite for Ref {

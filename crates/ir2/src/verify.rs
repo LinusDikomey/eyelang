@@ -1,5 +1,5 @@
 use crate::{Environment, ModuleId};
 
-pub fn module(env: &Environment, module: ModuleId) {
+pub fn module(_env: &Environment, _module: ModuleId) {
     // TODO: verification
 }

@@ -8,15 +8,14 @@ use llvm_sys::{
     core::{
         self, LLVMAddFunction, LLVMAddGlobal, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca,
         LLVMBuildAnd, LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue,
-        LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFNeg, LLVMBuildFRem,
-        LLVMBuildFSub, LLVMBuildGlobalStringPtr, LLVMBuildICmp, LLVMBuildInBoundsGEP2,
-        LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul, LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr,
-        LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore,
-        LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt, LLVMConstIntOfArbitraryPrecision,
-        LLVMConstReal, LLVMConstStringInContext, LLVMFunctionType, LLVMGetEnumAttributeKindForName,
-        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext,
-        LLVMInt8TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
-        LLVMPrintValueToString, LLVMSetInitializer, LLVMVoidTypeInContext,
+        LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFRem, LLVMBuildFSub,
+        LLVMBuildICmp, LLVMBuildInBoundsGEP2, LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul,
+        LLVMBuildNeg, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv,
+        LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt,
+        LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName, LLVMGetParam,
+        LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext, LLVMInt8TypeInContext,
+        LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
+        LLVMSetInitializer, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -160,7 +159,7 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTy
     match ty {
         Type::Primitive(id) => match Primitive::try_from(id).unwrap() {
             Primitive::Unit => None,
-            Primitive::I1 => Some(core::LLVMInt8TypeInContext(ctx)),
+            Primitive::I1 => Some(core::LLVMInt1TypeInContext(ctx)),
             Primitive::I8 | Primitive::U8 => Some(core::LLVMInt8TypeInContext(ctx)),
             Primitive::I16 | Primitive::U16 => Some(core::LLVMInt16TypeInContext(ctx)),
             Primitive::I32 | Primitive::U32 => Some(core::LLVMInt32TypeInContext(ctx)),
@@ -258,9 +257,14 @@ unsafe fn build_func(
         };
     let get_ref_and_type =
         |instructions: &[LLVMValueRef], r: Ref| get_ref_and_type_ptr(instructions, r);
-    let get_ref = |instructions: &[LLVMValueRef], r: Ref| {
-        let r = instructions[r.idx()];
-        (!r.is_null()).then_some(r)
+    let get_ref = |instructions: &[LLVMValueRef], r: Ref| match r {
+        Ref::UNIT => None,
+        Ref::TRUE => Some(LLVMConstInt(i1, 1, 0)),
+        Ref::FALSE => Some(LLVMConstInt(i1, 0, 0)),
+        _ => {
+            let r = instructions[r.idx()];
+            (!r.is_null()).then_some(r)
+        }
     };
 
     let table_ty = |ty: TypeId| llvm_ty(ctx, types[ty], types);
@@ -810,8 +814,13 @@ unsafe fn build_func(
                 }
             } else if inst.module() == module {
                 let (llvm_func, llvm_func_ty) = llvm_funcs[inst.function().idx()];
-                let params = env[inst.module()][inst.function()].params();
-                let args = inst.args(params, ir.blocks(), ir.extra());
+                let inst_func = &env[inst.module()][inst.function()];
+                let args = inst.args(
+                    inst_func.params(),
+                    inst_func.varargs(),
+                    ir.blocks(),
+                    ir.extra(),
+                );
                 let mut args: Vec<_> = args
                     .filter_map(|arg| {
                         let Argument::Ref(r) = arg else {

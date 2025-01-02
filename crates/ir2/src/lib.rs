@@ -506,9 +506,10 @@ impl FunctionIr {
     pub fn prepare_instruction<'a>(
         &mut self,
         params: &[Parameter],
+        varargs: bool,
         (id, args, ty): (FunctionId, impl IntoArgs<'a>, TypeId),
     ) -> Instruction {
-        let args = builder::write_args(&mut self.extra, params, args);
+        let args = builder::write_args(&mut self.extra, params, varargs, args);
         Instruction {
             function: id,
             args,
@@ -545,10 +546,11 @@ impl Instruction {
     pub fn args<'a>(
         &'a self,
         params: &'a [Parameter],
+        varargs: bool,
         blocks: &'a [BlockInfo],
         extra: &'a [u32],
     ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
-        decode_args(&self.args, params, blocks, extra)
+        decode_args(&self.args, params, varargs, blocks, extra)
     }
 
     pub fn as_module<I: Inst>(&self, m: ModuleOf<I>) -> Option<TypedInstruction<I>> {
@@ -566,14 +568,20 @@ pub const INLINE_ARGS: usize = 2;
 fn decode_args<'a>(
     args: &'a [u32; INLINE_ARGS],
     params: &'a [Parameter],
+    varargs: bool,
     blocks: &'a [BlockInfo],
     extra: &'a [u32],
 ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
-    let count: usize = params.iter().map(|p| p.slot_count()).sum();
-    let mut args = if count <= INLINE_ARGS {
+    let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
+    let mut vararg_count = 0;
+    let mut args = if count <= INLINE_ARGS && !varargs {
         &args[..count]
     } else {
         let i = args[0] as usize;
+        if varargs {
+            vararg_count = args[1] as usize;
+            count += vararg_count;
+        }
         &extra[i..i + count]
     }
     .iter()
@@ -581,32 +589,36 @@ fn decode_args<'a>(
 
     let mut arg = move || args.next().unwrap();
 
-    params.iter().map(move |param| match param {
-        Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
-        Parameter::BlockTarget => {
-            let id = BlockId(arg());
-            let arg_idx = arg();
-            let arg_count = blocks[id.idx()].arg_count;
-            let args: &[u32] = &extra[arg_idx as usize..(arg_idx + arg_count) as usize];
-            // SAFETY: Ref is repr(transparent)
-            let args: &[Ref] = unsafe { std::mem::transmute(args) };
-            Argument::BlockTarget(BlockTarget(id, args))
-        }
-        Parameter::Int => Argument::Int(u64::from(arg()) | (u64::from(arg()) << 32)),
-        Parameter::Float => {
-            Argument::Float(f64::from_bits(u64::from(arg()) | (u64::from(arg()) << 32)))
-        }
-        Parameter::Int32 => Argument::Int(arg().into()),
-        Parameter::TypeId => Argument::TypeId(TypeId(arg())),
-        Parameter::FunctionId => Argument::FunctionId(FunctionId {
-            module: ModuleId(arg()),
-            function: LocalFunctionId(arg()),
-        }),
-        Parameter::GlobalId => Argument::GlobalId(GlobalId {
-            module: ModuleId(arg()),
-            idx: arg(),
-        }),
-    })
+    params
+        .iter()
+        .copied()
+        .chain(std::iter::repeat(Parameter::Ref).take(vararg_count))
+        .map(move |param| match param {
+            Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
+            Parameter::BlockTarget => {
+                let id = BlockId(arg());
+                let arg_idx = arg();
+                let arg_count = blocks[id.idx()].arg_count;
+                let args: &[u32] = &extra[arg_idx as usize..(arg_idx + arg_count) as usize];
+                // SAFETY: Ref is repr(transparent)
+                let args: &[Ref] = unsafe { std::mem::transmute(args) };
+                Argument::BlockTarget(BlockTarget(id, args))
+            }
+            Parameter::Int => Argument::Int(u64::from(arg()) | (u64::from(arg()) << 32)),
+            Parameter::Float => {
+                Argument::Float(f64::from_bits(u64::from(arg()) | (u64::from(arg()) << 32)))
+            }
+            Parameter::Int32 => Argument::Int(arg().into()),
+            Parameter::TypeId => Argument::TypeId(TypeId(arg())),
+            Parameter::FunctionId => Argument::FunctionId(FunctionId {
+                module: ModuleId(arg()),
+                function: LocalFunctionId(arg()),
+            }),
+            Parameter::GlobalId => Argument::GlobalId(GlobalId {
+                module: ModuleId(arg()),
+                idx: arg(),
+            }),
+        })
 }
 
 pub struct TypedInstruction<I: Inst> {
@@ -629,7 +641,8 @@ impl<I: Inst> TypedInstruction<I> {
         extra: &'a [u32],
     ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
         let params = self.inst.params();
-        decode_args(&self.args, params, blocks, extra)
+        let varargs = self.inst.varargs();
+        decode_args(&self.args, params, varargs, blocks, extra)
     }
 }
 
@@ -641,6 +654,7 @@ pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy {
     fn functions() -> Vec<Function>;
     fn inst_table(module: &ModuleOf<Self>) -> &Self::InstTable;
     fn params(self) -> &'static [Parameter];
+    fn varargs(self) -> bool;
 }
 
 #[macro_export]
@@ -795,6 +809,8 @@ macro_rules! instructions {
                     )*
                 }
             }
+
+            fn varargs(self) -> bool { false }
 
             fn inst_table(module: &$crate::ModuleOf<Self>) -> &Self::InstTable {
                 unsafe { ::core::mem::transmute(module) }

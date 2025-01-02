@@ -91,7 +91,7 @@ impl<Env: HasEnvironment> Builder<Env> {
         };
         let def = &self.env.env()[function];
         let terminator = def.terminator;
-        let args = write_args(&mut self.extra, &def.params, args);
+        let args = write_args(&mut self.extra, &def.params, def.varargs, args);
         let r = Ref(self.insts.len() as _);
         self.insts.push(Instruction { function, args, ty });
         self.blocks[current_block.0 as usize].len += 1;
@@ -217,49 +217,72 @@ impl<Env: HasEnvironment> Builder<Env> {
 pub(crate) fn write_args<'a>(
     extra: &mut Vec<u32>,
     params: &[Parameter],
+    varargs: bool,
     args: impl IntoArgs<'a>,
 ) -> [u32; INLINE_ARGS] {
-    let args = args.into_args();
-    if args.len() != params.len() {
+    let mut args = args.into_args();
+    if (!varargs && args.len() != params.len()) || (varargs && args.len() < params.len()) {
         panic!(
             "invalid parameter count, expected {} but found {}",
             params.len(),
             args.len()
         );
     }
+    let mut arg_slots = (&mut args)
+        .take(params.len())
+        .zip(params)
+        .flat_map(|(arg, param)| {
+            let (a, b) = match (arg, param) {
+                (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => {
+                    (r.0, None)
+                }
+                (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
+                    let idx = extra.len() as u32;
+                    // TODO: check block has the correct number of arguments
+                    // (currently can't because it is set to 0 before start)
+                    extra.extend(target.1.iter().map(|&r| r.0));
+                    (target.0 .0, Some(idx))
+                }
+                (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
+                (Argument::Int(i), crate::Parameter::Int32) => {
+                    (i.try_into().expect("Int value too large for Int32"), None)
+                }
+                (Argument::Float(n), crate::Parameter::Float) => {
+                    let i = n.to_bits();
+                    (i as u32, Some((i >> 32) as u32))
+                }
+                (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
+                (Argument::FunctionId(id), crate::Parameter::TypeId) => {
+                    (id.module.0, Some(id.function.0))
+                }
+                (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
+                _ => panic!("argument was of unexpected kind, expected {param:?}"),
+            };
+            std::iter::once(a).chain(b)
+        });
     let count: usize = params.iter().map(|p| p.slot_count()).sum();
-    let mut args = args.zip(params.iter()).flat_map(|(arg, param)| {
-        let (a, b) = match (arg, param) {
-            (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => (r.0, None),
-            (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
-                let idx = extra.len() as u32;
-                // TODO: check block has the correct number of arguments
-                // (currently can't because it is set to 0 before start)
-                extra.extend(target.1.iter().map(|&r| r.0));
-                (target.0 .0, Some(idx))
-            }
-            (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
-            (Argument::Int(i), crate::Parameter::Int32) => {
-                (i.try_into().expect("Int value too large for Int32"), None)
-            }
-            (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
-            (Argument::FunctionId(id), crate::Parameter::TypeId) => {
-                (id.module.0, Some(id.function.0))
-            }
-            (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
-            _ => panic!("argument was of unexpected kind, expected {param:?}"),
-        };
-        std::iter::once(a).chain(b)
-    });
-    if count <= INLINE_ARGS {
+    if count <= INLINE_ARGS && !varargs {
         [
-            args.next().unwrap_or_default(),
-            args.next().unwrap_or_default(),
+            arg_slots.next().unwrap_or_default(),
+            arg_slots.next().unwrap_or_default(),
         ]
     } else {
-        let args: Vec<_> = args.collect(); // PERF: no extra collect here
+        // PERF: can we avoid extra collect here?
+        let arg_slots: Vec<_> = arg_slots.collect();
         let idx = extra.len() as u32;
-        extra.extend(args);
-        [idx, count as u32]
+        extra.extend(arg_slots);
+        if varargs {
+            let mut vararg_count = 0;
+            extra.extend(args.map(|arg| {
+                let Argument::Ref(r) = arg else {
+                    panic!("vararg argument must be of kind Ref");
+                };
+                vararg_count += 1;
+                r.0
+            }));
+            [idx, vararg_count]
+        } else {
+            [idx, 0]
+        }
     }
 }

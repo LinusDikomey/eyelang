@@ -906,7 +906,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 debug_assert_eq!(args.count, arg_types.count);
                 let func = lower(ctx, function)?;
                 let arg_types = ctx.get_multiple_types(arg_types)?;
-                todo!("call_ptr")
+                todo!("call_ptr: {func} {arg_types:?}")
                 //ctx.builder.
                 //    .build_call_ptr(func, arg_refs, arg_types, return_ty)
             };

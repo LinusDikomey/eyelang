@@ -78,6 +78,13 @@ impl fmt::Display for ModuleDisplay<'_> {
                         crate::Parameter::GlobalId => cwrite!(f, "#g<global>")?,
                     }
                 }
+                if function.varargs {
+                    if function.params.is_empty() {
+                        write!(f, "...")?;
+                    } else {
+                        write!(f, ", ...")?;
+                    }
+                }
                 writeln!(f, ")")
             };
             if let Some(ir) = &function.ir {
@@ -126,7 +133,8 @@ impl fmt::Display for ModuleDisplay<'_> {
                         }
                         cwrite!(f, "#c<{}>.", called_module.name)?;
                         cwrite!(f, "#b<{}>", called.name)?;
-                        for arg in inst.args(&called.params, &ir.blocks, &ir.extra) {
+                        for arg in inst.args(&called.params, called.varargs, &ir.blocks, &ir.extra)
+                        {
                             match arg {
                                 Argument::Ref(r) => write!(f, " {}", r)?,
                                 Argument::BlockTarget(target) => {
