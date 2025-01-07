@@ -1,6 +1,8 @@
 use crate::{
-    argument::IntoArgs, builtins::Builtin, Argument, BlockId, BlockInfo, Environment, Function,
-    FunctionId, Instruction, ModuleId, Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
+    argument::IntoArgs,
+    builtins::{self, Builtin},
+    Argument, BlockId, BlockInfo, Environment, Function, FunctionId, Instruction, ModuleId,
+    Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
 };
 
 pub trait HasEnvironment {
@@ -70,6 +72,7 @@ impl<Env: HasEnvironment> Builder<Env> {
                 arg_count,
                 idx: 0,
                 len: 0,
+                preds: dmap::new_set(),
             }],
             current_block: Some(BlockId::ENTRY),
         };
@@ -91,7 +94,14 @@ impl<Env: HasEnvironment> Builder<Env> {
         };
         let def = &self.env.env()[function];
         let terminator = def.terminator;
-        let args = write_args(&mut self.extra, &def.params, def.varargs, args);
+        let args = write_args(
+            &mut self.extra,
+            current_block,
+            &mut self.blocks,
+            &def.params,
+            def.varargs,
+            args,
+        );
         let r = Ref(self.insts.len() as _);
         self.insts.push(Instruction { function, args, ty });
         self.blocks[current_block.0 as usize].len += 1;
@@ -115,6 +125,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             arg_count: 0,
             idx: 0,
             len: 0,
+            preds: dmap::new_set(),
         });
         id
     }
@@ -131,14 +142,8 @@ impl<Env: HasEnvironment> Builder<Env> {
             "can't begin a block twice"
         );
         block.idx = self.insts.len() as _;
-        self.insts.extend(args.into_iter().map(|ty| Instruction {
-            function: crate::FunctionId {
-                module: crate::ModuleId::BUILTINS,
-                function: Builtin::BlockArg.id(),
-            },
-            args: [0, 0],
-            ty,
-        }));
+        self.insts
+            .extend(args.into_iter().map(builtins::block_arg_inst));
         block.arg_count = self.insts.len() as u32 - block.idx;
         self.current_block = Some(id);
         Refs {
@@ -174,6 +179,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             arg_count,
             idx,
             len: 0,
+            preds: dmap::new_set(),
         });
         self.current_block = Some(id);
         (id, args)
@@ -216,6 +222,8 @@ impl<Env: HasEnvironment> Builder<Env> {
 #[track_caller]
 pub(crate) fn write_args<'a>(
     extra: &mut Vec<u32>,
+    block: BlockId,
+    blocks: &mut [BlockInfo],
     params: &[Parameter],
     varargs: bool,
     args: impl IntoArgs<'a>,
@@ -237,6 +245,7 @@ pub(crate) fn write_args<'a>(
                     (r.0, None)
                 }
                 (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
+                    blocks[target.0.idx()].preds.insert(block);
                     let idx = extra.len() as u32;
                     // TODO: check block has the correct number of arguments
                     // (currently can't because it is set to 0 before start)

@@ -8,9 +8,9 @@ fn main() {
     let rewriter = AddZeroRewriter::new(&mut env);
     println!("Before rewrite:\n{}", env.display_module(main_module));
 
-    let mut func_ir = env[func_id].ir.take().unwrap();
-    ir2::rewrite::rewrite_in_place(&mut func_ir, &env[func_id].types, &env, rewriter);
-    env[func_id].ir = Some(func_ir);
+    let mut func_ir = env.remove_body(func_id).unwrap();
+    ir2::rewrite::rewrite_in_place(&mut func_ir, env[func_id].types(), &env, rewriter);
+    env.reattach_body(func_id, func_ir);
 
     println!("After rewrite:\n{}", env.display_module(main_module));
 }
@@ -19,7 +19,7 @@ fn create_add_function(env: &mut ir2::Environment) -> ir2::Function {
     let arith = env.get_dialect_module::<ir2::dialect::Arith>();
     let cf = env.get_dialect_module::<ir2::dialect::Cf>();
 
-    let mut builder = ir2::builder::Builder::new(&*env, "add");
+    let mut builder = ir2::builder::Builder::new(&*env);
     let int_ty = builder.types.add(Primitive::I32);
     let (_, args) = builder.create_and_begin_block([int_ty; 3]);
     let result = builder.append(arith.Add(args.nth(0), args.nth(1), int_ty));
@@ -27,7 +27,7 @@ fn create_add_function(env: &mut ir2::Environment) -> ir2::Function {
     let int_zero = builder.append(arith.Int(0, int_ty));
     let return_value = builder.append(arith.Add(result, int_zero, int_ty));
     builder.append(cf.Ret(return_value, int_ty));
-    builder.finish(int_ty)
+    builder.finish("add", int_ty)
 }
 
 // this macro defines a type AddZeroRewriter that implements Rewriter

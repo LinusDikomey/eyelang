@@ -11,6 +11,8 @@ pub mod block_graph;
 pub mod builder;
 pub mod dialect;
 pub mod eval;
+pub mod modify;
+pub mod optimize;
 pub mod rewrite;
 pub mod verify;
 
@@ -26,6 +28,7 @@ pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use builtins::{Builtin, BUILTIN};
 pub use dialect::Primitive;
+use dmap::DHashSet;
 pub use environment::Environment;
 pub use layout::{offset_in_tuple, type_layout, Layout};
 
@@ -217,7 +220,7 @@ pub struct Function {
     varargs: bool,
     terminator: bool,
     return_type: Option<TypeId>,
-    ir: Option<FunctionIr>,
+    pub(crate) ir: Option<FunctionIr>,
 }
 impl Index<TypeId> for Function {
     type Output = Type;
@@ -459,15 +462,33 @@ impl FunctionIr {
         self.insts.len() as _
     }
 
-    pub fn get_block_args(&self, id: BlockId) -> impl ExactSizeIterator<Item = Ref> {
+    pub fn get_refs(
+        &self,
+        idx: Ref,
+        count: u32,
+    ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)> + use<'_> {
+        (idx.0..idx.0 + count).map(|i| (Ref(i), &self.insts[i as usize]))
+    }
+
+    pub fn get_terminator(&self, block: BlockId) -> &Instruction {
+        let info = &self.blocks[block.idx()];
+        assert!(info.len != 0, "block is empty");
+        &self.insts[(info.idx + info.arg_count + info.len) as usize]
+    }
+
+    pub fn get_block_args(&self, id: BlockId) -> impl Iterator<Item = Ref> + use<'_> {
         let block = &self.blocks[id.0 as usize];
-        (block.idx..block.idx + block.arg_count).map(Ref)
+        self.get_refs(Ref(block.idx), block.arg_count)
+            .map(|(r, _)| r)
+    }
+
+    pub fn block_arg_count(&self, block: BlockId) -> u32 {
+        self.blocks[block.0 as usize].arg_count
     }
 
     pub fn get_block(&self, id: BlockId) -> impl Iterator<Item = (Ref, &Instruction)> + use<'_> {
         let block = &self.blocks[id.0 as usize];
-        let i = block.idx + block.arg_count;
-        (i..i + block.len).map(|i| (Ref(i), &self.insts[i as usize]))
+        self.get_refs(Ref(block.idx + block.arg_count), block.len)
     }
 
     pub fn get_inst(&self, r: Ref) -> &Instruction {
@@ -486,7 +507,22 @@ impl FunctionIr {
         self.insts[arg.idx()].ty
     }
 
-    pub fn args<'a, I: Inst + 'static>(
+    pub fn args<'a>(
+        &'a self,
+        inst: &'a Instruction,
+        env: &'a Environment,
+    ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
+        let func = &env[inst.function];
+        decode_args(
+            &inst.args,
+            &func.params,
+            func.varargs,
+            &self.blocks,
+            &self.extra,
+        )
+    }
+
+    pub fn typed_args<'a, I: Inst + 'static>(
         &'a self,
         inst: &'a TypedInstruction<I>,
     ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
@@ -497,7 +533,7 @@ impl FunctionIr {
         &'a self,
         inst: &'a TypedInstruction<I>,
     ) -> [Argument<'a>; N] {
-        let mut args = self.args(inst);
+        let mut args = self.typed_args(inst);
         let args_array = std::array::from_fn(|_| args.next().expect("not enough args"));
         assert!(args.next().is_none(), "too many args");
         args_array
@@ -507,9 +543,17 @@ impl FunctionIr {
         &mut self,
         params: &[Parameter],
         varargs: bool,
+        block: BlockId,
         (id, args, ty): (FunctionId, impl IntoArgs<'a>, TypeId),
     ) -> Instruction {
-        let args = builder::write_args(&mut self.extra, params, varargs, args);
+        let args = builder::write_args(
+            &mut self.extra,
+            block,
+            &mut self.blocks,
+            params,
+            varargs,
+            args,
+        );
         Instruction {
             function: id,
             args,
@@ -522,12 +566,13 @@ pub struct BlockInfo {
     arg_count: u32,
     idx: u32,
     len: u32,
+    preds: DHashSet<BlockId>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     function: FunctionId,
-    args: [u32; 2],
+    args: [u32; INLINE_ARGS],
     ty: TypeId,
 }
 impl Instruction {
@@ -543,7 +588,7 @@ impl Instruction {
         self.ty
     }
 
-    pub fn args<'a>(
+    pub fn args_inner<'a>(
         &'a self,
         params: &'a [Parameter],
         varargs: bool,
@@ -706,7 +751,7 @@ pub mod parameter_types {
     pub type Int32 = u32;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parameter {
     Ref,
     RefOf(TypeId),

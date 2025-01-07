@@ -2,8 +2,8 @@ mod macros;
 pub use macros::rewrite_rules;
 
 use crate::{
-    builtins::Builtin, Environment, FunctionId, FunctionIr, Instruction, IntoArgs, ModuleId,
-    Parameter, Ref, TypeId, Types, INLINE_ARGS,
+    builtins::Builtin, BlockId, Environment, FunctionId, FunctionIr, Instruction, IntoArgs,
+    ModuleId, Parameter, Ref, TypeId, Types, INLINE_ARGS,
 };
 
 pub trait Rewriter {
@@ -13,6 +13,7 @@ pub trait Rewriter {
         types: &Types,
         env: &Environment,
         inst: &Instruction,
+        block: BlockId,
     ) -> Rewrite;
 }
 
@@ -29,15 +30,20 @@ impl Rewrite {
 }
 
 pub trait IntoRewrite {
-    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment) -> Rewrite;
+    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite;
 }
 impl<'a, A: IntoArgs<'a>> IntoRewrite for (FunctionId, A, TypeId) {
-    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment) -> Rewrite {
-        Rewrite::Replace(ir.prepare_instruction(&env[self.0].params, env[self.0].varargs, self))
+    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite {
+        Rewrite::Replace(ir.prepare_instruction(
+            &env[self.0].params,
+            env[self.0].varargs,
+            block,
+            self,
+        ))
     }
 }
 impl IntoRewrite for Ref {
-    fn into_rewrite(self, _ir: &mut FunctionIr, _env: &Environment) -> Rewrite {
+    fn into_rewrite(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> Rewrite {
         Rewrite::Rename(self)
     }
 }
@@ -50,12 +56,12 @@ pub fn rewrite_in_place<R: Rewriter>(
 ) {
     let mut renames = RenameTable::new(ir);
     for block in ir.block_ids() {
-        let block = &ir.blocks[block.0 as usize];
-        let i = block.idx + block.arg_count;
-        for idx in i..i + block.len {
+        let block_info = &ir.blocks[block.0 as usize];
+        let i = block_info.idx + block_info.arg_count;
+        for idx in i..i + block_info.len {
             let mut inst = ir.insts[idx as usize];
             renames.visit_inst(ir, &mut inst, env);
-            let rewrite = rewriter.visit_instruction(ir, types, env, &inst);
+            let rewrite = rewriter.visit_instruction(ir, types, env, &inst, block);
             match rewrite {
                 Rewrite::Keep => {}
                 Rewrite::Replace(new_inst) => {

@@ -70,7 +70,15 @@ impl<B: Blocks> BlockGraph<B> {
         }
     }
 
+    pub fn block_count(&self) -> u32 {
+        self.dominators.len() as _
+    }
+
     pub fn block_dominates(&self, dominated: B::Block, dominating: B::Block) -> bool {
+        self.dominators[dominated.idx()].contains(&dominating)
+    }
+
+    pub fn dom(&self, dominating: B::Block, dominated: B::Block) -> bool {
         self.dominators[dominated.idx()].contains(&dominating)
     }
 
@@ -86,8 +94,28 @@ impl<B: Blocks> BlockGraph<B> {
         self.preds[block.idx()].iter().copied()
     }
 
+    pub fn dominators(&self, block: B::Block) -> impl Iterator<Item = B::Block> + use<'_, B> {
+        self.dominators[block.idx()].iter().copied()
+    }
+
     pub fn postorder(&self) -> &[B::Block] {
         &self.postorder
+    }
+
+    pub fn dominance_frontier(
+        &self,
+        block: B::Block,
+    ) -> impl Iterator<Item = B::Block> + use<'_, B> {
+        // From https://en.wikipedia.org/wiki/Dominator_(graph_theory):
+        // The dominance frontier of a node d is the set of all nodes ni such that d dominates an
+        // immediate predecessor of ni, but d does not strictly dominate ni. It is the set of nodes
+        //  where d's dominance stops.
+        (0..self.block_count())
+            .map(B::Block::from_raw)
+            .filter(move |&ni| {
+                (block == ni || !self.dom(block, ni))
+                    && self.preds(ni).any(|pred| self.dom(block, pred))
+            })
     }
 }
 
@@ -109,7 +137,7 @@ impl Blocks for FunctionIr {
         let varargs = func.varargs;
         debug_assert!(func.terminator);
         terminator
-            .args(params, varargs, self.blocks(), self.extra())
+            .args_inner(params, varargs, self.blocks(), self.extra())
             .filter_map(|arg| {
                 if let Argument::BlockTarget(target) = arg {
                     Some(target.0)

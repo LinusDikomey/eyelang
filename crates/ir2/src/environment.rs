@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    Function, FunctionId, Global, GlobalId, Inst, LocalFunctionId, Module, ModuleId, ModuleOf,
-    PrimitiveInfo,
+    Function, FunctionId, FunctionIr, Global, GlobalId, Inst, LocalFunctionId, Module, ModuleId,
+    ModuleOf, PrimitiveInfo,
 };
 
 pub struct Environment {
@@ -147,14 +147,20 @@ impl Environment {
         &self.modules[module.0 as usize]
     }
 
-    pub fn attach_body(
-        &mut self,
-        ir_id: FunctionId,
-        (ir, types): (crate::FunctionIr, crate::Types),
-    ) {
+    pub fn attach_body(&mut self, ir_id: FunctionId, (ir, types): (FunctionIr, crate::Types)) {
         let func = &mut self.modules[ir_id.module.idx()].functions[ir_id.function.idx()];
         func.ir = Some(ir);
         func.types = types;
+    }
+
+    pub fn remove_body(&mut self, id: FunctionId) -> Option<FunctionIr> {
+        self.modules[id.module.idx()].functions[id.function.idx()]
+            .ir
+            .take()
+    }
+
+    pub fn reattach_body(&mut self, id: FunctionId, ir: FunctionIr) {
+        self.modules[id.module.idx()].functions[id.function.idx()].ir = Some(ir);
     }
 }
 impl fmt::Display for Environment {

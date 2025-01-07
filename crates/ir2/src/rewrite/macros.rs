@@ -90,6 +90,7 @@ macro_rules! rewrite_rules {
                 #[allow(unused)] $types: &$crate::Types,
                 env: &$crate::Environment,
                 #[allow(unused)] $inst: &$crate::Instruction,
+                block: $crate::BlockId,
             ) -> $crate::rewrite::Rewrite {
                 $(
                     use $module_path as $module;
@@ -104,7 +105,7 @@ macro_rules! rewrite_rules {
                                 return $crate::rewrite::Rewrite::Keep;
                             }
                         )*
-                        $crate::rewrite::IntoRewrite::into_rewrite($result, $ir, env)
+                        $crate::rewrite::IntoRewrite::into_rewrite($result, $ir, env, block)
                     })();
                     if result.success() { return result; }
                 )*

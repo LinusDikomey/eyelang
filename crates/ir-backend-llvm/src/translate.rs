@@ -311,18 +311,16 @@ unsafe fn build_func(
                 use ir2::dialect::Arith as I;
                 let mut args = inst.args(ir.blocks(), ir.extra());
                 let un_op = || {
-                    let mut args = ir.args(&inst);
-                    match (args.next(), args.next()) {
-                        (Some(Argument::Ref(a)), None) => a,
-                        _ => unreachable!("un_op expected"),
-                    }
+                    let [Argument::Ref(a)] = ir.args_n(&inst) else {
+                        unreachable!()
+                    };
+                    a
                 };
                 let bin_op = || {
-                    let mut args = ir.args(&inst);
-                    match (args.next(), args.next(), args.next()) {
-                        (Some(Argument::Ref(a)), Some(Argument::Ref(b)), None) => (a, b),
-                        _ => unreachable!("bin_op expected"),
-                    }
+                    let [Argument::Ref(a), Argument::Ref(b)] = ir.args_n(&inst) else {
+                        unreachable!()
+                    };
+                    (a, b)
                 };
                 let comparison = |builder: LLVMBuilderRef,
                                   instructions: &[LLVMValueRef],
@@ -587,7 +585,7 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.cf) {
-                let mut args = ir.args(&inst);
+                let mut args = ir.typed_args(&inst);
                 use ir2::dialect::Cf as I;
                 match inst.op() {
                     I::Goto => {
@@ -815,7 +813,7 @@ unsafe fn build_func(
             } else if inst.module() == module {
                 let (llvm_func, llvm_func_ty) = llvm_funcs[inst.function().idx()];
                 let inst_func = &env[inst.module()][inst.function()];
-                let args = inst.args(
+                let args = inst.args_inner(
                     inst_func.params(),
                     inst_func.varargs(),
                     ir.blocks(),
