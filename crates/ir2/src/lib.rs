@@ -487,8 +487,16 @@ impl FunctionIr {
     }
 
     pub fn get_block(&self, id: BlockId) -> impl Iterator<Item = (Ref, &Instruction)> + use<'_> {
-        let block = &self.blocks[id.0 as usize];
+        let block = &self.blocks[id.idx()];
         self.get_refs(Ref(block.idx + block.arg_count), block.len)
+    }
+
+    pub fn block_refs(&self, id: BlockId) -> Refs {
+        let block = &self.blocks[id.idx()];
+        Refs {
+            idx: block.idx + block.arg_count,
+            count: block.len,
+        }
     }
 
     pub fn get_inst(&self, r: Ref) -> &Instruction {

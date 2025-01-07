@@ -1,19 +1,21 @@
 use dmap::DHashMap;
 
 use crate::{
-    Argument, BlockId, Builtin, Environment, FunctionIr, Inst, Instruction, Parameter, Ref, TypeId,
-    TypedInstruction, INLINE_ARGS,
+    Argument, BlockId, Builtin, Environment, FunctionId, FunctionIr, Inst, Instruction, Parameter,
+    Ref, TypeId, TypedInstruction, INLINE_ARGS,
 };
 
 pub struct IrModify {
     ir: FunctionIr,
     additional: Vec<AdditionalInst>,
+    renames: DHashMap<Ref, Ref>,
 }
 impl IrModify {
     pub fn new(ir: FunctionIr) -> Self {
         Self {
             ir,
             additional: Vec::new(),
+            renames: dmap::new(),
         }
     }
 
@@ -21,7 +23,7 @@ impl IrModify {
         (self.ir.insts.len() + self.additional.len()) as _
     }
 
-    pub fn block_ids(&self) -> impl Iterator<Item = BlockId> {
+    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> {
         self.ir.block_ids()
     }
 
@@ -49,7 +51,57 @@ impl IrModify {
         }
     }
 
-    pub fn add_block_arg(&mut self, env: &Environment, block: BlockId, ty: TypeId) -> Ref {
+    pub fn visit_block_targets_mut(
+        &mut self,
+        inst: Ref,
+        env: &Environment,
+        mut f: impl FnMut(BlockId, &mut [Ref]),
+    ) {
+        let inst = if (inst.0 as usize) < self.ir.insts.len() {
+            self.ir.insts[inst.idx()]
+        } else {
+            self.ir.insts[inst.idx() - self.ir.insts.len()]
+        };
+        let params = env[inst.function].params();
+        let slot_count: usize = params.iter().map(|p| p.slot_count()).sum();
+        if slot_count <= INLINE_ARGS {
+            let mut idx = 0;
+            for param in params {
+                if *param == Parameter::BlockTarget {
+                    let block = BlockId(inst.args[idx]);
+                    let args_idx = inst.args[idx + 1] as usize;
+                    let arg_count = self.ir.blocks[block.idx()].arg_count as usize;
+                    let args: &mut [u32] = &mut self.ir.extra[args_idx..args_idx + arg_count];
+                    // SAFETY: reinterprets the u32s as Refs, Refs are repr(transparent)
+                    let args: &mut [Ref] = unsafe {
+                        std::slice::from_raw_parts_mut(args.as_mut_ptr().cast(), args.len())
+                    };
+                    f(block, args)
+                }
+                idx += param.slot_count();
+            }
+        } else {
+            let mut idx = inst.args[0] as usize;
+            for param in params {
+                if *param == Parameter::BlockTarget {
+                    let block = BlockId(self.ir.extra[idx]);
+                    let args_idx = self.ir.extra[idx + 1] as usize;
+                    let arg_count = self.ir.blocks[block.idx()].arg_count as usize;
+                    let args: &mut [u32] = &mut self.ir.extra[args_idx..args_idx + arg_count];
+                    // SAFETY: reinterprets the u32s as Refs, Refs are repr(transparent)
+                    let args: &mut [Ref] = unsafe {
+                        std::slice::from_raw_parts_mut(args.as_mut_ptr().cast(), args.len())
+                    };
+                    f(block, args)
+                }
+                idx += param.slot_count();
+            }
+        }
+    }
+
+    /// adds a block argument of the specified type to the block and returns the Ref to the new arg
+    /// as well as it's index in the arg list of that block
+    pub fn add_block_arg(&mut self, env: &Environment, block: BlockId, ty: TypeId) -> (Ref, u32) {
         let r = Ref((self.ir.insts.len() + self.additional.len()) as u32);
         let block_info = &mut self.ir.blocks[block.idx()];
         let before = Ref(block_info.idx + block_info.arg_count);
@@ -109,20 +161,20 @@ impl IrModify {
                 }
             }
         }
-        r
+        (r, prev_arg_count)
     }
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
-        if self.additional.is_empty() {
-            return self.ir;
-        }
         let Self {
             mut ir,
             mut additional,
+            renames: rename_map,
         } = self;
+        if additional.is_empty() && rename_map.is_empty() {
+            return ir;
+        }
         additional.sort_by_key(|add| add.before.0);
         let inst_count = ir.insts.len() + additional.len();
-        let mut renames: Box<[Ref]> = (0..inst_count as u32).map(Ref).collect();
         let mut insts = Vec::with_capacity(inst_count);
         let new_refs = (ir.insts.len() as u32..).map(Ref);
         let mut old_insts = ir.insts.into_iter();
@@ -134,12 +186,13 @@ impl IrModify {
             .map(|info| info.idx)
             .zip((0..).map(BlockId))
             .collect();
-        dbg!(&block_start_indices);
         debug_assert_eq!(
             block_start_indices.len(),
             ir.blocks.len(),
             "blocks start at the same idx"
         );
+
+        let mut renames: Box<[Ref]> = (0..inst_count as u32).map(Ref).collect();
 
         let mut current = Ref(0);
         let mut current_block = BlockId(u32::MAX);
@@ -161,7 +214,6 @@ impl IrModify {
                 let info = &mut ir.blocks[block.idx()];
                 current_block = block;
                 info.idx = insts.len() as u32;
-                eprintln!("{} with {} args at {}", block, info.arg_count, info.idx);
             }
             if inst
                 .as_module(crate::BUILTIN)
@@ -176,7 +228,14 @@ impl IrModify {
             insts.push(inst);
         }
 
-        let renamed = |r: Ref| if r.is_ref() { renames[r.idx()] } else { r };
+        let renamed = |r: Ref| {
+            let r = rename_map.get(&r).copied().unwrap_or(r);
+            if r.is_ref() {
+                renames[r.idx()]
+            } else {
+                r
+            }
+        };
 
         for inst in &mut insts {
             let func = &env[inst.function];
@@ -242,6 +301,19 @@ impl IrModify {
 
         ir.insts = insts;
         ir
+    }
+
+    pub fn replace_with(&mut self, r: Ref, new: Ref) {
+        self.renames.insert(r, new);
+        let inst = if (r.0 as usize) < self.ir.insts.len() {
+            &mut self.ir.insts[r.0 as usize]
+        } else {
+            &mut self.additional[r.0 as usize - self.ir.insts.len()].inst
+        };
+        inst.function = FunctionId {
+            module: crate::ModuleId::BUILTINS,
+            function: Builtin::Nothing.id(),
+        };
     }
 }
 

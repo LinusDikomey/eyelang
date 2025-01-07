@@ -149,7 +149,9 @@ impl fmt::Display for BodyDisplay<'_> {
                     if i != 0 {
                         cwrite!(f, ", ")?;
                     }
-                    write!(f, "{arg}")?;
+                    write!(f, "{arg}: ")?;
+                    let ty = ir.get_ref_ty(arg);
+                    write!(f, "{}", types.display_type(ty, &env.primitives))?;
                 }
                 cwrite!(f, ")")?;
             }

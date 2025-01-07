@@ -6,7 +6,7 @@ use dmap::{DHashMap, DHashSet};
 use crate::{
     dialect::{self, Mem},
     modify::IrModify,
-    Argument, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref,
+    Argument, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
 };
 
 pub struct Mem2Reg {
@@ -30,43 +30,47 @@ impl super::FunctionPass for Mem2Reg {
         let mut can_alias = Bitmap::new(ir.inst_count() as usize);
         let mut variables = dmap::new();
 
-        for block in ir.block_ids() {
-            for (r, inst) in ir.get_block(block) {
-                if let Some(inst) = inst.as_module(mem) {
-                    match inst.op() {
-                        Mem::Decl => {
-                            variables.insert(r, dmap::new_set());
-                            continue;
-                        }
-                        Mem::Load => continue,
-                        Mem::Store => {
-                            let [Argument::Ref(_ptr), Argument::Ref(value)] = ir.args_n(&inst)
-                            else {
-                                unreachable!()
-                            };
-                            if value.is_ref() {
-                                can_alias.set(value.idx(), true);
+        let block_bodies: Box<[Refs]> = ir
+            .block_ids()
+            .map(|block| {
+                for (r, inst) in ir.get_block(block) {
+                    if let Some(inst) = inst.as_module(mem) {
+                        match inst.op() {
+                            Mem::Decl => {
+                                let [Argument::TypeId(ty)] = ir.args_n(&inst) else {
+                                    unreachable!()
+                                };
+                                variables.insert(r, (dmap::new_set(), ty));
+                                continue;
                             }
-                            continue;
+                            Mem::Load => continue,
+                            Mem::Store => {
+                                let [Argument::Ref(_ptr), Argument::Ref(value)] = ir.args_n(&inst)
+                                else {
+                                    unreachable!()
+                                };
+                                if value.is_ref() {
+                                    can_alias.set(value.idx(), true);
+                                }
+                                continue;
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                    }
+                    for arg in ir.args(inst, env) {
+                        if let Argument::Ref(r) = arg {
+                            if r.is_ref() {
+                                can_alias.set(r.idx(), true);
+                            }
+                        }
                     }
                 }
-                for arg in ir.args(inst, env) {
-                    if let Argument::Ref(r) = arg {
-                        if r.is_ref() {
-                            can_alias.set(r.idx(), true);
-                        }
-                    }
-                }
-            }
-        }
+                ir.block_refs(block)
+            })
+            .collect();
 
-        dbg!(&variables);
         // any variables that can alias will not be removed by mem2reg
         variables.retain(|v, _| !can_alias.get(v.idx()));
-
-        dbg!(&variables);
 
         // track all blocks containing stores to each variable
         for block in ir.block_ids() {
@@ -76,7 +80,7 @@ impl super::FunctionPass for Mem2Reg {
                         let [Argument::Ref(ptr), Argument::Ref(_value)] = ir.args_n(&inst) else {
                             unreachable!()
                         };
-                        if let Some(blocks) = variables.get_mut(&ptr) {
+                        if let Some((blocks, _)) = variables.get_mut(&ptr) {
                             blocks.insert(block);
                         }
                     }
@@ -89,45 +93,119 @@ impl super::FunctionPass for Mem2Reg {
         let mut ir = IrModify::new(ir);
 
         // find block arg positions
-        let positions: DHashMap<Ref, DHashSet<BlockId>> = variables
-            .iter()
-            .map(|(&v, blocks_containing_store)| {
+        let variables: DHashMap<Ref, (TypeId, DHashSet<BlockId>)> = variables
+            .into_iter()
+            .map(|(v, (blocks_containing_store, ty))| {
                 let mut result = dmap::new_set();
                 let mut to_consider: VecDeque<BlockId> =
                     blocks_containing_store.iter().copied().collect();
-                let mut queued: DHashSet<_> = blocks_containing_store.clone();
+                let mut queued: DHashSet<_> = blocks_containing_store;
                 while let Some(block) = to_consider.pop_front() {
-                    println!("considering {block}");
                     for frontier in block_graph.dominance_frontier(block) {
                         result.insert(frontier);
                         if !queued.contains(&frontier) {
-                            eprintln!("to_consider: {frontier}");
                             to_consider.push_back(frontier);
                             queued.insert(frontier);
                         }
                     }
                 }
-                (v, result)
+                (v, (ty, result))
             })
             .collect();
-        dbg!(&positions);
 
-        for (&var, blocks) in &positions {
-            let ty = ir.get_inst(var).ty();
-            for &block in blocks {
-                ir.add_block_arg(env, block, ty);
+        // insert block arguments
+        let variables: DHashMap<Ref, DHashMap<BlockId, (Ref, u32)>> = variables
+            .into_iter()
+            .map(|(var, (ty, blocks))| {
+                (
+                    var,
+                    blocks
+                        .into_iter()
+                        .map(|block| (block, ir.add_block_arg(env, block, ty)))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        enum Op {
+            Enter(BlockId),
+            Leave,
+        }
+        let mut stack = vec![Op::Enter(BlockId::ENTRY)];
+        let mut vars_stack = vec![];
+
+        fn decide_value(vars: &[DHashMap<Ref, Ref>], var: Ref) -> Ref {
+            vars.iter()
+                .rev()
+                .find_map(|map| map.get(&var).copied())
+                .unwrap_or(Ref::UNIT)
+        }
+
+        let mut seen = Bitmap::new(ir.block_ids().len());
+
+        while let Some(op) = stack.pop() {
+            match op {
+                Op::Enter(block) => {
+                    if seen.get(block.idx()) {
+                        continue;
+                    }
+                    seen.set(block.idx(), true);
+                    let mut block_vars = dmap::new();
+                    for (&var, blocks) in &variables {
+                        if let Some(&(arg, _)) = blocks.get(&block) {
+                            block_vars.insert(var, arg);
+                        }
+                    }
+                    vars_stack.push(block_vars);
+                    stack.push(Op::Leave);
+                    let refs = block_bodies[block.idx()];
+                    for r in refs.iter() {
+                        let inst = ir.get_inst(r);
+                        if let Some(inst) = inst.as_module(self.mem) {
+                            match inst.op() {
+                                Mem::Decl if variables.contains_key(&r) => {
+                                    ir.replace_with(r, Ref::UNIT);
+                                }
+                                Mem::Load => {
+                                    // TODO: figure out loads of differing types
+                                    let [Argument::Ref(ptr)] = ir.args_n(&inst) else {
+                                        unreachable!()
+                                    };
+                                    if variables.contains_key(&ptr) {
+                                        ir.replace_with(r, decide_value(&vars_stack, ptr));
+                                    }
+                                }
+                                Mem::Store => {
+                                    let [Argument::Ref(ptr), Argument::Ref(value)] =
+                                        ir.args_n(&inst)
+                                    else {
+                                        unreachable!()
+                                    };
+                                    if variables.contains_key(&ptr) {
+                                        ir.replace_with(r, Ref::UNIT);
+                                        vars_stack.last_mut().unwrap().insert(ptr, value);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    let terminator = refs.iter().last().unwrap();
+                    ir.visit_block_targets_mut(terminator, env, |target, args| {
+                        for (&var, blocks) in &variables {
+                            if let Some(&(_, idx)) = blocks.get(&target) {
+                                args[idx as usize] = decide_value(&vars_stack, var);
+                            }
+                        }
+                        stack.push(Op::Enter(target));
+                    });
+                }
+                Op::Leave => {
+                    vars_stack.pop();
+                }
             }
         }
 
-        for &block in block_graph.postorder() {
-            println!(
-                "Block {block} dominated by {:?}",
-                block_graph.dominators(block).collect::<Vec<_>>()
-            );
-            for b in block_graph.dominance_frontier(block) {
-                println!(" ~ {b}");
-            }
-        }
         ir.finish_and_compress(env)
     }
 }
@@ -241,5 +319,14 @@ mod tests {
                 ir: &ir,
             }
         );
+        let mem = env.get_dialect_module::<crate::dialect::Mem>();
+        for block in ir.block_ids() {
+            for (_, inst) in ir.get_block(block) {
+                assert!(
+                    inst.as_module(mem).is_none(),
+                    "there should be no memory instructions left after mem2reg in this case"
+                );
+            }
+        }
     }
 }
