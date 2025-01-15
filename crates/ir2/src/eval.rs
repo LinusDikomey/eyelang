@@ -1,10 +1,15 @@
 #![allow(unused)] // TODO: reimplement eval, then remove this
-use std::fmt;
+use std::{
+    cmp::Ordering,
+    fmt,
+    ops::{Add, Div, Mul, Rem, Sub},
+};
 
 use crate::{
     dialect::Primitive,
     layout::{type_layout, Layout},
-    BlockId, Function, FunctionId, FunctionIr, Ref, Type, Types,
+    BlockId, BlockInfo, BlockTarget, Environment, Function, FunctionId, FunctionIr, IntoArgs,
+    ModuleOf, PrimitiveId, PrimitiveInfo, Ref, Type, TypeId, Types,
 };
 
 pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
@@ -186,8 +191,9 @@ impl From<ProvenanceError> for Error {
     }
 }
 
-pub trait Environment {
-    fn get_function(&mut self, id: FunctionId) -> &Function;
+pub trait EvalEnvironment {
+    fn env(&self) -> &Environment;
+    fn env_mut(&mut self) -> &mut Environment;
 
     fn call_extern(
         &mut self,
@@ -198,27 +204,47 @@ pub trait Environment {
         Err("Can't evaluate extern functions".into())
     }
 }
+impl EvalEnvironment for Environment {
+    fn env(&self) -> &Environment {
+        self
+    }
 
-pub struct EmptyEnv;
-impl Environment for EmptyEnv {
-    fn get_function(&mut self, id: FunctionId) -> &Function {
-        panic!("EmptyEnv doesn't provide any functions but tried to retrieve {id:?}")
+    fn env_mut(&mut self) -> &mut Environment {
+        self
+    }
+}
+
+struct Dialects {
+    arith: ModuleOf<crate::dialect::Arith>,
+    tuple: ModuleOf<crate::dialect::Tuple>,
+    mem: ModuleOf<crate::dialect::Mem>,
+    cf: ModuleOf<crate::dialect::Cf>,
+}
+impl Dialects {
+    fn get(env: &mut crate::Environment) -> Self {
+        Self {
+            arith: env.get_dialect_module(),
+            tuple: env.get_dialect_module(),
+            mem: env.get_dialect_module(),
+            cf: env.get_dialect_module(),
+        }
     }
 }
 
 // TODO: validate params
 // TODO: give errors a span by giving all IR instructions spans.
-pub fn eval<E: Environment>(
+pub fn eval<E: EvalEnvironment>(
     top_level_ir: &FunctionIr,
     top_level_types: &Types,
     params: &[Val],
     env: &mut E,
 ) -> Result<Val, Error> {
     let top_level_function = (top_level_ir, top_level_types);
+    let dialects = Dialects::get(env.env_mut());
     let mut mem = Mem::new();
 
     let mut values = Values::new(top_level_ir, top_level_types);
-    let mut current_function = None;
+    let mut current_function: Option<FunctionId> = None;
     for (param, i) in params
         .iter()
         .zip(top_level_ir.get_block_args(BlockId::ENTRY))
@@ -234,7 +260,7 @@ pub fn eval<E: Environment>(
 
     let val = 'outer: loop {
         let (ir, types) = current_function.map_or(top_level_function, |id| {
-            let function = env.get_function(id);
+            let function = &env.env()[id];
             (function.ir.as_ref().unwrap(), &function.types)
         });
 
@@ -250,28 +276,57 @@ pub fn eval<E: Environment>(
             }
         };
         let get_ref = |values: &Values, r: Ref| -> Val { get_ref_and_ty(values, r).0 };
+        let get_int_ref = |values: &Values, r: Ref| -> u64 {
+            debug_assert!(
+                matches!(types[ir.get_inst(r).ty()], Type::Primitive(p) if Primitive::try_from(p).unwrap().is_int())
+            );
+            values.slots[values.slot_map[r.idx()] as usize]
+        };
+        let get_f32_ref = |values: &Values, r: Ref| -> f32 {
+            debug_assert!(
+                matches!(types[ir.get_inst(r).ty()], Type::Primitive(p) if Primitive::try_from(p).unwrap() == Primitive::F32)
+            );
+            f32::from_bits(values.slots[values.slot_map[r.idx()] as usize] as u32)
+        };
+        let get_f64_ref = |values: &Values, r: Ref| -> f64 {
+            debug_assert!(
+                matches!(types[ir.get_inst(r).ty()], Type::Primitive(p) if Primitive::try_from(p).unwrap() == Primitive::F64)
+            );
+            f64::from_bits(values.slots[values.slot_map[r.idx()] as usize])
+        };
+        let get_ptr_ref = |values: &Values, r: Ref| -> Ptr {
+            debug_assert!(
+                matches!(types[ir.get_inst(r).ty()], Type::Primitive(p) if Primitive::try_from(p).unwrap() == Primitive::Ptr)
+            );
+            Ptr::from_u64(values.slots[values.slot_map[r.idx()] as usize])
+        };
         macro_rules! bin_op {
-            ($op: tt, $inst: expr) => {{
-                let l = get_ref(&values, $inst.data.bin_op().0);
-                let r = get_ref(&values, $inst.data.bin_op().1);
+            ($int_f: path, $float_f: ident, $inst: expr) => {{
+                let (l, r): (Ref, Ref) = ir.args($inst, env.env());
+                let l = get_ref(&values, l);
+                let r = get_ref(&values, r);
 
-                match types[$inst.ty] {
-                    t if t.is_int() => {
+                let Type::Primitive(ty) = types[$inst.ty()] else {
+                    panic!("bin_op needs a primitive type")
+                };
+                let ty = Primitive::try_from(ty).unwrap();
+                match ty {
+                    ty if ty.is_int() => {
                         let Val::Int(l_val) = l else { panic!() };
                         let Val::Int(r_val) = r else { panic!() };
-                        Val::Int(l_val $op r_val)
+                        Val::Int($int_f(l_val, r_val))
                     }
-                    IrType::F32 => {
+                    Primitive::F32 => {
                         let Val::F32(l_val) = l else { panic!() };
                         let Val::F32(r_val) = r else { panic!() };
-                        Val::F32(l_val $op r_val)
+                        Val::F32(l_val.$float_f(r_val))
                     }
-                    IrType::F64 => {
+                    Primitive::F64 => {
                         let Val::F64(l_val) = l else { panic!() };
                         let Val::F64(r_val) = r else { panic!() };
-                        Val::F64(l_val $op r_val)
+                        Val::F64(l_val.$float_f(r_val))
                     }
-                    t => panic!("Invalid type for binary operation: {t:?}")
+                    t => panic!("Invalid type for binary operation: {t:?}"),
                 }
             }};
         }
@@ -292,7 +347,397 @@ pub fn eval<E: Environment>(
         let _: std::convert::Infallible = loop {
             let inst = ir.get_inst(Ref(pc));
             //eprintln!("evaluating {} {:?} pc={pc}", inst.tag, inst.data);
-            todo!("reimplement eval");
+            let invalid_ty =
+                |ty: Type| -> ! { panic!("invalid type {ty:?} for {:?}", inst.function) };
+            let value = if let Some(typed_inst) = inst.as_module(dialects.arith) {
+                use crate::dialect::Arith as I;
+                match typed_inst.op() {
+                    I::Int => {
+                        let i: u64 = ir.args(inst, env.env());
+                        Val::Int(i)
+                    }
+                    I::Float => {
+                        let x: f64 = ir.args(inst, env.env());
+                        match must_primitive(types[inst.ty()]) {
+                            Primitive::F32 => Val::F32(x as f32),
+                            Primitive::F64 => Val::F64(x),
+                            _ => invalid_ty(types[inst.ty()]),
+                        }
+                    }
+                    I::Neg => match get_ref(&values, ir.args(inst, env.env())) {
+                        Val::Invalid => Val::Invalid,
+                        Val::Int(val) => Val::Int(-(val as i64) as u64),
+                        Val::F32(val) => Val::F32(-val),
+                        Val::F64(val) => Val::F64(-val),
+                        _ => panic!("Invalid value to negate"),
+                    },
+                    I::Add => bin_op!(u64::wrapping_add, add, inst),
+                    I::Sub => bin_op!(u64::wrapping_sub, sub, inst),
+                    I::Mul => bin_op!(u64::wrapping_mul, mul, inst),
+                    I::Div => bin_op!(div_int, div, inst),
+                    I::Rem => bin_op!(u64::wrapping_rem, rem, inst),
+                    I::Or => {
+                        let (l, r): (Ref, Ref) = ir.args(inst, env.env());
+                        let Val::Int(l) = get_ref(&values, l) else {
+                            unreachable!()
+                        };
+                        let Val::Int(r) = get_ref(&values, r) else {
+                            unreachable!()
+                        };
+                        Val::Int(((l != 0) || (r != 0)) as u64)
+                    }
+                    I::And => {
+                        let (l, r) = ir.args(inst, env.env());
+                        let l = get_int_ref(&values, l);
+                        let r = get_int_ref(&values, r);
+                        Val::Int(((l != 0) && (r != 0)) as u64)
+                    }
+                    op @ (I::Eq | I::NE | I::LT | I::GT | I::LE | I::GE) => {
+                        let (l, r) = ir.args(inst, env.env());
+                        let Type::Primitive(p) = types[inst.ty()] else {
+                            unreachable!()
+                        };
+                        let p: Primitive = p.try_into().unwrap();
+                        let res = match p {
+                            Primitive::Unit => Some(Ordering::Equal),
+                            Primitive::I1
+                            | Primitive::I8
+                            | Primitive::I16
+                            | Primitive::I32
+                            | Primitive::I64 => {
+                                let l = get_int_ref(&values, l);
+                                let r = get_int_ref(&values, r);
+                                Some((l as i64).cmp(&(r as i64)))
+                            }
+                            Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64 => {
+                                let l = get_int_ref(&values, l);
+                                let r = get_int_ref(&values, r);
+                                Some(l.cmp(&r))
+                            }
+                            Primitive::I128 => todo!(),
+                            Primitive::U128 => todo!(),
+                            Primitive::F32 => {
+                                let l = get_f32_ref(&values, l);
+                                let r = get_f32_ref(&values, r);
+                                l.partial_cmp(&r)
+                            }
+                            Primitive::F64 => {
+                                let l = get_f64_ref(&values, l);
+                                let r = get_f64_ref(&values, r);
+                                l.partial_cmp(&r)
+                            }
+                            Primitive::Ptr => {
+                                let l = get_ptr_ref(&values, l);
+                                let r = get_ptr_ref(&values, r);
+                                Some(l.addr.cmp(&r.addr))
+                            }
+                        };
+                        let val = match op {
+                            I::Eq => res.is_some_and(|ord| ord.is_eq()),
+                            I::NE => res.is_none_or(|ord| ord.is_ne()),
+                            I::LT => res.is_some_and(|ord| ord.is_lt()),
+                            I::LE => res.is_some_and(|ord| ord.is_le()),
+                            I::GT => res.is_some_and(|ord| ord.is_gt()),
+                            I::GE => res.is_some_and(|ord| ord.is_ge()),
+                            _ => unreachable!(),
+                        };
+                        Val::Int(val as u64)
+                    }
+                    I::Xor => {
+                        let (l, r) = ir.args(inst, env.env());
+                        let l = get_int_ref(&values, l);
+                        let r = get_int_ref(&values, r);
+                        Val::Int(l ^ r)
+                    }
+                    I::Rol => {
+                        let (l, r) = ir.args(inst, env.env());
+                        let l = get_int_ref(&values, l);
+                        let r = get_int_ref(&values, r) as u32;
+                        Val::Int(match must_primitive(types[inst.ty()]) {
+                            Primitive::I1 => l,
+                            Primitive::I8 | Primitive::U8 => (l as u8).rotate_left(r).into(),
+                            Primitive::I16 | Primitive::U16 => (l as u16).rotate_left(r).into(),
+                            Primitive::I32 | Primitive::U32 => (l as u32).rotate_left(r).into(),
+                            Primitive::I64 | Primitive::U64 => l.rotate_left(r),
+                            Primitive::I128 | Primitive::U128 => todo!(),
+                            _ => invalid_ty(types[inst.ty()]),
+                        })
+                    }
+                    I::Ror => {
+                        let (l, r) = ir.args(inst, env.env());
+                        let l = get_int_ref(&values, l);
+                        let r = get_int_ref(&values, r) as u32;
+                        Val::Int(match must_primitive(types[inst.ty()]) {
+                            Primitive::I1 => l,
+                            Primitive::I8 | Primitive::U8 => (l as u8).rotate_right(r).into(),
+                            Primitive::I16 | Primitive::U16 => (l as u16).rotate_right(r).into(),
+                            Primitive::I32 | Primitive::U32 => (l as u32).rotate_right(r).into(),
+                            Primitive::I64 | Primitive::U64 => l.rotate_right(r),
+                            Primitive::I128 | Primitive::U128 => todo!(),
+                            _ => invalid_ty(types[inst.ty()]),
+                        })
+                    }
+                    I::CastInt => {
+                        let x = ir.args(inst, env.env());
+                        Val::Int(x)
+                    }
+                    I::CastFloat => {
+                        let val = get_ref(&values, ir.args(inst, env.env()));
+                        match (val, must_primitive(types[inst.ty()])) {
+                            (Val::F32(x), Primitive::F32) => Val::F32(x),
+                            (Val::F32(x), Primitive::F64) => Val::F64(x.into()),
+                            (Val::F64(x), Primitive::F32) => Val::F32(x as f32),
+                            (Val::F64(x), Primitive::F64) => Val::F64(x),
+                            _ => panic!("invalid types for CastFloat"),
+                        }
+                    }
+                    I::CastIntToFloat => {
+                        let r = ir.args(inst, env.env());
+                        let val = get_int_ref(&values, r);
+                        let ty = must_primitive(types[ir.get_ref_ty(r)]);
+                        match (ty, must_primitive(types[inst.ty()])) {
+                            (Primitive::I1, Primitive::F32) => Val::F32((val & 1) as _),
+                            (Primitive::U8, Primitive::F32) => Val::F32(val as u8 as _),
+                            (Primitive::I8, Primitive::F32) => Val::F32(val as i8 as _),
+                            (Primitive::U16, Primitive::F32) => Val::F32(val as u16 as _),
+                            (Primitive::I16, Primitive::F32) => Val::F32(val as i16 as _),
+                            (Primitive::U32, Primitive::F32) => Val::F32(val as u32 as _),
+                            (Primitive::I32, Primitive::F32) => Val::F32(val as i32 as _),
+                            (Primitive::U64, Primitive::F32) => Val::F32(val as _),
+                            (Primitive::I64, Primitive::F32) => Val::F32(val as i64 as _),
+                            (Primitive::U128, Primitive::F32) => todo!(),
+                            (Primitive::I128, Primitive::F32) => todo!(),
+                            (Primitive::I1, Primitive::F64) => Val::F64((val & 1) as _),
+                            (Primitive::U8, Primitive::F64) => Val::F64(val as u8 as _),
+                            (Primitive::I8, Primitive::F64) => Val::F64(val as i8 as _),
+                            (Primitive::U16, Primitive::F64) => Val::F64(val as u16 as _),
+                            (Primitive::I16, Primitive::F64) => Val::F64(val as i16 as _),
+                            (Primitive::U32, Primitive::F64) => Val::F64(val as u32 as _),
+                            (Primitive::I32, Primitive::F64) => Val::F64(val as i32 as _),
+                            (Primitive::U64, Primitive::F64) => Val::F64(val as _),
+                            (Primitive::I64, Primitive::F64) => Val::F64(val as i64 as _),
+                            (Primitive::U128, Primitive::F64) => todo!(),
+                            (Primitive::I128, Primitive::F64) => todo!(),
+                            _ => panic!("invalid types for CastIntToFloat"),
+                        }
+                    }
+                    I::CastFloatToInt => {
+                        let val = get_ref(&values, ir.args(inst, env.env()));
+                        Val::Int(match (val, must_primitive(types[inst.ty()])) {
+                            (Val::F32(x), Primitive::I1) => (x as u8 & 1) as _,
+                            (Val::F32(x), Primitive::U8) => (x as u8) as _,
+                            (Val::F32(x), Primitive::I8) => (x as i8) as _,
+                            (Val::F32(x), Primitive::U16) => (x as u16) as _,
+                            (Val::F32(x), Primitive::I16) => (x as i16) as _,
+                            (Val::F32(x), Primitive::U32) => (x as u32) as _,
+                            (Val::F32(x), Primitive::I32) => (x as i32) as _,
+                            (Val::F32(x), Primitive::U64) => (x as u64) as _,
+                            (Val::F32(x), Primitive::I64) => (x as i64) as _,
+                            (Val::F32(x), Primitive::U128) => todo!(),
+                            (Val::F32(x), Primitive::I128) => todo!(),
+                            (Val::F64(x), Primitive::I1) => (x as u8 & 1) as _,
+                            (Val::F64(x), Primitive::U8) => (x as u8) as _,
+                            (Val::F64(x), Primitive::I8) => (x as i8) as _,
+                            (Val::F64(x), Primitive::U16) => (x as u16) as _,
+                            (Val::F64(x), Primitive::I16) => (x as i16) as _,
+                            (Val::F64(x), Primitive::U32) => (x as u32) as _,
+                            (Val::F64(x), Primitive::I32) => (x as i32) as _,
+                            (Val::F64(x), Primitive::U32) => (x as u64) as _,
+                            (Val::F64(x), Primitive::I32) => (x as i64) as _,
+                            (Val::F64(x), Primitive::U128) => todo!(),
+                            (Val::F64(x), Primitive::I128) => todo!(),
+                            _ => panic!("invalid types for CastFloatToInt"),
+                        })
+                    }
+                }
+            } else if let Some(typed_inst) = inst.as_module(dialects.tuple) {
+                use crate::dialect::Tuple as I;
+                match typed_inst.op() {
+                    I::MemberValue => {
+                        let (tuple, i): (Ref, u64) = ir.args(inst, env.env());
+                        let Val::Tuple(t) = get_ref(&values, tuple) else {
+                            unreachable!()
+                        };
+                        t[i as usize].clone()
+                    }
+                    I::InsertMember => {
+                        let Type::Tuple(elem_types) = types[inst.ty()] else {
+                            unreachable!()
+                        };
+                        let (tuple, insert_idx, value): (Ref, u64, Ref) = ir.args(inst, env.env());
+                        let mut in_idx = values.slot_map[tuple.idx()];
+                        let mut out_idx = values.slot_map[pc as usize];
+                        for (elem_ty, i) in elem_types.iter().zip(0..) {
+                            let slot_count = slot_count(types[elem_ty], types);
+                            let n = slot_count as usize;
+                            let dest = out_idx as usize + out_idx as usize + n;
+                            let src = if i == insert_idx {
+                                values.slot_map[tuple.idx()]
+                            } else {
+                                in_idx
+                            };
+                            let src = src as usize..src as usize + n;
+                            in_idx += slot_count;
+                            out_idx += slot_count;
+                        }
+                        pc += 1;
+                        continue;
+                    }
+                }
+            } else if let Some(typed_inst) = inst.as_module(dialects.mem) {
+                use crate::dialect::Mem as I;
+                match typed_inst.op() {
+                    I::Decl => {
+                        let ty = ir.args(inst, env.env());
+                        let layout = type_layout(types[ty], types, env.env().primitives());
+                        Val::Ptr(mem.stack_alloc(layout)?)
+                    }
+                    I::Load => {
+                        let ptr = values.load_ptr(ir.args(inst, env.env()));
+                        values.load_primitives(
+                            pc,
+                            types[inst.ty],
+                            types,
+                            env.env().primitives(),
+                            |size, offset| {
+                                let ptr = ptr.add_offset(offset)?;
+                                let val = match size {
+                                    PrimitiveSize::S8 => u8::from_le_bytes(mem.load_n(ptr)) as u64,
+                                    PrimitiveSize::S16 => {
+                                        u16::from_le_bytes(mem.load_n(ptr)) as u64
+                                    }
+                                    PrimitiveSize::S32 => {
+                                        u32::from_le_bytes(mem.load_n(ptr)) as u64
+                                    }
+                                    PrimitiveSize::S64 => u64::from_le_bytes(mem.load_n(ptr)),
+                                    PrimitiveSize::S128 => todo!(),
+                                };
+                                Ok(val)
+                            },
+                        )?;
+                        pc += 1;
+                        continue;
+                    }
+                    I::Store => {
+                        let (var, val) = ir.args(inst, env.env());
+                        let mut ptr = get_ptr_ref(&values, var);
+                        values.visit_primitives(val, ir, types, |p| {
+                            match p {
+                                PrimitiveVal::I8(x) => {
+                                    let new_ptr = ptr.add_offset(1)?;
+                                    mem.store(ptr, &[x]);
+                                    ptr = new_ptr;
+                                }
+                                PrimitiveVal::I16(x) => {
+                                    let new_ptr = ptr.add_offset(2)?;
+                                    mem.store(ptr, &x.to_le_bytes());
+                                    ptr = new_ptr;
+                                }
+                                PrimitiveVal::I32(x) => {
+                                    let new_ptr = ptr.add_offset(4)?;
+                                    mem.store(ptr, &x.to_le_bytes());
+                                    ptr = new_ptr;
+                                }
+                                PrimitiveVal::I64(x) => {
+                                    let new_ptr = ptr.add_offset(8)?;
+                                    mem.store(ptr, &x.to_le_bytes());
+                                    ptr = new_ptr;
+                                }
+                                PrimitiveVal::I128(_) => todo!(),
+                            }
+                            Ok(())
+                        })?;
+                        Val::Invalid
+                    }
+                    I::MemberPtr => {
+                        let (ptr, tuple_ty, i): (Ref, TypeId, u64) = ir.args(inst, env.env());
+                        let Type::Tuple(elem_types) = types[tuple_ty] else {
+                            panic!("tuple type expected for MemberPtr");
+                        };
+                        let ptr = values.load_ptr(ptr);
+                        let offset = crate::offset_in_tuple(
+                            elem_types,
+                            i as u32,
+                            types,
+                            env.env().primitives(),
+                        );
+                        Val::Ptr(ptr.add_offset(offset.try_into().unwrap())?)
+                    }
+                    I::IntToPtr => {
+                        let i = get_int_ref(&values, ir.args(inst, env.env()));
+                        // TODO: what to do with large addresses?
+                        // TODO: what can be done with size
+                        Val::Ptr(Ptr {
+                            addr: i as u32,
+                            size: u32::MAX,
+                        })
+                    }
+                    I::PtrToInt => {
+                        Val::Int(get_ptr_ref(&values, ir.args(inst, env.env())).addr.into())
+                    }
+                    I::FunctionPtr => todo!("function pointers"),
+                    I::Global => todo!("globals"),
+                    I::ArrayIndex => {
+                        let (array_ptr, elem_ty, idx) = ir.args(inst, env.env());
+                        let ptr = get_ptr_ref(&values, array_ptr);
+                        let layout = type_layout(types[elem_ty], types, env.env().primitives());
+                        let idx = get_int_ref(&values, idx);
+                        let offset = idx * layout.stride();
+                        Val::Ptr(ptr.add_offset(offset.try_into().map_err(|_| ProvenanceError)?)?)
+                    }
+                }
+            } else if let Some(typed_inst) = inst.as_module(dialects.cf) {
+                use crate::dialect::Cf as I;
+                match typed_inst.op() {
+                    I::Goto => {
+                        let BlockTarget(target, args) = ir.args(inst, env.env());
+                        let info = &ir.blocks[target.idx()];
+                        let target_pos = info.idx + info.arg_count;
+                        if target_pos <= pc {
+                            backwards_jumps += 1;
+                            if backwards_jumps > BACKWARDS_JUMP_LIMIT {
+                                return Err(Error::InfiniteLoop);
+                            }
+                        }
+                        values.copy_args(info, args, ir, types);
+                        pc = target_pos;
+                        continue;
+                    }
+                    I::Branch => {
+                        let (cond, a, b) = ir.args(inst, env.env());
+                        let cond = get_int_ref(&values, cond) == 1;
+                        let BlockTarget(target, args) = if cond { a } else { b };
+                        let info = &ir.blocks[target.idx()];
+                        let target_pos = info.idx + info.arg_count;
+                        if target_pos <= pc {
+                            backwards_jumps += 1;
+                            if backwards_jumps > BACKWARDS_JUMP_LIMIT {
+                                return Err(Error::InfiniteLoop);
+                            }
+                        }
+                        values.copy_args(info, args, ir, types);
+                        pc = target_pos;
+                        continue;
+                    }
+                    I::Ret => {
+                        let return_val = get_ref(&values, ir.args(inst, env.env()));
+                        let Some(mut frame) = call_stack.pop() else {
+                            // the function that was originally evaluated returned, break to return the
+                            // value from eval
+                            break 'outer return_val;
+                        };
+                        current_function = frame.function;
+                        pc = frame.pc;
+                        mem.restore_sp(frame.sp);
+                        frame.values.store(pc, &return_val);
+                        values = frame.values;
+                        pc += 1;
+                        continue 'outer;
+                    }
+                }
+            } else {
+                panic!("instruction from unknown module encountered during eval")
+            };
             /*
             let value = match inst.tag {
                 super::Tag::Nothing => Val::Invalid,
@@ -668,10 +1113,10 @@ pub fn eval<E: Environment>(
                 }
                 super::Tag::Asm => todo!(), // TODO: error handling
             };
+            */
             //eprintln!("  -> got {value:?}");
             values.store(pc, &value);
             pc += 1;
-            */
         };
     };
     assert!(
@@ -783,10 +1228,11 @@ impl Values {
         i: u32,
         ty: Type,
         types: &Types,
+        primitives: &[PrimitiveInfo],
         mut visit: impl FnMut(PrimitiveSize, u32) -> Result<u64, Error>,
     ) -> Result<(), Error> {
         let slot_index = self.slot_map[i as usize];
-        self.load_primitives_inner(&mut { slot_index }, 0, ty, types, &mut visit)
+        self.load_primitives_inner(&mut { slot_index }, 0, ty, types, primitives, &mut visit)
     }
 
     pub fn load_primitives_inner(
@@ -795,31 +1241,32 @@ impl Values {
         offset: u32,
         ty: Type,
         types: &Types,
+        primitives: &[PrimitiveInfo],
         visit: &mut impl FnMut(PrimitiveSize, u32) -> Result<u64, Error>,
     ) -> Result<(), Error> {
-        todo!()
-        /*
         match ty {
-            IrType::Unit => {}
-            IrType::I8 | IrType::U8 | IrType::U1 => {
-                self.slots[*i as usize] = visit(PrimitiveSize::S8, offset)?;
-                *i += 1;
-            }
-            IrType::I16 | IrType::U16 => {
-                self.slots[*i as usize] = visit(PrimitiveSize::S16, offset.div_ceil(2) * 2)?;
-                *i += 1;
-            }
-            IrType::I32 | IrType::U32 | IrType::F32 => {
-                self.slots[*i as usize] = visit(PrimitiveSize::S32, offset.div_ceil(4) * 4)?;
-                *i += 1;
-            }
-            IrType::I64 | IrType::U64 | IrType::F64 | IrType::Ptr => {
-                self.slots[*i as usize] = visit(PrimitiveSize::S64, offset.div_ceil(8) * 8)?;
-                *i += 1;
-            }
-            IrType::I128 | IrType::U128 => todo!(),
-            IrType::Array(elem, len) => {
-                let elem_layout = types.layout(types[elem]);
+            Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+                Primitive::Unit => {}
+                Primitive::I8 | Primitive::U8 | Primitive::I1 => {
+                    self.slots[*i as usize] = visit(PrimitiveSize::S8, offset)?;
+                    *i += 1;
+                }
+                Primitive::I16 | Primitive::U16 => {
+                    self.slots[*i as usize] = visit(PrimitiveSize::S16, offset.div_ceil(2) * 2)?;
+                    *i += 1;
+                }
+                Primitive::I32 | Primitive::U32 | Primitive::F32 => {
+                    self.slots[*i as usize] = visit(PrimitiveSize::S32, offset.div_ceil(4) * 4)?;
+                    *i += 1;
+                }
+                Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Ptr => {
+                    self.slots[*i as usize] = visit(PrimitiveSize::S64, offset.div_ceil(8) * 8)?;
+                    *i += 1;
+                }
+                Primitive::I128 | Primitive::U128 => todo!(),
+            },
+            Type::Array(elem, len) => {
+                let elem_layout = type_layout(types[elem], types, primitives);
                 if elem_layout.size == 0 {
                     return Ok(());
                 }
@@ -839,12 +1286,13 @@ impl Values {
                         offset + elem_idx * stride,
                         types[elem],
                         types,
+                        primitives,
                         visit,
                     )?;
                 }
             }
-            IrType::Tuple(elems) => {
-                let layout = types.layout(IrType::Tuple(elems));
+            Type::Tuple(elems) => {
+                let layout = type_layout(Type::Tuple(elems), types, primitives);
                 let align: u32 = layout
                     .align
                     .get()
@@ -853,7 +1301,7 @@ impl Values {
                 let offset = offset.div_ceil(align) * align;
                 let mut layout = Layout::EMPTY;
                 for elem in elems.iter() {
-                    let elem_layout = types.layout(types[elem]);
+                    let elem_layout = type_layout(types[elem], types, primitives);
                     layout.align_for(elem_layout.align);
                     let tuple_offset: u32 = layout.size.try_into().unwrap();
                     self.load_primitives_inner(
@@ -861,14 +1309,14 @@ impl Values {
                         offset + tuple_offset,
                         types[elem],
                         types,
+                        primitives,
                         visit,
                     )?;
-                    layout.accumulate(types.layout(types[elem]));
+                    layout.accumulate(type_layout(types[elem], types, primitives));
                 }
             }
         }
         Ok(())
-        */
     }
 
     pub fn store(&mut self, i: u32, val: &Val) {
@@ -913,68 +1361,88 @@ impl Values {
     }
 
     fn load_inner(&self, i: &mut u32, ty: Type, types: &Types) -> Val {
-        todo!()
-        /*
         match ty {
-            IrType::Unit => Val::Unit,
-            IrType::U1
-            | IrType::I8
-            | IrType::I16
-            | IrType::I32
-            | IrType::I64
-            | IrType::U8
-            | IrType::U16
-            | IrType::U32
-            | IrType::U64 => {
-                let val = Val::Int(self.slots[*i as usize]);
-                *i += 1;
-                val
-            }
-            IrType::I128 | IrType::U128 => todo!(),
-            IrType::F32 => {
-                let val = Val::F32(f32::from_bits(self.slots[*i as usize] as u32));
-                *i += 1;
-                val
-            }
-            IrType::F64 => {
-                let val = Val::F64(f64::from_bits(self.slots[*i as usize]));
-                *i += 1;
-                val
-            }
-            IrType::Ptr => {
-                let x = self.slots[*i as usize];
-                *i += 1;
-                Val::Ptr(Ptr::from_u64(x))
-            }
-            IrType::Array(elem, len) => Val::Array(
+            Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+                Primitive::Unit => Val::Unit,
+                Primitive::I1
+                | Primitive::I8
+                | Primitive::I16
+                | Primitive::I32
+                | Primitive::I64
+                | Primitive::U8
+                | Primitive::U16
+                | Primitive::U32
+                | Primitive::U64 => {
+                    let val = Val::Int(self.slots[*i as usize]);
+                    *i += 1;
+                    val
+                }
+                Primitive::I128 | Primitive::U128 => todo!(),
+                Primitive::F32 => {
+                    let val = Val::F32(f32::from_bits(self.slots[*i as usize] as u32));
+                    *i += 1;
+                    val
+                }
+                Primitive::F64 => {
+                    let val = Val::F64(f64::from_bits(self.slots[*i as usize]));
+                    *i += 1;
+                    val
+                }
+                Primitive::Ptr => {
+                    let x = self.slots[*i as usize];
+                    *i += 1;
+                    Val::Ptr(Ptr::from_u64(x))
+                }
+            },
+            Type::Array(elem, len) => Val::Array(
                 (0..len)
                     .map(|_| self.load_inner(i, types[elem], types))
                     .collect(),
             ),
-            IrType::Tuple(elems) => Val::Tuple(
+            Type::Tuple(elems) => Val::Tuple(
                 elems
                     .iter()
                     .map(|elem| self.load_inner(i, types[elem], types))
                     .collect(),
             ),
         }
-        */
+    }
+
+    fn copy_args(&mut self, info: &BlockInfo, args: &[Ref], ir: &FunctionIr, types: &Types) {
+        debug_assert_eq!(info.arg_count as usize, args.len());
+        for (&r, i) in args.iter().zip(info.idx..info.idx + info.arg_count) {
+            let src = self.slot_map[r.idx()] as usize;
+            let dst = self.slot_map[i as usize] as usize;
+            let n = slot_count(types[ir.get_ref_ty(r)], types) as usize;
+            self.slots.copy_within(src..src + n, dst);
+        }
     }
 }
 
 fn slot_count(ty: Type, types: &Types) -> u32 {
-    todo!()
-    /*
     match ty {
-        IrType::Unit => 0,
-        IrType::Array(type_ref, count) => slot_count(types[type_ref], types) * count,
-        IrType::Tuple(type_refs) => type_refs
+        Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+            Primitive::Unit => 0,
+            Primitive::I128 | Primitive::U128 => 2,
+            _ => 1,
+        },
+        Type::Array(type_ref, count) => slot_count(types[type_ref], types) * count,
+        Type::Tuple(type_refs) => type_refs
             .iter()
             .map(|ty| slot_count(types[ty], types))
             .sum(),
-        _ => 1,
     }
-    */
+}
+
+fn div_int(a: u64, b: u64) -> u64 {
+    a.checked_div(b).unwrap_or_default()
+}
+
+fn must_primitive(ty: Type) -> Primitive {
+    let Type::Primitive(p) = ty else {
+        panic!("primitive expected");
+    };
+    p.try_into().expect("invalid primitive")
 }
 
 #[derive(Debug)]

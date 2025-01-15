@@ -120,7 +120,7 @@ impl TokenReader {
     }
 
     pub fn more_on_line(&self) -> bool {
-        self.peek().map_or(false, |tok| !tok.new_line)
+        self.peek().is_some_and(|tok| !tok.new_line)
     }
 
     pub fn peek(&self) -> Option<Token> {

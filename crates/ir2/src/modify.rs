@@ -32,7 +32,7 @@ impl IrModify {
         inst: &'a Instruction,
         env: &'a Environment,
     ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
-        self.ir.args(inst, env)
+        self.ir.args_iter(inst, env)
     }
 
     pub fn args_n<'a, I: Inst + 'static, const N: usize>(

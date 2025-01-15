@@ -304,6 +304,13 @@ impl Function {
     pub fn return_type(&self) -> Option<TypeId> {
         self.return_type
     }
+
+    pub fn display<'a>(&'a self, env: &'a Environment) -> crate::display::FunctionDisplay<'a> {
+        crate::display::FunctionDisplay {
+            env,
+            function: self,
+        }
+    }
 }
 
 pub struct Global {
@@ -515,7 +522,21 @@ impl FunctionIr {
         self.insts[arg.idx()].ty
     }
 
-    pub fn args<'a>(
+    #[inline]
+    #[track_caller]
+    pub fn args<'a, A: argument::Args<'a>>(
+        &'a self,
+        inst: &'a Instruction,
+        env: &'a Environment,
+    ) -> A {
+        A::get(self, inst, env).unwrap_or_else(|err| {
+            let module_name = &env[inst.module()].name;
+            let name = &env[inst.function].name;
+            panic!("Invalid arguments for {module_name}.{name}: {err:?}");
+        })
+    }
+
+    pub fn args_iter<'a>(
         &'a self,
         inst: &'a Instruction,
         env: &'a Environment,
@@ -566,6 +587,18 @@ impl FunctionIr {
             function: id,
             args,
             ty,
+        }
+    }
+
+    pub fn display<'a>(
+        &'a self,
+        env: &'a Environment,
+        types: &'a Types,
+    ) -> crate::display::BodyDisplay<'a> {
+        crate::display::BodyDisplay {
+            env,
+            types,
+            ir: self,
         }
     }
 }

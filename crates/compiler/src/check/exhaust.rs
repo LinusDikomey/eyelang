@@ -94,7 +94,7 @@ impl Exhaustion {
 
                         ranges
                             .first()
-                            .map_or(false, |r| r.start == 0 && r.end >= int.max())
+                            .is_some_and(|r| r.start == 0 && r.end >= int.max())
                     }
                     TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
                     _ => return None,
@@ -106,10 +106,10 @@ impl Exhaustion {
                         let int = p.as_int().unwrap();
 
                         pos.first()
-                            .map_or(false, |r| r.start == 0 && r.end >= int.max())
+                            .is_some_and(|r| r.start == 0 && r.end >= int.max())
                             && neg
                                 .first()
-                                .map_or(false, |r| r.start == 0 && r.end >= int.min())
+                                .is_some_and(|r| r.start == 0 && r.end >= int.min())
                     }
                     TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
 

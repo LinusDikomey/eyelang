@@ -57,7 +57,7 @@ impl super::FunctionPass for Mem2Reg {
                             _ => {}
                         }
                     }
-                    for arg in ir.args(inst, env) {
+                    for arg in ir.args_iter(inst, env) {
                         if let Argument::Ref(r) = arg {
                             if r.is_ref() {
                                 can_alias.set(r.idx(), true);

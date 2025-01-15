@@ -13,6 +13,11 @@ impl HasEnvironment for &Environment {
         self
     }
 }
+impl HasEnvironment for &mut Environment {
+    fn env(&self) -> &Environment {
+        self
+    }
+}
 
 pub struct Builder<Env: HasEnvironment> {
     pub env: Env,
