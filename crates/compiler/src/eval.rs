@@ -25,6 +25,8 @@ pub enum ConstValue {
     Bool(bool),
     Int(u64, Option<IntType>),
     Float(f64, Option<FloatType>),
+    Tuple(Box<[ConstValue]>),
+    Typed(id::TypeId, Box<[ConstValue]>),
 }
 impl ConstValue {
     pub fn dump(&self) {
@@ -42,6 +44,24 @@ impl ConstValue {
                 print!("{n}");
                 if let Some(ty) = ty {
                     print!(": {ty}");
+                }
+            }
+            Self::Tuple(elems) => {
+                print!("(");
+                for (i, elem) in elems.iter().enumerate() {
+                    if i != 0 {
+                        print!(", ");
+                    }
+                    elem.dump();
+                }
+            }
+            Self::Typed(id, elems) => {
+                print!("{id:?}(");
+                for (i, elem) in elems.iter().enumerate() {
+                    if i != 0 {
+                        print!(", ");
+                    }
+                    elem.dump();
                 }
             }
         }
@@ -116,6 +136,8 @@ impl ConstValue {
                     ResolvedPrimitive::Invalid => Err(None),
                 }
             }
+            Self::Tuple(_) => todo!(),
+            Self::Typed(_, _) => todo!(),
         }
     }
 
@@ -126,6 +148,8 @@ impl ConstValue {
             ConstValue::Bool(_) => Type::Primitive(Primitive::Bool),
             ConstValue::Int(_, ty) => Type::Primitive(ty.map_or(Primitive::I32, Primitive::from)),
             ConstValue::Float(_, ty) => Type::Primitive(ty.map_or(Primitive::F32, Primitive::from)),
+            ConstValue::Tuple(elems) => Type::Tuple(elems.iter().map(Self::ty).collect()),
+            ConstValue::Typed(_, _) => todo!("generics from values with default types?"),
         }
     }
 }
@@ -344,36 +368,42 @@ pub fn value_expr(
         }
     }
     let mut env = LazyEvalEnv { compiler };
-    ir2::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| {
-        match val {
-            Val::Invalid => panic!("internal error during evaluation occured"),
-            Val::Unit => ConstValue::Unit,
-            Val::Int(n) if matches!(types[expected], TypeInfo::Primitive(Primitive::Bool)) => {
-                debug_assert!(n < 2);
-                ConstValue::Bool(n != 0)
-            }
-            Val::Int(n) => {
-                let TypeInfo::Primitive(p) = types[expected] else {
-                    unreachable!()
-                };
-                let int_ty = p.as_int().unwrap();
-                ConstValue::Int(n, Some(int_ty))
-            }
-            Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
-            Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
-            Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
-            Val::Array(_) | Val::Tuple(_) => todo!("handle constant arrays/tuples"),
-            /*
-            Val::Ptr(_) => {
-                compiler.errors.emit_err(
-                    Error::EvalReturnedStackPointer
-                        .at_span(ast[expr].span(ast).in_mod(module)),
-                );
-                return Def::Invalid;
-            }
-            */
+    ir2::eval::eval(&ir, &ir_types, &[], &mut env)
+        .map(|val| to_const_val(val, types[expected], &types))
+}
+
+fn to_const_val(val: Val, ty: TypeInfo, types: &TypeTable) -> ConstValue {
+    match val {
+        Val::Invalid => ConstValue::Undefined,
+        Val::Unit => ConstValue::Unit,
+        Val::Int(n) if matches!(ty, TypeInfo::Primitive(Primitive::Bool)) => {
+            debug_assert!(n < 2);
+            ConstValue::Bool(n != 0)
         }
-    })
+        Val::Int(n) => {
+            let TypeInfo::Primitive(p) = ty else {
+                unreachable!()
+            };
+            let int_ty = p.as_int().unwrap();
+            ConstValue::Int(n, Some(int_ty))
+        }
+        Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
+        Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
+        Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
+        Val::Array(_) => todo!("constant arrays"),
+        Val::Tuple(elems) => match ty {
+            TypeInfo::Tuple(elem_types) => {
+                assert_eq!(elems.len(), elem_types.count as usize);
+                let elems = IntoIterator::into_iter(elems)
+                    .zip(elem_types.iter())
+                    .map(|(elem, ty)| to_const_val(elem, types[ty], types))
+                    .collect();
+                ConstValue::Tuple(elems)
+            }
+            TypeInfo::TypeDef(_, _) => todo!("const value from typed Val"),
+            _ => ConstValue::Undefined,
+        },
+    }
 }
 
 struct LazyEvalEnv<'a> {

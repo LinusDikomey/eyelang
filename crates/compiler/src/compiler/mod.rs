@@ -957,52 +957,44 @@ impl Compiler {
             Resolvable::Unresolved => {
                 parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
-                let (val, ty) = if let Some(val) = global.val {
-                    let const_value = match eval::def_expr(
-                        self,
-                        module,
-                        global.scope,
-                        &ast,
-                        val,
-                        &global.name,
-                        &global.ty,
-                    ) {
-                        Def::ConstValue(id) => self.const_values[id.idx()].clone(),
-                        Def::Invalid => ConstValue::Undefined,
-                        _ => {
-                            let error =
-                                Error::ExpectedValue.at_span(ast[val].span_in(&ast, module));
-                            self.errors.emit_err(error);
-                            ConstValue::Undefined
-                        }
-                    };
-                    let value = const_value.check_with_type(module, global.scope, self, &global.ty);
-                    let val = match value {
-                        Ok(None) => const_value,
-                        Ok(Some(value)) => value,
-                        Err(found) => {
-                            if let Some(found) = found {
-                                let mut expected = String::new();
-                                global.ty.to_string(&mut expected, ast.src());
-                                self.errors.emit_err(
-                                    Error::MismatchedType {
-                                        expected,
-                                        found: found.to_owned(),
-                                    }
-                                    .at_span(ast[val].span(&ast).in_mod(module)),
-                                );
-                            }
-                            ConstValue::Undefined
-                        }
-                    };
-                    let ty = val.ty();
-                    (val, ty)
-                } else {
-                    (
-                        ConstValue::Undefined,
-                        self.resolve_type(&global.ty, module, global.scope),
-                    )
+                let const_value = match eval::def_expr(
+                    self,
+                    module,
+                    global.scope,
+                    &ast,
+                    global.val,
+                    &global.name,
+                    &global.ty,
+                ) {
+                    Def::ConstValue(id) => self.const_values[id.idx()].clone(),
+                    Def::Invalid => ConstValue::Undefined,
+                    _ => {
+                        let error =
+                            Error::ExpectedValue.at_span(ast[global.val].span_in(&ast, module));
+                        self.errors.emit_err(error);
+                        ConstValue::Undefined
+                    }
                 };
+                let value = const_value.check_with_type(module, global.scope, self, &global.ty);
+                let val = match value {
+                    Ok(None) => const_value,
+                    Ok(Some(value)) => value,
+                    Err(found) => {
+                        if let Some(found) = found {
+                            let mut expected = String::new();
+                            global.ty.to_string(&mut expected, ast.src());
+                            self.errors.emit_err(
+                                Error::MismatchedType {
+                                    expected,
+                                    found: found.to_owned(),
+                                }
+                                .at_span(ast[global.val].span(&ast).in_mod(module)),
+                            );
+                        }
+                        ConstValue::Undefined
+                    }
+                };
+                let ty = val.ty();
                 self.modules[module.idx()]
                     .ast
                     .as_mut()

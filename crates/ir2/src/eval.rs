@@ -8,8 +8,8 @@ use std::{
 use crate::{
     dialect::Primitive,
     layout::{type_layout, Layout},
-    BlockId, BlockInfo, BlockTarget, Environment, Function, FunctionId, FunctionIr, IntoArgs,
-    ModuleOf, PrimitiveId, PrimitiveInfo, Ref, Type, TypeId, Types,
+    Argument, BlockId, BlockInfo, BlockTarget, Environment, Function, FunctionId, FunctionIr,
+    IntoArgs, ModuleOf, PrimitiveId, PrimitiveInfo, Ref, Type, TypeId, Types,
 };
 
 pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
@@ -349,7 +349,18 @@ pub fn eval<E: EvalEnvironment>(
             //eprintln!("evaluating {} {:?} pc={pc}", inst.tag, inst.data);
             let invalid_ty =
                 |ty: Type| -> ! { panic!("invalid type {ty:?} for {:?}", inst.function) };
-            let value = if let Some(typed_inst) = inst.as_module(dialects.arith) {
+            let value = if let Some(typed_inst) = inst.as_module(crate::BUILTIN) {
+                use crate::Builtin as I;
+                match typed_inst.op() {
+                    I::Nothing => Val::Unit,
+                    I::BlockArg => panic!("BlockArg inside function body encountered"),
+                    I::Undef => {
+                        // TODO: could track usage of undefined values and error
+                        pc += 1;
+                        continue;
+                    }
+                }
+            } else if let Some(typed_inst) = inst.as_module(dialects.arith) {
                 use crate::dialect::Arith as I;
                 match typed_inst.op() {
                     I::Int => {
@@ -371,6 +382,10 @@ pub fn eval<E: EvalEnvironment>(
                         Val::F64(val) => Val::F64(-val),
                         _ => panic!("Invalid value to negate"),
                     },
+                    I::Not => {
+                        let x = get_int_ref(&values, ir.args(inst, env.env()));
+                        Val::Int(1 - x)
+                    }
                     I::Add => bin_op!(u64::wrapping_add, add, inst),
                     I::Sub => bin_op!(u64::wrapping_sub, sub, inst),
                     I::Mul => bin_op!(u64::wrapping_mul, mul, inst),
@@ -736,6 +751,46 @@ pub fn eval<E: EvalEnvironment>(
                     }
                 }
             } else {
+                let func = &env.env()[inst.function];
+                let args: Vec<_> = ir
+                    .args_iter(inst, env.env())
+                    .map(|r| {
+                        let Argument::Ref(r) = r else {
+                            panic!("can't evaluate unknown instruction");
+                        };
+                        get_ref(&values, r)
+                    })
+                    .collect();
+                if let Some(func_ir) = func.ir() {
+                    // PERF: could copy args directly here without allocating
+                    let mut new_values = Values::new(func_ir, &func.types);
+                    let entry = BlockId::ENTRY;
+                    let args_indices = func_ir.get_block_args(entry);
+                    for (arg, val) in args_indices.zip(args) {
+                        new_values.store(arg.0, &val);
+                    }
+                    if call_stack.len() > STACK_FRAME_COUNT {
+                        return Err(Error::StackOverflow);
+                    }
+                    call_stack.push(StackFrame {
+                        function: current_function,
+                        pc,
+                        sp: mem.sp(),
+                        values,
+                    });
+                    pc = func_ir.get_block(BlockId::ENTRY).next().unwrap().0 .0;
+                    values = new_values;
+                    current_function = Some(inst.function);
+                    // this will fetch ir and types again based on current_function
+                    continue 'outer;
+                } else {
+                    let res = env
+                        .call_extern(inst.function, &args, &mut mem)
+                        .map_err(Error::ExternCallFailed)?;
+                    values.store(pc, &res);
+                    pc += 1;
+                    continue 'outer;
+                }
                 panic!("instruction from unknown module encountered during eval")
             };
             /*

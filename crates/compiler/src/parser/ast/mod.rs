@@ -450,7 +450,7 @@ pub struct Global {
     pub name: Box<str>,
     pub scope: ScopeId,
     pub ty: UnresolvedType,
-    pub val: Option<ExprId>,
+    pub val: ExprId,
     pub span: TSpan,
 }
 

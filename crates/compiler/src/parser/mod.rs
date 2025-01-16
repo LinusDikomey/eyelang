@@ -255,13 +255,9 @@ impl Parser<'_> {
     ) {
         let expr = self.ast.expr(expr);
         let mut add_global =
-            |s: &mut Parser, pat: ExprId, annotated_ty: UnresolvedType, val: Option<ExprId>| {
+            |s: &mut Parser, pat: ExprId, annotated_ty: UnresolvedType, val: ExprId| {
                 let start = s.ast.get_expr(expr).span_builder(s.ast).start;
-                let end = if let Some(val) = val {
-                    s.ast.get_expr(val).span_builder(s.ast).end
-                } else {
-                    annotated_ty.span().end
-                };
+                let end = s.ast.get_expr(val).span_builder(s.ast).end;
                 match s.ast.get_expr(pat) {
                     Expr::Ident { span } => {
                         let name = s.src[span.range()].to_owned();
@@ -283,15 +279,12 @@ impl Parser<'_> {
                 }
             };
         match self.ast.get_expr(expr) {
-            Expr::Declare { pat, annotated_ty } => {
-                add_global(self, *pat, annotated_ty.clone(), None);
-            }
             Expr::DeclareWithVal {
                 pat,
                 annotated_ty,
                 val,
             } => {
-                add_global(self, *pat, annotated_ty.clone(), Some(*val));
+                add_global(self, *pat, annotated_ty.clone(), *val);
             }
             _ => self.errors.emit_err(CompileError {
                 err: Error::InvalidTopLevelBlockItem,

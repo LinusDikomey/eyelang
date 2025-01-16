@@ -10,12 +10,12 @@ use llvm_sys::{
         LLVMBuildAnd, LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue,
         LLVMBuildFAdd, LLVMBuildFCmp, LLVMBuildFDiv, LLVMBuildFMul, LLVMBuildFRem, LLVMBuildFSub,
         LLVMBuildICmp, LLVMBuildInBoundsGEP2, LLVMBuildIntCast2, LLVMBuildLoad2, LLVMBuildMul,
-        LLVMBuildNeg, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid, LLVMBuildSDiv,
-        LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem, LLVMConstInt,
-        LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName, LLVMGetParam,
-        LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext, LLVMInt8TypeInContext,
-        LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd, LLVMPrintValueToString,
-        LLVMSetInitializer, LLVMVoidTypeInContext,
+        LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid,
+        LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem,
+        LLVMConstInt, LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName,
+        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext,
+        LLVMInt8TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
+        LLVMPrintValueToString, LLVMSetInitializer, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
     LLVMIntPredicate, LLVMRealPredicate,
@@ -207,7 +207,10 @@ unsafe fn build_func(
     log: bool,
 ) {
     if log {
-        println!("Translating function {} to LLVM IR", func.name);
+        println!(
+            "----------\nTranslating function {} to LLVM IR\n----------",
+            func.name
+        );
     }
 
     let types = func.types();
@@ -244,8 +247,14 @@ unsafe fn build_func(
         |instructions: &[LLVMValueRef], r: Ref| -> (Option<LLVMValueRef>, Type) {
             match r {
                 Ref::UNIT => (None, Type::Primitive(Primitive::Unit.id())),
-                Ref::TRUE => (None, Type::Primitive(Primitive::I1.id())),
-                Ref::FALSE => (None, Type::Primitive(Primitive::I1.id())),
+                Ref::TRUE => (
+                    Some(LLVMConstInt(i1, 1, 0)),
+                    Type::Primitive(Primitive::I1.id()),
+                ),
+                Ref::FALSE => (
+                    Some(LLVMConstInt(i1, 0, 0)),
+                    Type::Primitive(Primitive::I1.id()),
+                ),
                 _ => {
                     let inst = ir.get_inst(r);
 
@@ -367,6 +376,10 @@ unsafe fn build_func(
                             _ => panic!("invalid type for neg"),
                         }
                     }
+                    I::Not => {
+                        let l = get_ref(&instructions, un_op()).unwrap();
+                        LLVMBuildNot(builder, l, NONE)
+                    }
                     I::Add | I::Sub | I::Mul | I::Div | I::Rem | I::Or | I::And => {
                         let (l, r) = bin_op();
                         let l = get_ref(&instructions, l).unwrap();
@@ -410,6 +423,8 @@ unsafe fn build_func(
                         let (a, b) = bin_op();
                         let (l, ty) = get_ref_and_type(&instructions, a);
                         let r = get_ref(&instructions, b);
+
+                        dbg!(a, b, l, r);
 
                         if let (Some(l), Some(r)) = (l, r) {
                             match ty {

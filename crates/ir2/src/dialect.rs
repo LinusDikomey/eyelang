@@ -45,6 +45,7 @@ instructions! {
     Float value: Float;
 
     Neg value: Ref;
+    Not value: Ref;
 
     Add l: Ref r: Ref;
     Sub l: Ref r: Ref;

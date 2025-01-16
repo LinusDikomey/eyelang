@@ -774,8 +774,19 @@ fn const_value_to_node(
     const_val: ConstValueId,
     span: TSpan,
 ) -> Node {
-    match &ctx.compiler.const_values[const_val.idx()] {
-        ConstValue::Undefined => todo!("should this invalidate the type?"),
+    // PERF: clone of potentially heap allocating const value. Could use Rc or create ConstValueIds
+    // for Tuples/structs etc.
+    let val = ctx.compiler.const_values[const_val.idx()].clone();
+    const_value_ty(ctx, expected, &val, span);
+    Node::Const {
+        id: const_val,
+        ty: expected,
+    }
+}
+
+fn const_value_ty(ctx: &mut Ctx, expected: LocalTypeId, const_val: &ConstValue, span: TSpan) {
+    match const_val {
+        ConstValue::Undefined => ctx.invalidate(expected),
         ConstValue::Unit => {
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
         }
@@ -796,10 +807,14 @@ fn const_value_to_node(
                 |_| span,
             );
         }
-    }
-    Node::Const {
-        id: const_val,
-        ty: expected,
+        ConstValue::Tuple(elems) => {
+            let elem_types = ctx.hir.types.add_multiple_unknown(elems.len() as _);
+            for (elem, ty) in elems.iter().zip(elem_types.iter()) {
+                const_value_ty(ctx, ty, elem, span);
+            }
+            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| span);
+        }
+        ConstValue::Typed(_, _) => todo!(),
     }
 }
 

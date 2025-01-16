@@ -280,7 +280,12 @@ impl Ctx<'_> {
             let parsed = self.builder.env.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
             let (ty, value) = self.builder.env.get_checked_global(module, id);
-            let (value, align) = const_value::translate(value, ty);
+            let Ok((value, align)) = const_value::translate(value, ty) else {
+                // FIXME: this tries to translate invalid globals again every time they are
+                // requested since we never store to the instances. Maybe create the notion of
+                // invalid globals in ir? Or get layout of the value and return zeroes.
+                return None;
+            };
             let global_id =
                 self.builder
                     .env
@@ -548,6 +553,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     }
                 }
                 ConstValue::Undefined => crash_point!(ctx),
+                ConstValue::Tuple(_) => todo!(),
+                ConstValue::Typed(_, _) => todo!(),
             }
         }
 
@@ -559,7 +566,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::Not(value) => {
             let value = lower(ctx, value)?;
-            ctx.builder.append(arith.Neg(value, ctx.i1_ty))
+            ctx.builder.append(arith.Not(value, ctx.i1_ty))
         }
         &Node::AddressOf { value, value_ty: _ } => lower_lval(ctx, value)?,
         &Node::Deref { value, deref_ty } => {

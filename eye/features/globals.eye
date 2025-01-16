@@ -1,21 +1,21 @@
 use std.println
 use std.int_to_str
 
-global_int: i32
+global_int: i32 = 5
 
-global_struct: Vec2
+# global_struct: Vec2 = Vec2(0, 0)
 
 main :: fn {
     global_int = 3
-    global_struct = Vec2(x: 1, y: 2)
+    #global_struct = Vec2(x: 1, y: 2)
     println(int_to_str(global_int))
     println(int_to_str(global_int))
     inc_global()
     print_from_other()
-    std.c.printf("[%d, %d]\n".ptr, global_struct.x, global_struct.y)
-    global_struct.print()
-    global_struct.x += global_struct.y
-    global_struct.print()
+    #std.c.printf("[%d, %d]\n".ptr, global_struct.x, global_struct.y)
+    #global_struct.print()
+    #global_struct.x += global_struct.y
+    #global_struct.print()
 }
 
 inc_global :: fn: global_int += 1

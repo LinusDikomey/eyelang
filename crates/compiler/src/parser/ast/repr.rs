@@ -119,10 +119,8 @@ impl Definition {
                 c.write_add(name);
                 c.write_add(": ");
                 global.ty.repr(c);
-                if let Some(val) = global.val {
-                    c.write_add(" = ");
-                    c.ast()[val].repr(c);
-                }
+                c.write_add(" = ");
+                c.ast()[global.val].repr(c);
             }
             Self::Module(_) => {
                 c.write_add("<module ");
