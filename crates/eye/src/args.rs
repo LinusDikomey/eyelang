@@ -40,6 +40,7 @@ impl fmt::Display for Backend {
             Self::C => "C",
             #[cfg(feature = "llvm-backend")]
             Self::Llvm => "LLVM",
+            #[cfg(feature = "x86-backend")]
             Self::X86 => "x86",
         };
         f.write_str(s)

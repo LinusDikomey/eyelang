@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["llvm-backend", "x86-backend"]
+default = [
+  "llvm-backend",
+  #"x86-backend"
+]
 llvm-backend = ["dep:ir-backend-llvm"]
 x86-backend = ["dep:ir-backend-x86"]
 lsp = ["dep:eye-lsp"]

@@ -8,7 +8,7 @@ use super::{
 };
 
 pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>, log: bool) {
-    let graph = BlockGraph::calculate(mir);
+    let graph = BlockGraph::calculate(mir, &());
     let mut intersecting_precolored = vec![I::Register::NO_BITS; mir.virtual_register_count()];
     let mut liveins: Box<[Bitmap]> = (0..mir.block_count())
         .map(|_| Bitmap::new(mir.virtual_register_count()))

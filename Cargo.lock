@@ -218,13 +218,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ir"
-version = "0.1.0"
-dependencies = [
- "color-format",
-]
-
-[[package]]
 name = "ir-backend-llvm"
 version = "0.1.0"
 dependencies = [
@@ -236,7 +229,6 @@ dependencies = [
 name = "ir-backend-x86"
 version = "0.1.0"
 dependencies = [
- "ir",
  "ir2",
 ]
 

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt,
     marker::PhantomData,
     num::NonZeroU64,
@@ -11,6 +12,7 @@ pub mod block_graph;
 pub mod builder;
 pub mod dialect;
 pub mod eval;
+pub mod mc;
 pub mod modify;
 pub mod optimize;
 pub mod rewrite;
@@ -601,6 +603,45 @@ impl FunctionIr {
             ir: self,
         }
     }
+}
+impl block_graph::Blocks for FunctionIr {
+    type Block = BlockId;
+    type Env = Environment;
+
+    fn block_count(&self) -> u32 {
+        self.block_count()
+    }
+
+    fn successors(&self, env: &Environment, block: BlockId) -> Cow<[BlockId]> {
+        // PERF: maybe return a SmallVec or something to prevent many heap allocations.
+        // Alternatively could just track successors (and maybe predecessors) in IR to be able to
+        // retrieve them easily.
+        let (_, terminator) = self.get_block(block).last().expect("empty block found");
+        let func = &env[terminator.function];
+        let params = &func.params;
+        let varargs = func.varargs;
+        debug_assert!(func.terminator);
+        terminator
+            .args_inner(params, varargs, self.blocks(), self.extra())
+            .filter_map(|arg| {
+                if let Argument::BlockTarget(target) = arg {
+                    Some(target.0)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /*
+    pub fn dominates(&self, ir: &FunctionIr, i: u32, dominating: Ref) -> bool {
+        self.block_dominates(
+            ir.get_block_from_index(i),
+            ir.get_block_from_index(dominating_index),
+        )
+        todo!()
+    }
+    */
 }
 
 pub struct BlockInfo {

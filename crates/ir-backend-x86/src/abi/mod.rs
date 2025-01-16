@@ -1,11 +1,16 @@
-use ir::{IrType, IrTypes, TypeRefs};
+use ir2::{PrimitiveInfo, Type, TypeIds, Types};
 
 use crate::isa::Reg;
 
 mod systemv;
 
 pub trait Abi {
-    fn from_function(types: &IrTypes, params: TypeRefs, return_ty: IrType) -> Self
+    fn from_function(
+        types: &Types,
+        params: TypeIds,
+        return_ty: Type,
+        primitives: &[PrimitiveInfo],
+    ) -> Self
     where
         Self: Sized;
     fn arg_registers(&self) -> &[Reg];
@@ -13,10 +18,15 @@ pub trait Abi {
     fn return_place(&self) -> ReturnPlace;
 }
 
-pub fn get_function_abi(types: &IrTypes, params: TypeRefs, return_ty: IrType) -> Box<dyn Abi> {
+pub fn get_function_abi(
+    types: &Types,
+    params: TypeIds,
+    return_ty: Type,
+    primitives: &[PrimitiveInfo],
+) -> Box<dyn Abi> {
     // TODO: decide abi from target
     Box::new(systemv::FunctionAbi::from_function(
-        types, params, return_ty,
+        types, params, return_ty, primitives,
     ))
 }
 

@@ -1,8 +1,8 @@
 use std::{fmt, ops};
 
-use ir::mc::Register as _;
+use ir2::mc::Register as _;
 
-ir::mc::registers! { Reg RegisterBits
+ir2::mc::registers! { Reg RegisterBits
     GP64 => rax rbx rcx rdx rbp rsi rdi rsp;
     GP32 => eax ebx ecx edx ebp esi edi esp;
     GP16 => ax  bx  cx  dx  bp  si  di  sp;
@@ -85,7 +85,7 @@ impl RegisterBits {
     }
 }
 
-ir::mc::inst! { Inst Reg
+ir2::mc::inst! { Inst Reg
     // add
     addrr32 Reg: DefUse, Reg: Use               !implicit_def eflags;
     addri32 Reg: DefUse, Imm: Use               !implicit_def eflags;

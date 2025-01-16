@@ -2,7 +2,7 @@
 use std::{ffi::CStr, path::Path};
 
 use elf::{ElfObjectWriter, SectionHeader};
-use ir::mc::Op;
+use ir2::mc::Op;
 
 mod abi;
 mod elf;

@@ -289,6 +289,7 @@ fn list_targets(backend: args::Backend) {
                 println!("\t{target}");
             }
         }
+        #[cfg(feature = "x86-backend")]
         Backend::X86 => todo!(),
     }
 }

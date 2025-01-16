@@ -1,6 +1,6 @@
-use ir::{
+use ir2::{
     mc::{BlockBuilder, MachineIR, MirBlock, Op, RegClass, VRegs},
-    BlockGraph, BlockIndex, FunctionId, IrType, Ref, Tag,
+    BlockGraph, BlockId, Environment, FunctionId, Parameter, Ref, Type, Types,
 };
 
 use crate::{
@@ -12,13 +12,14 @@ use crate::{
 type Builder<'a> = BlockBuilder<'a, Inst>;
 
 pub fn codegen(
-    body: &ir::FunctionIr,
-    function: &ir::Function,
-    types: &ir::IrTypes,
+    env: &Environment,
+    body: &ir2::FunctionIr,
+    function: &ir2::Function,
+    types: &ir2::Types,
 ) -> MachineIR<Inst> {
     let mut mir = MachineIR::new();
     let mut builder = mir.begin_block(MirBlock::ENTRY);
-    let mut values = vec![MCValue::None; body.inst.len()];
+    let mut values = vec![MCValue::None; body.inst_count() as usize];
 
     builder.inst(Inst::push64, [Op::Reg(Reg::rbp)]);
     builder.inst(Inst::movrr64, [Op::Reg(Reg::rbp), Op::Reg(Reg::rsp)]);
@@ -28,7 +29,15 @@ pub fn codegen(
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
 
-    let abi = abi::get_function_abi(types, function.params, function.return_type);
+    let abi = abi::get_function_abi(
+        types,
+        function.params().iter().map(|p| {
+            let Parameter::RefOf(ty) = p else { panic!() };
+            ty
+        }),
+        function.return_type().unwrap(),
+        env.primitives(),
+    );
 
     let (mir_entry_block, entry_block_args) =
         builder.create_block(abi.arg_registers().iter().map(|r| r.class()));
@@ -50,7 +59,7 @@ pub fn codegen(
             };
             let mut mir_arg_iter = mir_args.iter();
             for arg in args.iter() {
-                let arg_ty = body.get_ref_ty(Ref::index(arg), types);
+                let arg_ty = body.get_ref_ty(Ref::index(arg));
                 let mir_classes = block_arg_regs(arg_ty, types);
                 let value = match mir_classes {
                     ZeroToTwo::Zero => MCValue::None,
@@ -101,7 +110,7 @@ fn block_args_to_reg_classes<'a>(
     })
 }
 
-fn block_arg_regs(ty: IrType, types: &ir::IrTypes) -> ZeroToTwo<RegClass> {
+fn block_arg_regs(ty: Type, types: &Types) -> ZeroToTwo<RegClass> {
     match ty {
         IrType::Unit => ZeroToTwo::Zero,
         IrType::U1 | IrType::I8 | IrType::U8 => ZeroToTwo::One(RegClass::GP8),

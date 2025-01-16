@@ -1,4 +1,4 @@
-use ir::{IrType, IrTypes, TypeRefs};
+use ir2::{Primitive, PrimitiveInfo, Type, TypeIds, Types};
 
 use crate::isa::Reg;
 
@@ -19,7 +19,12 @@ pub struct FunctionAbi {
     return_place: ReturnPlace,
 }
 impl Abi for FunctionAbi {
-    fn from_function(types: &IrTypes, params: TypeRefs, return_ty: IrType) -> Self {
+    fn from_function(
+        types: &Types,
+        params: TypeIds,
+        return_ty: Type,
+        primitives: &[PrimitiveInfo],
+    ) -> Self {
         let mut next_gp_reg = 0;
 
         let mut registers = Vec::new();
@@ -27,47 +32,50 @@ impl Abi for FunctionAbi {
         let params = params
             .iter()
             .map(|param_ty| match types[param_ty] {
-                IrType::Unit => ParamStorage::None,
-                ty @ (IrType::U1
-                | IrType::I8
-                | IrType::U8
-                | IrType::I16
-                | IrType::U16
-                | IrType::I32
-                | IrType::U32
-                | IrType::I64
-                | IrType::U64
-                | IrType::Ptr) => {
-                    let size_idx = match ty {
-                        IrType::U1 | IrType::I8 | IrType::U8 => 3,
-                        IrType::I16 | IrType::U16 => 2,
-                        IrType::I32 | IrType::U32 => 1,
-                        IrType::I64 | IrType::U64 | IrType::Ptr => 0,
-                        _ => unreachable!(),
-                    };
-                    if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
-                        next_gp_reg += 1;
-                        let idx = registers.len() as _;
-                        registers.push(reg[size_idx]);
-                        ParamStorage::Reg(idx)
-                    } else {
-                        todo!("handle stack passed parameters")
+                Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+                    Primitive::Unit => ParamStorage::None,
+                    ty @ (Primitive::I1
+                    | Primitive::I8
+                    | Primitive::U8
+                    | Primitive::I16
+                    | Primitive::U16
+                    | Primitive::I32
+                    | Primitive::U32
+                    | Primitive::I64
+                    | Primitive::U64
+                    | Primitive::Ptr) => {
+                        let size_idx = match ty {
+                            Primitive::I1 | Primitive::I8 | Primitive::U8 => 3,
+                            Primitive::I16 | Primitive::U16 => 2,
+                            Primitive::I32 | Primitive::U32 => 1,
+                            Primitive::I64 | Primitive::U64 | Primitive::Ptr => 0,
+                            _ => unreachable!(),
+                        };
+                        if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
+                            next_gp_reg += 1;
+                            let idx = registers.len() as _;
+                            registers.push(reg[size_idx]);
+                            ParamStorage::Reg(idx)
+                        } else {
+                            todo!("handle stack passed parameters")
+                        }
                     }
-                }
-                IrType::I128 | IrType::U128 => {
-                    if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
-                        let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
-                        let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
-                        next_gp_reg += 2;
-                        let idx = registers.len() as _;
-                        registers.extend([r1, r2]);
-                        ParamStorage::TwoRegs(idx)
-                    } else {
-                        todo!("handle stack passed parameters")
+                    Primitive::I128 | Primitive::U128 => {
+                        if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
+                            let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
+                            let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
+                            next_gp_reg += 2;
+                            let idx = registers.len() as _;
+                            registers.extend([r1, r2]);
+                            ParamStorage::TwoRegs(idx)
+                        } else {
+                            todo!("handle stack passed parameters")
+                        }
                     }
-                }
-                aggregate_ty @ (IrType::Tuple(_) | IrType::Array(_, _)) => {
-                    let layout = ir::type_layout(aggregate_ty, types);
+                    Primitive::F32 | Primitive::F64 => todo!("handle floating point params"),
+                },
+                aggregate_ty @ (Type::Tuple(_) | Type::Array(_, _)) => {
+                    let layout = ir2::type_layout(aggregate_ty, types, primitives);
                     if layout.size == 0 {
                         ParamStorage::None
                     } else if layout.size <= 8 {
@@ -94,11 +102,10 @@ impl Abi for FunctionAbi {
                         todo!("handle larger aggregates")
                     }
                 }
-                IrType::F32 | IrType::F64 => todo!("handle floating point params"),
             })
             .collect();
 
-        let return_layout = ir::type_layout(return_ty, types);
+        let return_layout = ir2::type_layout(return_ty, types, primitives);
         let return_place = match return_layout.size {
             0 => ReturnPlace::None,
             1 => ReturnPlace::Reg(Reg::al),

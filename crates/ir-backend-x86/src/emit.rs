@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, hint::unreachable_unchecked};
 
-use ir::mc::{MachineIR, MirBlock, Op, OpType, RegClass};
+use ir2::mc::{MachineIR, MirBlock, Op, OpType, RegClass};
 
 use crate::isa::{Inst, Reg};
 
@@ -394,8 +394,8 @@ fn copy_rr(text: &mut Vec<u8>, to: Reg, from: Reg) {
         return;
     }
     match to.class() {
-        ir::mc::RegClass::GP8 => todo!(),
-        ir::mc::RegClass::GP16 => todo!(),
+        RegClass::GP8 => todo!(),
+        RegClass::GP16 => todo!(),
         RegClass::GP32 | RegClass::GP64 => {
             let wide = to.class() == RegClass::GP64;
             let modrm = encode_modrm_rr(to, from, wide);
@@ -405,7 +405,7 @@ fn copy_rr(text: &mut Vec<u8>, to: Reg, from: Reg) {
             text.extend([0x89, modrm.modrm]);
         }
         RegClass::F32 | RegClass::F64 => todo!(),
-        ir::mc::RegClass::Flags => todo!(),
+        RegClass::Flags => todo!(),
     }
 }
 

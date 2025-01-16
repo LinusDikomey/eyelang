@@ -4,12 +4,15 @@ mod regalloc;
 pub use builder::BlockBuilder;
 pub use regalloc::regalloc;
 
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::BitAnd;
 use std::ops::Not;
 
 use crate::block_graph::Block;
+use crate::block_graph::Blocks;
 use crate::FunctionId;
+use crate::LocalFunctionId;
 
 pub struct MachineIR<I: Instruction> {
     insts: Vec<InstructionStorage<I>>,
@@ -287,6 +290,18 @@ impl<I: Instruction> fmt::Display for MachineIR<I> {
         Ok(())
     }
 }
+impl<I: crate::mc::Instruction> Blocks for MachineIR<I> {
+    type Env = ();
+    type Block = MirBlock;
+
+    fn successors(&self, _env: &(), block: Self::Block) -> Cow<[Self::Block]> {
+        Cow::Borrowed(self.block_successors(block))
+    }
+
+    fn block_count(&self) -> u32 {
+        self.block_count()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct InstructionStorage<I: Instruction> {
@@ -433,7 +448,7 @@ impl<R: Register> Op<R> {
             &Self::VReg(r) => r.0 as u64,
             &Self::Imm(value) => value,
             Self::Block(block) => block.0 as u64,
-            Self::Func(id) => id.0,
+            Self::Func(id) => ((id.module.0 as u64) << 32) | (id.function.0 as u64),
             Self::None => 0,
         }
     }
@@ -448,7 +463,10 @@ impl<R: Register> Op<R> {
             OpType::Mem => todo!(),
             OpType::Imm => Self::Imm(value),
             OpType::Blk => Self::Block(MirBlock(value as u32)),
-            OpType::Fun => Self::Func(FunctionId(value)),
+            OpType::Fun => Self::Func(FunctionId {
+                module: ModuleId((value >> 32) as u32),
+                function: LocalFunctionId(value as u32),
+            }),
         }
     }
 
@@ -469,7 +487,13 @@ impl<R: Register> Op<R> {
                 (u64::checked_ilog10(n).unwrap_or_default() + 1 + signed as u32) as usize
             }
             Op::Block(b) => (u32::checked_ilog10(b.0).unwrap_or_default() + 3) as usize,
-            Op::Func(f) => (u64::checked_ilog10(f.0).unwrap_or_default() + 4) as usize,
+            Op::Func(f) => {
+                (u32::checked_ilog10(f.module.0).unwrap_or_default()
+                    + 4
+                    + 1
+                    + u32::checked_ilog10(f.function.0).unwrap_or_default())
+                    as usize
+            }
             Op::None => 0,
         }
     }
@@ -481,7 +505,7 @@ impl<R: Register> fmt::Display for Op<R> {
             Op::VReg(n) => write!(f, "%{}", n.0),
             &Op::Imm(value) => write!(f, "{}", value as i64),
             Op::Block(b) => write!(f, "bb{}", b.0),
-            Op::Func(func) => write!(f, "<#{}>", func.0),
+            Op::Func(func) => write!(f, "<#{}:{}>", func.module.0, func.function.0),
             Op::None => Ok(()),
         }
     }
@@ -725,3 +749,4 @@ macro_rules! registers {
 }
 pub use crate::registers;
 use crate::Layout;
+use crate::ModuleId;
