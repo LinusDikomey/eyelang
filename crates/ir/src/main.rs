@@ -1,4 +1,4 @@
-use ir2::{
+use ir::{
     builder::Builder,
     dialect::{Arith, Cf, Mem, Primitive},
     BlockTarget, Environment, Function, ModuleId, ModuleOf,
@@ -11,7 +11,7 @@ fn main() {
     let mem = env.add_dialect_module::<Mem>();
     let main = env.create_module("main");
     let my_function = {
-        let mut types = ir2::Types::new();
+        let mut types = ir::Types::new();
         let i32 = types.add(Primitive::I32);
         let unit = types.add(Primitive::Unit);
         env.add_function(
@@ -38,7 +38,7 @@ fn main() {
     let else_block = builder.create_block();
     let cond = builder.append(arith.LT(params.nth(1), result, i1));
     builder.append((
-        ir2::FunctionId {
+        ir::FunctionId {
             module: cf.id(),
             function: Cf::Branch.id(),
         },

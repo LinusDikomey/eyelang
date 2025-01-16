@@ -1,4 +1,4 @@
-use ir2::{Ref, TypeId};
+use ir::{Ref, TypeId};
 
 use super::{Ctx, ValueOrPlace};
 

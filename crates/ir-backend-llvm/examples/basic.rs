@@ -1,10 +1,10 @@
 //! Example for compiling a function using this backend based on llvm. Creates a module, displays
 //! it and then emits it to an object file called 'out.o'.
 
-use ir2::{dialect::Primitive, Environment, ModuleOf};
+use ir::{dialect::Primitive, Environment, ModuleOf};
 
 fn main() {
-    let mut env = Environment::new(ir2::dialect::Primitive::create_infos());
+    let mut env = Environment::new(ir::dialect::Primitive::create_infos());
     let module = env.create_module("main");
     let dialects = Dialects {
         arith: env.add_dialect_module(),
@@ -24,13 +24,13 @@ fn main() {
 }
 
 struct Dialects {
-    arith: ModuleOf<ir2::dialect::Arith>,
-    cf: ModuleOf<ir2::dialect::Cf>,
+    arith: ModuleOf<ir::dialect::Arith>,
+    cf: ModuleOf<ir::dialect::Cf>,
 }
 
-fn build_mul(env: &Environment, dialects: &Dialects) -> ir2::Function {
+fn build_mul(env: &Environment, dialects: &Dialects) -> ir::Function {
     let Dialects { arith, cf, .. } = dialects;
-    let mut builder = ir2::builder::Builder::new(env);
+    let mut builder = ir::builder::Builder::new(env);
     let unit = builder.types.add(Primitive::Unit);
     let int_ty = builder.types.add(Primitive::I32);
     let param_types = builder.types.add_multiple([Primitive::I32.into(); 2]);

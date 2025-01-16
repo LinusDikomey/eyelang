@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, hint::unreachable_unchecked};
 
-use ir2::mc::{MachineIR, MirBlock, Op, OpType, RegClass};
+use ir::mc::{MachineIR, MirBlock, Op, OpType, RegClass};
 
 use crate::isa::{Inst, Reg};
 

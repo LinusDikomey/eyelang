@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use ir2::{ModuleId, ModuleOf};
+use ir::{ModuleId, ModuleOf};
 use llvm::{
     core::{self, LLVMModuleCreateWithNameInContext},
     prelude::{LLVMBool, LLVMContextRef, LLVMModuleRef},
@@ -67,7 +67,7 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        env: &ir2::Environment,
+        env: &ir::Environment,
         module_id: ModuleId,
         print_ir: bool,
         target: Option<&CStr>,
@@ -164,10 +164,10 @@ impl Backend {
 }
 
 struct Dialects {
-    arith: ModuleOf<ir2::dialect::Arith>,
-    tuple: ModuleOf<ir2::dialect::Tuple>,
-    mem: ModuleOf<ir2::dialect::Mem>,
-    cf: ModuleOf<ir2::dialect::Cf>,
+    arith: ModuleOf<ir::dialect::Arith>,
+    tuple: ModuleOf<ir::dialect::Tuple>,
+    mem: ModuleOf<ir::dialect::Mem>,
+    cf: ModuleOf<ir::dialect::Cf>,
 }
 
 struct Intrinsics {

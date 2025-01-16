@@ -1,4 +1,4 @@
-use ir2::{Primitive, PrimitiveInfo, Type, TypeIds, Types};
+use ir::{Primitive, PrimitiveInfo, Type, TypeIds, Types};
 
 use crate::isa::Reg;
 
@@ -75,7 +75,7 @@ impl Abi for FunctionAbi {
                     Primitive::F32 | Primitive::F64 => todo!("handle floating point params"),
                 },
                 aggregate_ty @ (Type::Tuple(_) | Type::Array(_, _)) => {
-                    let layout = ir2::type_layout(aggregate_ty, types, primitives);
+                    let layout = ir::type_layout(aggregate_ty, types, primitives);
                     if layout.size == 0 {
                         ParamStorage::None
                     } else if layout.size <= 8 {
@@ -105,7 +105,7 @@ impl Abi for FunctionAbi {
             })
             .collect();
 
-        let return_layout = ir2::type_layout(return_ty, types, primitives);
+        let return_layout = ir::type_layout(return_ty, types, primitives);
         let return_place = match return_layout.size {
             0 => ReturnPlace::None,
             1 => ReturnPlace::Reg(Reg::al),

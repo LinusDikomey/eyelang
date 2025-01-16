@@ -136,7 +136,7 @@ dependencies = [
  "dmap",
  "id",
  "indexmap",
- "ir2",
+ "ir",
  "pathdiff",
  "span",
  "types",
@@ -160,9 +160,9 @@ dependencies = [
  "color-format",
  "compiler",
  "eye-lsp",
+ "ir",
  "ir-backend-llvm",
  "ir-backend-x86",
- "ir2",
  "pathdiff",
 ]
 
@@ -218,10 +218,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ir"
+version = "0.1.0"
+dependencies = [
+ "color-format",
+ "dmap",
+ "strum",
+]
+
+[[package]]
 name = "ir-backend-llvm"
 version = "0.1.0"
 dependencies = [
- "ir2",
+ "ir",
  "llvm-sys",
 ]
 
@@ -229,16 +238,7 @@ dependencies = [
 name = "ir-backend-x86"
 version = "0.1.0"
 dependencies = [
- "ir2",
-]
-
-[[package]]
-name = "ir2"
-version = "0.1.0"
-dependencies = [
- "color-format",
- "dmap",
- "strum",
+ "ir",
 ]
 
 [[package]]

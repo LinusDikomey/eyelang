@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ir2 = { path = "../ir2" }
+ir = { path = "../ir" }

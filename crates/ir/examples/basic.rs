@@ -1,14 +1,14 @@
 //! Example for using the ir crate. A function is constructed, printed, verified and evaluated.
 
-use ir2::{builder::Builder, BlockTarget, Environment, Primitive};
+use ir::{builder::Builder, BlockTarget, Environment, Primitive};
 
 fn main() {
     let mut env = Environment::new(Primitive::create_infos());
-    let arith = env.get_dialect_module::<ir2::dialect::Arith>();
-    let mem = env.get_dialect_module::<ir2::dialect::Mem>();
-    let cf = env.get_dialect_module::<ir2::dialect::Cf>();
+    let arith = env.get_dialect_module::<ir::dialect::Arith>();
+    let mem = env.get_dialect_module::<ir::dialect::Mem>();
+    let cf = env.get_dialect_module::<ir::dialect::Cf>();
 
-    let mut builder = ir2::builder::Builder::new(&env);
+    let mut builder = ir::builder::Builder::new(&env);
     builder.create_and_begin_block([]);
 
     let loop_body = builder.create_block();
@@ -49,29 +49,29 @@ fn main() {
 
     let function = builder.finish("my_function", int_ty);
 
-    ir2::verify::function(&env, &function);
+    ir::verify::function(&env, &function);
 
     let display = function.display(&env);
     eprintln!("{display}");
 
-    let value = ir2::eval::eval(function.ir().unwrap(), function.types(), &[], &mut env);
+    let value = ir::eval::eval(function.ir().unwrap(), function.types(), &[], &mut env);
     eprintln!("Function evaluated to {value:?}");
 
     // another example: mul function taking in parameters
     let mul = build_mul(&mut env);
-    ir2::verify::function(&env, &mul);
+    ir::verify::function(&env, &mul);
 
     let display = mul.ir().unwrap().display(&env, mul.types());
     eprintln!("{display}");
-    let args = [ir2::eval::Val::Int(5), ir2::eval::Val::Int(3)];
-    let result = ir2::eval::eval(mul.ir().unwrap(), mul.types(), &args, &mut env)
+    let args = [ir::eval::Val::Int(5), ir::eval::Val::Int(3)];
+    let result = ir::eval::eval(mul.ir().unwrap(), mul.types(), &args, &mut env)
         .expect("Function call failed");
     eprintln!("{:?}*{:?} = {:?}", args[0], args[1], result);
 }
 
-fn build_mul(env: &mut Environment) -> ir2::Function {
-    let arith = env.get_dialect_module::<ir2::dialect::Arith>();
-    let cf = env.get_dialect_module::<ir2::dialect::Cf>();
+fn build_mul(env: &mut Environment) -> ir::Function {
+    let arith = env.get_dialect_module::<ir::dialect::Arith>();
+    let cf = env.get_dialect_module::<ir::dialect::Cf>();
     let mut builder = Builder::new(env);
     let int_ty = builder.types.add(Primitive::I32);
     let unit_ty = builder.types.add(Primitive::Unit);

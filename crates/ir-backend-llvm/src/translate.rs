@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
 
-use ir2::{
+use ir::{
     dialect::Primitive, Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId,
     Types,
 };
@@ -26,7 +26,7 @@ use crate::{llvm_bool, Dialects, Error, Intrinsics, FALSE, NONE};
 pub unsafe fn add_function(
     ctx: LLVMContextRef,
     llvm_module: LLVMModuleRef,
-    function: &ir2::Function,
+    function: &ir::Function,
     attribs: &Attribs,
 ) -> Result<(LLVMValueRef, LLVMTypeRef), Error> {
     let return_ty = llvm_ty(
@@ -41,7 +41,7 @@ pub unsafe fn add_function(
         .params()
         .iter()
         .filter_map(|param| {
-            let &ir2::Parameter::RefOf(ty) = param else {
+            let &ir::Parameter::RefOf(ty) = param else {
                 panic!("invalid parameter kind {param:?}")
             };
             llvm_ty(ctx, function.types()[ty], function.types())
@@ -77,7 +77,7 @@ pub unsafe fn add_function(
 pub fn add_global(
     ctx: LLVMContextRef,
     llvm_module: LLVMModuleRef,
-    global: &ir2::Global,
+    global: &ir::Global,
 ) -> Result<LLVMValueRef, Error> {
     let ty = unsafe {
         core::LLVMArrayType2(
@@ -116,7 +116,7 @@ pub unsafe fn function(
     globals: &[LLVMValueRef],
     llvm_func: LLVMValueRef,
     builder: LLVMBuilderRef,
-    function: &ir2::Function,
+    function: &ir::Function,
     intrinsics: &Intrinsics,
     log: bool,
 ) -> Result<(), Error> {
@@ -194,12 +194,12 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTy
 unsafe fn build_func(
     env: &Environment,
     module: ModuleId,
-    func: &ir2::Function,
+    func: &ir::Function,
     dialects: &Dialects,
     llvm_module: LLVMModuleRef,
     llvm_funcs: &[(LLVMValueRef, LLVMTypeRef)],
     globals: &[LLVMValueRef],
-    ir: &ir2::FunctionIr,
+    ir: &ir::FunctionIr,
     ctx: LLVMContextRef,
     builder: LLVMBuilderRef,
     llvm_func: LLVMValueRef,
@@ -226,7 +226,7 @@ unsafe fn build_func(
             let block_args = ir.get_block_args(block);
             LLVMPositionBuilderAtEnd(builder, llvm_block);
             for (i, arg) in block_args.enumerate() {
-                if block == ir2::BlockId::ENTRY {
+                if block == ir::BlockId::ENTRY {
                     instructions[arg.idx()] = LLVMGetParam(llvm_func, i as _);
                 } else {
                     let arg_ty = types[ir.get_ref_ty(arg)];
@@ -239,7 +239,7 @@ unsafe fn build_func(
         })
         .collect();
 
-    let block_graph = ir2::BlockGraph::calculate(ir, env);
+    let block_graph = ir::BlockGraph::calculate(ir, env);
 
     let i1 = LLVMInt1TypeInContext(ctx);
 
@@ -286,7 +286,7 @@ unsafe fn build_func(
         let llvm_block = blocks[block.idx()];
 
         let mut handle_successor =
-            |ir: &ir2::FunctionIr, instructions: &[LLVMValueRef], successor: BlockTarget| {
+            |ir: &ir::FunctionIr, instructions: &[LLVMValueRef], successor: BlockTarget| {
                 for (block_arg_ref, &r) in ir.get_block_args(successor.0).zip(successor.1.iter()) {
                     if let Some(mut llvm_val) = get_ref(instructions, r) {
                         let phi = instructions[block_arg_ref.idx()];
@@ -308,16 +308,16 @@ unsafe fn build_func(
                 print!("Generating %{i:?} = {:?} ->", inst);
                 std::io::stdout().flush().unwrap();
             }
-            let val: LLVMValueRef = if let Some(inst) = inst.as_module(ir2::BUILTIN) {
+            let val: LLVMValueRef = if let Some(inst) = inst.as_module(ir::BUILTIN) {
                 match inst.op() {
-                    ir2::Builtin::Nothing => ptr::null_mut(),
-                    ir2::Builtin::BlockArg => unreachable!(),
-                    ir2::Builtin::Undef => llvm_ty(ctx, types[inst.ty()], types)
+                    ir::Builtin::Nothing => ptr::null_mut(),
+                    ir::Builtin::BlockArg => unreachable!(),
+                    ir::Builtin::Undef => llvm_ty(ctx, types[inst.ty()], types)
                         .map(|ty| LLVMGetUndef(ty))
                         .unwrap_or(ptr::null_mut()),
                 }
             } else if let Some(inst) = inst.as_module(dialects.arith) {
-                use ir2::dialect::Arith as I;
+                use ir::dialect::Arith as I;
                 let mut args = inst.args(ir.blocks(), ir.extra());
                 let un_op = || {
                     let [Argument::Ref(a)] = ir.args_n(&inst) else {
@@ -601,7 +601,7 @@ unsafe fn build_func(
                 }
             } else if let Some(inst) = inst.as_module(dialects.cf) {
                 let mut args = ir.typed_args(&inst);
-                use ir2::dialect::Cf as I;
+                use ir::dialect::Cf as I;
                 match inst.op() {
                     I::Goto => {
                         let Some(Argument::BlockTarget(target)) = args.next() else {
@@ -656,7 +656,7 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.mem) {
-                use ir2::dialect::Mem as I;
+                use ir::dialect::Mem as I;
                 match inst.op() {
                     I::Decl => {
                         let [Argument::TypeId(ty)] = ir.args_n(&inst) else {
@@ -701,7 +701,7 @@ unsafe fn build_func(
                         let Type::Tuple(elem_types) = types[tuple] else {
                             panic!()
                         };
-                        let offset = ir2::offset_in_tuple(
+                        let offset = ir::offset_in_tuple(
                             elem_types,
                             idx.try_into().unwrap(),
                             types,
@@ -778,7 +778,7 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.tuple) {
-                use ir2::dialect::Tuple as I;
+                use ir::dialect::Tuple as I;
                 match inst.op() {
                     I::MemberValue => {
                         let [Argument::Ref(tuple), Argument::Int(mut idx)] = ir.args_n(&inst)

@@ -1,4 +1,4 @@
-use ir2::{PrimitiveInfo, Type, TypeIds, Types};
+use ir::{PrimitiveInfo, Type, TypeIds, Types};
 
 use crate::isa::Reg;
 

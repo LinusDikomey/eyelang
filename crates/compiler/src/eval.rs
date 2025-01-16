@@ -1,7 +1,7 @@
 use std::{num::NonZeroU64, rc::Rc};
 
 use id::ModuleId;
-use ir2::eval::Val;
+use ir::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
@@ -310,7 +310,7 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
-) -> Result<ConstValue, ir2::eval::Error> {
+) -> Result<ConstValue, ir::eval::Error> {
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);
@@ -328,7 +328,7 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     let mut to_generate = Vec::new();
-    let mut builder = ir2::builder::Builder::new(&mut *compiler);
+    let mut builder = ir::builder::Builder::new(&mut *compiler);
     builder.create_and_begin_block([]);
     let Some(return_ty) = crate::irgen::types::get_from_info(
         builder.env,
@@ -346,7 +346,7 @@ pub fn value_expr(
         &types,
         &mut to_generate,
         &[],
-        ir2::Refs::EMPTY,
+        ir::Refs::EMPTY,
         return_ty,
     );
     while let Some(f) = to_generate.pop() {
@@ -354,7 +354,7 @@ pub fn value_expr(
 
         if let Some(body) = &checked.body {
             let return_type = compiler.ir[f.ir_id].return_type().unwrap();
-            let (builder, params) = ir2::builder::Builder::begin_function(&mut *compiler, f.ir_id);
+            let (builder, params) = ir::builder::Builder::begin_function(&mut *compiler, f.ir_id);
             let res = irgen::lower_hir(
                 builder,
                 body,
@@ -368,7 +368,7 @@ pub fn value_expr(
         }
     }
     let mut env = LazyEvalEnv { compiler };
-    ir2::eval::eval(&ir, &ir_types, &[], &mut env)
+    ir::eval::eval(&ir, &ir_types, &[], &mut env)
         .map(|val| to_const_val(val, types[expected], &types))
 }
 
@@ -409,20 +409,20 @@ fn to_const_val(val: Val, ty: TypeInfo, types: &TypeTable) -> ConstValue {
 struct LazyEvalEnv<'a> {
     compiler: &'a mut Compiler,
 }
-impl ir2::eval::EvalEnvironment for LazyEvalEnv<'_> {
-    fn env(&self) -> &ir2::Environment {
+impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
+    fn env(&self) -> &ir::Environment {
         &self.compiler.ir
     }
 
-    fn env_mut(&mut self) -> &mut ir2::Environment {
+    fn env_mut(&mut self) -> &mut ir::Environment {
         &mut self.compiler.ir
     }
 
     fn call_extern(
         &mut self,
-        id: ir2::FunctionId,
+        id: ir::FunctionId,
         args: &[Val],
-        mem: &mut ir2::eval::Mem,
+        mem: &mut ir::eval::Mem,
     ) -> Result<Val, Box<str>> {
         let func = &self.compiler.ir[id];
         Ok(match &*func.name {
@@ -431,7 +431,7 @@ impl ir2::eval::EvalEnvironment for LazyEvalEnv<'_> {
                     return Err("invalid signature for malloc".into());
                 };
                 let ptr = mem
-                    .malloc(ir2::Layout {
+                    .malloc(ir::Layout {
                         size,
                         align: NonZeroU64::new(16).unwrap(),
                     })

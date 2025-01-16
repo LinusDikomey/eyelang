@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ir2 = { version = "0.1.0", path = "../ir2" }
+ir = { version = "0.1.0", path = "../ir" }
 llvm-sys = "191.0.0"

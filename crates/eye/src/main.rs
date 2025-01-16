@@ -176,17 +176,17 @@ fn main() -> Result<(), MainError> {
                 compiler.emit_whole_project_ir(project);
             }
             #[cfg(debug_assertions)]
-            ir2::verify::module(&compiler.ir, compiler.ir_module);
+            ir::verify::module(&compiler.ir, compiler.ir_module);
 
             if args.optimize {
-                let mut pipeline = ir2::optimize::Pipeline::optimizing(&mut compiler.ir);
+                let mut pipeline = ir::optimize::Pipeline::optimizing(&mut compiler.ir);
                 if args.passes {
                     pipeline.enable_print_passes();
                 }
                 pipeline.optimize_module(&mut compiler.ir, compiler.ir_module);
 
                 #[cfg(debug_assertions)]
-                ir2::verify::module(&compiler.ir, compiler.ir_module);
+                ir::verify::module(&compiler.ir, compiler.ir_module);
             }
 
             if compiler.print_errors() && !args.run_with_errors {

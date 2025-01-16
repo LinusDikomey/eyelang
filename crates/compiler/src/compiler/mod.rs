@@ -10,7 +10,7 @@ use std::{
 use dmap::DHashMap;
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
-use ir2::ModuleOf;
+use ir::ModuleOf;
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
@@ -35,28 +35,28 @@ pub struct Compiler {
     pub modules: Vec<Module>,
     pub const_values: Vec<ConstValue>,
     pub types: Vec<ResolvableTypeDef>,
-    pub ir: ir2::Environment,
-    pub ir_module: ir2::ModuleId,
+    pub ir: ir::Environment,
+    pub ir_module: ir::ModuleId,
     pub dialects: Dialects,
     pub errors: Errors,
     pub builtins: Builtins,
 }
-impl ir2::builder::HasEnvironment for &mut Compiler {
-    fn env(&self) -> &ir2::Environment {
+impl ir::builder::HasEnvironment for &mut Compiler {
+    fn env(&self) -> &ir::Environment {
         &self.ir
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct Dialects {
-    pub arith: ModuleOf<ir2::dialect::Arith>,
-    pub tuple: ModuleOf<ir2::dialect::Tuple>,
-    pub mem: ModuleOf<ir2::dialect::Mem>,
-    pub cf: ModuleOf<ir2::dialect::Cf>,
+    pub arith: ModuleOf<ir::dialect::Arith>,
+    pub tuple: ModuleOf<ir::dialect::Tuple>,
+    pub mem: ModuleOf<ir::dialect::Mem>,
+    pub cf: ModuleOf<ir::dialect::Cf>,
 }
 impl Compiler {
     pub fn new() -> Self {
-        let mut ir = ir2::Environment::new(ir2::dialect::Primitive::create_infos());
+        let mut ir = ir::Environment::new(ir::dialect::Primitive::create_infos());
         let dialects = Dialects {
             arith: ir.get_dialect_module(),
             tuple: ir.get_dialect_module(),
@@ -1006,7 +1006,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_builtin_panic(&mut self) -> ir2::FunctionId {
+    pub fn get_builtin_panic(&mut self) -> ir::FunctionId {
         let (panic_mod, panic_function) = builtins::get_panic(self);
         self.get_ir_function_id(panic_mod, panic_function, Vec::new())
     }
@@ -1077,7 +1077,7 @@ impl Compiler {
         module: ModuleId,
         function: ast::FunctionId,
         generics: Vec<Type>,
-    ) -> ir2::FunctionId {
+    ) -> ir::FunctionId {
         self.get_parsed_module(module);
         if let Some(&id) = self.modules[module.idx()]
             .ast
@@ -1125,7 +1125,7 @@ impl Compiler {
 
             if let Some(body) = &checked.body {
                 let return_type = self.ir[f.ir_id].return_type().unwrap();
-                let (builder, params) = ir2::builder::Builder::begin_function(&mut *self, f.ir_id);
+                let (builder, params) = ir::builder::Builder::begin_function(&mut *self, f.ir_id);
                 let res = irgen::lower_hir(
                     builder,
                     body,
@@ -1165,7 +1165,7 @@ impl Compiler {
 
     /// Emit project ir starting from a root function (for example the main function) while
     /// generating all functions recursively that are called by that function
-    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir2::FunctionId> {
+    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
         let mut functions_to_emit = VecDeque::from([(root.0, root.1, vec![])]);
         let mut finished_functions = Vec::new();
         while let Some((module, function, generics)) = functions_to_emit.pop_front() {
@@ -1194,7 +1194,7 @@ impl Compiler {
     pub fn verify_main_and_add_entry_point(
         &mut self,
         main: (ModuleId, FunctionId),
-    ) -> Result<ir2::FunctionId, Option<CompileError>> {
+    ) -> Result<ir::FunctionId, Option<CompileError>> {
         let main_ir_id = self.get_ir_function_id(main.0, main.1, vec![]);
         let main_signature = self.get_signature(main.0, main.1);
         check::verify_main_signature(main_signature, main.0).map(|()| {
@@ -1209,7 +1209,7 @@ impl Compiler {
         })
     }
 
-    pub fn get_ir_function(&self, id: ir2::FunctionId) -> &ir2::Function {
+    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
         &self.ir[id]
     }
 
@@ -1890,8 +1890,8 @@ pub struct CheckedTrait {
 }
 
 pub struct IrInstances {
-    pub functions: Vec<DHashMap<Vec<Type>, ir2::FunctionId>>,
-    pub globals: Vec<Option<ir2::GlobalId>>,
+    pub functions: Vec<DHashMap<Vec<Type>, ir::FunctionId>>,
+    pub globals: Vec<Option<ir::GlobalId>>,
 }
 impl IrInstances {
     pub fn new(function_count: usize, global_count: usize) -> Self {
@@ -1903,7 +1903,7 @@ impl IrInstances {
 }
 
 pub struct FunctionToGenerate {
-    pub ir_id: ir2::FunctionId,
+    pub ir_id: ir::FunctionId,
     pub module: ModuleId,
     pub ast_function_id: ast::FunctionId,
     pub generics: Vec<Type>,

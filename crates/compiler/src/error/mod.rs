@@ -227,7 +227,7 @@ pub enum Error {
         to: String,
     },
     TrivialCast,
-    EvalFailed(ir2::eval::Error),
+    EvalFailed(ir::eval::Error),
     EvalReturnedStackPointer,
     CantInferFromBody {
         ty: String,
@@ -331,19 +331,19 @@ impl Error {
             Error::TypeAnnotationNeeded { .. } => "type annotation needed",
             Error::InvalidCast { .. } => "this cast is not valid",
             Error::TrivialCast => "this cast is trivial",
-            Error::EvalFailed(ir2::eval::Error::InfiniteLoop) => {
+            Error::EvalFailed(ir::eval::Error::InfiniteLoop) => {
                 "evaluation failed due to an infinite loop"
             }
-            Error::EvalFailed(ir2::eval::Error::ExternCallFailed(_)) => {
+            Error::EvalFailed(ir::eval::Error::ExternCallFailed(_)) => {
                 "evaluation failed while calling an extern function"
             }
-            Error::EvalFailed(ir2::eval::Error::StackOverflow) => {
+            Error::EvalFailed(ir::eval::Error::StackOverflow) => {
                 "evaluation failed due to a stack overflow"
             }
-            Error::EvalFailed(ir2::eval::Error::ProvenanceViolation) => {
+            Error::EvalFailed(ir::eval::Error::ProvenanceViolation) => {
                 "evaluation failed due to a provenance violation"
             }
-            Error::EvalFailed(ir2::eval::Error::OutOfMemory) => {
+            Error::EvalFailed(ir::eval::Error::OutOfMemory) => {
                 "evaluation failed by running out of memory"
             }
             Error::EvalReturnedStackPointer => {
@@ -473,13 +473,13 @@ impl Error {
             Error::TrivialCast => {
                 cformat!("#c<hint>: remove this cast")
             }
-            Error::EvalFailed(ir2::eval::Error::InfiniteLoop) => {
+            Error::EvalFailed(ir::eval::Error::InfiniteLoop) => {
                 cformat!("#c<hint>: configuring the backwards jump limit \
                     (currently always #blue<{}>) will be configurable in the future",
-                    ir2::eval::BACKWARDS_JUMP_LIMIT
+                    ir::eval::BACKWARDS_JUMP_LIMIT
                 )
             }
-            Error::EvalFailed(ir2::eval::Error::ExternCallFailed(s)) => {
+            Error::EvalFailed(ir::eval::Error::ExternCallFailed(s)) => {
                 cformat!("#r<error>: {s}")
             }
             Error::CantInferFromBody { ty } => cformat!("got: {ty}"),

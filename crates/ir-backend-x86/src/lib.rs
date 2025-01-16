@@ -2,7 +2,7 @@
 use std::{ffi::CStr, path::Path};
 
 use elf::{ElfObjectWriter, SectionHeader};
-use ir2::mc::Op;
+use ir::mc::Op;
 
 mod abi;
 mod elf;
@@ -30,13 +30,13 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        env: &ir2::Environment,
-        module_id: ir2::ModuleId,
+        env: &ir::Environment,
+        module_id: ir::ModuleId,
         print_ir: bool,
         target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
-        todo!("implement x86 backend for ir2")
+        todo!("implement x86 backend for ir")
         /*
             assert!(target.is_none(), "todo: check target");
             let mut writer = ElfObjectWriter::new();

@@ -1,7 +1,7 @@
-use ir2::dialect::Primitive;
+use ir::dialect::Primitive;
 
 fn main() {
-    let mut env = ir2::Environment::new(Primitive::create_infos());
+    let mut env = ir::Environment::new(Primitive::create_infos());
     let main_module = env.create_module("main");
     let func = create_add_function(&mut env);
     let func_id = env.add_function(main_module, func);
@@ -9,17 +9,17 @@ fn main() {
     println!("Before rewrite:\n{}", env.display_module(main_module));
 
     let mut func_ir = env.remove_body(func_id).unwrap();
-    ir2::rewrite::rewrite_in_place(&mut func_ir, env[func_id].types(), &env, rewriter);
+    ir::rewrite::rewrite_in_place(&mut func_ir, env[func_id].types(), &env, rewriter);
     env.reattach_body(func_id, func_ir);
 
     println!("After rewrite:\n{}", env.display_module(main_module));
 }
 
-fn create_add_function(env: &mut ir2::Environment) -> ir2::Function {
-    let arith = env.get_dialect_module::<ir2::dialect::Arith>();
-    let cf = env.get_dialect_module::<ir2::dialect::Cf>();
+fn create_add_function(env: &mut ir::Environment) -> ir::Function {
+    let arith = env.get_dialect_module::<ir::dialect::Arith>();
+    let cf = env.get_dialect_module::<ir::dialect::Cf>();
 
-    let mut builder = ir2::builder::Builder::new(&*env);
+    let mut builder = ir::builder::Builder::new(&*env);
     let int_ty = builder.types.add(Primitive::I32);
     let (_, args) = builder.create_and_begin_block([int_ty; 3]);
     let result = builder.append(arith.Add(args.nth(0), args.nth(1), int_ty));
@@ -32,7 +32,7 @@ fn create_add_function(env: &mut ir2::Environment) -> ir2::Function {
 
 // this macro defines a type AddZeroRewriter that implements Rewriter
 // it matches all of the listed, potentially recursive rules on each instruction
-ir2::rewrite::rewrite_rules! {
+ir::rewrite::rewrite_rules! {
     // name of the rewriter type
     AddZeroRewriter
     // define all the arguments, this should never be changed and is only needed so the variables
@@ -40,7 +40,7 @@ ir2::rewrite::rewrite_rules! {
     ir types inst
 
     // specify that we want to use the Arith dialect in the rules
-    use arith: ir2::dialect::Arith;
+    use arith: ir::dialect::Arith;
 
     patterns:
 

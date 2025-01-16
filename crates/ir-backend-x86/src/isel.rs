@@ -1,4 +1,4 @@
-use ir2::{
+use ir::{
     mc::{BlockBuilder, MachineIR, MirBlock, Op, RegClass, VRegs},
     BlockGraph, BlockId, Environment, FunctionId, Parameter, Ref, Type, Types,
 };
@@ -13,9 +13,9 @@ type Builder<'a> = BlockBuilder<'a, Inst>;
 
 pub fn codegen(
     env: &Environment,
-    body: &ir2::FunctionIr,
-    function: &ir2::Function,
-    types: &ir2::Types,
+    body: &ir::FunctionIr,
+    function: &ir::Function,
+    types: &ir::Types,
 ) -> MachineIR<Inst> {
     let mut mir = MachineIR::new();
     let mut builder = mir.begin_block(MirBlock::ENTRY);
