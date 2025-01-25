@@ -1,12 +1,13 @@
 mod macros;
-pub use macros::rewrite_rules;
+pub use macros::visitor;
 
 use crate::{
     builtins::Builtin, BlockId, Environment, FunctionId, FunctionIr, Instruction, IntoArgs,
     ModuleId, Parameter, Ref, TypeId, Types, INLINE_ARGS,
 };
 
-pub trait Rewriter {
+pub trait Visitor {
+    type Output;
     fn visit_instruction(
         &mut self,
         ir: &mut FunctionIr,
@@ -14,7 +15,7 @@ pub trait Rewriter {
         env: &Environment,
         inst: &Instruction,
         block: BlockId,
-    ) -> Rewrite;
+    ) -> Option<Self::Output>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,11 +30,16 @@ impl Rewrite {
     }
 }
 
-pub trait IntoRewrite {
-    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite;
+pub trait IntoVisit<T> {
+    fn into_visit(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> T;
 }
-impl<'a, A: IntoArgs<'a>> IntoRewrite for (FunctionId, A, TypeId) {
-    fn into_rewrite(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite {
+impl<T> IntoVisit<T> for T {
+    fn into_visit(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> T {
+        self
+    }
+}
+impl<'a, A: IntoArgs<'a>> IntoVisit<Rewrite> for (FunctionId, A, TypeId) {
+    fn into_visit(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite {
         Rewrite::Replace(ir.prepare_instruction(
             &env[self.0].params,
             env[self.0].varargs,
@@ -42,13 +48,13 @@ impl<'a, A: IntoArgs<'a>> IntoRewrite for (FunctionId, A, TypeId) {
         ))
     }
 }
-impl IntoRewrite for Ref {
-    fn into_rewrite(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> Rewrite {
+impl IntoVisit<Rewrite> for Ref {
+    fn into_visit(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> Rewrite {
         Rewrite::Rename(self)
     }
 }
 
-pub fn rewrite_in_place<R: Rewriter>(
+pub fn rewrite_in_place<R: Visitor<Output = Rewrite>>(
     ir: &mut FunctionIr,
     types: &Types,
     env: &Environment,
@@ -63,11 +69,11 @@ pub fn rewrite_in_place<R: Rewriter>(
             renames.visit_inst(ir, &mut inst, env);
             let rewrite = rewriter.visit_instruction(ir, types, env, &inst, block);
             match rewrite {
-                Rewrite::Keep => {}
-                Rewrite::Replace(new_inst) => {
+                Some(Rewrite::Keep) | None => {}
+                Some(Rewrite::Replace(new_inst)) => {
                     inst = new_inst;
                 }
-                Rewrite::Rename(new_ref) => {
+                Some(Rewrite::Rename(new_ref)) => {
                     inst.function = FunctionId {
                         module: ModuleId::BUILTINS,
                         function: Builtin::Nothing.id(),

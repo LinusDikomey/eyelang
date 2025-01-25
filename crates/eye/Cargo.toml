@@ -6,10 +6,10 @@ edition = "2021"
 [features]
 default = [
   "llvm-backend",
-  #"x86-backend"
+  "fast-backend"
 ]
 llvm-backend = ["dep:ir-backend-llvm"]
-x86-backend = ["dep:ir-backend-x86"]
+fast-backend = ["dep:ir-backend-fast"]
 lsp = ["dep:eye-lsp"]
 
 [dependencies]
@@ -21,5 +21,5 @@ ir = { path = "../ir" }
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }
-ir-backend-x86 = { path = "../ir-backend-x86", optional = true }
+ir-backend-fast = { path = "../ir-backend-fast", optional = true }
 pathdiff = "0.2.1"

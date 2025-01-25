@@ -196,9 +196,9 @@ fn main() -> Result<(), MainError> {
             let obj_file = format!("eyebuild/{name}.o");
             match args.backend {
                 Backend::C => todo!("reimplement C backend"),
-                #[cfg(feature = "x86-backend")]
-                Backend::X86 => {
-                    let mut backend = ir_backend_x86::Backend::new();
+                #[cfg(feature = "fast-backend")]
+                Backend::Fast => {
+                    let mut backend = ir_backend_fast::Backend::new();
                     if args.log {
                         backend.enable_logging();
                     }
@@ -279,17 +279,18 @@ fn main() -> Result<(), MainError> {
 }
 
 fn list_targets(backend: args::Backend) {
-    match backend {
-        Backend::C => todo!(),
+    let targets = match backend {
+        Backend::C => vec!["C".to_owned()],
         #[cfg(feature = "llvm-backend")]
-        Backend::Llvm => {
-            let targets = ir_backend_llvm::list_targets();
-            println!("Available LLVM targets: (total: {})", targets.len());
-            for target in targets {
-                println!("\t{target}");
-            }
-        }
-        #[cfg(feature = "x86-backend")]
-        Backend::X86 => todo!(),
+        Backend::Llvm => ir_backend_llvm::list_targets(),
+        #[cfg(feature = "fast-backend")]
+        Backend::Fast => ir_backend_fast::list_targets(),
+    };
+    println!(
+        "Available targets for {backend} backend: (total: {})",
+        targets.len()
+    );
+    for target in targets {
+        println!("\t{target}");
     }
 }

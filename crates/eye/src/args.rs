@@ -29,19 +29,19 @@ pub enum Backend {
     // Run with the llvm backend
     #[cfg(feature = "llvm-backend")]
     Llvm,
-    /// W.I.P.! Run with a self-implemented x86-64 backend. Will emit completely unoptimized code.
+    /// W.I.P.! Run with the self-implemented backend. Will emit completely unoptimized code.
     /// This backend is primarily used for fast compilations. It is VERY unfinished right now.
-    #[cfg(feature = "x86-backend")]
-    X86,
+    #[cfg(feature = "fast-backend")]
+    Fast,
 }
 impl fmt::Display for Backend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match *self {
-            Self::C => "C",
+            Self::C => "c",
             #[cfg(feature = "llvm-backend")]
-            Self::Llvm => "LLVM",
-            #[cfg(feature = "x86-backend")]
-            Self::X86 => "x86",
+            Self::Llvm => "llvm",
+            #[cfg(feature = "fast-backend")]
+            Self::Fast => "fast",
         };
         f.write_str(s)
     }
@@ -55,7 +55,14 @@ impl Default for Backend {
 
         #[cfg(not(feature = "llvm-backend"))]
         {
-            Self::X86
+            Self::Fast
+        }
+
+        #[cfg(not(any(feature = "llvm-backend", feature = "fast-backend")))]
+        {
+            compile_error!(
+                "No backend is active. Compile with at least llvm-backend or fast-backend"
+            )
         }
     }
 }

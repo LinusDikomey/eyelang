@@ -10,7 +10,7 @@ members = [
     "crates/ir",
     "crates/eye-lsp",
     "crates/ir-backend-llvm",
-    "crates/ir-backend-x86",
+    "crates/ir-backend-fast",
 ]
 default-members = ["crates/eye"]
 

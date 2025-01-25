@@ -161,8 +161,8 @@ dependencies = [
  "compiler",
  "eye-lsp",
  "ir",
+ "ir-backend-fast",
  "ir-backend-llvm",
- "ir-backend-x86",
  "pathdiff",
 ]
 
@@ -227,18 +227,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ir-backend-fast"
+version = "0.1.0"
+dependencies = [
+ "ir",
+]
+
+[[package]]
 name = "ir-backend-llvm"
 version = "0.1.0"
 dependencies = [
  "ir",
  "llvm-sys",
-]
-
-[[package]]
-name = "ir-backend-x86"
-version = "0.1.0"
-dependencies = [
- "ir",
 ]
 
 [[package]]

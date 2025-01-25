@@ -1,6 +1,8 @@
 use ir::{
     mc::{BlockBuilder, MachineIR, MirBlock, Op, RegClass, VRegs},
-    BlockGraph, BlockId, Environment, FunctionId, Parameter, Ref, Type, Types,
+    rewrite::Visitor,
+    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, Parameter, Primitive, PrimitiveInfo,
+    Ref, Type, Types,
 };
 
 use crate::{
@@ -12,9 +14,9 @@ use crate::{
 type Builder<'a> = BlockBuilder<'a, Inst>;
 
 pub fn codegen(
-    env: &Environment,
+    env: &mut Environment,
     body: &ir::FunctionIr,
-    function: &ir::Function,
+    function: &mut ir::Function,
     types: &ir::Types,
 ) -> MachineIR<Inst> {
     let mut mir = MachineIR::new();
@@ -29,6 +31,7 @@ pub fn codegen(
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
 
+    /*
     let abi = abi::get_function_abi(
         types,
         function.params().iter().map(|p| {
@@ -38,29 +41,37 @@ pub fn codegen(
         function.return_type().unwrap(),
         env.primitives(),
     );
+    */
 
-    let (mir_entry_block, entry_block_args) =
-        builder.create_block(abi.arg_registers().iter().map(|r| r.class()));
+    //let (mir_entry_block, entry_block_args) =
+    //    builder.create_block(abi.arg_registers().iter().map(|r| r.class()));
+    let (mir_entry_block, entry_block_args) = builder.create_block([]);
     builder.register_successor(mir_entry_block);
+    /*
     builder.build_copyargs(
         Inst::Copyargs,
         entry_block_args.iter().map(|vreg| vreg.op()),
         abi.arg_registers().iter().copied().map(Op::Reg),
     );
+    */
 
     let block_map = body
-        .blocks()
+        .block_ids()
         .map(|block| {
-            let args = body.get_block_args(block);
-            let (mir_block, mir_args) = if block == BlockIndex::ENTRY {
+            let (mir_block, mir_args) = if block == BlockId::ENTRY {
                 (mir_entry_block, entry_block_args)
             } else {
-                builder.create_block(block_args_to_reg_classes(body, types, args))
+                builder.create_block(block_args_to_reg_classes(
+                    body,
+                    types,
+                    env.primitives(),
+                    body.get_block_args(block),
+                ))
             };
             let mut mir_arg_iter = mir_args.iter();
-            for arg in args.iter() {
-                let arg_ty = body.get_ref_ty(Ref::index(arg));
-                let mir_classes = block_arg_regs(arg_ty, types);
+            for arg in body.get_block_args(block) {
+                let arg_ty = body.get_ref_ty(arg);
+                let mir_classes = block_arg_regs(function.types()[arg_ty], types, env.primitives());
                 let value = match mir_classes {
                     ZeroToTwo::Zero => MCValue::None,
                     ZeroToTwo::One(_) => MCValue::Reg(MCReg::Virtual(mir_arg_iter.next().unwrap())),
@@ -69,13 +80,16 @@ pub fn codegen(
                         MCReg::Virtual(mir_arg_iter.next().unwrap()),
                     ),
                 };
-                values[arg as usize] = value;
+                values[arg.idx()] = value;
             }
             (mir_block, mir_args)
         })
         .collect();
+    let modules = Modules::new(env);
     let mut gen = Gen {
-        abi,
+        env,
+        modules,
+        //abi,
         function,
         body,
         types,
@@ -83,13 +97,13 @@ pub fn codegen(
         block_map,
     };
 
-    let graph = BlockGraph::calculate(gen.body);
+    let graph = BlockGraph::calculate(gen.body, gen.env);
 
     for &block in graph.postorder().iter().rev() {
-        let mir_block = gen.block_map[block.idx() as usize].0;
+        let mir_block = gen.block_map[block.idx()].0;
         let mut builder = mir.begin_block(mir_block);
         for (i, inst) in body.get_block(block) {
-            values[i as usize] = gen.gen_inst(inst, &mut builder, &values, &body.extra);
+            values[i.idx()] = gen.gen_inst(inst, block, &mut builder, &values, body);
         }
     }
 
@@ -99,36 +113,44 @@ pub fn codegen(
     mir
 }
 
-fn block_args_to_reg_classes<'a>(
+fn block_args_to_reg_classes<'a, I: IntoIterator<Item = ir::Ref>>(
     ir: &'a ir::FunctionIr,
-    types: &'a ir::IrTypes,
-    args: ir::BlockArgs,
-) -> impl 'a + Iterator<Item = RegClass> {
-    args.iter().flat_map(|arg| {
-        let ty = ir.get_ref_ty(Ref::index(arg), types);
-        block_arg_regs(ty, types)
+    types: &'a ir::Types,
+    primitives: &'a [PrimitiveInfo],
+    args: I,
+) -> impl 'a + Iterator<Item = RegClass>
+where
+    I::IntoIter: 'a,
+{
+    args.into_iter().flat_map(|arg| {
+        let ty = ir.get_ref_ty(arg);
+        block_arg_regs(types[ty], types, primitives)
     })
 }
 
-fn block_arg_regs(ty: Type, types: &Types) -> ZeroToTwo<RegClass> {
+fn block_arg_regs(ty: Type, types: &Types, primitives: &[PrimitiveInfo]) -> ZeroToTwo<RegClass> {
     match ty {
-        IrType::Unit => ZeroToTwo::Zero,
-        IrType::U1 | IrType::I8 | IrType::U8 => ZeroToTwo::One(RegClass::GP8),
-        IrType::I16 | IrType::U16 => ZeroToTwo::One(RegClass::GP16),
-        IrType::I32 | IrType::U32 => ZeroToTwo::One(RegClass::GP32),
-        IrType::I64 | IrType::U64 | IrType::Ptr => ZeroToTwo::One(RegClass::GP64),
-        IrType::I128 | IrType::U128 => ZeroToTwo::Two(RegClass::GP64, RegClass::GP64),
-        IrType::F32 => ZeroToTwo::One(RegClass::F32),
-        IrType::F64 => ZeroToTwo::One(RegClass::F64),
-        IrType::Array(_, _) | IrType::Tuple(_) => match types.layout(ty).size {
-            0 => ZeroToTwo::Zero,
-            1 => ZeroToTwo::One(RegClass::GP8),
-            2 => ZeroToTwo::One(RegClass::GP16),
-            3..=4 => ZeroToTwo::One(RegClass::GP32),
-            5..=8 => ZeroToTwo::One(RegClass::GP64),
-            9..=16 => ZeroToTwo::Two(RegClass::GP64, RegClass::GP64),
-            _ => todo!("large block args"),
+        ir::Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+            Primitive::Unit => ZeroToTwo::Zero,
+            Primitive::I1 | Primitive::I8 | Primitive::U8 => ZeroToTwo::One(RegClass::GP8),
+            Primitive::I16 | Primitive::U16 => ZeroToTwo::One(RegClass::GP16),
+            Primitive::I32 | Primitive::U32 => ZeroToTwo::One(RegClass::GP32),
+            Primitive::I64 | Primitive::U64 | Primitive::Ptr => ZeroToTwo::One(RegClass::GP64),
+            Primitive::I128 | Primitive::U128 => ZeroToTwo::Two(RegClass::GP64, RegClass::GP64),
+            Primitive::F32 => ZeroToTwo::One(RegClass::F32),
+            Primitive::F64 => ZeroToTwo::One(RegClass::F64),
         },
+        ir::Type::Array(_, _) | ir::Type::Tuple(_) => {
+            match ir::type_layout(ty, types, primitives).size {
+                0 => ZeroToTwo::Zero,
+                1 => ZeroToTwo::One(RegClass::GP8),
+                2 => ZeroToTwo::One(RegClass::GP16),
+                3..=4 => ZeroToTwo::One(RegClass::GP32),
+                5..=8 => ZeroToTwo::One(RegClass::GP64),
+                9..=16 => ZeroToTwo::Two(RegClass::GP64, RegClass::GP64),
+                _ => todo!("large block args"),
+            }
+        }
     }
 }
 
@@ -175,10 +197,12 @@ impl<T> ExactSizeIterator for ZeroToTwo<T> {
 }
 
 struct Gen<'a> {
-    abi: Box<dyn abi::Abi>,
+    env: &'a mut ir::Environment,
+    modules: Modules,
+    //abi: Box<dyn abi::Abi>,
     function: &'a ir::Function,
-    body: &'a ir::FunctionIr,
-    types: &'a ir::IrTypes,
+    body: &'a mut ir::FunctionIr,
+    types: &'a ir::Types,
     stack_setup_indices: Vec<u32>,
     block_map: Box<[(MirBlock, VRegs)]>,
 }
@@ -191,11 +215,20 @@ impl Gen<'_> {
 
     fn gen_inst(
         &mut self,
-        inst: ir::Instruction,
-        builder: &mut Builder,
+        inst: &ir::Instruction,
+        block: BlockId,
+        builder: &mut Builder<'_>,
         values: &[MCValue],
-        extra: &[u8],
+        body: &FunctionIr,
     ) -> MCValue {
+        let mut visitor = InstructionSelector {
+            modules: &self.modules,
+            builder: &mut *builder,
+        };
+        visitor.visit_instruction(self.body, self.types, &self.env, inst, block);
+        drop(visitor);
+        todo!()
+        /*
         match inst.tag {
             Tag::Nothing => MCValue::None,
             Tag::BlockArg => unreachable!(),
@@ -434,19 +467,21 @@ impl Gen<'_> {
             Tag::PtrToInt => todo!(),
             Tag::Asm => todo!(),
         }
+        */
     }
 
+    /*
     fn copy_block_args(
         &self,
         builder: &mut Builder,
         values: &[MCValue],
-        target: BlockIndex,
+        target: BlockId,
         extra_index: usize,
     ) {
         let t_count = self.body.get_block_args(target).count();
         let mut bytes = [0; 4];
-        let t_to = self.body.get_block_args(target).iter().map(|arg| {
-            let MCValue::Reg(MCReg::Virtual(v)) = values[arg as usize] else {
+        let t_to = self.body.get_block_args(target).map(|arg| {
+            let MCValue::Reg(MCReg::Virtual(v)) = values[arg.idx()] else {
                 unreachable!()
             };
             v.op::<Reg>()
@@ -462,6 +497,7 @@ impl Gen<'_> {
         });
         builder.build_copyargs(Inst::Copyargs, t_to, t_from);
     }
+    */
 
     fn store(
         &mut self,
@@ -469,8 +505,10 @@ impl Gen<'_> {
         values: &[MCValue],
         (ptr, val): (Ref, Ref),
     ) -> MCValue {
+        todo!("store")
+        /*
         let ptr = get_ref(values, ptr);
-        let ty = self.body.get_ref_ty(val, self.types);
+        let ty = self.types[self.body.get_ref_ty(val)];
         let val = get_ref(values, val);
         let MCValue::PtrOffset(ptr, off) = ptr else {
             todo!("handle store into {ptr:?}")
@@ -526,6 +564,7 @@ impl Gen<'_> {
             }
         }
         MCValue::None
+        */
     }
 
     fn bin_op_commutative(
@@ -533,10 +572,12 @@ impl Gen<'_> {
         builder: &mut Builder,
         values: &[MCValue],
         (lhs, rhs): (Ref, Ref),
-        ty: IrType,
+        ty: ir::Type,
         insts32: BinOpInsts,
         fold: impl Fn(u64, u64) -> u64,
     ) -> MCValue {
+        todo!("bin_op")
+        /*
         let lhs = get_ref(values, lhs);
         let rhs = get_ref(values, rhs);
         let (insts, class, movrm) = match ty {
@@ -586,6 +627,7 @@ impl Gen<'_> {
         MCValue::Reg(MCReg::Virtual(
             builder.copy_to_fresh(changed_reg.op(), class),
         ))
+        */
     }
 
     fn bin_op_noncommutative(
@@ -593,10 +635,12 @@ impl Gen<'_> {
         builder: &mut Builder,
         values: &[MCValue],
         (lhs, rhs): (Ref, Ref),
-        ty: IrType,
+        ty: ir::Type,
         insts32: BinOpInsts,
         fold: impl Fn(u64, u64) -> u64,
     ) -> MCValue {
+        todo!("bin_op_noncommutative")
+        /*
         let (insts, class, movri, movrm) = match ty {
             IrType::I32 | IrType::U32 => (insts32, RegClass::GP32, Inst::movri32, Inst::movrm32),
             _ => todo!("handle op ty {ty:?}"),
@@ -633,8 +677,10 @@ impl Gen<'_> {
             }
         }
         MCValue::Reg(MCReg::Virtual(lhs))
+        */
     }
 
+    /*
     fn comparison(
         &mut self,
         builder: &mut Builder,
@@ -721,6 +767,28 @@ impl Gen<'_> {
         builder.inst(set_inst, [r.op()]);
         MCValue::Reg(MCReg::Virtual(r))
     }
+    */
+}
+
+struct InstructionSelector<'a> {
+    modules: &'a Modules,
+    builder: &'a mut BlockBuilder<'a, Inst>,
+}
+
+ir::visitor! {
+    impl <'a> for InstructionSelector<'a>,
+    modules: Modules,
+    MCValue,
+    ir, types, inst;
+
+    use arith: ir::dialect::Arith;
+    use tuple: ir::dialect::Tuple;
+    use mem: ir::dialect::Mem;
+    use cf: ir::dialect::Cf;
+
+    patterns:
+    (arith.Int (#x)) => MCValue::Imm(x);
+    (cf.Ret (arith.Int x)) => MCValue::Imm(0);
 }
 
 fn offset_op(offset: i32) -> Op<Reg> {
@@ -735,11 +803,10 @@ struct BinOpInsts {
 }
 
 fn get_ref(values: &[MCValue], r: ir::Ref) -> MCValue {
-    match r.into_val() {
-        Some(ir::RefVal::True) => MCValue::Imm(1),
-        Some(ir::RefVal::False) => MCValue::Imm(0),
-        Some(ir::RefVal::Unit) => MCValue::None,
-        Some(ir::RefVal::Undef) => MCValue::Undef,
-        None => values[r.into_ref().unwrap() as usize],
+    match r {
+        Ref::TRUE => MCValue::Imm(1),
+        Ref::FALSE => MCValue::Imm(0),
+        Ref::UNIT => MCValue::None,
+        _ => values[r.idx()],
     }
 }

@@ -5,7 +5,9 @@ fn main() {
     let main_module = env.create_module("main");
     let func = create_add_function(&mut env);
     let func_id = env.add_function(main_module, func);
-    let rewriter = AddZeroRewriter::new(&mut env);
+    let rewriter = AddZeroRewriter {
+        modules: Modules::new(&mut env),
+    };
     println!("Before rewrite:\n{}", env.display_module(main_module));
 
     let mut func_ir = env.remove_body(func_id).unwrap();
@@ -30,14 +32,20 @@ fn create_add_function(env: &mut ir::Environment) -> ir::Function {
     builder.finish("add", int_ty)
 }
 
+struct AddZeroRewriter {
+    modules: Modules,
+}
+
 // this macro defines a type AddZeroRewriter that implements Rewriter
 // it matches all of the listed, potentially recursive rules on each instruction
-ir::rewrite::rewrite_rules! {
+ir::rewrite::visitor! {
     // name of the rewriter type
-    AddZeroRewriter
+    impl for AddZeroRewriter,
+    modules: Modules,
+    ir::rewrite::Rewrite,
     // define all the arguments, this should never be changed and is only needed so the variables
     // can be used in pattern code
-    ir types inst
+    ir, types, inst;
 
     // specify that we want to use the Arith dialect in the rules
     use arith: ir::dialect::Arith;
