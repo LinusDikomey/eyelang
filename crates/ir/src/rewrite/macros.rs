@@ -27,7 +27,7 @@ macro_rules! arg {
             return ::core::option::Option::None;
         };
         let inst = $ir.get_inst(r);
-        $crate::pattern_ref!($modules, $ir, $env, inst, $($inner)*)
+        $crate::pattern_ref!($modules, $ir, $env, inst, r, $($inner)*)
     };
 }
 
@@ -49,8 +49,11 @@ macro_rules! args {
 
 #[macro_export]
 macro_rules! pattern_ref {
-    ($modules: ident, $ir: ident, $env: ident, $inst: expr, ($module: ident.$matched_inst: ident $($arg: tt)*)) => {
+    ($modules: ident, $ir: ident, $env: ident, $inst: expr, $r: ident, ($(% $out_r: ident =)? $module: ident.$matched_inst: ident $($arg: tt)*)) => {
         let inst = $inst.as_module($modules.$module)?;
+        $(
+            let $out_r = $r;
+        )?
         if inst.op() != $module::$matched_inst {
             return ::core::option::Option::None;
         }
@@ -59,16 +62,25 @@ macro_rules! pattern_ref {
 }
 
 #[macro_export]
+macro_rules! ident_or_ignore {
+    ($id: ident) => {
+        $id
+    };
+    () => {
+        _
+    };
+}
+
+#[macro_export]
 macro_rules! visitor {
     (
-        impl $(<$lifetime: lifetime>)?
-        for
-        $rewriter: ty,
-        $modules_field: ident: $modules: ident,
+        $rewriter: ident,
         $output: ty,
         $ir: ident,
         $types: ident,
-        $inst: ident;
+        $inst: ident,
+        $env: ident,
+        $ctx: ident: $ctx_ty: ty;
 
         $(use $module: ident: $module_path: path;)*
 
@@ -76,39 +88,40 @@ macro_rules! visitor {
 
         $($pattern: tt $(if $cond: expr)? => $(=)? $result: expr;)*
     ) => {
-        pub struct $modules {
+        pub struct $rewriter {
             $(
                 $module: $crate::ModuleOf<$module_path>,
             )*
         }
-        impl $modules {
-            pub fn new(env: &mut $crate::Environment) -> Self {
+        impl $rewriter {
+            pub fn new(env: &$crate::Environment) -> Self {
                 Self {
                     $(
-                        $module: env.get_dialect_module(),
+                        $module: env.get_dialect_module_if_present().expect("Rewriter needs dialect module to be present"),
                     )*
                 }
             }
         }
-        impl $(<$lifetime>)* $crate::rewrite::Visitor for $rewriter {
+        impl $crate::rewrite::Visitor<$ctx_ty> for $rewriter {
             type Output = $output;
 
             fn visit_instruction(
                 &mut self,
-                #[allow(unused)] $ir: &mut $crate::FunctionIr,
+                #[allow(unused)] $ir: &mut $crate::modify::IrModify,
                 #[allow(unused)] $types: &$crate::Types,
-                env: &$crate::Environment,
+                $env: &$crate::Environment,
                 #[allow(unused)] $inst: &$crate::Instruction,
+                r: $crate::Ref,
                 block: $crate::BlockId,
+                $ctx: &mut $ctx_ty,
             ) -> ::core::option::Option<$output> {
-                let modules = &self.$modules_field;
                 $(
                     use $module_path as $module;
-                    let $module = modules.$module;
+                    let $module = self.$module;
                 )*
                 $(
                     let result = (|| {
-                        $crate::pattern_ref!(modules, $ir, env, $inst, $pattern);
+                        $crate::pattern_ref!(self, $ir, $env, $inst, r, $pattern);
                         $(
                             let cond: bool = $cond;
                             if !cond {
@@ -116,11 +129,11 @@ macro_rules! visitor {
                             }
                         )*
                         ::core::option::Option::Some(
-                            $crate::rewrite::IntoVisit::into_visit($result, $ir, env, block)
+                            $crate::rewrite::IntoVisit::into_visit($result, $ir, $env, block)
                         )
                     })();
                     if let Some(value) = result {
-                        return Some(value);
+                        return value;
                     }
                 )*
                 ::core::option::Option::None

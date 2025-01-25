@@ -1,12 +1,13 @@
 use dmap::DHashMap;
 
 use crate::{
-    Argument, BlockId, Builtin, Environment, FunctionId, FunctionIr, Inst, Instruction, Parameter,
-    Ref, TypeId, TypedInstruction, INLINE_ARGS,
+    builder::write_args, Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId,
+    FunctionIr, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, TypeId, TypedInstruction,
+    INLINE_ARGS,
 };
 
 pub struct IrModify {
-    ir: FunctionIr,
+    pub(crate) ir: FunctionIr,
     additional: Vec<AdditionalInst>,
     renames: DHashMap<Ref, Ref>,
 }
@@ -27,6 +28,14 @@ impl IrModify {
         self.ir.block_ids()
     }
 
+    pub fn get_ref_ty(&self, r: Ref) -> TypeId {
+        if r.idx() < self.ir.insts.len() {
+            self.ir.insts[r.idx()].ty
+        } else {
+            self.additional[r.idx() - self.ir.insts.len()].inst.ty
+        }
+    }
+
     pub fn args<'a>(
         &'a self,
         inst: &'a Instruction,
@@ -43,6 +52,7 @@ impl IrModify {
     }
 
     pub fn get_inst(&self, r: Ref) -> &Instruction {
+        let r = self.renames.get(&r).copied().unwrap_or(r);
         let i = r.0 as usize;
         if i < self.ir.insts.len() {
             &self.ir.insts[i]
@@ -164,6 +174,52 @@ impl IrModify {
         (r, prev_arg_count)
     }
 
+    pub fn add_before<'r>(
+        &mut self,
+        env: &Environment,
+        r: Ref,
+        (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) -> Ref {
+        let before = if r.idx() < self.ir.insts.len() {
+            r
+        } else {
+            todo!("add before added insts");
+        };
+        let def = &env[function];
+        debug_assert!(
+            !def.terminator,
+            "can't add a terminator before another instruction"
+        );
+        // TODO: this is probably wrong
+        let block = BlockId(
+            self.ir
+                .blocks
+                .iter()
+                .position(|info| {
+                    let i = info.idx + info.arg_count;
+                    (i..i + info.len).contains(&r.0)
+                })
+                .expect("no block found") as _,
+        );
+        self.ir.blocks[block.0 as usize].len += 1;
+        let args = write_args(
+            &mut self.ir.extra,
+            block,
+            &mut self.ir.blocks,
+            &def.params,
+            def.varargs,
+            args,
+        );
+        let r = Ref((self.ir.insts.len() + self.additional.len())
+            .try_into()
+            .expect("too many instructions"));
+        self.additional.push(AdditionalInst {
+            before,
+            inst: Instruction { function, args, ty },
+        });
+        r
+    }
+
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
         let Self {
             mut ir,
@@ -261,7 +317,8 @@ impl IrModify {
                     | Parameter::Int32
                     | Parameter::TypeId
                     | Parameter::FunctionId
-                    | Parameter::GlobalId => idx += param.slot_count(),
+                    | Parameter::GlobalId
+                    | Parameter::MCReg(_) => idx += param.slot_count(),
                 };
                 for &param in func.params() {
                     visit_param(param);
@@ -293,7 +350,8 @@ impl IrModify {
                         | Parameter::Int32
                         | Parameter::TypeId
                         | Parameter::FunctionId
-                        | Parameter::GlobalId => idx += param.slot_count(),
+                        | Parameter::GlobalId
+                        | Parameter::MCReg(_) => idx += param.slot_count(),
                     }
                 }
             }
@@ -301,6 +359,10 @@ impl IrModify {
 
         ir.insts = insts;
         ir
+    }
+
+    pub fn new_reg(&mut self) -> MCReg {
+        self.ir.new_reg()
     }
 
     pub fn replace_with(&mut self, r: Ref, new: Ref) {
@@ -314,6 +376,28 @@ impl IrModify {
             module: crate::ModuleId::BUILTINS,
             function: Builtin::Nothing.id(),
         };
+    }
+
+    pub fn replace(&mut self, r: Ref, new_inst: Instruction) {
+        if r.idx() < self.ir.insts.len() {
+            self.ir.insts[r.idx()] = new_inst;
+        } else {
+            self.additional[r.idx() - self.ir.insts.len()].inst = new_inst;
+        }
+    }
+
+    pub fn get_block(&self, block: BlockId) -> &BlockInfo {
+        &self.ir.blocks[block.idx()]
+    }
+
+    pub fn prepare_instruction<'a, A: crate::IntoArgs<'a>>(
+        &mut self,
+        params: &[Parameter],
+        varargs: bool,
+        block: BlockId,
+        arg: (FunctionId, A, TypeId),
+    ) -> Instruction {
+        self.ir.prepare_instruction(params, varargs, block, arg)
     }
 }
 

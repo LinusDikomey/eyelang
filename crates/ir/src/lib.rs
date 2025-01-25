@@ -124,6 +124,8 @@ pub struct TypeIds {
     count: u32,
 }
 impl TypeIds {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+
     pub fn count(self) -> u32 {
         self.count
     }
@@ -215,6 +217,9 @@ impl BlockId {
 #[derive(Debug, Clone, Copy)]
 pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MCReg(u32);
+
 pub struct Function {
     pub name: Box<str>,
     types: Types,
@@ -276,6 +281,24 @@ impl Function {
             varargs,
             terminator: false,
             return_type: Some(return_type),
+            ir: None,
+        }
+    }
+
+    pub fn declare_inst(
+        name: impl Into<Box<str>>,
+        types: Types,
+        params: Vec<Parameter>,
+        varargs: bool,
+        terminator: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            types,
+            params,
+            varargs,
+            terminator,
+            return_type: None,
             ir: None,
         }
     }
@@ -453,10 +476,12 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct FunctionIr {
     blocks: Vec<BlockInfo>,
     insts: Vec<Instruction>,
     extra: Vec<u32>,
+    mc_reg_count: u32,
 }
 impl FunctionIr {
     pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> {
@@ -592,6 +617,12 @@ impl FunctionIr {
         }
     }
 
+    pub fn new_reg(&mut self) -> MCReg {
+        let r = self.mc_reg_count;
+        self.mc_reg_count += 1;
+        MCReg(r)
+    }
+
     pub fn display<'a>(
         &'a self,
         env: &'a Environment,
@@ -644,6 +675,7 @@ impl block_graph::Blocks for FunctionIr {
     */
 }
 
+#[derive(Clone)]
 pub struct BlockInfo {
     arg_count: u32,
     idx: u32,
@@ -745,6 +777,7 @@ fn decode_args<'a>(
                 module: ModuleId(arg()),
                 idx: arg(),
             }),
+            Parameter::MCReg(_) => Argument::MCReg(MCReg(arg())),
         })
 }
 
@@ -827,7 +860,7 @@ macro_rules! primitives {
 }
 
 pub mod parameter_types {
-    pub use super::{BlockTarget, FunctionId, GlobalId, Ref, TypeId};
+    pub use super::{BlockTarget, FunctionId, GlobalId, MCReg, Ref, TypeId};
     pub type Int = u64;
     pub type Float = f64;
     pub type Int32 = u32;
@@ -844,16 +877,37 @@ pub enum Parameter {
     TypeId,
     FunctionId,
     GlobalId,
+    MCReg(Usage),
 }
 impl Parameter {
     pub fn slot_count(self) -> usize {
         match self {
-            Parameter::Ref | Parameter::RefOf(_) | Parameter::TypeId | Parameter::Int32 => 1,
+            Parameter::Ref
+            | Parameter::RefOf(_)
+            | Parameter::TypeId
+            | Parameter::Int32
+            | Parameter::MCReg(_) => 1,
             Parameter::Int
             | Parameter::Float
             | Parameter::BlockTarget
             | Parameter::FunctionId
             | Parameter::GlobalId => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Usage {
+    Def,
+    Use,
+    DefUse,
+}
+impl fmt::Display for Usage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Def => write!(f, "def"),
+            Self::Use => write!(f, "use"),
+            Self::DefUse => write!(f, "def-use"),
         }
     }
 }
@@ -879,8 +933,9 @@ macro_rules! lifetime_or_static {
 
 #[macro_export]
 macro_rules! instructions {
-    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $(<$inst_life: lifetime>)? $($arg_name: ident: $arg: ident $(<$life: lifetime>)?)* $(!terminator $terminator_val: literal)?; )*) => {
+    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $(<$inst_life: lifetime>)? $($arg_name: ident: $arg: ident $(<$life: lifetime>)? $(($arg_param: expr))?)* $(!terminator $terminator_val: literal)?; )*) => {
         #[derive(Debug, Clone, Copy, $crate::__FromRepr, PartialEq, Eq, Hash)]
+        #[allow(non_camel_case_types)]
         pub enum $module_name {
             $($instruction,)*
         }
@@ -915,15 +970,13 @@ macro_rules! instructions {
                     $(
                         {
                             let terminator = false $(|| $terminator_val)?;
-                            $crate::Function {
-                                name: stringify!($instruction).into(),
-                                types: $crate::Types::new(),
-                                params: vec![ $( $crate::Parameter::$arg, )* ],
-                                varargs: false,
-                                terminator,
-                                return_type: None,
-                                ir: None,
-                            }
+                            $crate::Function::declare_inst(
+                                 stringify!($instruction),
+                                 $crate::Types::new(),
+                                 vec![ $( $crate::Parameter::$arg $(($arg_param))*, )* ],
+                                 false,
+                                 terminator,
+                            )
                         },
                     )*
                 ]
@@ -932,7 +985,7 @@ macro_rules! instructions {
             fn params(self) -> &'static [$crate::Parameter] {
                 match self {
                     $(
-                        Self::$instruction => &[$( $crate::Parameter::$arg, )*],
+                        Self::$instruction => &[$( $crate::Parameter::$arg $(($arg_param))*, )*],
                     )*
                 }
             }

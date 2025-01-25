@@ -1,6 +1,6 @@
 use crate::{
-    BlockId, BlockTarget, Environment, FunctionId, FunctionIr, GlobalId, Instruction, Parameter,
-    Ref, TypeId,
+    BlockId, BlockTarget, Environment, FunctionId, FunctionIr, GlobalId, Instruction, MCReg,
+    Parameter, Ref, TypeId,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -12,6 +12,7 @@ pub enum Argument<'a> {
     TypeId(TypeId),
     FunctionId(FunctionId),
     GlobalId(GlobalId),
+    MCReg(MCReg),
 }
 impl Argument<'_> {
     pub fn parameter_ty(&self) -> Parameter {
@@ -23,6 +24,7 @@ impl Argument<'_> {
             Argument::TypeId(_) => Parameter::TypeId,
             Argument::FunctionId(_) => Parameter::FunctionId,
             Argument::GlobalId(_) => Parameter::GlobalId,
+            Argument::MCReg(_) => Parameter::MCReg(crate::Usage::Def), // TODO: setting def here ok?
         }
     }
 }
@@ -141,6 +143,11 @@ impl TryFrom<Argument<'_>> for FunctionId {
 impl From<GlobalId> for Argument<'_> {
     fn from(value: GlobalId) -> Self {
         Self::GlobalId(value)
+    }
+}
+impl From<MCReg> for Argument<'_> {
+    fn from(value: MCReg) -> Self {
+        Self::MCReg(value)
     }
 }
 impl TryFrom<Argument<'_>> for GlobalId {

@@ -2,7 +2,7 @@ use core::{fmt, str};
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{builtins, Argument, Environment, Function, FunctionIr, Module, Ref};
+use crate::{builtins, Argument, Environment, Function, FunctionIr, MCReg, Module, Ref};
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -18,6 +18,12 @@ impl fmt::Display for Ref {
 impl fmt::Display for crate::BlockId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         cwrite!(f, "#r<b{}>", self.0)
+    }
+}
+
+impl fmt::Display for MCReg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        cwrite!(f, "#c<${}>", self.0)
     }
 }
 
@@ -95,6 +101,7 @@ impl fmt::Display for FunctionDisplay<'_> {
                     crate::Parameter::TypeId => cwrite!(f, "#g<type>")?,
                     crate::Parameter::FunctionId => cwrite!(f, "#g<function>")?,
                     crate::Parameter::GlobalId => cwrite!(f, "#g<global>")?,
+                    crate::Parameter::MCReg(usage) => cwrite!(f, "#g<mcreg>({usage})")?,
                 }
             }
             if function.varargs {
@@ -213,6 +220,7 @@ impl fmt::Display for BodyDisplay<'_> {
                             let global = &module.globals[id.idx as usize];
                             cwrite!(f, " @#c<{}>.#b<{}>", module.name, global.name)?;
                         }
+                        Argument::MCReg(r) => write!(f, " {}", r)?,
                     }
                 }
                 if !called.terminator {

@@ -195,6 +195,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             blocks: self.blocks,
             insts: self.insts,
             extra: self.extra,
+            mc_reg_count: 0,
         };
         let entry = &ir.blocks[BlockId::ENTRY.idx()];
         let params = (entry.idx..entry.idx + entry.arg_count)
@@ -219,6 +220,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             blocks: self.blocks,
             insts: self.insts,
             extra: self.extra,
+            mc_reg_count: 0,
         };
         (ir, self.types)
     }
@@ -270,6 +272,7 @@ pub(crate) fn write_args<'a>(
                     (id.module.0, Some(id.function.0))
                 }
                 (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
+                (Argument::MCReg(r), crate::Parameter::MCReg(_)) => (r.0, None),
                 _ => panic!("argument was of unexpected kind, expected {param:?}"),
             };
             std::iter::once(a).chain(b)

@@ -204,7 +204,7 @@ fn main() -> Result<(), MainError> {
                     }
                     backend
                         .emit_module(
-                            &compiler.ir,
+                            &mut compiler.ir,
                             compiler.ir_module,
                             args.backend_ir,
                             args.target.as_deref(),

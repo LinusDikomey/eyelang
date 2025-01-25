@@ -1,7 +1,7 @@
 #![allow(unused)] // TODO: remove when x86 backend is worked on again
 use std::{ffi::CStr, path::Path};
 
-use ir::mc::Op;
+use ir::{mc::Op, MCReg};
 
 mod abi;
 mod elf;
@@ -31,12 +31,13 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        env: &ir::Environment,
+        env: &mut ir::Environment,
         module_id: ir::ModuleId,
         print_ir: bool,
         target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
+        env.get_dialect_module::<isa::X86>();
         assert!(target.is_none(), "todo: check target");
         let mut writer = ElfObjectWriter::new();
         let mut text_section = Vec::new();
@@ -66,16 +67,20 @@ impl Backend {
 
         for func in env[module_id].functions() {
             if let Some(ir) = func.ir() {
-                let mut mir = isel::codegen(env, ir, func, func.types());
+                let (mut mir, types) = isel::codegen(env, ir, func, func.types());
                 let offset = text_section.len() as u64;
                 if print_ir {
-                    println!("mir for {}:\n{}\n", func.name, mir);
+                    println!("mir for {}:\n{}\n", func.name, mir.display(env, &types));
                 }
-                ir::mc::regalloc(&mut mir, self.log);
+                //ir::mc::regalloc(&mut mir, self.log);
                 if self.log {
-                    println!("mir for {}: (post-regalloc)\n{}\n", func.name, mir);
+                    println!(
+                        "mir for {}: (post-regalloc)\n{}\n",
+                        func.name,
+                        mir.display(env, func.types())
+                    );
                 }
-                emit::write(&mir, &mut text_section);
+                //emit::write(&mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
                 symtab.entry(elf::symtab::Entry {
@@ -129,19 +134,6 @@ pub enum MCValue {
     PtrOffset(MCReg, i32),
     /// value is located at a constant offset from an address in a register
     Indirect(MCReg, i32),
-}
-#[derive(Debug, Clone, Copy)]
-pub enum MCReg {
-    Register(isa::Reg),
-    Virtual(ir::mc::VReg),
-}
-impl MCReg {
-    pub fn op(self) -> Op<isa::Reg> {
-        match self {
-            MCReg::Register(r) => Op::Reg(r),
-            MCReg::Virtual(r) => Op::VReg(r),
-        }
-    }
 }
 
 pub fn list_targets() -> Vec<String> {

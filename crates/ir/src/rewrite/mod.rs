@@ -2,87 +2,101 @@ mod macros;
 pub use macros::visitor;
 
 use crate::{
-    builtins::Builtin, BlockId, Environment, FunctionId, FunctionIr, Instruction, IntoArgs,
-    ModuleId, Parameter, Ref, TypeId, Types, INLINE_ARGS,
+    modify::IrModify, BlockId, Environment, FunctionId, FunctionIr, Instruction, IntoArgs,
+    Parameter, Ref, TypeId, Types, INLINE_ARGS,
 };
 
-pub trait Visitor {
+pub trait Visitor<Ctx = ()> {
     type Output;
     fn visit_instruction(
         &mut self,
-        ir: &mut FunctionIr,
+        ir: &mut IrModify,
         types: &Types,
         env: &Environment,
         inst: &Instruction,
+        r: Ref,
         block: BlockId,
+        ctx: &mut Ctx,
     ) -> Option<Self::Output>;
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Rewrite {
-    Keep,
     Replace(Instruction),
     Rename(Ref),
 }
-impl Rewrite {
-    pub fn success(&self) -> bool {
-        !matches!(self, Self::Keep)
-    }
-}
 
 pub trait IntoVisit<T> {
-    fn into_visit(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> T;
+    fn into_visit(self, ir: &mut IrModify, env: &Environment, block: BlockId) -> Option<T>;
 }
 impl<T> IntoVisit<T> for T {
-    fn into_visit(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> T {
-        self
+    fn into_visit(self, _ir: &mut IrModify, _env: &Environment, _block: BlockId) -> Option<T> {
+        Some(self)
     }
 }
 impl<'a, A: IntoArgs<'a>> IntoVisit<Rewrite> for (FunctionId, A, TypeId) {
-    fn into_visit(self, ir: &mut FunctionIr, env: &Environment, block: BlockId) -> Rewrite {
-        Rewrite::Replace(ir.prepare_instruction(
+    fn into_visit(self, ir: &mut IrModify, env: &Environment, block: BlockId) -> Option<Rewrite> {
+        Some(Rewrite::Replace(ir.prepare_instruction(
             &env[self.0].params,
             env[self.0].varargs,
             block,
             self,
-        ))
+        )))
     }
 }
 impl IntoVisit<Rewrite> for Ref {
-    fn into_visit(self, _ir: &mut FunctionIr, _env: &Environment, _block: BlockId) -> Rewrite {
-        Rewrite::Rename(self)
+    fn into_visit(
+        self,
+        _ir: &mut IrModify,
+        _env: &Environment,
+        _block: BlockId,
+    ) -> Option<Rewrite> {
+        Some(Rewrite::Rename(self))
+    }
+}
+impl IntoVisit<Rewrite> for () {
+    fn into_visit(
+        self,
+        _ir: &mut IrModify,
+        _env: &Environment,
+        _block: BlockId,
+    ) -> Option<Rewrite> {
+        None
     }
 }
 
-pub fn rewrite_in_place<R: Visitor<Output = Rewrite>>(
-    ir: &mut FunctionIr,
+pub trait RewriteCtx {
+    fn begin_block(&mut self, _ir: &mut IrModify, _block: BlockId) {}
+    fn end_block(&mut self, _ir: &mut IrModify, _block: BlockId) {}
+}
+impl RewriteCtx for () {}
+
+pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
+    ir: &mut IrModify,
     types: &Types,
     env: &Environment,
+    ctx: &mut Ctx,
     mut rewriter: R,
 ) {
-    let mut renames = RenameTable::new(ir);
     for block in ir.block_ids() {
-        let block_info = &ir.blocks[block.0 as usize];
+        ctx.begin_block(ir, block);
+        let block_info = ir.get_block(block);
         let i = block_info.idx + block_info.arg_count;
         for idx in i..i + block_info.len {
-            let mut inst = ir.insts[idx as usize];
-            renames.visit_inst(ir, &mut inst, env);
-            let rewrite = rewriter.visit_instruction(ir, types, env, &inst, block);
+            let r = Ref(idx);
+            let inst = *ir.get_inst(r);
+            let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
             match rewrite {
-                Some(Rewrite::Keep) | None => {}
+                None => {}
                 Some(Rewrite::Replace(new_inst)) => {
-                    inst = new_inst;
+                    ir.replace(r, new_inst);
                 }
                 Some(Rewrite::Rename(new_ref)) => {
-                    inst.function = FunctionId {
-                        module: ModuleId::BUILTINS,
-                        function: Builtin::Nothing.id(),
-                    };
-                    renames.rename(idx, new_ref);
+                    ir.replace_with(r, new_ref);
                 }
             }
-            ir.insts[idx as usize] = inst;
         }
+        ctx.end_block(ir, block);
     }
 }
 /// Tracks renames of values to replace all uses of values with other values
@@ -100,7 +114,7 @@ impl RenameTable {
         self.renames[idx as usize] = Some(rename);
     }
 
-    pub fn visit_inst(&self, ir: &mut FunctionIr, inst: &mut Instruction, env: &Environment) {
+    pub fn visit_inst(&self, ir: &mut IrModify, inst: &mut Instruction, env: &Environment) {
         let get_new =
             |r: Ref| -> Option<Ref> { r.into_ref().and_then(|i| self.renames[i as usize]) };
         let get = |r: Ref| get_new(r).unwrap_or(r);
@@ -110,7 +124,7 @@ impl RenameTable {
             &mut inst.args[..count]
         } else {
             let i = inst.args[0] as usize;
-            &mut ir.extra[i..i + count]
+            &mut ir.ir.extra[i..i + count]
         };
         let mut args = args.iter_mut();
 

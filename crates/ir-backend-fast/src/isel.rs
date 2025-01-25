@@ -1,8 +1,9 @@
 use ir::{
     mc::{BlockBuilder, MachineIR, MirBlock, Op, RegClass, VRegs},
-    rewrite::Visitor,
+    modify::IrModify,
+    rewrite::{Rewrite, RewriteCtx, Visitor},
     BlockGraph, BlockId, Environment, FunctionId, FunctionIr, Parameter, Primitive, PrimitiveInfo,
-    Ref, Type, Types,
+    Ref, Type, TypeIds, Types,
 };
 
 use crate::{
@@ -14,11 +15,12 @@ use crate::{
 type Builder<'a> = BlockBuilder<'a, Inst>;
 
 pub fn codegen(
-    env: &mut Environment,
+    env: &Environment,
     body: &ir::FunctionIr,
-    function: &mut ir::Function,
+    function: &ir::Function,
     types: &ir::Types,
-) -> MachineIR<Inst> {
+) -> (FunctionIr, ir::Types) {
+    /*
     let mut mir = MachineIR::new();
     let mut builder = mir.begin_block(MirBlock::ENTRY);
     let mut values = vec![MCValue::None; body.inst_count() as usize];
@@ -30,6 +32,7 @@ pub fn codegen(
     // slots.
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
+    */
 
     /*
     let abi = abi::get_function_abi(
@@ -45,8 +48,8 @@ pub fn codegen(
 
     //let (mir_entry_block, entry_block_args) =
     //    builder.create_block(abi.arg_registers().iter().map(|r| r.class()));
-    let (mir_entry_block, entry_block_args) = builder.create_block([]);
-    builder.register_successor(mir_entry_block);
+    //let (mir_entry_block, entry_block_args) = builder.create_block([]);
+    //builder.register_successor(mir_entry_block);
     /*
     builder.build_copyargs(
         Inst::Copyargs,
@@ -55,6 +58,7 @@ pub fn codegen(
     );
     */
 
+    /*
     let block_map = body
         .block_ids()
         .map(|block| {
@@ -85,7 +89,8 @@ pub fn codegen(
             (mir_block, mir_args)
         })
         .collect();
-    let modules = Modules::new(env);
+    */
+    /*
     let mut gen = Gen {
         env,
         modules,
@@ -96,7 +101,17 @@ pub fn codegen(
         stack_setup_indices,
         block_map,
     };
+    */
+    let mut rewriter = InstructionSelector::new(env);
+    let mut body = IrModify::new(body.clone());
+    let mut types = types.clone();
+    let mut ctx = IselCtx {
+        unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
+        values: vec![MCValue::None; body.inst_count() as usize].into_boxed_slice(),
+    };
+    ir::rewrite::rewrite_in_place(&mut body, &types, env, &mut ctx, rewriter);
 
+    /*
     let graph = BlockGraph::calculate(gen.body, gen.env);
 
     for &block in graph.postorder().iter().rev() {
@@ -106,11 +121,15 @@ pub fn codegen(
             values[i.idx()] = gen.gen_inst(inst, block, &mut builder, &values, body);
         }
     }
+    */
 
-    for idx in gen.stack_setup_indices {
+    /*
+    for idx in stack_setup_indices {
         mir.replace_operand(idx, 1, offset_op(mir.stack_offset() as i32));
     }
     mir
+    */
+    (body.finish_and_compress(env), types)
 }
 
 fn block_args_to_reg_classes<'a, I: IntoIterator<Item = ir::Ref>>(
@@ -198,7 +217,6 @@ impl<T> ExactSizeIterator for ZeroToTwo<T> {
 
 struct Gen<'a> {
     env: &'a mut ir::Environment,
-    modules: Modules,
     //abi: Box<dyn abi::Abi>,
     function: &'a ir::Function,
     body: &'a mut ir::FunctionIr,
@@ -221,12 +239,6 @@ impl Gen<'_> {
         values: &[MCValue],
         body: &FunctionIr,
     ) -> MCValue {
-        let mut visitor = InstructionSelector {
-            modules: &self.modules,
-            builder: &mut *builder,
-        };
-        visitor.visit_instruction(self.body, self.types, &self.env, inst, block);
-        drop(visitor);
         todo!()
         /*
         match inst.tag {
@@ -770,25 +782,49 @@ impl Gen<'_> {
     */
 }
 
-struct InstructionSelector<'a> {
-    modules: &'a Modules,
-    builder: &'a mut BlockBuilder<'a, Inst>,
+pub struct IselCtx {
+    unit: ir::TypeId,
+    values: Box<[MCValue]>,
+}
+impl ir::rewrite::RewriteCtx for IselCtx {}
+impl IselCtx {
+    fn set(&mut self, r: Ref, value: MCValue) {
+        self.values[r.idx()] = value;
+    }
+
+    fn get(&mut self, r: Ref) -> MCValue {
+        self.values[r.idx()]
+    }
 }
 
 ir::visitor! {
-    impl <'a> for InstructionSelector<'a>,
-    modules: Modules,
-    MCValue,
-    ir, types, inst;
+    InstructionSelector,
+    Rewrite,
+    ir, types, inst, env,
+    ctx: IselCtx;
 
     use arith: ir::dialect::Arith;
     use tuple: ir::dialect::Tuple;
     use mem: ir::dialect::Mem;
     use cf: ir::dialect::Cf;
 
+    use x86: crate::isa::X86;
+
     patterns:
-    (arith.Int (#x)) => MCValue::Imm(x);
-    (cf.Ret (arith.Int x)) => MCValue::Imm(0);
+    (%r = arith.Int (#x)) => {
+        let reg = ir.new_reg();
+        ctx.set(r, MCValue::Reg(reg));
+        x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
+    };
+    (%r = cf.Ret value) => {
+        let MCValue::Reg(reg) = ctx.get(value) else {
+            todo!()
+        };
+        // TODO: physical registers for eax here
+        let inst = x86.movrr32(ir.new_reg(), reg, ctx.unit);
+        ir.add_before(env, r, inst);
+        x86.ret32(ctx.unit)
+    };
 }
 
 fn offset_op(offset: i32) -> Op<Reg> {
