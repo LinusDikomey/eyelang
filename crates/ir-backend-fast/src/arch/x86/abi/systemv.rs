@@ -1,6 +1,6 @@
 use ir::{Primitive, PrimitiveInfo, Type, TypeIds, Types};
 
-use crate::isa::Reg;
+use crate::arch::x86::isa::Reg;
 
 use super::{Abi, ParamStorage, ReturnPlace};
 

@@ -1,19 +1,16 @@
 use std::collections::VecDeque;
 
-use crate::{block_graph::Block, Bitmap, BlockGraph};
+use crate::{ArgumentMut, Bitmap, BlockGraph, Environment, FunctionIr, Instruction, MCReg, Usage};
 
-use super::{
-    decode_reg, Instruction, InstructionStorage, MachineIR, Op, OpUsage, RegType, Register,
-    DEAD_BIT, PHYSICAL_BIT,
-};
+use super::Register;
 
-pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>, log: bool) {
-    let graph = BlockGraph::calculate(mir, &());
-    let mut intersecting_precolored = vec![I::Register::NO_BITS; mir.virtual_register_count()];
-    let mut liveins: Box<[Bitmap]> = (0..mir.block_count())
-        .map(|_| Bitmap::new(mir.virtual_register_count()))
+pub fn regalloc<R: Register>(env: &Environment, ir: &mut FunctionIr, log: bool) {
+    let graph = BlockGraph::calculate(ir, env);
+    let mut intersecting_precolored = vec![R::NO_BITS; ir.mc_reg_count() as usize];
+    let mut liveins: Box<[Bitmap]> = (0..ir.block_count())
+        .map(|_| Bitmap::new(ir.mc_reg_count() as usize))
         .collect();
-    analyze_liveness(mir, &graph, &mut liveins, &mut intersecting_precolored);
+    analyze_liveness::<R>(env, ir, &graph, &mut liveins, &mut intersecting_precolored);
     if log {
         eprintln!("liveins:");
         for (i, liveins) in liveins.iter().enumerate() {
@@ -23,25 +20,35 @@ pub fn regalloc<I: Instruction>(mir: &mut MachineIR<I>, log: bool) {
         }
         eprintln!();
     }
-    perform_regalloc(mir, &graph, &intersecting_precolored, &liveins);
+    perform_regalloc::<R>(env, ir, &graph, &intersecting_precolored, &liveins);
 }
 
-fn analyze_liveness<I: Instruction>(
-    mir: &mut MachineIR<I>,
-    graph: &BlockGraph<MachineIR<I>>,
+fn analyze_liveness<R: Register>(
+    env: &Environment,
+    ir: &mut FunctionIr,
+    graph: &BlockGraph<FunctionIr>,
     liveins: &mut [Bitmap],
-    intersecting_precolored: &mut [<I::Register as Register>::RegisterBits],
+    intersecting_precolored: &mut [R::RegisterBits],
 ) {
     let mut workqueue: VecDeque<_> = graph.postorder().iter().copied().collect();
-    let mut workqueue_set: Bitmap = Bitmap::new_with_ones(mir.block_count() as usize);
+    let mut workqueue_set: Bitmap = Bitmap::new_with_ones(ir.block_count() as usize);
     let mut liveouts = liveins.to_vec();
 
     while let Some(block) = workqueue.pop_front() {
         workqueue_set.set(block.idx(), false);
         // PERF: just reuse one bitmap in the future and copy over
         let mut live = liveouts[block.idx()].clone();
-        let (block_insts, extra_ops) = mir.block_insts_mut(block);
-        analyze_block_liveness(&mut live, intersecting_precolored, block_insts, extra_ops);
+        let mut live_precolored = R::NO_BITS;
+        for r in ir.block_refs(block).iter().rev() {
+            analyze_inst_liveness::<R>(
+                env,
+                ir,
+                &mut live,
+                &mut live_precolored,
+                intersecting_precolored,
+                ir.get_inst(r),
+            );
+        }
         for pred in graph.preds(block) {
             if liveouts[pred.idx()].union_with(&live) && !workqueue_set.get(pred.idx()) {
                 workqueue_set.set(pred.idx(), true);
@@ -52,31 +59,15 @@ fn analyze_liveness<I: Instruction>(
     }
 }
 
-fn analyze_block_liveness<I: Instruction>(
+fn analyze_inst_liveness<R: Register>(
+    env: &Environment,
+    ir: &FunctionIr,
     live: &mut Bitmap,
-    intersecting_precolored: &mut [<I::Register as Register>::RegisterBits],
-    insts: &mut [InstructionStorage<I>],
-    extra_ops: &mut [Op<I::Register>],
+    live_precolored: &mut R::RegisterBits,
+    intersecting_precolored: &mut [R::RegisterBits],
+    inst: &Instruction,
 ) {
-    let mut live_precolored = I::Register::NO_BITS;
-    for inst in insts.iter_mut().rev() {
-        analyze_inst_liveness(
-            live,
-            &mut live_precolored,
-            intersecting_precolored,
-            inst,
-            extra_ops,
-        )
-    }
-}
-
-fn analyze_inst_liveness<I: Instruction>(
-    live: &mut Bitmap,
-    live_precolored: &mut <I::Register as Register>::RegisterBits,
-    intersecting_precolored: &mut [<I::Register as Register>::RegisterBits],
-    inst: &mut InstructionStorage<I>,
-    extra_ops: &mut [Op<I::Register>],
-) {
+    /*
     if inst.inst.is_copyargs() {
         let (to, from) = inst.decode_copyargs(extra_ops);
         for op in from {
@@ -126,40 +117,48 @@ fn analyze_inst_liveness<I: Instruction>(
     for &reg in inst.inst.implicit_defs() {
         reg.set_bit(live_precolored, false);
     }
+    */
 }
 
-fn perform_regalloc<I: Instruction>(
-    mir: &mut MachineIR<I>,
-    graph: &BlockGraph<MachineIR<I>>,
-    intersecting_precolored: &[<I::Register as Register>::RegisterBits],
+fn perform_regalloc<R: Register>(
+    env: &Environment,
+    mir: &mut FunctionIr,
+    graph: &BlockGraph<FunctionIr>,
+    intersecting_precolored: &[R::RegisterBits],
     liveins: &[Bitmap],
 ) {
-    let mut chosen = vec![I::Register::DEFAULT; mir.virtual_register_count()];
+    let mut chosen = vec![R::DEFAULT; mir.mc_reg_count() as usize];
 
     // first choose the registers for all block arguments
     for &block in graph.postorder().iter() {
-        let mut free = I::Register::ALL_BITS;
-        for arg in mir.block_args(block).iter() {
+        let mut free = R::ALL_BITS;
+        /*
+        for arg in mir.block_args(block) {
             let avail = free & !intersecting_precolored[arg.0 as usize];
             let class = mir.virtual_reg_class(arg);
-            let chosen_reg = I::Register::allocate_reg(avail, class)
-                .expect("register allocation failed, TODO: spilling");
+            let chosen_reg =
+                R::allocate_reg(avail, class).expect("register allocation failed, TODO: spilling");
             chosen_reg.set_bit(&mut free, false);
             chosen[arg.0 as usize] = chosen_reg;
         }
+        */
     }
 
     // then go over the blocks again to fill in the remaining registers
     for &block in graph.postorder().iter().rev() {
-        let mut free = I::Register::ALL_BITS;
+        let mut free = R::ALL_BITS;
         liveins[block.idx()].visit_set_bits(|livein| {
             chosen[livein].set_bit(&mut free, false);
         });
+        /*
         for arg in mir.block_args(block).iter() {
             chosen[arg.0 as usize].set_bit(&mut free, false);
         }
-        let (insts, extra_ops) = mir.block_insts_mut(block);
-        for (i, inst) in insts.iter_mut().enumerate() {
+        */
+        for r in mir.block_refs(block).iter() {
+            let inst = mir.get_inst(r);
+
+            /*
             if inst.inst.is_copyargs() {
                 let (to, from) = inst.decode_copyargs_mut(extra_ops);
                 for op in to {
@@ -211,44 +210,45 @@ fn perform_regalloc<I: Instruction>(
                     _ => {}
                 }
             }
-            for (reg, _) in inst
-                .reg_ops_mut()
-                .filter(|&(_, usage)| usage != OpUsage::Def)
-            {
-                if let RegType::Virtual(r) = decode_reg::<I::Register>(*reg) {
-                    // Update Def/DefUse with the chosen register and set the free bit if it's dead.
-                    let dead = *reg & DEAD_BIT != 0;
-                    let chosen_reg = chosen[r.0 as usize];
-                    *reg = PHYSICAL_BIT | chosen_reg.encode() as u64;
-                    if dead {
-                        chosen_reg.set_bit(&mut free, true);
-                        // always preserve the dead bit
-                        *reg |= DEAD_BIT;
+            */
+            for arg in mir.args_mut(r, env) {
+                match arg {
+                    ArgumentMut::MCReg(Usage::Def, _) => {}
+                    ArgumentMut::MCReg(_, reg) => {
+                        if let Some(r) = reg.virt() {
+                            // Update Def/DefUse with the chosen register and set the free bit if it's dead.
+                            let dead = reg.is_dead();
+                            let chosen_reg = chosen[r as usize];
+                            *reg = MCReg::from_phys(chosen_reg);
+                            if dead {
+                                chosen_reg.set_bit(&mut free, true);
+                                // always preserve the dead bit
+                                reg.set_dead();
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
-            for (reg, usage) in inst.reg_ops_mut().rev() {
-                let dead = *reg & DEAD_BIT != 0;
-                match decode_reg::<I::Register>(*reg) {
-                    RegType::Reg(r) => {
-                        r.set_bit(&mut free, dead);
-                    }
-                    RegType::Virtual(r) => {
-                        if usage == OpUsage::Def {
-                            // TODO: proper register classes
-                            // TODO: spilling
-                            let occupied = intersecting_precolored[r.0 as usize];
-                            let avail = free & !occupied;
-                            let chosen_reg =
-                                I::Register::allocate_reg(avail, super::RegClass::GP32)
-                                    .expect("register allocation failed, TODO: spilling");
-                            chosen_reg.set_bit(&mut free, false);
-                            chosen[r.0 as usize] = chosen_reg;
-                            *reg = PHYSICAL_BIT | chosen_reg.encode() as u64;
-                            // preserve the dead bit
-                            if dead {
-                                *reg |= DEAD_BIT;
-                            }
+            for arg in mir.args_mut(r, env).rev() {
+                if let ArgumentMut::MCReg(usage, r) = arg {
+                    if let Some(phys) = r.phys::<R>() {
+                        phys.set_bit(&mut free, r.is_dead());
+                    } else if usage == Usage::Def {
+                        let i = r.virt().unwrap() as usize;
+                        // TODO: proper register classes
+                        // TODO: spilling
+                        let occupied = intersecting_precolored[i];
+                        let avail = free & !occupied;
+                        let chosen_reg = R::allocate_reg(avail, super::RegClass::GP32)
+                            .expect("register allocation failed, TODO: spilling");
+                        chosen_reg.set_bit(&mut free, false);
+                        chosen[i] = chosen_reg;
+                        let dead = r.is_dead();
+                        *r = MCReg::from_phys(chosen_reg);
+                        // preserve the dead bit
+                        if dead {
+                            r.set_dead();
                         }
                     }
                 }

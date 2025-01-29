@@ -88,11 +88,15 @@ impl RegisterBits {
 use ir::Usage;
 ir::instructions! {
     X86 "x86" X86Insts
+
     movri32 to: MCReg(Usage::Def) i: Int32;
+    movri64 to: MCReg(Usage::Def) i: Int32;
+
     movrr32 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
-    ret32;
+    ret32 !terminator true;
 }
 
+/*
 ir::mc::inst! { Inst Reg
     // add
     addrr32 Reg: DefUse, Reg: Use               !implicit_def eflags;
@@ -163,3 +167,4 @@ ir::mc::inst! { Inst Reg
     setg8  Reg: Def !implicit eflags;
     setge8 Reg: Def !implicit eflags;
 }
+*/

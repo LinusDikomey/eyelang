@@ -1,47 +1,38 @@
 use std::{collections::VecDeque, hint::unreachable_unchecked};
 
-use ir::mc::{MachineIR, MirBlock, Op, OpType, RegClass};
+use ir::{
+    block_graph::Blocks,
+    mc::{OpType, RegClass},
+    BlockId, Environment, FunctionIr, MCReg, ModuleOf,
+};
 
-use crate::isa::{Inst, Reg};
+use super::isa::{Reg, X86};
 
-pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
+pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut Vec<u8>) {
     let start = text.len();
+    /*
     #[cold]
     fn op_error(expected: &'static str, found: Op<Reg>) -> ! {
         panic!("invalid instruction operand, expected {expected} but found value {found:?}")
     }
+    */
 
-    fn r(a: u64) -> Reg {
-        let a = Op::decode(a, OpType::Reg);
-        let Op::Reg(a) = a else {
-            op_error("Register", a)
-        };
-        a
-    }
-
-    fn m(a: u64, b: u64) -> (Reg, OffsetClass) {
-        let a = Op::decode(a, OpType::Reg);
-        let Op::Reg(a) = a else {
-            op_error("Register", a)
-        };
-        (a, OffsetClass::from_imm(b as i64))
-    }
-
-    let mut block_queue = VecDeque::from([MirBlock::ENTRY]);
+    let mut block_queue = VecDeque::from([BlockId::ENTRY]);
     let mut block_offsets: Box<[Option<u32>]> =
         vec![None; ir.block_count() as usize].into_boxed_slice();
 
-    let mut missing_block_addrs = Vec::new();
+    let mut missing_block_addrs: Vec<(u32, BlockId)> = Vec::new();
 
     while let Some(block) = block_queue.pop_front() {
-        let offset = &mut block_offsets[block.0 as usize];
+        let offset = &mut block_offsets[block.idx()];
         if offset.is_some() {
             continue;
         }
         *offset = Some((text.len() - start) as u32);
-        block_queue.extend(ir.block_successors(block));
+        block_queue.extend(ir.successors(env, block).into_iter());
 
-        for inst in ir.block_insts(block) {
+        for (r, i) in ir.get_block(block) {
+            /*
             let rr = || (r(inst.ops[0]), r(inst.ops[1]));
             let ri = || (r(inst.ops[0]), inst.ops[1]);
             let rri = || (r(inst.ops[0]), r(inst.ops[1]), inst.ops[2]);
@@ -49,7 +40,30 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
             let mr = || (m(inst.ops[0], inst.ops[1]), r(inst.ops[2]));
             let mi = || (m(inst.ops[0], inst.ops[1]), inst.ops[2]);
             let b = || MirBlock(inst.ops[0] as u32);
+            */
 
+            let Some(inst) = i.as_module(x86) else {
+                panic!("expected x86 instruction but encountered other module at {r:?}");
+            };
+
+            use X86 as I;
+            match inst.op() {
+                I::movri32 | I::movri64 => {
+                    let wide = inst.op() == I::movri64;
+                    let (a, b): (Reg, u64) = ir.args(i, env);
+                    let imm32: i32 = b.try_into().unwrap();
+                    let [i0, i1, i2, i3] = imm32.to_le_bytes();
+                    let (r, b) = encode_reg(a);
+                    if b || wide {
+                        text.push(REX | if b { REX_B } else { 0 } | if wide { REX_W } else { 0 });
+                    }
+                    text.extend([0xB8 + r, i0, i1, i2, i3]);
+                }
+                I::movrr32 => todo!(),
+                I::ret32 => todo!(),
+            }
+
+            /*
             match inst.inst {
                 Inst::Copy => {
                     let (a, b) = rr();
@@ -321,10 +335,11 @@ pub fn write(ir: &MachineIR<Inst>, text: &mut Vec<u8>) {
                     text.extend([0x0F, po, 0b11 << 6 | r]);
                 }
             }
+            */
         }
     }
     for (offset_location, block) in missing_block_addrs {
-        let block_offset = block_offsets[block.0 as usize].unwrap();
+        let block_offset = block_offsets[block.idx()].unwrap();
         let offset: i32 = (block_offset as i64 - offset_location as i64 - 4)
             .try_into()
             .unwrap();
@@ -412,14 +427,14 @@ fn copy_rr(text: &mut Vec<u8>, to: Reg, from: Reg) {
 fn emit_jmp(
     rel8_op: &[u8],
     rel32_op: &[u8],
-    target: MirBlock,
+    target: BlockId,
     text: &mut Vec<u8>,
     start: usize,
     block_offsets: &[Option<u32>],
-    missing_block_addrs: &mut Vec<(u32, MirBlock)>,
+    missing_block_addrs: &mut Vec<(u32, BlockId)>,
 ) {
     let my_rel8_offset = (text.len() + rel8_op.len() - start + 1) as u32;
-    if let Some(known) = block_offsets[target.0 as usize] {
+    if let Some(known) = block_offsets[target.idx()] {
         let offset: i32 = (known as i64 - my_rel8_offset as i64).try_into().unwrap();
         let offset8: Result<i8, _> = offset.try_into();
         if let Ok(offset8) = offset8 {

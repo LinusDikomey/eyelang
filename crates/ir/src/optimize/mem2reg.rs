@@ -212,7 +212,11 @@ impl super::FunctionPass for Mem2Reg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{optimize::FunctionPass, BlockId, BlockTarget, Environment, Ref};
+    use std::marker::PhantomData;
+
+    use crate::{
+        mc::UnknownRegister, optimize::FunctionPass, BlockId, BlockTarget, Environment, Ref,
+    };
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,
@@ -302,23 +306,9 @@ mod tests {
     fn mem2reg_optimize() {
         let mut env = crate::Environment::new(crate::Primitive::create_infos());
         let (ir, types) = test_func(&mut env);
-        println!(
-            "Before:\n{}",
-            crate::display::BodyDisplay {
-                env: &env,
-                types: &types,
-                ir: &ir,
-            }
-        );
+        println!("Before:\n{}", ir.display(&env, &types),);
         let ir = super::Mem2Reg::new(&mut env).run(&env, &types, ir);
-        println!(
-            "After:\n{}",
-            crate::display::BodyDisplay {
-                env: &env,
-                types: &types,
-                ir: &ir,
-            }
-        );
+        println!("After:\n{}", ir.display(&env, &types),);
         let mem = env.get_dialect_module::<crate::dialect::Mem>();
         for block in ir.block_ids() {
             for (_, inst) in ir.get_block(block) {

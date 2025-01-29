@@ -1,8 +1,13 @@
 use core::{fmt, str};
+use std::marker::PhantomData;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{builtins, Argument, Environment, Function, FunctionIr, MCReg, Module, Ref};
+use crate::{
+    builtins,
+    mc::{Register, UnknownRegister},
+    Argument, Environment, Function, FunctionIr, MCReg, Module, Ref,
+};
 
 impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -23,7 +28,14 @@ impl fmt::Display for crate::BlockId {
 
 impl fmt::Display for MCReg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        cwrite!(f, "#c<${}>", self.0)
+        if self.is_dead() {
+            write!(f, "!")?;
+        }
+        if let Some(r) = self.virt() {
+            cwrite!(f, "#c<${}>", r)
+        } else {
+            cwrite!(f, "#c<?{}>", self.0)
+        }
     }
 }
 
@@ -119,10 +131,11 @@ impl fmt::Display for FunctionDisplay<'_> {
             writeln!(
                 f,
                 "{}",
-                BodyDisplay {
+                BodyDisplay::<UnknownRegister> {
                     env,
                     types: &function.types,
-                    ir
+                    ir,
+                    _r: PhantomData,
                 }
             )?;
             cwriteln!(f, "  #m<end> #b<{}>", function.name)?;
@@ -134,14 +147,15 @@ impl fmt::Display for FunctionDisplay<'_> {
     }
 }
 
-pub struct BodyDisplay<'a> {
+pub struct BodyDisplay<'a, R: Register = UnknownRegister> {
     pub env: &'a Environment,
     pub types: &'a crate::Types,
     pub ir: &'a FunctionIr,
+    pub _r: PhantomData<R>,
 }
-impl fmt::Display for BodyDisplay<'_> {
+impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { env, types, ir } = self;
+        let Self { env, types, ir, _r } = self;
         let digits = if ir.insts.len() < 2 {
             1
         } else {
@@ -174,16 +188,18 @@ impl fmt::Display for BodyDisplay<'_> {
                 let called = &called_module.functions[inst.function.function.0 as usize];
 
                 cwrite!(f, "    ")?;
-                if called.terminator {
-                    for _ in 0..digits + 4 {
-                        write!(f, " ")?;
-                    }
-                } else {
+                let has_value = !called.terminator
+                    && !matches!(types[inst.ty], crate::Type::Tuple(members) if members.count == 0);
+                if has_value {
                     let r_digits = if r.0 == 0 { 1 } else { r.0.ilog10() + 1 };
                     for _ in 0..digits - r_digits {
                         cwrite!(f, " ")?;
                     }
                     write!(f, "{} = ", r)?;
+                } else {
+                    for _ in 0..digits + 4 {
+                        write!(f, " ")?;
+                    }
                 }
                 cwrite!(f, "#c<{}>.", called_module.name)?;
                 cwrite!(f, "#b<{}>", called.name)?;
@@ -220,10 +236,20 @@ impl fmt::Display for BodyDisplay<'_> {
                             let global = &module.globals[id.idx as usize];
                             cwrite!(f, " @#c<{}>.#b<{}>", module.name, global.name)?;
                         }
-                        Argument::MCReg(r) => write!(f, " {}", r)?,
+                        Argument::MCReg(r) => {
+                            write!(f, " ")?;
+                            if r.is_dead() {
+                                write!(f, "!")?;
+                            }
+                            if let Some(v) = r.virt() {
+                                cwrite!(f, "#c<${}>", v)?;
+                            } else {
+                                cwrite!(f, "#c<%{}>", r.phys::<R>().unwrap().to_str())?;
+                            }
+                        }
                     }
                 }
-                if !called.terminator {
+                if has_value {
                     let display = types.display_type(inst.ty, &env.primitives);
                     write!(f, " :: {display}")?;
                 }

@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     fmt,
     marker::PhantomData,
+    mem::transmute,
     num::NonZeroU64,
     ops::{Deref, Index, IndexMut},
 };
@@ -25,7 +26,7 @@ mod display;
 mod environment;
 mod layout;
 
-pub use argument::{Argument, IntoArgs};
+pub use argument::{ArgError, Argument, IntoArgs};
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use builtins::{Builtin, BUILTIN};
@@ -86,6 +87,7 @@ impl Index<LocalFunctionId> for Module {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct ModuleId(u32);
 impl ModuleId {
     pub const BUILTINS: Self = Self(0);
@@ -96,6 +98,7 @@ impl ModuleId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct LocalFunctionId(pub u32);
 impl LocalFunctionId {
     pub fn idx(&self) -> usize {
@@ -116,6 +119,7 @@ pub struct GlobalId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct TypeId(u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -195,7 +199,7 @@ impl Refs {
         Ref(self.idx + n)
     }
 
-    pub fn iter(self) -> impl Iterator<Item = Ref> {
+    pub fn iter(self) -> impl DoubleEndedIterator<Item = Ref> {
         (self.idx..self.idx + self.count).map(Ref)
     }
 
@@ -218,7 +222,53 @@ impl BlockId {
 pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct MCReg(u32);
+impl MCReg {
+    const VIRT_BIT: u32 = 1 << 31;
+    const DEAD_BIT: u32 = 1 << 30;
+
+    pub fn from_phys<R: Register>(phys: R) -> Self {
+        let v = phys.encode();
+        debug_assert!(
+            v & (1 << 31) == 0,
+            "highest bit shouldn't be set for physical register encoding"
+        );
+        Self(v)
+    }
+
+    pub fn is_virt(self) -> bool {
+        self.0 & Self::VIRT_BIT != 0
+    }
+
+    pub fn is_phys(self) -> bool {
+        !self.is_virt()
+    }
+
+    pub fn is_dead(self) -> bool {
+        self.0 & Self::DEAD_BIT != 0
+    }
+
+    pub fn set_dead(&mut self) {
+        self.0 |= Self::DEAD_BIT;
+    }
+
+    pub fn phys<R: Register>(self) -> Option<R> {
+        self.is_phys().then(|| R::decode(self.0 & !Self::DEAD_BIT))
+    }
+
+    pub fn virt(self) -> Option<u32> {
+        self.is_virt()
+            .then_some(self.0 & !(Self::VIRT_BIT | Self::DEAD_BIT))
+    }
+
+    fn from_virt(r: u32) -> MCReg {
+        if r & (Self::VIRT_BIT | Self::DEAD_BIT) != 0 {
+            panic!("virtual register value too high")
+        }
+        Self(r | Self::VIRT_BIT)
+    }
+}
 
 pub struct Function {
     pub name: Box<str>,
@@ -500,7 +550,9 @@ impl FunctionIr {
         &self,
         idx: Ref,
         count: u32,
-    ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)> + use<'_> {
+    ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)>
+           + DoubleEndedIterator<Item = (Ref, &Instruction)>
+           + use<'_> {
         (idx.0..idx.0 + count).map(|i| (Ref(i), &self.insts[i as usize]))
     }
 
@@ -520,7 +572,12 @@ impl FunctionIr {
         self.blocks[block.0 as usize].arg_count
     }
 
-    pub fn get_block(&self, id: BlockId) -> impl Iterator<Item = (Ref, &Instruction)> + use<'_> {
+    pub fn get_block(
+        &self,
+        id: BlockId,
+    ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)>
+           + DoubleEndedIterator<Item = (Ref, &Instruction)>
+           + use<'_> {
         let block = &self.blocks[id.idx()];
         self.get_refs(Ref(block.idx + block.arg_count), block.len)
     }
@@ -595,6 +652,27 @@ impl FunctionIr {
         args_array
     }
 
+    pub fn args_mut<'a>(&'a mut self, r: Ref, env: &'a Environment) -> ArgIterMut<'a> {
+        let inst = &mut self.insts[r.idx()];
+        let func = &env[inst.function];
+        let params = func.params();
+        let param_count = params.iter().map(|p| p.slot_count()).sum();
+        let (storage, vararg_count) = if params.len() <= INLINE_ARGS && !func.varargs {
+            (&mut inst.args[..param_count], 0)
+        } else {
+            let vararg_count = if func.varargs { inst.args[1] } else { 0 };
+            (
+                &mut self.extra[inst.args[0] as usize..][..param_count + vararg_count as usize],
+                vararg_count,
+            )
+        };
+        ArgIterMut {
+            params: params.iter(),
+            storage: storage.iter_mut(),
+            vararg_count,
+        }
+    }
+
     pub fn prepare_instruction<'a>(
         &mut self,
         params: &[Parameter],
@@ -620,7 +698,7 @@ impl FunctionIr {
     pub fn new_reg(&mut self) -> MCReg {
         let r = self.mc_reg_count;
         self.mc_reg_count += 1;
-        MCReg(r)
+        MCReg::from_virt(r)
     }
 
     pub fn display<'a>(
@@ -632,7 +710,25 @@ impl FunctionIr {
             env,
             types,
             ir: self,
+            _r: PhantomData,
         }
+    }
+
+    pub fn display_with_phys_regs<'a, R: Register>(
+        &'a self,
+        env: &'a Environment,
+        types: &'a Types,
+    ) -> crate::display::BodyDisplay<'a, R> {
+        crate::display::BodyDisplay {
+            env,
+            types,
+            ir: self,
+            _r: PhantomData,
+        }
+    }
+
+    pub fn mc_reg_count(&self) -> u32 {
+        self.mc_reg_count
     }
 }
 impl block_graph::Blocks for FunctionIr {
@@ -651,7 +747,10 @@ impl block_graph::Blocks for FunctionIr {
         let func = &env[terminator.function];
         let params = &func.params;
         let varargs = func.varargs;
-        debug_assert!(func.terminator);
+        debug_assert!(
+            func.terminator,
+            "last instruction of a block is not a terminator"
+        );
         terminator
             .args_inner(params, varargs, self.blocks(), self.extra())
             .filter_map(|arg| {
@@ -719,6 +818,31 @@ impl Instruction {
             ty: self.ty,
         })
     }
+}
+
+pub enum ArgumentMut<'a> {
+    Ref(&'a mut Ref),
+    /// can't be visited mutably for now due to how it is encoded
+    BlockTarget,
+    Int {
+        lo: &'a mut u32,
+        hi: &'a mut u32,
+    },
+    Int32(&'a mut u32),
+    Float {
+        lo: &'a mut u32,
+        hi: &'a mut u32,
+    },
+    TypeId(&'a mut TypeId),
+    FunctionId {
+        module: &'a mut ModuleId,
+        function: &'a mut LocalFunctionId,
+    },
+    GlobalId {
+        module: &'a mut ModuleId,
+        idx: &'a mut u32,
+    },
+    MCReg(Usage, &'a mut MCReg),
 }
 
 /// how many arguments are stored inline with each instruction.
@@ -817,6 +941,106 @@ pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy {
     fn varargs(self) -> bool;
 }
 
+pub struct ArgIterMut<'a> {
+    params: std::slice::Iter<'a, Parameter>,
+    storage: std::slice::IterMut<'a, u32>,
+    vararg_count: u32,
+}
+impl ArgIterMut<'_> {
+    fn next_param(&mut self) -> Option<Parameter> {
+        self.params.next().copied().or_else(|| {
+            self.vararg_count.checked_sub(1).map(|new_count| {
+                self.vararg_count = new_count;
+                Parameter::Ref
+            })
+        })
+    }
+
+    fn next_param_back(&mut self) -> Option<Parameter> {
+        self.vararg_count
+            .checked_sub(1)
+            .map(|new_count| {
+                self.vararg_count = new_count;
+                Parameter::Ref
+            })
+            .or_else(|| self.params.next_back().copied())
+    }
+}
+impl<'a> Iterator for ArgIterMut<'a> {
+    type Item = ArgumentMut<'a>;
+
+    #[allow(clippy::missing_transmute_annotations)]
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match self.next_param()? {
+            Parameter::Ref | Parameter::RefOf(_) => {
+                ArgumentMut::Ref(unsafe { transmute(self.storage.next().unwrap()) })
+            }
+            Parameter::BlockTarget => ArgumentMut::BlockTarget,
+            Parameter::Int => ArgumentMut::Int {
+                lo: self.storage.next().unwrap(),
+                hi: self.storage.next().unwrap(),
+            },
+            Parameter::Int32 => ArgumentMut::Int32(self.storage.next().unwrap()),
+            Parameter::Float => ArgumentMut::Float {
+                lo: self.storage.next().unwrap(),
+                hi: self.storage.next().unwrap(),
+            },
+            Parameter::TypeId => {
+                ArgumentMut::TypeId(unsafe { transmute(self.storage.next().unwrap()) })
+            }
+            Parameter::FunctionId => ArgumentMut::FunctionId {
+                module: unsafe { transmute(self.storage.next().unwrap()) },
+                function: unsafe { transmute(self.storage.next().unwrap()) },
+            },
+            Parameter::GlobalId => ArgumentMut::GlobalId {
+                module: unsafe { transmute(self.storage.next().unwrap()) },
+                idx: self.storage.next().unwrap(),
+            },
+            Parameter::MCReg(usage) => {
+                ArgumentMut::MCReg(usage, unsafe { transmute(self.storage.next().unwrap()) })
+            }
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.params.len(), Some(self.params.len()))
+    }
+}
+impl DoubleEndedIterator for ArgIterMut<'_> {
+    #[allow(clippy::missing_transmute_annotations)]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some(match self.next_param_back()? {
+            Parameter::Ref | Parameter::RefOf(_) => {
+                ArgumentMut::Ref(unsafe { transmute(self.storage.next_back().unwrap()) })
+            }
+            Parameter::BlockTarget => ArgumentMut::BlockTarget,
+            Parameter::Int => ArgumentMut::Int {
+                hi: self.storage.next_back().unwrap(),
+                lo: self.storage.next_back().unwrap(),
+            },
+            Parameter::Int32 => ArgumentMut::Int32(self.storage.next_back().unwrap()),
+            Parameter::Float => ArgumentMut::Float {
+                hi: self.storage.next_back().unwrap(),
+                lo: self.storage.next_back().unwrap(),
+            },
+            Parameter::TypeId => {
+                ArgumentMut::TypeId(unsafe { transmute(self.storage.next_back().unwrap()) })
+            }
+            Parameter::FunctionId => ArgumentMut::FunctionId {
+                function: unsafe { transmute(self.storage.next_back().unwrap()) },
+                module: unsafe { transmute(self.storage.next_back().unwrap()) },
+            },
+            Parameter::GlobalId => ArgumentMut::GlobalId {
+                idx: self.storage.next_back().unwrap(),
+                module: unsafe { transmute(self.storage.next_back().unwrap()) },
+            },
+            Parameter::MCReg(usage) => ArgumentMut::MCReg(usage, unsafe {
+                transmute(self.storage.next_back().unwrap())
+            }),
+        })
+    }
+}
+
 #[macro_export]
 macro_rules! primitives {
     ($($primitive: ident = $size: literal)*) => {
@@ -872,8 +1096,8 @@ pub enum Parameter {
     RefOf(TypeId),
     BlockTarget,
     Int,
-    Float,
     Int32,
+    Float,
     TypeId,
     FunctionId,
     GlobalId,
@@ -918,6 +1142,7 @@ pub struct InvalidInstruction;
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidPrimitive;
 
+use mc::Register;
 #[doc(hidden)]
 pub use strum::FromRepr as __FromRepr;
 

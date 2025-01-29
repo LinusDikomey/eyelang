@@ -47,11 +47,7 @@ impl Pipeline {
                     "-----------------------------\n\
                     IR for #r<{}> before optimizations:\n{}",
                     env[module].functions[i].name,
-                    crate::display::BodyDisplay {
-                        env,
-                        types: &env[module].functions[i].types,
-                        ir: &ir,
-                    }
+                    ir.display(env, &env[module].functions[i].types),
                 );
             }
 
@@ -60,11 +56,7 @@ impl Pipeline {
                 if self.print_passes {
                     eprintln!(
                         "after {pass:?}:\n{}",
-                        crate::display::BodyDisplay {
-                            env,
-                            types: &env[module].functions[i].types,
-                            ir: &ir,
-                        }
+                        ir.display(env, &env[module].functions[i].types),
                     );
                 }
             }

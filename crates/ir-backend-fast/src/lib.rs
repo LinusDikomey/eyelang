@@ -1,15 +1,10 @@
 #![allow(unused)] // TODO: remove when x86 backend is worked on again
 use std::{ffi::CStr, path::Path};
 
-use ir::{mc::Op, MCReg};
+use ir::MCReg;
 
-mod abi;
-mod elf;
-mod emit;
-mod isa;
-mod isel;
-
-use elf::{ElfObjectWriter, SectionHeader};
+mod arch;
+mod bin;
 
 #[derive(Debug)]
 pub enum Error {
@@ -37,57 +32,64 @@ impl Backend {
         target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
-        env.get_dialect_module::<isa::X86>();
         assert!(target.is_none(), "todo: check target");
-        let mut writer = ElfObjectWriter::new();
+
+        env.get_dialect_module::<arch::x86::X86>();
+        let mut writer = bin::elf::ElfObjectWriter::new();
         let mut text_section = Vec::new();
-        let mut symtab = elf::symtab::SymtabWriter::new();
+        let mut symtab = bin::elf::symtab::SymtabWriter::new();
 
         // file entry
         let file_name = writer.add_str(env[module_id].name());
-        symtab.entry(elf::symtab::Entry {
+        symtab.entry(bin::elf::symtab::Entry {
             name_index: file_name,
-            bind: elf::symtab::Bind::Local,
-            ty: elf::symtab::Type::File,
-            visibility: elf::symtab::Visibility::Default,
+            bind: bin::elf::symtab::Bind::Local,
+            ty: bin::elf::symtab::Type::File,
+            visibility: bin::elf::symtab::Visibility::Default,
             section_index: 0xfff1, // SHN_ABS
             value: 0,
             size: 0,
         });
         // section entry
-        symtab.entry(elf::symtab::Entry {
+        symtab.entry(bin::elf::symtab::Entry {
             name_index: 0,
-            bind: elf::symtab::Bind::Local,
-            ty: elf::symtab::Type::Section,
-            visibility: elf::symtab::Visibility::Default,
+            bind: bin::elf::symtab::Bind::Local,
+            ty: bin::elf::symtab::Type::Section,
+            visibility: bin::elf::symtab::Visibility::Default,
             section_index: 2,
             value: 0,
             size: 0,
         });
 
+        let x86 = env.get_dialect_module::<arch::x86::X86>();
+
         for func in env[module_id].functions() {
             if let Some(ir) = func.ir() {
-                let (mut mir, types) = isel::codegen(env, ir, func, func.types());
+                let (mut mir, types) = arch::x86::codegen(env, ir, func, func.types());
                 let offset = text_section.len() as u64;
                 if print_ir {
-                    println!("mir for {}:\n{}\n", func.name, mir.display(env, &types));
+                    println!(
+                        "mir for {}:\n{}\n",
+                        func.name,
+                        mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
+                    );
                 }
-                //ir::mc::regalloc(&mut mir, self.log);
+                ir::mc::regalloc::<arch::x86::Reg>(env, &mut mir, self.log);
                 if self.log {
                     println!(
                         "mir for {}: (post-regalloc)\n{}\n",
                         func.name,
-                        mir.display(env, func.types())
+                        mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
                     );
                 }
-                //emit::write(&mir, &mut text_section);
+                arch::x86::write(env, x86, &mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
-                symtab.entry(elf::symtab::Entry {
+                symtab.entry(bin::elf::symtab::Entry {
                     name_index,
-                    bind: elf::symtab::Bind::Global,
-                    ty: elf::symtab::Type::Function,
-                    visibility: elf::symtab::Visibility::Default,
+                    bind: bin::elf::symtab::Bind::Global,
+                    ty: bin::elf::symtab::Type::Function,
+                    visibility: bin::elf::symtab::Visibility::Default,
                     section_index: 2,
                     value: offset,
                     size,
@@ -95,10 +97,10 @@ impl Backend {
             }
         }
         writer.section(
-            SectionHeader {
+            bin::elf::SectionHeader {
                 name: ".text".to_owned(),
-                ty: elf::SectionHeaderType::Progbits,
-                flags: elf::SectionHeaderFlags {
+                ty: bin::elf::SectionHeaderType::Progbits,
+                flags: bin::elf::SectionHeaderFlags {
                     alloc: true,
                     execinstr: true,
                     ..Default::default()

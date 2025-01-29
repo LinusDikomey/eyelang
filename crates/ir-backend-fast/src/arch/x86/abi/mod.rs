@@ -1,6 +1,6 @@
 use ir::{PrimitiveInfo, Type, TypeIds, Types};
 
-use crate::isa::Reg;
+use super::isa::Reg;
 
 mod systemv;
 

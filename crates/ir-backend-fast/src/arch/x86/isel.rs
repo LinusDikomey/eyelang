@@ -1,18 +1,18 @@
 use ir::{
-    mc::{BlockBuilder, MachineIR, MirBlock, Op, RegClass, VRegs},
+    mc::RegClass,
     modify::IrModify,
     rewrite::{Rewrite, RewriteCtx, Visitor},
-    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, Parameter, Primitive, PrimitiveInfo,
-    Ref, Type, TypeIds, Types,
+    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, Parameter, Primitive,
+    PrimitiveInfo, Ref, Type, TypeIds, Types,
 };
 
 use crate::{
-    abi::{self, ReturnPlace},
-    isa::{Inst, Reg},
-    MCReg, MCValue,
+    arch::x86::{
+        abi::{self, ReturnPlace},
+        isa::Reg,
+    },
+    MCValue,
 };
-
-type Builder<'a> = BlockBuilder<'a, Inst>;
 
 pub fn codegen(
     env: &Environment,
@@ -222,20 +222,22 @@ struct Gen<'a> {
     body: &'a mut ir::FunctionIr,
     types: &'a ir::Types,
     stack_setup_indices: Vec<u32>,
-    block_map: Box<[(MirBlock, VRegs)]>,
+    block_map: Box<[(BlockId, u32)]>,
 }
 impl Gen<'_> {
+    /*
     fn create_epilogue(&mut self, builder: &mut Builder) {
         self.stack_setup_indices.push(builder.next_inst_index());
         builder.inst(Inst::addri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
         builder.inst(Inst::pop64, [Op::Reg(Reg::rbp)]);
     }
+    */
 
     fn gen_inst(
         &mut self,
         inst: &ir::Instruction,
         block: BlockId,
-        builder: &mut Builder<'_>,
+        //builder: &mut Builder<'_>,
         values: &[MCValue],
         body: &FunctionIr,
     ) -> MCValue {
@@ -511,14 +513,13 @@ impl Gen<'_> {
     }
     */
 
+    /*
     fn store(
         &mut self,
         builder: &mut Builder,
         values: &[MCValue],
         (ptr, val): (Ref, Ref),
     ) -> MCValue {
-        todo!("store")
-        /*
         let ptr = get_ref(values, ptr);
         let ty = self.types[self.body.get_ref_ty(val)];
         let val = get_ref(values, val);
@@ -576,9 +577,10 @@ impl Gen<'_> {
             }
         }
         MCValue::None
-        */
     }
+        */
 
+    /*
     fn bin_op_commutative(
         &mut self,
         builder: &mut Builder,
@@ -588,8 +590,6 @@ impl Gen<'_> {
         insts32: BinOpInsts,
         fold: impl Fn(u64, u64) -> u64,
     ) -> MCValue {
-        todo!("bin_op")
-        /*
         let lhs = get_ref(values, lhs);
         let rhs = get_ref(values, rhs);
         let (insts, class, movrm) = match ty {
@@ -639,9 +639,10 @@ impl Gen<'_> {
         MCValue::Reg(MCReg::Virtual(
             builder.copy_to_fresh(changed_reg.op(), class),
         ))
-        */
     }
+        */
 
+    /*
     fn bin_op_noncommutative(
         &mut self,
         builder: &mut Builder,
@@ -651,8 +652,6 @@ impl Gen<'_> {
         insts32: BinOpInsts,
         fold: impl Fn(u64, u64) -> u64,
     ) -> MCValue {
-        todo!("bin_op_noncommutative")
-        /*
         let (insts, class, movri, movrm) = match ty {
             IrType::I32 | IrType::U32 => (insts32, RegClass::GP32, Inst::movri32, Inst::movrm32),
             _ => todo!("handle op ty {ty:?}"),
@@ -689,8 +688,8 @@ impl Gen<'_> {
             }
         }
         MCValue::Reg(MCReg::Virtual(lhs))
-        */
     }
+    */
 
     /*
     fn comparison(
@@ -808,7 +807,7 @@ ir::visitor! {
     use mem: ir::dialect::Mem;
     use cf: ir::dialect::Cf;
 
-    use x86: crate::isa::X86;
+    use x86: crate::arch::x86::isa::X86;
 
     patterns:
     (%r = arith.Int (#x)) => {
@@ -821,12 +820,14 @@ ir::visitor! {
             todo!()
         };
         // TODO: physical registers for eax here
-        let inst = x86.movrr32(ir.new_reg(), reg, ctx.unit);
+        let eax = MCReg::from_phys(Reg::eax);
+        let inst = x86.movrr32(eax, reg, ctx.unit);
         ir.add_before(env, r, inst);
         x86.ret32(ctx.unit)
     };
 }
 
+/*
 fn offset_op(offset: i32) -> Op<Reg> {
     Op::Imm(offset as i64 as u64)
 }
@@ -846,3 +847,4 @@ fn get_ref(values: &[MCValue], r: ir::Ref) -> MCValue {
         _ => values[r.idx()],
     }
 }
+*/

@@ -1,6 +1,6 @@
 use crate::{
     BlockId, BlockTarget, Environment, FunctionId, FunctionIr, GlobalId, Instruction, MCReg,
-    Parameter, Ref, TypeId,
+    Parameter, Ref, TypeId, Usage,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +89,21 @@ impl From<u32> for Argument<'_> {
         Self::Int(value.into())
     }
 }
+impl TryFrom<Argument<'_>> for u32 {
+    type Error = ArgError;
+    fn try_from(value: Argument) -> Result<Self, Self::Error> {
+        let Argument::Int(value) = value else {
+            return Err(ArgError {
+                expected: Parameter::Int32,
+                found: value.parameter_ty(),
+            });
+        };
+        value.try_into().map_err(|_| ArgError {
+            expected: Parameter::Int32,
+            found: Parameter::Int,
+        })
+    }
+}
 impl From<f64> for Argument<'_> {
     fn from(value: f64) -> Self {
         Self::Float(value)
@@ -145,11 +160,6 @@ impl From<GlobalId> for Argument<'_> {
         Self::GlobalId(value)
     }
 }
-impl From<MCReg> for Argument<'_> {
-    fn from(value: MCReg) -> Self {
-        Self::MCReg(value)
-    }
-}
 impl TryFrom<Argument<'_>> for GlobalId {
     type Error = ArgError;
     fn try_from(value: Argument) -> Result<Self, Self::Error> {
@@ -162,7 +172,23 @@ impl TryFrom<Argument<'_>> for GlobalId {
         Ok(value)
     }
 }
-
+impl From<MCReg> for Argument<'_> {
+    fn from(value: MCReg) -> Self {
+        Self::MCReg(value)
+    }
+}
+impl TryFrom<Argument<'_>> for MCReg {
+    type Error = ArgError;
+    fn try_from(value: Argument) -> Result<Self, Self::Error> {
+        let Argument::MCReg(value) = value else {
+            return Err(ArgError {
+                expected: Parameter::MCReg(Usage::Def),
+                found: value.parameter_ty(),
+            });
+        };
+        Ok(value)
+    }
+}
 pub trait IntoArgs<'a> {
     type Args: ExactSizeIterator<Item = Argument<'a>>;
 
