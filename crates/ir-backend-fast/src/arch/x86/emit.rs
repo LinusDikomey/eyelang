@@ -3,20 +3,13 @@ use std::{collections::VecDeque, hint::unreachable_unchecked};
 use ir::{
     block_graph::Blocks,
     mc::{OpType, RegClass},
-    BlockId, Environment, FunctionIr, MCReg, ModuleOf,
+    BlockId, BlockTarget, Environment, FunctionIr, MCReg, ModuleOf,
 };
 
 use super::isa::{Reg, X86};
 
 pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut Vec<u8>) {
     let start = text.len();
-    /*
-    #[cold]
-    fn op_error(expected: &'static str, found: Op<Reg>) -> ! {
-        panic!("invalid instruction operand, expected {expected} but found value {found:?}")
-    }
-    */
-
     let mut block_queue = VecDeque::from([BlockId::ENTRY]);
     let mut block_offsets: Box<[Option<u32>]> =
         vec![None; ir.block_count() as usize].into_boxed_slice();
@@ -29,19 +22,9 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
             continue;
         }
         *offset = Some((text.len() - start) as u32);
-        block_queue.extend(ir.successors(env, block).into_iter());
+        block_queue.extend(ir.successors(env, block).iter());
 
         for (r, i) in ir.get_block(block) {
-            /*
-            let rr = || (r(inst.ops[0]), r(inst.ops[1]));
-            let ri = || (r(inst.ops[0]), inst.ops[1]);
-            let rri = || (r(inst.ops[0]), r(inst.ops[1]), inst.ops[2]);
-            let rm = || (r(inst.ops[0]), m(inst.ops[1], inst.ops[2]));
-            let mr = || (m(inst.ops[0], inst.ops[1]), r(inst.ops[2]));
-            let mi = || (m(inst.ops[0], inst.ops[1]), inst.ops[2]);
-            let b = || MirBlock(inst.ops[0] as u32);
-            */
-
             let Some(inst) = i.as_module(x86) else {
                 panic!("expected x86 instruction but encountered other module at {r:?}");
             };
@@ -59,8 +42,50 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
                     }
                     text.extend([0xB8 + r, i0, i1, i2, i3]);
                 }
-                I::movrr32 => todo!(),
-                I::ret32 => todo!(),
+                I::movrr32 | I::movrr64 => {
+                    let (a, b): (Reg, Reg) = ir.args(i, env);
+                    let wide = inst.op() == I::movrr64;
+                    let modrm = encode_modrm_rr(a, b, wide);
+                    if modrm.rex != 0 {
+                        text.push(modrm.rex);
+                    }
+                    text.extend([0x89, modrm.modrm]);
+                }
+                I::ret32 => {
+                    text.push(0xc3);
+                }
+                I::cmprr32 => {
+                    let (a, b) = ir.args(i, env);
+                    let modrm = encode_modrm_rr(b, a, false);
+                    if modrm.rex != 0 {
+                        text.push(REX);
+                    }
+                    text.extend([0x3B, modrm.modrm]);
+                }
+                I::jmp => {
+                    let BlockTarget(target, _) = ir.args(i, env);
+                    emit_jmp(
+                        &[0xEB],
+                        &[0xE9],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
+                I::jl => {
+                    let BlockTarget(target, _) = ir.args(i, env);
+                    emit_jmp(
+                        &[0x7C, 0xcb],
+                        &[0x0F, 0x8C],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
             }
 
             /*

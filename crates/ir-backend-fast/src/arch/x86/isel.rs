@@ -2,8 +2,8 @@ use ir::{
     mc::RegClass,
     modify::IrModify,
     rewrite::{Rewrite, RewriteCtx, Visitor},
-    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, Parameter, Primitive,
-    PrimitiveInfo, Ref, Type, TypeIds, Types,
+    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, Parameter,
+    Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
 };
 
 use crate::{
@@ -792,7 +792,12 @@ impl IselCtx {
     }
 
     fn get(&mut self, r: Ref) -> MCValue {
-        self.values[r.idx()]
+        match r {
+            Ref::TRUE => MCValue::Imm(1),
+            Ref::FALSE => MCValue::Imm(0),
+            Ref::UNIT => MCValue::None,
+            r => self.values[r.idx()],
+        }
     }
 }
 
@@ -824,6 +829,22 @@ ir::visitor! {
         let inst = x86.movrr32(eax, reg, ctx.unit);
         ir.add_before(env, r, inst);
         x86.ret32(ctx.unit)
+    };
+    (cf.Goto (@b b_args)) => {
+        x86.jmp(BlockTarget(b, &[]), ctx.unit)
+    };
+    (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) => {
+        let MCValue::Reg(a) = ctx.get(a) else {
+            todo!()
+        };
+        let MCValue::Reg(b) = ctx.get(b) else {
+            todo!()
+        };
+    // FIXME: this is only valid when this is the only use of the LT
+        ir.replace(env, lt, x86.cmprr32(a, b, ctx.unit));
+        let jl = x86.jl(BlockTarget(b1, &[]), ctx.unit);
+        ir.add_before(env, r, jl);
+        x86.jmp(BlockTarget(b2, &[]), ctx.unit)
     };
 }
 

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::{ArgumentMut, Bitmap, BlockGraph, Environment, FunctionIr, Instruction, MCReg, Usage};
+use crate::{ArgumentMut, Bitmap, BlockGraph, Environment, FunctionIr, MCReg, Ref, Usage};
 
 use super::Register;
 
@@ -46,7 +46,7 @@ fn analyze_liveness<R: Register>(
                 &mut live,
                 &mut live_precolored,
                 intersecting_precolored,
-                ir.get_inst(r),
+                r,
             );
         }
         for pred in graph.preds(block) {
@@ -61,11 +61,11 @@ fn analyze_liveness<R: Register>(
 
 fn analyze_inst_liveness<R: Register>(
     env: &Environment,
-    ir: &FunctionIr,
+    ir: &mut FunctionIr,
     live: &mut Bitmap,
     live_precolored: &mut R::RegisterBits,
     intersecting_precolored: &mut [R::RegisterBits],
-    inst: &Instruction,
+    inst_r: Ref,
 ) {
     /*
     if inst.inst.is_copyargs() {
@@ -84,30 +84,31 @@ fn analyze_inst_liveness<R: Register>(
         }
         return;
     }
-    for (reg, usage) in inst.reg_ops_mut() {
-        match decode_reg::<I::Register>(*reg) {
-            RegType::Reg(r) => {
-                if !r.get_bit(live_precolored) {
-                    *reg |= DEAD_BIT;
-                }
-                match usage {
-                    OpUsage::Def => r.set_bit(live_precolored, false),
-                    OpUsage::Use | OpUsage::DefUse => r.set_bit(live_precolored, true),
-                }
-                live.visit_set_bits(|vreg| {
-                    r.set_bit(&mut intersecting_precolored[vreg], true);
-                });
+    */
+    for arg in ir.args_mut(inst_r, env) {
+        let ArgumentMut::MCReg(usage, r) = arg else {
+            continue;
+        };
+        if let Some(p) = r.phys::<R>() {
+            if !p.get_bit(live_precolored) {
+                r.set_dead();
             }
-            RegType::Virtual(v) => {
-                if !live.get(v.0 as usize) {
-                    live.set(v.0 as usize, true);
-                    *reg |= DEAD_BIT;
-                } else if usage == OpUsage::Def {
-                    live.set(v.0 as usize, false);
-                }
+            p.set_bit(live_precolored, usage != Usage::Def);
+            live.visit_set_bits(|vreg| {
+                p.set_bit(&mut intersecting_precolored[vreg], true);
+            });
+        } else {
+            let i = r.virt().unwrap() as usize;
+            if !live.get(i) {
+                live.set(i, true);
+                r.set_dead();
+            } else if usage == Usage::Def {
+                live.set(i, false);
             }
         }
     }
+    // TODO: implicit usages
+    /*
     for &reg in inst.inst.implicit_uses() {
         if !reg.get_bit(live_precolored) {
             reg.set_bit(live_precolored, true);
@@ -122,12 +123,12 @@ fn analyze_inst_liveness<R: Register>(
 
 fn perform_regalloc<R: Register>(
     env: &Environment,
-    mir: &mut FunctionIr,
+    ir: &mut FunctionIr,
     graph: &BlockGraph<FunctionIr>,
     intersecting_precolored: &[R::RegisterBits],
     liveins: &[Bitmap],
 ) {
-    let mut chosen = vec![R::DEFAULT; mir.mc_reg_count() as usize];
+    let mut chosen = vec![R::DEFAULT; ir.mc_reg_count() as usize];
 
     // first choose the registers for all block arguments
     for &block in graph.postorder().iter() {
@@ -155,8 +156,8 @@ fn perform_regalloc<R: Register>(
             chosen[arg.0 as usize].set_bit(&mut free, false);
         }
         */
-        for r in mir.block_refs(block).iter() {
-            let inst = mir.get_inst(r);
+        for r in ir.block_refs(block).iter() {
+            let inst = ir.get_inst(r);
 
             /*
             if inst.inst.is_copyargs() {
@@ -211,7 +212,7 @@ fn perform_regalloc<R: Register>(
                 }
             }
             */
-            for arg in mir.args_mut(r, env) {
+            for arg in ir.args_mut(r, env) {
                 match arg {
                     ArgumentMut::MCReg(Usage::Def, _) => {}
                     ArgumentMut::MCReg(_, reg) => {
@@ -230,7 +231,7 @@ fn perform_regalloc<R: Register>(
                     _ => {}
                 }
             }
-            for arg in mir.args_mut(r, env).rev() {
+            for arg in ir.args_mut(r, env).rev() {
                 if let ArgumentMut::MCReg(usage, r) = arg {
                     if let Some(phys) = r.phys::<R>() {
                         phys.set_bit(&mut free, r.is_dead());

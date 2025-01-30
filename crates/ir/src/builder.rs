@@ -78,6 +78,7 @@ impl<Env: HasEnvironment> Builder<Env> {
                 idx: 0,
                 len: 0,
                 preds: dmap::new_set(),
+                succs: dmap::new_set(),
             }],
             current_block: Some(BlockId::ENTRY),
         };
@@ -131,6 +132,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             idx: 0,
             len: 0,
             preds: dmap::new_set(),
+            succs: dmap::new_set(),
         });
         id
     }
@@ -185,6 +187,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             idx,
             len: 0,
             preds: dmap::new_set(),
+            succs: dmap::new_set(),
         });
         self.current_block = Some(id);
         (id, args)
@@ -253,6 +256,7 @@ pub(crate) fn write_args<'a>(
                 }
                 (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
                     blocks[target.0.idx()].preds.insert(block);
+                    blocks[block.idx()].succs.insert(target.0);
                     let idx = extra.len() as u32;
                     // TODO: check block has the correct number of arguments
                     // (currently can't because it is set to 0 before start)

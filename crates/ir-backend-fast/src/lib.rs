@@ -4,7 +4,7 @@ use std::{ffi::CStr, path::Path};
 use ir::MCReg;
 
 mod arch;
-mod bin;
+mod exe;
 
 #[derive(Debug)]
 pub enum Error {
@@ -35,27 +35,27 @@ impl Backend {
         assert!(target.is_none(), "todo: check target");
 
         env.get_dialect_module::<arch::x86::X86>();
-        let mut writer = bin::elf::ElfObjectWriter::new();
+        let mut writer = exe::elf::ElfObjectWriter::new();
         let mut text_section = Vec::new();
-        let mut symtab = bin::elf::symtab::SymtabWriter::new();
+        let mut symtab = exe::elf::symtab::SymtabWriter::new();
 
         // file entry
         let file_name = writer.add_str(env[module_id].name());
-        symtab.entry(bin::elf::symtab::Entry {
+        symtab.entry(exe::elf::symtab::Entry {
             name_index: file_name,
-            bind: bin::elf::symtab::Bind::Local,
-            ty: bin::elf::symtab::Type::File,
-            visibility: bin::elf::symtab::Visibility::Default,
+            bind: exe::elf::symtab::Bind::Local,
+            ty: exe::elf::symtab::Type::File,
+            visibility: exe::elf::symtab::Visibility::Default,
             section_index: 0xfff1, // SHN_ABS
             value: 0,
             size: 0,
         });
         // section entry
-        symtab.entry(bin::elf::symtab::Entry {
+        symtab.entry(exe::elf::symtab::Entry {
             name_index: 0,
-            bind: bin::elf::symtab::Bind::Local,
-            ty: bin::elf::symtab::Type::Section,
-            visibility: bin::elf::symtab::Visibility::Default,
+            bind: exe::elf::symtab::Bind::Local,
+            ty: exe::elf::symtab::Type::Section,
+            visibility: exe::elf::symtab::Visibility::Default,
             section_index: 2,
             value: 0,
             size: 0,
@@ -85,11 +85,11 @@ impl Backend {
                 arch::x86::write(env, x86, &mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
-                symtab.entry(bin::elf::symtab::Entry {
+                symtab.entry(exe::elf::symtab::Entry {
                     name_index,
-                    bind: bin::elf::symtab::Bind::Global,
-                    ty: bin::elf::symtab::Type::Function,
-                    visibility: bin::elf::symtab::Visibility::Default,
+                    bind: exe::elf::symtab::Bind::Global,
+                    ty: exe::elf::symtab::Type::Function,
+                    visibility: exe::elf::symtab::Visibility::Default,
                     section_index: 2,
                     value: offset,
                     size,
@@ -97,10 +97,10 @@ impl Backend {
             }
         }
         writer.section(
-            bin::elf::SectionHeader {
+            exe::elf::SectionHeader {
                 name: ".text".to_owned(),
-                ty: bin::elf::SectionHeaderType::Progbits,
-                flags: bin::elf::SectionHeaderFlags {
+                ty: exe::elf::SectionHeaderType::Progbits,
+                flags: exe::elf::SectionHeaderFlags {
                     alloc: true,
                     execinstr: true,
                     ..Default::default()

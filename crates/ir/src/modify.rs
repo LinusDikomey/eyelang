@@ -53,6 +53,10 @@ impl IrModify {
 
     pub fn get_inst(&self, r: Ref) -> &Instruction {
         let r = self.renames.get(&r).copied().unwrap_or(r);
+        debug_assert!(
+            r.is_ref(),
+            "Tried to get an instruction from a Ref value or a Ref that was renamed to one"
+        );
         let i = r.0 as usize;
         if i < self.ir.insts.len() {
             &self.ir.insts[i]
@@ -190,7 +194,7 @@ impl IrModify {
             !def.terminator,
             "can't add a terminator before another instruction"
         );
-        // TODO: this is probably wrong
+        // PERF: iterating blocks every time is bad, somehow avoid this
         let block = BlockId(
             self.ir
                 .blocks
@@ -201,7 +205,6 @@ impl IrModify {
                 })
                 .expect("no block found") as _,
         );
-        self.ir.blocks[block.0 as usize].len += 1;
         let args = write_args(
             &mut self.ir.extra,
             block,
@@ -253,9 +256,13 @@ impl IrModify {
         let mut current = Ref(0);
         let mut current_block = BlockId(u32::MAX);
         loop {
+            let mut is_new = false;
             let Some((r, inst, before_idx)) = new_insts
                 .next_if(|(add, _)| add.before == current)
-                .map(|(add, r)| (r, add.inst, add.before))
+                .map(|(add, r)| {
+                    is_new = true;
+                    (r, add.inst, add.before)
+                })
                 .or_else(|| {
                     old_insts.next().map(|inst| {
                         let r = current;
@@ -278,6 +285,9 @@ impl IrModify {
                 renames[r.idx()] = Ref::UNIT;
                 ir.blocks[current_block.idx()].len -= 1;
                 continue;
+            }
+            if is_new {
+                ir.blocks[current_block.idx()].len += 1;
             }
             let new_r = Ref(insts.len() as _);
             renames[r.idx()] = new_r;
@@ -378,7 +388,36 @@ impl IrModify {
         };
     }
 
-    pub fn replace(&mut self, r: Ref, new_inst: Instruction) {
+    pub fn replace<'r>(
+        &mut self,
+        env: &Environment,
+        r: Ref,
+        (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) {
+        // PERF: iterating blocks every time is bad, somehow avoid this
+        let block = BlockId(
+            self.ir
+                .blocks
+                .iter()
+                .position(|info| {
+                    let i = info.idx + info.arg_count;
+                    (i..i + info.len).contains(&r.0)
+                })
+                .expect("no block found") as _,
+        );
+        let def = &env[function];
+        let args = write_args(
+            &mut self.ir.extra,
+            block,
+            &mut self.ir.blocks,
+            &def.params,
+            def.varargs,
+            args,
+        );
+        self.replace_with_inst(r, Instruction { function, args, ty });
+    }
+
+    pub fn replace_with_inst(&mut self, r: Ref, new_inst: Instruction) {
         if r.idx() < self.ir.insts.len() {
             self.ir.insts[r.idx()] = new_inst;
         } else {

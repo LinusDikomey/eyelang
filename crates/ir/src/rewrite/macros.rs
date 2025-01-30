@@ -19,6 +19,11 @@ macro_rules! arg {
             unreachable!("invalid argument type, expected Int");
         };
     };
+    ($modules: ident, $ir: ident, $env: ident, $arg: ident, (@ $block: ident $args: ident)) => {
+        let $crate::Argument::BlockTarget($crate::BlockTarget($block, $args)) = $arg else {
+            unreachable!("invalid argument type, expected BlockTarget");
+        };
+    };
     ($modules: ident, $ir: ident, $env: ident, $arg: ident, $($inner: tt)*) => {
         let $crate::Argument::Ref(r) = $arg else {
             unreachable!("invalid argument type, expected Ref");
@@ -44,6 +49,36 @@ macro_rules! args {
         let [a, b] = $args;
         $crate::arg!($modules, $ir, $env, a, $a);
         $crate::arg!($modules, $ir, $env, b, $b);
+    };
+    ($modules: ident, $ir: ident, $env: ident, $args: expr, $a: tt $b: tt $c: tt) => {
+        let [a, b, c] = $args;
+        $crate::arg!($modules, $ir, $env, a, $a);
+        $crate::arg!($modules, $ir, $env, b, $b);
+        $crate::arg!($modules, $ir, $env, c, $c);
+    };
+    ($modules: ident, $ir: ident, $env: ident, $args: expr, $a: tt $b: tt $c: tt $d: tt) => {
+        let [a, b, c, d] = $args;
+        $crate::arg!($modules, $ir, $env, a, $a);
+        $crate::arg!($modules, $ir, $env, b, $b);
+        $crate::arg!($modules, $ir, $env, c, $c);
+        $crate::arg!($modules, $ir, $env, b, $d);
+    };
+    ($modules: ident, $ir: ident, $env: ident, $args: expr, $a: tt $b: tt $c: tt $d: tt $e: tt) => {
+        let [a, b, c, d, e] = $args;
+        $crate::arg!($modules, $ir, $env, a, $a);
+        $crate::arg!($modules, $ir, $env, b, $b);
+        $crate::arg!($modules, $ir, $env, c, $c);
+        $crate::arg!($modules, $ir, $env, d, $d);
+        $crate::arg!($modules, $ir, $env, e, $e);
+    };
+    ($modules: ident, $ir: ident, $env: ident, $args: expr, $a: tt $b: tt $c: tt $d: tt $e: tt $f: tt) => {
+        let [a, b, c, d, e, f] = $args;
+        $crate::arg!($modules, $ir, $env, a, $a);
+        $crate::arg!($modules, $ir, $env, b, $b);
+        $crate::arg!($modules, $ir, $env, c, $c);
+        $crate::arg!($modules, $ir, $env, d, $d);
+        $crate::arg!($modules, $ir, $env, e, $e);
+        $crate::arg!($modules, $ir, $env, f, $f);
     };
 }
 

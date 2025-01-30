@@ -89,7 +89,7 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
             match rewrite {
                 None => {}
                 Some(Rewrite::Replace(new_inst)) => {
-                    ir.replace(r, new_inst);
+                    ir.replace_with_inst(r, new_inst);
                 }
                 Some(Rewrite::Rename(new_ref)) => {
                     ir.replace_with(r, new_ref);

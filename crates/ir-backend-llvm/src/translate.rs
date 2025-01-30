@@ -424,8 +424,6 @@ unsafe fn build_func(
                         let (l, ty) = get_ref_and_type(&instructions, a);
                         let r = get_ref(&instructions, b);
 
-                        dbg!(a, b, l, r);
-
                         if let (Some(l), Some(r)) = (l, r) {
                             match ty {
                                 t if is_int(t) => {

@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     fmt,
     marker::PhantomData,
     mem::transmute,
@@ -739,28 +738,8 @@ impl block_graph::Blocks for FunctionIr {
         self.block_count()
     }
 
-    fn successors(&self, env: &Environment, block: BlockId) -> Cow<[BlockId]> {
-        // PERF: maybe return a SmallVec or something to prevent many heap allocations.
-        // Alternatively could just track successors (and maybe predecessors) in IR to be able to
-        // retrieve them easily.
-        let (_, terminator) = self.get_block(block).last().expect("empty block found");
-        let func = &env[terminator.function];
-        let params = &func.params;
-        let varargs = func.varargs;
-        debug_assert!(
-            func.terminator,
-            "last instruction of a block is not a terminator"
-        );
-        terminator
-            .args_inner(params, varargs, self.blocks(), self.extra())
-            .filter_map(|arg| {
-                if let Argument::BlockTarget(target) = arg {
-                    Some(target.0)
-                } else {
-                    None
-                }
-            })
-            .collect()
+    fn successors(&self, _env: &Environment, block: BlockId) -> &DHashSet<BlockId> {
+        &self.blocks[block.idx()].succs
     }
 
     /*
@@ -780,6 +759,7 @@ pub struct BlockInfo {
     idx: u32,
     len: u32,
     preds: DHashSet<BlockId>,
+    succs: DHashSet<BlockId>,
 }
 
 #[derive(Debug, Clone, Copy)]

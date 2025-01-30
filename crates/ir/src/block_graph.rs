@@ -1,4 +1,6 @@
-use std::{borrow::Cow, collections::HashSet, hash::Hash};
+use std::{collections::HashSet, hash::Hash};
+
+use dmap::DHashSet;
 
 use crate::{Bitmap, BlockId};
 
@@ -25,7 +27,7 @@ pub trait Blocks {
     type Env;
 
     fn block_count(&self) -> u32;
-    fn successors(&self, env: &Self::Env, block: Self::Block) -> Cow<[Self::Block]>;
+    fn successors(&self, env: &Self::Env, block: Self::Block) -> &DHashSet<Self::Block>;
 }
 
 pub struct BlockGraph<B: Blocks> {

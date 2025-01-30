@@ -93,7 +93,14 @@ ir::instructions! {
     movri64 to: MCReg(Usage::Def) i: Int32;
 
     movrr32 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
+    movrr64 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
+
     ret32 !terminator true;
+
+    cmprr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);  /* !implicit_def eflags */
+
+    jmp<'a> addr: BlockTarget<'a> !terminator true;
+    jl<'a> addr: BlockTarget<'a>;
 }
 
 /*
