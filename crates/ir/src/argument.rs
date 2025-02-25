@@ -202,6 +202,12 @@ impl IntoArgs<'static> for Vec<Ref> {
         self.into_iter().map(Argument::Ref)
     }
 }
+impl<'a> IntoArgs<'a> for Vec<Argument<'a>> {
+    type Args = std::vec::IntoIter<Argument<'a>>;
+    fn into_args(self) -> Self::Args {
+        self.into_iter()
+    }
+}
 impl IntoArgs<'static> for () {
     type Args = std::array::IntoIter<Argument<'static>, 0>;
 

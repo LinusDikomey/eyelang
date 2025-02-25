@@ -13,6 +13,7 @@ pub struct Environment {
     pub(crate) modules: Vec<Module>,
     pub(crate) primitives: Vec<PrimitiveInfo>,
     pub(crate) modules_by_type: dmap::DHashMap<std::any::TypeId, ModuleId>,
+    pub(crate) modules_by_name: dmap::DHashMap<Box<str>, ModuleId>,
 }
 impl Index<ModuleId> for Environment {
     type Output = Module;
@@ -46,6 +47,7 @@ impl Environment {
             modules: Vec::new(),
             primitives,
             modules_by_type: dmap::new(),
+            modules_by_name: dmap::new(),
         };
         let id = env.add_dialect_module::<crate::builtins::Builtin>();
         debug_assert_eq!(id.id(), ModuleId::BUILTINS);
@@ -54,11 +56,13 @@ impl Environment {
 
     pub fn create_module(&mut self, name: impl Into<Box<str>>) -> ModuleId {
         let id = ModuleId(self.modules.len() as _);
+        let name = name.into();
         self.modules.push(Module {
-            name: name.into(),
+            name: name.clone(),
             functions: Vec::new(),
             globals: Vec::new(),
         });
+        self.modules_by_name.insert(name, id);
         id
     }
 
@@ -68,17 +72,20 @@ impl Environment {
         functions: Vec<Function>,
     ) -> ModuleId {
         let id = ModuleId(self.modules.len() as _);
+        let name = name.into();
         self.modules.push(Module {
-            name: name.into(),
+            name: name.clone(),
             functions,
             globals: Vec::new(),
         });
+        self.modules_by_name.insert(name, id);
         id
     }
 
     pub fn add_dialect_module<I: Inst + 'static>(&mut self) -> ModuleOf<I> {
         let id = self.create_module_from_functions(I::MODULE_NAME, I::functions());
         self.modules_by_type.insert(std::any::TypeId::of::<I>(), id);
+        self.modules_by_name.insert(I::MODULE_NAME.into(), id);
         ModuleOf(id, PhantomData)
     }
 
@@ -93,6 +100,7 @@ impl Environment {
                     functions: I::functions(),
                     globals: Vec::new(),
                 });
+                self.modules_by_name.insert(I::MODULE_NAME.into(), id);
                 id
             });
         ModuleOf(id, PhantomData)

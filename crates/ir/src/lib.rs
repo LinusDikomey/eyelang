@@ -15,6 +15,7 @@ pub mod eval;
 pub mod mc;
 pub mod modify;
 pub mod optimize;
+pub mod parse;
 pub mod rewrite;
 pub mod verify;
 
@@ -1058,6 +1059,15 @@ macro_rules! primitives {
 
             fn try_from(value: $crate::PrimitiveId) -> ::core::result::Result<Self, Self::Error> {
                 Self::from_repr(value.0 as usize).ok_or($crate::InvalidPrimitive)
+            }
+        }
+        impl core::str::FromStr for Primitive {
+            type Err = $crate::InvalidPrimitive;
+            fn from_str(s: &core::primitive::str) -> ::core::result::Result<Self, Self::Err> {
+                match s {
+                    $(s if s == stringify!($primitive) => Ok(Self::$primitive),)*
+                    _ => Err($crate::InvalidPrimitive),
+                }
             }
         }
     };

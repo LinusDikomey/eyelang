@@ -63,4 +63,23 @@ impl Pipeline {
             env.modules[module.idx()].functions[i].ir = Some(ir);
         }
     }
+
+    pub fn optimize_function(
+        &self,
+        env: &mut Environment,
+        mut ir: FunctionIr,
+        types: &mut Types,
+    ) -> FunctionIr {
+        if self.print_passes {
+            ceprintln!("IR before optimizations:\n{}", ir.display(env, types),);
+        }
+
+        for pass in &self.function_passes {
+            ir = pass.run(env, types, ir);
+            if self.print_passes {
+                eprintln!("after {pass:?}:\n{}", ir.display(env, types));
+            }
+        }
+        ir
+    }
 }

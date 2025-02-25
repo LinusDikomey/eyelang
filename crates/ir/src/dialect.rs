@@ -38,6 +38,13 @@ impl Primitive {
     }
 }
 
+pub fn register_all(env: &mut crate::Environment) {
+    env.get_dialect_module::<Arith>();
+    env.get_dialect_module::<Tuple>();
+    env.get_dialect_module::<Mem>();
+    env.get_dialect_module::<Cf>();
+}
+
 instructions! {
     Arith "arith" ArithInsts
 
