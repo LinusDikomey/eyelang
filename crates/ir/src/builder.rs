@@ -1,8 +1,8 @@
 use crate::{
+    Argument, BlockId, BlockInfo, Environment, Function, FunctionId, INLINE_ARGS, Instruction,
+    ModuleId, Parameter, Ref, Refs, TypeId, Types,
     argument::IntoArgs,
     builtins::{self, Builtin},
-    Argument, BlockId, BlockInfo, Environment, Function, FunctionId, Instruction, ModuleId,
-    Parameter, Ref, Refs, TypeId, Types, INLINE_ARGS,
 };
 
 pub trait HasEnvironment {
@@ -211,7 +211,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             name: name.into(),
             types: self.types,
             params,
-            varargs: false,
+            varargs: None,
             terminator: false,
             return_type: Some(return_type),
             ir: Some(ir),
@@ -230,16 +230,65 @@ impl<Env: HasEnvironment> Builder<Env> {
 }
 
 #[track_caller]
+fn encode_arg(
+    extra: &mut Vec<u32>,
+    block: BlockId,
+    blocks: &mut [BlockInfo],
+    arg: Argument<'_>,
+    param: Parameter,
+) -> impl Iterator<Item = u32> + use<> {
+    let (a, b) = match (arg, param) {
+        (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => (r.0, None),
+        (Argument::BlockId(target), crate::Parameter::BlockId) => {
+            blocks[target.idx()].preds.insert(block);
+            blocks[block.idx()].succs.insert(target);
+            (target.0, None)
+        }
+        (Argument::BlockId(target), crate::Parameter::BlockTarget) => {
+            blocks[target.idx()].preds.insert(block);
+            blocks[block.idx()].succs.insert(target);
+            // TODO: check block has the correct number of arguments
+            (target.0, Some(0))
+        }
+        (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
+            blocks[target.0.idx()].preds.insert(block);
+            blocks[block.idx()].succs.insert(target.0);
+            let idx = extra.len() as u32;
+            // TODO: check block has the correct number of arguments
+            // (currently can't because it is set to 0 before start)
+            extra.extend(target.1.iter().map(|&r| r.0));
+            (target.0.0, Some(idx))
+        }
+        (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
+        (Argument::Int(i), crate::Parameter::Int32) => {
+            (i.try_into().expect("Int value too large for Int32"), None)
+        }
+        (Argument::Float(n), crate::Parameter::Float) => {
+            let i = n.to_bits();
+            (i as u32, Some((i >> 32) as u32))
+        }
+        (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
+        (Argument::FunctionId(id), crate::Parameter::TypeId) => (id.module.0, Some(id.function.0)),
+        (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
+        (Argument::MCReg(r), crate::Parameter::MCReg(_)) => (r.0, None),
+        _ => panic!("argument was of unexpected kind, expected {param:?}"),
+    };
+    std::iter::once(a).chain(b)
+}
+
+#[track_caller]
 pub(crate) fn write_args<'a>(
     extra: &mut Vec<u32>,
     block: BlockId,
     blocks: &mut [BlockInfo],
     params: &[Parameter],
-    varargs: bool,
+    varargs: Option<Parameter>,
     args: impl IntoArgs<'a>,
 ) -> [u32; INLINE_ARGS] {
     let mut args = args.into_args();
-    if (!varargs && args.len() != params.len()) || (varargs && args.len() < params.len()) {
+    if (varargs.is_none() && args.len() != params.len())
+        || (varargs.is_some() && args.len() < params.len())
+    {
         panic!(
             "invalid parameter count, expected {} but found {}",
             params.len(),
@@ -249,59 +298,35 @@ pub(crate) fn write_args<'a>(
     let mut arg_slots = (&mut args)
         .take(params.len())
         .zip(params)
-        .flat_map(|(arg, param)| {
-            let (a, b) = match (arg, param) {
-                (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => {
-                    (r.0, None)
-                }
-                (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
-                    blocks[target.0.idx()].preds.insert(block);
-                    blocks[block.idx()].succs.insert(target.0);
-                    let idx = extra.len() as u32;
-                    // TODO: check block has the correct number of arguments
-                    // (currently can't because it is set to 0 before start)
-                    extra.extend(target.1.iter().map(|&r| r.0));
-                    (target.0 .0, Some(idx))
-                }
-                (Argument::Int(i), crate::Parameter::Int) => (i as u32, Some((i >> 32) as u32)),
-                (Argument::Int(i), crate::Parameter::Int32) => {
-                    (i.try_into().expect("Int value too large for Int32"), None)
-                }
-                (Argument::Float(n), crate::Parameter::Float) => {
-                    let i = n.to_bits();
-                    (i as u32, Some((i >> 32) as u32))
-                }
-                (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
-                (Argument::FunctionId(id), crate::Parameter::TypeId) => {
-                    (id.module.0, Some(id.function.0))
-                }
-                (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
-                (Argument::MCReg(r), crate::Parameter::MCReg(_)) => (r.0, None),
-                _ => panic!("argument was of unexpected kind, expected {param:?}"),
-            };
-            std::iter::once(a).chain(b)
-        });
+        .flat_map(|(arg, param)| encode_arg(extra, block, blocks, arg, *param));
     let count: usize = params.iter().map(|p| p.slot_count()).sum();
-    if count <= INLINE_ARGS && !varargs {
+    if count <= INLINE_ARGS && varargs.is_none() {
         [
             arg_slots.next().unwrap_or_default(),
             arg_slots.next().unwrap_or_default(),
         ]
     } else {
-        // PERF: can we avoid extra collect here?
-        let arg_slots: Vec<_> = arg_slots.collect();
+        // PERF: extra collect could be avoided by encoding step by step after reserving slots
+        let arg_slots = arg_slots.collect::<Vec<_>>();
         let idx = extra.len() as u32;
         extra.extend(arg_slots);
-        if varargs {
-            let mut vararg_count = 0;
-            extra.extend(args.map(|arg| {
-                let Argument::Ref(r) = arg else {
-                    panic!("vararg argument must be of kind Ref");
-                };
-                vararg_count += 1;
-                r.0
-            }));
-            [idx, vararg_count]
+        let mut i = extra.len();
+        /*
+        for val in arg_slots {
+            extra[i] = val;
+            i += 1;
+        }
+        */
+        if let Some(vararg_param) = varargs {
+            let vararg_count = args.len();
+            extra.extend(std::iter::repeat(0).take(vararg_count));
+            for arg in args {
+                for val in encode_arg(extra, block, blocks, arg, vararg_param) {
+                    extra[i] = val;
+                    i += 1;
+                }
+            }
+            [idx, vararg_count.try_into().unwrap()]
         } else {
             [idx, 0]
         }

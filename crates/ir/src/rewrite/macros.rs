@@ -84,7 +84,13 @@ macro_rules! args {
 
 #[macro_export]
 macro_rules! pattern_ref {
-    ($modules: ident, $ir: ident, $env: ident, $inst: expr, $r: ident, ($(% $out_r: ident =)? $module: ident.$matched_inst: ident $($arg: tt)*)) => {
+    ($modules: ident, $ir: ident, $end: ident, $inst: expr, $r: ident, _) => {};
+    ($modules: ident, $ir: ident, $end: ident, $inst: expr, $r: ident, ($(% $out_r: ident = )? _)) => {
+        $(
+            let $out_r = $r;
+        )?
+    };
+    ($modules: ident, $ir: ident, $env: ident, $inst: expr, $r: ident, ($(% $out_r: ident =)? $module: ident. $matched_inst: ident $($arg: tt)*)) => {
         let inst = $inst.as_module($modules.$module)?;
         $(
             let $out_r = $r;
@@ -125,14 +131,14 @@ macro_rules! visitor {
     ) => {
         pub struct $rewriter {
             $(
-                $module: $crate::ModuleOf<$module_path>,
+                pub $module: $crate::ModuleOf<$module_path>,
             )*
         }
         impl $rewriter {
-            pub fn new(env: &$crate::Environment) -> Self {
+            pub fn new(env: &mut $crate::Environment) -> Self {
                 Self {
                     $(
-                        $module: env.get_dialect_module_if_present().expect("Rewriter needs dialect module to be present"),
+                        $module: env.get_dialect_module(),
                     )*
                 }
             }

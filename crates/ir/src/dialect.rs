@@ -104,7 +104,7 @@ instructions! {
 instructions! {
     Cf "cf" CfInsts
 
-    Goto<'a> target: BlockTarget<'a> !terminator true;
-    Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator true;
-    Ret value: Ref !terminator true;
+    Goto<'a> target: BlockTarget<'a> !terminator;
+    Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator;
+    Ret value: Ref !terminator;
 }

@@ -1,5 +1,7 @@
+mod dialect;
 mod regalloc;
 
+pub use dialect::{Mc, McInsts};
 pub use regalloc::regalloc;
 
 use std::ops::BitAnd;

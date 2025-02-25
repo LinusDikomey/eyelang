@@ -29,11 +29,11 @@ mod layout;
 pub use argument::{ArgError, Argument, IntoArgs};
 pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
-pub use builtins::{Builtin, BUILTIN};
+pub use builtins::{BUILTIN, Builtin};
 pub use dialect::Primitive;
 use dmap::DHashSet;
 pub use environment::Environment;
-pub use layout::{offset_in_tuple, type_layout, Layout};
+pub use layout::{Layout, offset_in_tuple, type_layout};
 
 pub struct ModuleOf<I>(ModuleId, PhantomData<*const I>);
 impl<I> ModuleOf<I> {
@@ -209,6 +209,7 @@ impl Refs {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
 pub struct BlockId(u32);
 impl BlockId {
     pub const ENTRY: Self = Self(0);
@@ -274,7 +275,7 @@ pub struct Function {
     pub name: Box<str>,
     types: Types,
     params: Vec<Parameter>,
-    varargs: bool,
+    varargs: Option<Parameter>,
     terminator: bool,
     return_type: Option<TypeId>,
     pub(crate) ir: Option<FunctionIr>,
@@ -292,7 +293,7 @@ impl Function {
             name: name.into(),
             types: Types::new(),
             params: Vec::new(),
-            varargs: false,
+            varargs: None,
             terminator: false,
             return_type: None,
             ir: None,
@@ -310,7 +311,7 @@ impl Function {
             name: name.into(),
             types,
             params: params.into_iter().map(Parameter::RefOf).collect(),
-            varargs: false,
+            varargs: None,
             terminator: false,
             return_type: Some(return_type),
             ir: Some(ir),
@@ -328,7 +329,7 @@ impl Function {
             name: name.into(),
             types,
             params: params.into_iter().map(Parameter::RefOf).collect(),
-            varargs,
+            varargs: varargs.then_some(Parameter::Ref),
             terminator: false,
             return_type: Some(return_type),
             ir: None,
@@ -339,15 +340,14 @@ impl Function {
         name: impl Into<Box<str>>,
         types: Types,
         params: Vec<Parameter>,
-        varargs: bool,
-        terminator: bool,
+        attrs: InstAttrs,
     ) -> Self {
         Self {
             name: name.into(),
             types,
             params,
-            varargs,
-            terminator,
+            varargs: attrs.varargs,
+            terminator: attrs.terminator,
             return_type: None,
             ir: None,
         }
@@ -372,7 +372,7 @@ impl Function {
         &self.params
     }
 
-    pub fn varargs(&self) -> bool {
+    pub fn varargs(&self) -> Option<Parameter> {
         self.varargs
     }
 
@@ -534,7 +534,7 @@ pub struct FunctionIr {
     mc_reg_count: u32,
 }
 impl FunctionIr {
-    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> {
+    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
         (0..self.blocks.len() as u32).map(BlockId)
     }
 
@@ -551,8 +551,8 @@ impl FunctionIr {
         idx: Ref,
         count: u32,
     ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)>
-           + DoubleEndedIterator<Item = (Ref, &Instruction)>
-           + use<'_> {
+    + DoubleEndedIterator<Item = (Ref, &Instruction)>
+    + use<'_> {
         (idx.0..idx.0 + count).map(|i| (Ref(i), &self.insts[i as usize]))
     }
 
@@ -562,10 +562,12 @@ impl FunctionIr {
         &self.insts[(info.idx + info.arg_count + info.len) as usize]
     }
 
-    pub fn get_block_args(&self, id: BlockId) -> impl Iterator<Item = Ref> + use<'_> {
+    pub fn get_block_args(&self, id: BlockId) -> Refs {
         let block = &self.blocks[id.0 as usize];
-        self.get_refs(Ref(block.idx), block.arg_count)
-            .map(|(r, _)| r)
+        Refs {
+            idx: block.idx,
+            count: block.arg_count,
+        }
     }
 
     pub fn block_arg_count(&self, block: BlockId) -> u32 {
@@ -576,8 +578,8 @@ impl FunctionIr {
         &self,
         id: BlockId,
     ) -> impl ExactSizeIterator<Item = (Ref, &Instruction)>
-           + DoubleEndedIterator<Item = (Ref, &Instruction)>
-           + use<'_> {
+    + DoubleEndedIterator<Item = (Ref, &Instruction)>
+    + use<'_> {
         let block = &self.blocks[id.idx()];
         self.get_refs(Ref(block.idx + block.arg_count), block.len)
     }
@@ -657,12 +659,17 @@ impl FunctionIr {
         let func = &env[inst.function];
         let params = func.params();
         let param_count = params.iter().map(|p| p.slot_count()).sum();
-        let (storage, vararg_count) = if params.len() <= INLINE_ARGS && !func.varargs {
+        let (storage, vararg_count) = if params.len() <= INLINE_ARGS && func.varargs.is_none() {
             (&mut inst.args[..param_count], 0)
         } else {
-            let vararg_count = if func.varargs { inst.args[1] } else { 0 };
+            let vararg_count = if func.varargs.is_some() {
+                inst.args[1]
+            } else {
+                0
+            };
             (
-                &mut self.extra[inst.args[0] as usize..][..param_count + vararg_count as usize],
+                &mut self.extra[inst.args[0] as usize..][..param_count
+                    + vararg_count as usize * func.varargs.map_or(0, |p| p.slot_count())],
                 vararg_count,
             )
         };
@@ -670,13 +677,14 @@ impl FunctionIr {
             params: params.iter(),
             storage: storage.iter_mut(),
             vararg_count,
+            vararg_param: func.varargs.unwrap_or(Parameter::Ref),
         }
     }
 
     pub fn prepare_instruction<'a>(
         &mut self,
         params: &[Parameter],
-        varargs: bool,
+        varargs: Option<Parameter>,
         block: BlockId,
         (id, args, ty): (FunctionId, impl IntoArgs<'a>, TypeId),
     ) -> Instruction {
@@ -785,7 +793,7 @@ impl Instruction {
     pub fn args_inner<'a>(
         &'a self,
         params: &'a [Parameter],
-        varargs: bool,
+        varargs: Option<Parameter>,
         blocks: &'a [BlockInfo],
         extra: &'a [u32],
     ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
@@ -803,6 +811,7 @@ impl Instruction {
 
 pub enum ArgumentMut<'a> {
     Ref(&'a mut Ref),
+    BlockId(&'a mut BlockId),
     /// can't be visited mutably for now due to how it is encoded
     BlockTarget,
     Int {
@@ -832,19 +841,19 @@ pub const INLINE_ARGS: usize = 2;
 fn decode_args<'a>(
     args: &'a [u32; INLINE_ARGS],
     params: &'a [Parameter],
-    varargs: bool,
+    varargs: Option<Parameter>,
     blocks: &'a [BlockInfo],
     extra: &'a [u32],
 ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
     let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
     let mut vararg_count = 0;
-    let mut args = if count <= INLINE_ARGS && !varargs {
+    let mut args = if count <= INLINE_ARGS && varargs.is_none() {
         &args[..count]
     } else {
         let i = args[0] as usize;
-        if varargs {
+        if let Some(param) = varargs {
             vararg_count = args[1] as usize;
-            count += vararg_count;
+            count += vararg_count * param.slot_count();
         }
         &extra[i..i + count]
     }
@@ -856,9 +865,14 @@ fn decode_args<'a>(
     params
         .iter()
         .copied()
-        .chain(std::iter::repeat(Parameter::Ref).take(vararg_count))
+        .chain(
+            varargs
+                .into_iter()
+                .flat_map(move |p| std::iter::repeat(p).take(vararg_count)),
+        )
         .map(move |param| match param {
             Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
+            Parameter::BlockId => Argument::BlockId(BlockId(arg())),
             Parameter::BlockTarget => {
                 let id = BlockId(arg());
                 let arg_idx = arg();
@@ -919,20 +933,21 @@ pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy {
     fn functions() -> Vec<Function>;
     fn inst_table(module: &ModuleOf<Self>) -> &Self::InstTable;
     fn params(self) -> &'static [Parameter];
-    fn varargs(self) -> bool;
+    fn varargs(self) -> Option<Parameter>;
 }
 
 pub struct ArgIterMut<'a> {
     params: std::slice::Iter<'a, Parameter>,
     storage: std::slice::IterMut<'a, u32>,
     vararg_count: u32,
+    vararg_param: Parameter,
 }
 impl ArgIterMut<'_> {
     fn next_param(&mut self) -> Option<Parameter> {
         self.params.next().copied().or_else(|| {
             self.vararg_count.checked_sub(1).map(|new_count| {
                 self.vararg_count = new_count;
-                Parameter::Ref
+                self.vararg_param
             })
         })
     }
@@ -942,7 +957,7 @@ impl ArgIterMut<'_> {
             .checked_sub(1)
             .map(|new_count| {
                 self.vararg_count = new_count;
-                Parameter::Ref
+                self.vararg_param
             })
             .or_else(|| self.params.next_back().copied())
     }
@@ -955,6 +970,9 @@ impl<'a> Iterator for ArgIterMut<'a> {
         Some(match self.next_param()? {
             Parameter::Ref | Parameter::RefOf(_) => {
                 ArgumentMut::Ref(unsafe { transmute(self.storage.next().unwrap()) })
+            }
+            Parameter::BlockId => {
+                ArgumentMut::BlockId(unsafe { transmute(self.storage.next().unwrap()) })
             }
             Parameter::BlockTarget => ArgumentMut::BlockTarget,
             Parameter::Int => ArgumentMut::Int {
@@ -993,6 +1011,9 @@ impl DoubleEndedIterator for ArgIterMut<'_> {
         Some(match self.next_param_back()? {
             Parameter::Ref | Parameter::RefOf(_) => {
                 ArgumentMut::Ref(unsafe { transmute(self.storage.next_back().unwrap()) })
+            }
+            Parameter::BlockId => {
+                ArgumentMut::BlockId(unsafe { transmute(self.storage.next_back().unwrap()) })
             }
             Parameter::BlockTarget => ArgumentMut::BlockTarget,
             Parameter::Int => ArgumentMut::Int {
@@ -1074,7 +1095,7 @@ macro_rules! primitives {
 }
 
 pub mod parameter_types {
-    pub use super::{BlockTarget, FunctionId, GlobalId, MCReg, Ref, TypeId};
+    pub use super::{BlockId, BlockTarget, FunctionId, GlobalId, MCReg, Ref, TypeId};
     pub type Int = u64;
     pub type Float = f64;
     pub type Int32 = u32;
@@ -1084,6 +1105,7 @@ pub mod parameter_types {
 pub enum Parameter {
     Ref,
     RefOf(TypeId),
+    BlockId,
     BlockTarget,
     Int,
     Int32,
@@ -1098,6 +1120,7 @@ impl Parameter {
         match self {
             Parameter::Ref
             | Parameter::RefOf(_)
+            | Parameter::BlockId
             | Parameter::TypeId
             | Parameter::Int32
             | Parameter::MCReg(_) => 1,
@@ -1146,13 +1169,49 @@ macro_rules! lifetime_or_static {
     };
 }
 
+#[derive(Default)]
+pub struct InstAttrs {
+    pub terminator: bool,
+    pub varargs: Option<Parameter>,
+}
+
+#[macro_export]
+macro_rules! instruction_attrs {
+    ($attrs: ident) => {};
+    ($attrs: ident !$attr: ident = $value: expr; $($rest: tt)*) => {
+        $attrs.$attr = $value;
+        $crate::instruction_attrs!($attrs $($rest)*);
+    };
+    ($attrs: ident !$attr: ident $($rest: tt)*) => {
+        $attrs.$attr = true;
+        $crate::instruction_attrs!($attrs $($rest)*);
+    };
+}
+
 #[macro_export]
 macro_rules! instructions {
-    ($module_name: ident $name: literal $table_name: ident $($instruction: ident $(<$inst_life: lifetime>)? $($arg_name: ident: $arg: ident $(<$life: lifetime>)? $(($arg_param: expr))?)* $(!terminator $terminator_val: literal)?; )*) => {
+    (
+        $module_name: ident
+        $name: literal
+        $table_name: ident
+        $(
+            $(
+                #[doc = $doc: literal]
+            )*
+            $instruction: ident $(<$inst_life: lifetime>)?
+            $(
+                $arg_name: ident: $arg: ident
+                $(<$life: lifetime>)?
+                $(($arg_param: expr))?
+            )*
+            $(!$attr: ident $(= $attr_value: expr)?),*
+            ;
+        )*
+    ) => {
         #[derive(Debug, Clone, Copy, $crate::__FromRepr, PartialEq, Eq, Hash)]
         #[allow(non_camel_case_types)]
         pub enum $module_name {
-            $($instruction,)*
+            $( $(#[doc = $doc])* $instruction,)*
         }
 
         #[repr(transparent)]
@@ -1162,7 +1221,9 @@ macro_rules! instructions {
         impl $table_name<$crate::ModuleOf<$module_name>> {
             $(
                 #[inline]
-                pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
+
+                 $(#[doc = $doc])*
+                 pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
                 where
                     $('a: $inst_life)*
                 {
@@ -1184,13 +1245,14 @@ macro_rules! instructions {
                 ::std::vec![
                     $(
                         {
-                            let terminator = false $(|| $terminator_val)?;
+                            #[allow(unused_mut)]
+                            let mut attrs = $crate::InstAttrs::default();
+                            $crate::instruction_attrs!(attrs $(!$attr $(= $attr_value;)*)*);
                             $crate::Function::declare_inst(
                                  stringify!($instruction),
                                  $crate::Types::new(),
                                  vec![ $( $crate::Parameter::$arg $(($arg_param))*, )* ],
-                                 false,
-                                 terminator,
+                                 attrs,
                             )
                         },
                     )*
@@ -1205,7 +1267,7 @@ macro_rules! instructions {
                 }
             }
 
-            fn varargs(self) -> bool { false }
+            fn varargs(self) -> Option<$crate::Parameter> { None }
 
             fn inst_table(module: &$crate::ModuleOf<Self>) -> &Self::InstTable {
                 unsafe { ::core::mem::transmute(module) }

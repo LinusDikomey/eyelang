@@ -1,10 +1,10 @@
-use std::{fmt::Arguments, iter::Peekable};
+use std::iter::Peekable;
 
 use dmap::DHashMap;
 
 use crate::{
-    builder::Builder, Argument, BlockId, Environment, FunctionIr, Primitive, Ref, Type, TypeId,
-    TypeIds, Types,
+    Argument, BlockId, Environment, FunctionIr, Primitive, Ref, Type, TypeId, TypeIds, Types,
+    builder::Builder,
 };
 
 pub fn parse_function_body(env: &Environment, s: &str) -> (FunctionIr, Types) {
@@ -167,7 +167,7 @@ fn tokenize(s: &str) -> impl Iterator<Item = Token<'_>> {
                         Token::ColonColon
                     } else {
                         break Token::Colon;
-                    }
+                    };
                 }
                 '=' => break Token::Equals,
                 '.' => break Token::Dot,

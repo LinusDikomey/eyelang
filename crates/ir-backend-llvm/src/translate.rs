@@ -1,10 +1,13 @@
+#![allow(unsafe_op_in_unsafe_fn)]
+
 use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
 
 use ir::{
-    dialect::Primitive, Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId,
-    Types,
+    Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId, Types,
+    dialect::Primitive,
 };
 use llvm_sys::{
+    LLVMIntPredicate, LLVMRealPredicate,
     core::{
         self, LLVMAddFunction, LLVMAddGlobal, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca,
         LLVMBuildAnd, LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue,
@@ -13,15 +16,14 @@ use llvm_sys::{
         LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid,
         LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem,
         LLVMConstInt, LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName,
-        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt32TypeInContext,
-        LLVMInt8TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
+        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt8TypeInContext,
+        LLVMInt32TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
         LLVMPrintValueToString, LLVMSetInitializer, LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
-    LLVMIntPredicate, LLVMRealPredicate,
 };
 
-use crate::{llvm_bool, Dialects, Error, Intrinsics, FALSE, NONE};
+use crate::{Dialects, Error, FALSE, Intrinsics, NONE, llvm_bool};
 
 pub unsafe fn add_function(
     ctx: LLVMContextRef,
@@ -47,11 +49,15 @@ pub unsafe fn add_function(
             llvm_ty(ctx, function.types()[ty], function.types())
         })
         .collect();
+    let varargs = function.varargs().is_some_and(|arg| {
+        assert_eq!(arg, ir::Parameter::Ref, "unsupported type for varargs");
+        true
+    });
     let llvm_func_ty = LLVMFunctionType(
         return_ty,
         params.as_mut_ptr(),
         params.len() as _,
-        llvm_bool(function.varargs()),
+        llvm_bool(varargs),
     );
     let name = CString::from_vec_with_nul(
         // HACK: temporary prefix until proper name mangling is implemented
@@ -225,7 +231,7 @@ unsafe fn build_func(
 
             let block_args = ir.get_block_args(block);
             LLVMPositionBuilderAtEnd(builder, llvm_block);
-            for (i, arg) in block_args.enumerate() {
+            for (i, arg) in block_args.iter().enumerate() {
                 if block == ir::BlockId::ENTRY {
                     instructions[arg.idx()] = LLVMGetParam(llvm_func, i as _);
                 } else {
@@ -287,7 +293,11 @@ unsafe fn build_func(
 
         let mut handle_successor =
             |ir: &ir::FunctionIr, instructions: &[LLVMValueRef], successor: BlockTarget| {
-                for (block_arg_ref, &r) in ir.get_block_args(successor.0).zip(successor.1.iter()) {
+                for (block_arg_ref, &r) in ir
+                    .get_block_args(successor.0)
+                    .iter()
+                    .zip(successor.1.iter())
+                {
                     if let Some(mut llvm_val) = get_ref(instructions, r) {
                         let phi = instructions[block_arg_ref.idx()];
                         if !phi.is_null() {
@@ -609,16 +619,15 @@ unsafe fn build_func(
                         LLVMBuildBr(builder, blocks[target.0.idx()])
                     }
                     I::Branch => {
-                        let (cond, on_true, on_false) = match [
-                            args.next(),
-                            args.next(),
-                            args.next(),
-                        ] {
-                            [Some(Argument::Ref(cond)), Some(Argument::BlockTarget(on_true)), Some(Argument::BlockTarget(on_false))] => {
-                                (cond, on_true, on_false)
-                            }
-                            _ => unreachable!(),
-                        };
+                        let (cond, on_true, on_false) =
+                            match [args.next(), args.next(), args.next()] {
+                                [
+                                    Some(Argument::Ref(cond)),
+                                    Some(Argument::BlockTarget(on_true)),
+                                    Some(Argument::BlockTarget(on_false)),
+                                ] => (cond, on_true, on_false),
+                                _ => unreachable!(),
+                            };
                         let cond = get_ref(&instructions, cond).unwrap();
                         handle_successor(ir, &instructions, on_true);
                         handle_successor(ir, &instructions, on_false);
@@ -691,8 +700,11 @@ unsafe fn build_func(
                         ptr::null_mut()
                     }
                     I::MemberPtr => {
-                        let [Argument::Ref(ptr), Argument::TypeId(tuple), Argument::Int(idx)] =
-                            ir.args_n(&inst)
+                        let [
+                            Argument::Ref(ptr),
+                            Argument::TypeId(tuple),
+                            Argument::Int(idx),
+                        ] = ir.args_n(&inst)
                         else {
                             unreachable!()
                         };
@@ -742,7 +754,9 @@ unsafe fn build_func(
                             unreachable!()
                         };
                         if func_id.module != module {
-                            panic!("unsupported: can't take function pointer of function in different module")
+                            panic!(
+                                "unsupported: can't take function pointer of function in different module"
+                            )
                         }
                         let (llvm_func, _) = llvm_funcs[func_id.function.idx()];
                         llvm_func
@@ -757,8 +771,11 @@ unsafe fn build_func(
                         globals[id.idx as usize]
                     }
                     I::ArrayIndex => {
-                        let [Argument::Ref(array_ptr), Argument::TypeId(elem_ty), Argument::Ref(idx)] =
-                            ir.args_n(&inst)
+                        let [
+                            Argument::Ref(array_ptr),
+                            Argument::TypeId(elem_ty),
+                            Argument::Ref(idx),
+                        ] = ir.args_n(&inst)
                         else {
                             unreachable!()
                         };
@@ -796,8 +813,11 @@ unsafe fn build_func(
                         }
                     }
                     I::InsertMember => {
-                        let [Argument::Ref(tuple), Argument::Int(mut idx), Argument::Ref(member)] =
-                            ir.args_n(&inst)
+                        let [
+                            Argument::Ref(tuple),
+                            Argument::Int(mut idx),
+                            Argument::Ref(member),
+                        ] = ir.args_n(&inst)
                         else {
                             panic!()
                         };

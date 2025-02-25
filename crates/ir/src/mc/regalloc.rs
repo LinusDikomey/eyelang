@@ -1,30 +1,47 @@
 use std::collections::VecDeque;
 
-use crate::{ArgumentMut, Bitmap, BlockGraph, Environment, FunctionIr, MCReg, Ref, Usage};
+use crate::{
+    Argument, ArgumentMut, Bitmap, BlockGraph, Environment, FunctionIr, MCReg, ModuleOf, Ref, Usage,
+};
 
-use super::Register;
+use super::{Mc, Register};
 
-pub fn regalloc<R: Register>(env: &Environment, ir: &mut FunctionIr, log: bool) {
+pub fn regalloc<R: Register>(
+    env: &Environment,
+    mc: ModuleOf<Mc>,
+    ir: &mut FunctionIr,
+    types: &crate::Types,
+    log: bool,
+) {
     let graph = BlockGraph::calculate(ir, env);
     let mut intersecting_precolored = vec![R::NO_BITS; ir.mc_reg_count() as usize];
     let mut liveins: Box<[Bitmap]> = (0..ir.block_count())
         .map(|_| Bitmap::new(ir.mc_reg_count() as usize))
         .collect();
-    analyze_liveness::<R>(env, ir, &graph, &mut liveins, &mut intersecting_precolored);
+    analyze_liveness::<R>(
+        env,
+        mc,
+        ir,
+        &graph,
+        &mut liveins,
+        &mut intersecting_precolored,
+    );
     if log {
         eprintln!("liveins:");
         for (i, liveins) in liveins.iter().enumerate() {
             eprint!("  bb{i}:");
-            liveins.visit_set_bits(|vreg| eprint!(" %{vreg}"));
+            liveins.visit_set_bits(|vreg| eprint!(" ${vreg}"));
             eprintln!();
         }
         eprintln!();
+        eprintln!("After liveness analysis:\n{}", ir.display(env, types))
     }
-    perform_regalloc::<R>(env, ir, &graph, &intersecting_precolored, &liveins);
+    perform_regalloc::<R>(env, mc, ir, &graph, &intersecting_precolored, &liveins);
 }
 
 fn analyze_liveness<R: Register>(
     env: &Environment,
+    mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     graph: &BlockGraph<FunctionIr>,
     liveins: &mut [Bitmap],
@@ -42,6 +59,7 @@ fn analyze_liveness<R: Register>(
         for r in ir.block_refs(block).iter().rev() {
             analyze_inst_liveness::<R>(
                 env,
+                mc,
                 ir,
                 &mut live,
                 &mut live_precolored,
@@ -61,30 +79,44 @@ fn analyze_liveness<R: Register>(
 
 fn analyze_inst_liveness<R: Register>(
     env: &Environment,
+    mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     live: &mut Bitmap,
     live_precolored: &mut R::RegisterBits,
     intersecting_precolored: &mut [R::RegisterBits],
     inst_r: Ref,
 ) {
-    /*
-    if inst.inst.is_copyargs() {
-        let (to, from) = inst.decode_copyargs(extra_ops);
-        for op in from {
-            if let &Op::VReg(v) = op {
-                if !live.get(v.0 as usize) {
-                    live.set(v.0 as usize, true);
-                    // TODO: mark dead in extra_ops
+    if let Some(inst) = ir.get_inst(inst_r).as_module(mc) {
+        match inst.op() {
+            Mc::IncomingBlockArgs => {}
+            Mc::Copy => {
+                for (arg_idx, arg) in ir.args_mut(inst_r, env).enumerate() {
+                    let ArgumentMut::MCReg(_, r) = arg else {
+                        unreachable!();
+                    };
+                    if arg_idx % 2 == 0 {
+                        // to
+                        eprintln!("Copy to@{arg_idx} {r}");
+                        if let Some(i) = r.virt() {
+                            dbg!(i);
+                            live.set(i as usize, false);
+                        };
+                    } else {
+                        // from
+                        eprintln!("Copy from@{arg_idx} {r}");
+                        if let Some(i) = r.virt() {
+                            if !dbg!(live.get(i as usize)) {
+                                live.set(i as usize, true);
+                                r.set_dead();
+                            }
+                        }
+                    };
                 }
+                return;
             }
         }
-        for op in to {
-            let Op::VReg(v) = op else { unreachable!() };
-            live.set(v.0 as usize, false);
-        }
-        return;
     }
-    */
+
     for arg in ir.args_mut(inst_r, env) {
         let ArgumentMut::MCReg(usage, r) = arg else {
             continue;
@@ -123,6 +155,7 @@ fn analyze_inst_liveness<R: Register>(
 
 fn perform_regalloc<R: Register>(
     env: &Environment,
+    mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     graph: &BlockGraph<FunctionIr>,
     intersecting_precolored: &[R::RegisterBits],
@@ -133,16 +166,29 @@ fn perform_regalloc<R: Register>(
     // first choose the registers for all block arguments
     for &block in graph.postorder().iter() {
         let mut free = R::ALL_BITS;
-        /*
-        for arg in mir.block_args(block) {
-            let avail = free & !intersecting_precolored[arg.0 as usize];
-            let class = mir.virtual_reg_class(arg);
+        let incoming = ir.get_block(block).next().unwrap().1;
+        debug_assert_eq!(
+            incoming.function,
+            crate::FunctionId {
+                module: env
+                    .get_dialect_module_if_present::<crate::mc::Mc>()
+                    .unwrap()
+                    .id(),
+                function: crate::mc::Mc::IncomingBlockArgs.id(),
+            }
+        );
+        for arg in ir.args_iter(incoming, env) {
+            let Argument::MCReg(r) = arg else {
+                unreachable!()
+            };
+            let i = r.virt().unwrap() as usize;
+            let avail = free & !intersecting_precolored[i];
+            let class = crate::mc::RegClass::GP32; //ir.virtual_reg_class(r); // TODO: virtual reg classes
             let chosen_reg =
                 R::allocate_reg(avail, class).expect("register allocation failed, TODO: spilling");
             chosen_reg.set_bit(&mut free, false);
-            chosen[arg.0 as usize] = chosen_reg;
+            chosen[i] = chosen_reg;
         }
-        */
     }
 
     // then go over the blocks again to fill in the remaining registers
@@ -157,31 +203,45 @@ fn perform_regalloc<R: Register>(
         }
         */
         for r in ir.block_refs(block).iter() {
-            let inst = ir.get_inst(r);
+            if let Some(inst) = ir.get_inst(r).as_module(mc) {
+                match inst.op() {
+                    Mc::IncomingBlockArgs => {}
+                    Mc::Copy => {
+                        for (arg_idx, arg) in ir.args_mut(r, env).enumerate() {
+                            let ArgumentMut::MCReg(_, r) = arg else {
+                                unreachable!();
+                            };
+                            if arg_idx % 2 == 0 {
+                                // to
+                                if let Some(i) = r.virt() {
+                                    let dead = r.is_dead();
+                                    *r = MCReg::from_phys(chosen[i as usize]);
+                                    if dead {
+                                        r.set_dead();
+                                    }
+                                }
+                            } else {
+                                // from
+                                if let Some(i) = r.virt() {
+                                    let chosen = chosen[i as usize];
+                                    let dead = r.is_dead();
+                                    *r = MCReg::from_phys(chosen);
+                                    if dead {
+                                        chosen.set_bit(&mut free, true);
+                                        // always preserve the dead bit
+                                        r.set_dead();
+                                    }
+                                } else {
+                                    r.phys::<R>().unwrap().set_bit(&mut free, false);
+                                }
+                            };
+                        }
+                        continue;
+                    }
+                }
+            }
 
             /*
-            if inst.inst.is_copyargs() {
-                let (to, from) = inst.decode_copyargs_mut(extra_ops);
-                for op in to {
-                    if let Op::VReg(vreg) = *op {
-                        *op = Op::Reg(chosen[vreg.0 as usize]);
-                    }
-                }
-                for op in from {
-                    match *op {
-                        Op::VReg(vreg) => {
-                            let chosen = chosen[vreg.0 as usize];
-                            *op = Op::Reg(chosen);
-                            chosen.set_bit(&mut free, false);
-                        }
-                        Op::Reg(reg) => {
-                            reg.set_bit(&mut free, false);
-                        }
-                        _ => {}
-                    }
-                }
-                continue;
-            }
             if inst.inst.is_copy() && inst.ops[1] & DEAD_BIT != 0 {
                 let a = decode_reg::<I::Register>(inst.ops[0]);
                 let b = decode_reg::<I::Register>(inst.ops[1]);

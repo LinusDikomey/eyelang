@@ -41,15 +41,19 @@ pub unsafe fn emit(
 
     let file_type = target_machine::LLVMCodeGenFileType::LLVMObjectFile;
 
-    if target_machine::LLVMTargetMachineEmitToFile(
-        target_machine,
-        module,
-        out_file as _,
-        file_type,
-        &mut error,
-    ) != 0
+    if unsafe {
+        target_machine::LLVMTargetMachineEmitToFile(
+            target_machine,
+            module,
+            out_file as _,
+            file_type,
+            &mut error,
+        )
+    } != 0
     {
-        let msg = CStr::from_ptr(error).to_string_lossy().into_owned();
+        let msg = unsafe { CStr::from_ptr(error) }
+            .to_string_lossy()
+            .into_owned();
         return Err(Error::EmitFailed(msg));
     }
     Ok(())

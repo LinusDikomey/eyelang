@@ -6,10 +6,10 @@ use std::{
 };
 
 use crate::{
-    dialect::Primitive,
-    layout::{type_layout, Layout},
     Argument, BlockId, BlockInfo, BlockTarget, Environment, Function, FunctionId, FunctionIr,
     IntoArgs, ModuleOf, PrimitiveId, PrimitiveInfo, Ref, Type, TypeId, Types,
+    dialect::Primitive,
+    layout::{Layout, type_layout},
 };
 
 pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
@@ -162,7 +162,7 @@ impl Ptr {
     }
 
     pub fn into_u64(self) -> u64 {
-        (self.addr as u64) << 32 | self.size as u64
+        ((self.addr as u64) << 32) | self.size as u64
     }
 
     #[must_use = "returns a new pointer"]
@@ -247,14 +247,14 @@ pub fn eval<E: EvalEnvironment>(
     let mut current_function: Option<FunctionId> = None;
     for (param, i) in params
         .iter()
-        .zip(top_level_ir.get_block_args(BlockId::ENTRY))
+        .zip(top_level_ir.get_block_args(BlockId::ENTRY).iter())
     {
         // TODO: check that the type fits
         // let ty = top_level_types[top_level_ir.inst[i as usize].ty];
         values.store(i.0, param);
     }
 
-    let mut pc: u32 = top_level_ir.get_block(BlockId::ENTRY).next().unwrap().0 .0;
+    let mut pc: u32 = top_level_ir.get_block(BlockId::ENTRY).next().unwrap().0.0;
     let mut call_stack: Vec<StackFrame> = vec![];
     let mut backwards_jumps = 0;
 
@@ -766,7 +766,7 @@ pub fn eval<E: EvalEnvironment>(
                     let mut new_values = Values::new(func_ir, &func.types);
                     let entry = BlockId::ENTRY;
                     let args_indices = func_ir.get_block_args(entry);
-                    for (arg, val) in args_indices.zip(args) {
+                    for (arg, val) in args_indices.iter().zip(args) {
                         new_values.store(arg.0, &val);
                     }
                     if call_stack.len() > STACK_FRAME_COUNT {
@@ -778,7 +778,7 @@ pub fn eval<E: EvalEnvironment>(
                         sp: mem.sp(),
                         values,
                     });
-                    pc = func_ir.get_block(BlockId::ENTRY).next().unwrap().0 .0;
+                    pc = func_ir.get_block(BlockId::ENTRY).next().unwrap().0.0;
                     values = new_values;
                     current_function = Some(inst.function);
                     // this will fetch ir and types again based on current_function

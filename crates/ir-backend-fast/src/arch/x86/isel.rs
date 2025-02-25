@@ -1,9 +1,10 @@
 use ir::{
-    mc::RegClass,
+    mc::{Mc, McInsts, RegClass},
     modify::IrModify,
+    optimize::FunctionPass,
     rewrite::{Rewrite, RewriteCtx, Visitor},
-    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, Parameter,
-    Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
+    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
+    Parameter, Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
 };
 
 use crate::{
@@ -14,11 +15,15 @@ use crate::{
     MCValue,
 };
 
+use super::X86;
+
 pub fn codegen(
     env: &Environment,
     body: &ir::FunctionIr,
     function: &ir::Function,
     types: &ir::Types,
+    isel: &mut InstructionSelector,
+    mc: ModuleOf<Mc>,
 ) -> (FunctionIr, ir::Types) {
     /*
     let mut mir = MachineIR::new();
@@ -58,63 +63,44 @@ pub fn codegen(
     );
     */
 
-    /*
-    let block_map = body
-        .block_ids()
-        .map(|block| {
-            let (mir_block, mir_args) = if block == BlockId::ENTRY {
-                (mir_entry_block, entry_block_args)
-            } else {
-                builder.create_block(block_args_to_reg_classes(
-                    body,
-                    types,
-                    env.primitives(),
-                    body.get_block_args(block),
-                ))
-            };
-            let mut mir_arg_iter = mir_args.iter();
-            for arg in body.get_block_args(block) {
-                let arg_ty = body.get_ref_ty(arg);
-                let mir_classes = block_arg_regs(function.types()[arg_ty], types, env.primitives());
-                let value = match mir_classes {
-                    ZeroToTwo::Zero => MCValue::None,
-                    ZeroToTwo::One(_) => MCValue::Reg(MCReg::Virtual(mir_arg_iter.next().unwrap())),
-                    ZeroToTwo::Two(_, _) => MCValue::TwoRegs(
-                        MCReg::Virtual(mir_arg_iter.next().unwrap()),
-                        MCReg::Virtual(mir_arg_iter.next().unwrap()),
-                    ),
-                };
-                values[arg.idx()] = value;
-            }
-            (mir_block, mir_args)
-        })
-        .collect();
-    */
-    /*
-    let mut gen = Gen {
-        env,
-        modules,
-        //abi,
-        function,
-        body,
-        types,
-        stack_setup_indices,
-        block_map,
-    };
-    */
-    let mut rewriter = InstructionSelector::new(env);
-    let mut body = IrModify::new(body.clone());
+    let mut values = vec![MCValue::None; body.inst_count() as usize].into_boxed_slice();
+    let mut body = body.clone();
     let mut types = types.clone();
     let mut ctx = IselCtx {
         unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
-        values: vec![MCValue::None; body.inst_count() as usize].into_boxed_slice(),
+        values,
+        block_arg_regs: body.block_ids().map(|_| Vec::new()).collect(),
+        mc,
     };
-    ir::rewrite::rewrite_in_place(&mut body, &types, env, &mut ctx, rewriter);
+
+    for block in body.block_ids() {
+        for arg in body.get_block_args(block).iter() {
+            let mir_classes = block_arg_regs(types[body.get_ref_ty(arg)], &types, env.primitives());
+
+            // TODO: register classes
+            let value = match mir_classes {
+                ZeroToTwo::Zero => MCValue::None,
+                ZeroToTwo::One(a) => {
+                    let a = body.new_reg();
+                    ctx.block_arg_regs[block.idx()].push(a);
+                    MCValue::Reg(a)
+                }
+                ZeroToTwo::Two(a, b) => {
+                    let a = body.new_reg();
+                    let b = body.new_reg();
+                    ctx.block_arg_regs[block.idx()].extend([a, b]);
+                    MCValue::TwoRegs(a, b)
+                }
+            };
+            ctx.set(arg, value);
+        }
+    }
+
+    let mut body = IrModify::new(body);
+
+    ir::rewrite::rewrite_in_place(&mut body, &types, env, &mut ctx, isel);
 
     /*
-    let graph = BlockGraph::calculate(gen.body, gen.env);
-
-    for &block in graph.postorder().iter().rev() {
         let mir_block = gen.block_map[block.idx()].0;
         let mut builder = mir.begin_block(mir_block);
         for (i, inst) in body.get_block(block) {
@@ -784,8 +770,21 @@ impl Gen<'_> {
 pub struct IselCtx {
     unit: ir::TypeId,
     values: Box<[MCValue]>,
+    block_arg_regs: Box<[Vec<MCReg>]>,
+    mc: ModuleOf<Mc>,
 }
-impl ir::rewrite::RewriteCtx for IselCtx {}
+impl ir::rewrite::RewriteCtx for IselCtx {
+    fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
+        let start = ir.get_block(block);
+        let f = FunctionId {
+            module: self.mc.id(),
+            function: Mc::IncomingBlockArgs.id(),
+        };
+        let start = ir.get_original_block_start(block);
+        let args: &[MCReg] = &self.block_arg_regs[block.idx()];
+        ir.add_before(env, start, (f, ((), args), self.unit));
+    }
+}
 impl IselCtx {
     fn set(&mut self, r: Ref, value: MCValue) {
         self.values[r.idx()] = value;
@@ -797,6 +796,41 @@ impl IselCtx {
             Ref::FALSE => MCValue::Imm(0),
             Ref::UNIT => MCValue::None,
             r => self.values[r.idx()],
+        }
+    }
+
+    fn create_args_copy(
+        &mut self,
+        env: &Environment,
+        before: Ref,
+        mc: ModuleOf<Mc>,
+        ir: &mut IrModify,
+        target: BlockId,
+        args: &[Ref],
+    ) {
+        let arg_refs = ir.get_block_args(target);
+        debug_assert_eq!(args.len(), arg_refs.count() as usize);
+        let copyargs: Vec<MCReg> = arg_refs
+            .iter()
+            .zip(args)
+            .flat_map(|(to, &from)| {
+                let to = self.get(to);
+                let from = self.get(from);
+                let values = match (to, from) {
+                    (MCValue::None, MCValue::None) => None,
+                    (MCValue::Reg(a), MCValue::Reg(b)) => Some(([a, b], None)),
+                    (MCValue::TwoRegs(a1, a2), MCValue::TwoRegs(b1, b2)) => {
+                        Some(([a1, b1], Some([a2, b2])))
+                    }
+                    _ => unreachable!("shouldn't copy {to:?} {from:?}"),
+                };
+                values
+                    .into_iter()
+                    .flat_map(|(xs, rest)| xs.into_iter().chain(rest.into_iter().flatten()))
+            })
+            .collect();
+        if !copyargs.is_empty() {
+            ir.add_before(env, before, parallel_copy(mc, &copyargs, self.unit));
         }
     }
 }
@@ -813,6 +847,7 @@ ir::visitor! {
     use cf: ir::dialect::Cf;
 
     use x86: crate::arch::x86::isa::X86;
+    use mc: ir::mc::Mc;
 
     patterns:
     (%r = arith.Int (#x)) => {
@@ -826,13 +861,15 @@ ir::visitor! {
         };
         // TODO: physical registers for eax here
         let eax = MCReg::from_phys(Reg::eax);
-        let inst = x86.movrr32(eax, reg, ctx.unit);
-        ir.add_before(env, r, inst);
+        ir.add_before(env, r, parallel_copy(mc, &[eax, reg], ctx.unit));
         x86.ret32(ctx.unit)
     };
-    (cf.Goto (@b b_args)) => {
-        x86.jmp(BlockTarget(b, &[]), ctx.unit)
+    (%r = cf.Goto (@b b_args)) => {
+        let b_args = b_args.to_vec();
+        ctx.create_args_copy(env, r, mc, ir, b, &b_args);
+        x86.jmp(b, ctx.unit)
     };
+    (arith.LT a b) => {}; // FIXME: this is only to temporarily make the Branch below work
     (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) => {
         let MCValue::Reg(a) = ctx.get(a) else {
             todo!()
@@ -840,12 +877,42 @@ ir::visitor! {
         let MCValue::Reg(b) = ctx.get(b) else {
             todo!()
         };
-    // FIXME: this is only valid when this is the only use of the LT
+        let b1_args = b1_args.to_vec();
+        let b2_args = b2_args.to_vec();
+        // FIXME: this is only valid when this is the only use of the LT
         ir.replace(env, lt, x86.cmprr32(a, b, ctx.unit));
-        let jl = x86.jl(BlockTarget(b1, &[]), ctx.unit);
+        // TODO: copyargs values.get(ir.block_args(b1)) b1_args
+        ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
+        let jl = x86.jl(b1, ctx.unit);
         ir.add_before(env, r, jl);
-        x86.jmp(BlockTarget(b2, &[]), ctx.unit)
+        ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
+        x86.jmp(b2, ctx.unit)
     };
+    (%r = arith.Add a b) => {
+        let MCValue::Reg(a) = ctx.get(a) else { todo!() };
+        let MCValue::Reg(b) = ctx.get(b) else { todo!() };
+        let out = ir.new_reg();
+        ir.add_before(env, r, parallel_copy(mc, &[out, a], ctx.unit));
+        ctx.set(r, MCValue::Reg(out));
+        x86.addrr32(out, b, ctx.unit)
+    };
+    (%r = _) => {
+        todo!("unhandled instruction at {r}");
+        #[allow(clippy::unused_unit)]
+        ()
+    };
+}
+
+fn parallel_copy(
+    mc: ModuleOf<Mc>,
+    args: &[MCReg],
+    unit: ir::TypeId,
+) -> (FunctionId, impl ir::IntoArgs<'_>, ir::TypeId) {
+    let f = ir::FunctionId {
+        module: mc.id(),
+        function: ir::mc::Mc::Copy.id(),
+    };
+    (f, ((), args), unit)
 }
 
 /*

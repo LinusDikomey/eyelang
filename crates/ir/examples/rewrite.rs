@@ -5,11 +5,17 @@ fn main() {
     let main_module = env.create_module("main");
     let func = create_add_function(&mut env);
     let func_id = env.add_function(main_module, func);
-    let rewriter = AddZeroRewriter::new(&env);
+    let mut rewriter = AddZeroRewriter::new(&mut env);
     println!("Before rewrite:\n{}", env.display_module(main_module));
 
     let mut func_ir = IrModify::new(env.remove_body(func_id).unwrap());
-    ir::rewrite::rewrite_in_place(&mut func_ir, env[func_id].types(), &env, &mut (), rewriter);
+    ir::rewrite::rewrite_in_place(
+        &mut func_ir,
+        env[func_id].types(),
+        &env,
+        &mut (),
+        &mut rewriter,
+    );
     env.reattach_body(func_id, func_ir.finish_and_compress(&env));
 
     println!("After rewrite:\n{}", env.display_module(main_module));

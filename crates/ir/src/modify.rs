@@ -1,9 +1,9 @@
 use dmap::DHashMap;
 
 use crate::{
-    builder::write_args, Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId,
-    FunctionIr, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, TypeId, TypedInstruction,
-    INLINE_ARGS,
+    Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
+    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction,
+    builder::write_args,
 };
 
 pub struct IrModify {
@@ -24,7 +24,7 @@ impl IrModify {
         (self.ir.insts.len() + self.additional.len()) as _
     }
 
-    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> {
+    pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
         self.ir.block_ids()
     }
 
@@ -149,7 +149,7 @@ impl IrModify {
                     extra.push(Ref::UNIT.0);
                     new_idx
                 };
-            if param_count <= INLINE_ARGS && !func.varargs {
+            if param_count <= INLINE_ARGS && func.varargs.is_none() {
                 let mut idx = 0;
                 for param in &func.params {
                     if *param == Parameter::BlockTarget {
@@ -286,7 +286,11 @@ impl IrModify {
                 ir.blocks[current_block.idx()].len -= 1;
                 continue;
             }
-            if is_new {
+            if is_new
+                && !inst
+                    .as_module(crate::BUILTIN)
+                    .is_some_and(|inst| inst.op() == Builtin::BlockArg)
+            {
                 ir.blocks[current_block.idx()].len += 1;
             }
             let new_r = Ref(insts.len() as _);
@@ -296,17 +300,13 @@ impl IrModify {
 
         let renamed = |r: Ref| {
             let r = rename_map.get(&r).copied().unwrap_or(r);
-            if r.is_ref() {
-                renames[r.idx()]
-            } else {
-                r
-            }
+            if r.is_ref() { renames[r.idx()] } else { r }
         };
 
         for inst in &mut insts {
             let func = &env[inst.function];
             let slot_count: usize = func.params().iter().map(|p| p.slot_count()).sum();
-            if slot_count > INLINE_ARGS || func.varargs() {
+            if slot_count > INLINE_ARGS || func.varargs().is_some() {
                 let mut idx = inst.args[0] as usize;
                 let mut visit_param = |param| match param {
                     Parameter::Ref | Parameter::RefOf(_) => {
@@ -322,7 +322,8 @@ impl IrModify {
                             ir.extra[i as usize] = renamed(Ref(ir.extra[i as usize])).0;
                         }
                     }
-                    Parameter::Int
+                    Parameter::BlockId
+                    | Parameter::Int
                     | Parameter::Float
                     | Parameter::Int32
                     | Parameter::TypeId
@@ -333,9 +334,9 @@ impl IrModify {
                 for &param in func.params() {
                     visit_param(param);
                 }
-                if func.varargs {
+                if let Some(param) = func.varargs {
                     for _ in 0..inst.args[1] {
-                        visit_param(Parameter::Ref);
+                        visit_param(param);
                     }
                 }
             } else {
@@ -355,7 +356,8 @@ impl IrModify {
                                 ir.extra[i as usize] = renamed(Ref(ir.extra[i as usize])).0;
                             }
                         }
-                        Parameter::Int
+                        Parameter::BlockId
+                        | Parameter::Int
                         | Parameter::Float
                         | Parameter::Int32
                         | Parameter::TypeId
@@ -429,10 +431,21 @@ impl IrModify {
         &self.ir.blocks[block.idx()]
     }
 
+    /// Gets the Ref to the first instruction in the given block before potential modifications.
+    pub fn get_original_block_start(&self, block: BlockId) -> Ref {
+        let info = &self.ir.blocks[block.idx()];
+        Ref(info.idx + info.arg_count)
+    }
+
+    pub fn get_block_args(&self, block: BlockId) -> Refs {
+        // FIXME: this is incorrect since block args can be changed
+        self.ir.get_block_args(block)
+    }
+
     pub fn prepare_instruction<'a, A: crate::IntoArgs<'a>>(
         &mut self,
         params: &[Parameter],
-        varargs: bool,
+        varargs: Option<Parameter>,
         block: BlockId,
         arg: (FunctionId, A, TypeId),
     ) -> Instruction {

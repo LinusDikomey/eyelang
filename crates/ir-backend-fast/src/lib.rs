@@ -61,11 +61,14 @@ impl Backend {
             size: 0,
         });
 
-        let x86 = env.get_dialect_module::<arch::x86::X86>();
+        let mut isel = arch::x86::InstructionSelector::new(env);
+        let mc = env.get_dialect_module::<ir::mc::Mc>();
+        let x86 = isel.x86;
 
         for func in env[module_id].functions() {
             if let Some(ir) = func.ir() {
-                let (mut mir, types) = arch::x86::codegen(env, ir, func, func.types());
+                let (mut mir, types) =
+                    arch::x86::codegen(env, ir, func, func.types(), &mut isel, mc);
                 let offset = text_section.len() as u64;
                 if print_ir {
                     println!(
@@ -74,7 +77,7 @@ impl Backend {
                         mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
                     );
                 }
-                ir::mc::regalloc::<arch::x86::Reg>(env, &mut mir, self.log);
+                ir::mc::regalloc::<arch::x86::Reg>(env, mc, &mut mir, &types, self.log);
                 if self.log {
                     println!(
                         "mir for {}: (post-regalloc)\n{}\n",
@@ -82,7 +85,7 @@ impl Backend {
                         mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
                     );
                 }
-                arch::x86::write(env, x86, &mir, &mut text_section);
+                arch::x86::write(env, mc, x86, &mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
                 symtab.entry(exe::elf::symtab::Entry {
@@ -132,10 +135,6 @@ pub enum MCValue {
     Reg(MCReg),
     /// value is up to 16 bytes large and is spread across two registers (lower bits, upper bits)
     TwoRegs(MCReg, MCReg),
-    /// represents a constant offset from a register
-    PtrOffset(MCReg, i32),
-    /// value is located at a constant offset from an address in a register
-    Indirect(MCReg, i32),
 }
 
 pub fn list_targets() -> Vec<String> {

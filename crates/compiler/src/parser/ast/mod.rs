@@ -48,7 +48,7 @@ impl Ast {
         &self.scopes
     }
 
-    pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> {
+    pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> + use<> {
         (0..self.functions.len() as _).map(FunctionId)
     }
 

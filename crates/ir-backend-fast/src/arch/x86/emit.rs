@@ -1,14 +1,20 @@
 use std::{collections::VecDeque, hint::unreachable_unchecked};
 
 use ir::{
+    Argument, BlockId, BlockTarget, Environment, FunctionIr, MCReg, ModuleOf,
     block_graph::Blocks,
-    mc::{OpType, RegClass},
-    BlockId, BlockTarget, Environment, FunctionIr, MCReg, ModuleOf,
+    mc::{Mc, OpType, RegClass},
 };
 
 use super::isa::{Reg, X86};
 
-pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut Vec<u8>) {
+pub fn write(
+    env: &Environment,
+    mc: ModuleOf<Mc>,
+    x86: ModuleOf<X86>,
+    ir: &FunctionIr,
+    text: &mut Vec<u8>,
+) {
     let start = text.len();
     let mut block_queue = VecDeque::from([BlockId::ENTRY]);
     let mut block_offsets: Box<[Option<u32>]> =
@@ -25,6 +31,37 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
         block_queue.extend(ir.successors(env, block).iter());
 
         for (r, i) in ir.get_block(block) {
+            if let Some(inst) = i.as_module(mc) {
+                match inst.op() {
+                    Mc::IncomingBlockArgs => {}
+                    Mc::Copy => {
+                        let mut args = ir.args_iter(i, env).map(|arg| {
+                            let Argument::MCReg(r) = arg else {
+                                unreachable!()
+                            };
+                            r
+                        });
+                        // FIXME: this doesn't handle conflicting copies, will require a proper
+                        // parallel copy algo in the future
+                        loop {
+                            let Some(to) = args.next() else { break };
+                            let from = args.next().unwrap();
+                            let to = to.phys::<Reg>().unwrap();
+                            let from = from.phys::<Reg>().unwrap();
+                            if to == from {
+                                continue;
+                            }
+                            // FIXME: assumes 32 bits right now
+                            let modrm = encode_modrm_rr(to, from, false);
+                            if modrm.rex != 0 {
+                                text.push(modrm.rex);
+                            }
+                            text.extend([0x89, modrm.modrm]);
+                        }
+                    }
+                }
+                continue;
+            }
             let Some(inst) = i.as_module(x86) else {
                 panic!("expected x86 instruction but encountered other module at {r:?}");
             };
@@ -63,7 +100,7 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
                     text.extend([0x3B, modrm.modrm]);
                 }
                 I::jmp => {
-                    let BlockTarget(target, _) = ir.args(i, env);
+                    let target = ir.args(i, env);
                     emit_jmp(
                         &[0xEB],
                         &[0xE9],
@@ -75,7 +112,7 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
                     );
                 }
                 I::jl => {
-                    let BlockTarget(target, _) = ir.args(i, env);
+                    let target = ir.args(i, env);
                     emit_jmp(
                         &[0x7C, 0xcb],
                         &[0x0F, 0x8C],
@@ -85,6 +122,9 @@ pub fn write(env: &Environment, x86: ModuleOf<X86>, ir: &FunctionIr, text: &mut 
                         &block_offsets,
                         &mut missing_block_addrs,
                     );
+                }
+                I::addrr32 => {
+                    inst_rr(text, &[0x01], ir.args(i, env));
                 }
             }
 
@@ -564,7 +604,7 @@ fn encode_modrm_rr(reg_a: Reg, reg_b: Reg, wide: bool) -> Modrm {
     };
     Modrm {
         rex,
-        modrm: modrm_a | modrm_b << 3 | 0b11 << 6,
+        modrm: modrm_a | (modrm_b << 3) | (0b11 << 6),
     }
 }
 
@@ -578,7 +618,7 @@ fn encode_modrm_rm(reg_val: Reg, reg_ptr: Reg, off: OffsetClass, wide: bool) -> 
     };
     Modrm {
         rex,
-        modrm: modrm_a << 3 | modrm_b | off.modrm_bits(),
+        modrm: (modrm_a << 3) | modrm_b | off.modrm_bits(),
     }
 }
 
@@ -592,7 +632,7 @@ fn encode_modrm_mr(reg_ptr: Reg, off: OffsetClass, reg_val: Reg, wide: bool) -> 
     };
     Modrm {
         rex,
-        modrm: modrm_a | modrm_b << 3 | off.modrm_bits(),
+        modrm: modrm_a | (modrm_b << 3) | off.modrm_bits(),
     }
 }
 

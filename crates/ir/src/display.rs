@@ -6,7 +6,7 @@ use color_format::{cwrite, cwriteln};
 use crate::{
     builtins,
     mc::{Register, UnknownRegister},
-    Argument, Environment, Function, FunctionIr, MCReg, Module, Ref,
+    Argument, Environment, Function, FunctionIr, MCReg, Module, Parameter, Ref, Types,
 };
 
 impl fmt::Display for Ref {
@@ -35,6 +35,39 @@ impl fmt::Display for MCReg {
             cwrite!(f, "#c<${}>", r)
         } else {
             cwrite!(f, "#c<?{}>", self.0)
+        }
+    }
+}
+impl Parameter {
+    pub fn display<'a>(self, types: &'a Types, env: &'a Environment) -> ParameterDisplay<'a> {
+        ParameterDisplay {
+            param: self,
+            types,
+            env,
+        }
+    }
+}
+pub struct ParameterDisplay<'a> {
+    param: Parameter,
+    types: &'a Types,
+    env: &'a Environment,
+}
+impl fmt::Display for ParameterDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.param {
+            crate::Parameter::Ref => cwrite!(f, "#g<val>"),
+            crate::Parameter::RefOf(ty) => {
+                write!(f, "{}", self.types.display_type(ty, &self.env.primitives))?;
+                Ok(())
+            }
+            crate::Parameter::BlockId => cwrite!(f, "#g<blockid>"),
+            crate::Parameter::BlockTarget => cwrite!(f, "#g<block>"),
+            crate::Parameter::Int | crate::Parameter::Int32 => cwrite!(f, "#g<intliteral>"),
+            crate::Parameter::Float => cwrite!(f, "#b<floatliteral>"),
+            crate::Parameter::TypeId => cwrite!(f, "#g<type>"),
+            crate::Parameter::FunctionId => cwrite!(f, "#g<function>"),
+            crate::Parameter::GlobalId => cwrite!(f, "#g<global>"),
+            crate::Parameter::MCReg(usage) => cwrite!(f, "#g<mcreg>({usage})"),
         }
     }
 }
@@ -100,28 +133,15 @@ impl fmt::Display for FunctionDisplay<'_> {
                 if i != 0 {
                     write!(f, ", ")?;
                 }
-                match param {
-                    crate::Parameter::Ref => cwrite!(f, "#g<val>")?,
-                    &crate::Parameter::RefOf(ty) => {
-                        write!(f, "{}", function.types.display_type(ty, &env.primitives))?;
-                    }
-                    crate::Parameter::BlockTarget => cwrite!(f, "#g<block>")?,
-                    crate::Parameter::Int | crate::Parameter::Int32 => {
-                        cwrite!(f, "#g<intliteral>")?
-                    }
-                    crate::Parameter::Float => cwrite!(f, "#b<floatliteral>")?,
-                    crate::Parameter::TypeId => cwrite!(f, "#g<type>")?,
-                    crate::Parameter::FunctionId => cwrite!(f, "#g<function>")?,
-                    crate::Parameter::GlobalId => cwrite!(f, "#g<global>")?,
-                    crate::Parameter::MCReg(usage) => cwrite!(f, "#g<mcreg>({usage})")?,
-                }
+                write!(f, "{}", param.display(&function.types, env))?;
             }
-            if function.varargs {
+            if let Some(param) = function.varargs {
                 if function.params.is_empty() {
                     write!(f, "...")?;
                 } else {
                     write!(f, ", ...")?;
                 }
+                write!(f, "{}", param.display(&function.types, env))?;
             }
             writeln!(f, ")")
         };
@@ -164,7 +184,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
         for block in ir.block_ids() {
             cwrite!(f, "  {}", block)?;
             if ir.block_arg_count(block) > 0 {
-                let args = ir.get_block_args(block);
+                let args = ir.get_block_args(block).iter();
                 cwrite!(f, "(")?;
                 for (i, arg) in args.enumerate() {
                     if i != 0 {
@@ -206,6 +226,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 for arg in inst.args_inner(&called.params, called.varargs, &ir.blocks, &ir.extra) {
                     match arg {
                         Argument::Ref(r) => write!(f, " {}", r)?,
+                        Argument::BlockId(id) => cwrite!(f, " {}", id)?,
                         Argument::BlockTarget(target) => {
                             cwrite!(f, " {}", target.0)?;
                             let args = target.1;

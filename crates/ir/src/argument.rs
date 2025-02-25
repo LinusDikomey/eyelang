@@ -6,6 +6,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub enum Argument<'a> {
     Ref(Ref),
+    BlockId(BlockId),
     BlockTarget(BlockTarget<'a>),
     Int(u64),
     Float(f64),
@@ -18,6 +19,7 @@ impl Argument<'_> {
     pub fn parameter_ty(&self) -> Parameter {
         match self {
             Argument::Ref(_) => Parameter::Ref,
+            Argument::BlockId(_) => Parameter::BlockId,
             Argument::BlockTarget(_) => Parameter::BlockTarget,
             Argument::Int(_) => Parameter::Int,
             Argument::Float(_) => Parameter::Float,
@@ -47,9 +49,22 @@ impl TryFrom<Argument<'_>> for Ref {
 }
 impl From<BlockId> for Argument<'_> {
     fn from(value: BlockId) -> Self {
-        Self::BlockTarget(BlockTarget(value, &[]))
+        Self::BlockId(value)
     }
 }
+impl TryFrom<Argument<'_>> for BlockId {
+    type Error = ArgError;
+    fn try_from(value: Argument<'_>) -> Result<Self, Self::Error> {
+        let Argument::BlockId(value) = value else {
+            return Err(ArgError {
+                expected: Parameter::BlockId,
+                found: value.parameter_ty(),
+            });
+        };
+        Ok(value)
+    }
+}
+
 impl<'a> From<BlockTarget<'a>> for Argument<'a> {
     fn from(value: BlockTarget<'a>) -> Self {
         Self::BlockTarget(value)
@@ -194,10 +209,10 @@ pub trait IntoArgs<'a> {
 
     fn into_args(self) -> Self::Args;
 }
-impl IntoArgs<'static> for Vec<Ref> {
+impl<'a> IntoArgs<'a> for Vec<Ref> {
     // PERF: specifying function pointer here in Map type might worsen performance since it becomes
     // a dynamic call
-    type Args = std::iter::Map<std::vec::IntoIter<Ref>, fn(Ref) -> Argument<'static>>;
+    type Args = std::iter::Map<std::vec::IntoIter<Ref>, fn(Ref) -> Argument<'a>>;
     fn into_args(self) -> Self::Args {
         self.into_iter().map(Argument::Ref)
     }
@@ -208,8 +223,8 @@ impl<'a> IntoArgs<'a> for Vec<Argument<'a>> {
         self.into_iter()
     }
 }
-impl IntoArgs<'static> for () {
-    type Args = std::array::IntoIter<Argument<'static>, 0>;
+impl<'a> IntoArgs<'a> for () {
+    type Args = std::array::IntoIter<Argument<'a>, 0>;
 
     fn into_args(self) -> Self::Args {
         [].into_iter()
@@ -259,6 +274,40 @@ impl<
 
     fn into_args(self) -> Self::Args {
         [self.0.into(), self.1.into(), self.2.into(), self.3.into()].into_iter()
+    }
+}
+impl<'a, A: IntoArgs<'a>, V: Copy + Into<Argument<'a>>> IntoArgs<'a> for (A, &'a [V]) {
+    type Args = VarargsIntoArgs<'a, A, V>;
+
+    fn into_args(self) -> Self::Args {
+        VarargsIntoArgs {
+            a: self.0.into_args(),
+            v: self.1,
+        }
+    }
+}
+
+pub struct VarargsIntoArgs<'a, A: IntoArgs<'a>, V> {
+    a: A::Args,
+    v: &'a [V],
+}
+impl<'a, A: IntoArgs<'a>, V: Copy + Into<Argument<'a>>> Iterator for VarargsIntoArgs<'a, A, V> {
+    type Item = Argument<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.a.next().or_else(|| {
+            self.v.split_first().map(|(x, xs)| {
+                self.v = xs;
+                (*x).into()
+            })
+        })
+    }
+}
+impl<'a, A: IntoArgs<'a>, V: Copy + Into<Argument<'a>>> ExactSizeIterator
+    for VarargsIntoArgs<'a, A, V>
+{
+    fn len(&self) -> usize {
+        self.a.len() + self.v.len()
     }
 }
 

@@ -212,11 +212,7 @@ impl super::FunctionPass for Mem2Reg {
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
-    use crate::{
-        mc::UnknownRegister, optimize::FunctionPass, BlockId, BlockTarget, Environment, Ref,
-    };
+    use crate::{optimize::FunctionPass, BlockId, BlockTarget, Environment, Ref};
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,

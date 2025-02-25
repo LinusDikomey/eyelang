@@ -66,8 +66,8 @@ impl IntoVisit<Rewrite> for () {
 }
 
 pub trait RewriteCtx {
-    fn begin_block(&mut self, _ir: &mut IrModify, _block: BlockId) {}
-    fn end_block(&mut self, _ir: &mut IrModify, _block: BlockId) {}
+    fn begin_block(&mut self, _env: &Environment, _ir: &mut IrModify, _block: BlockId) {}
+    fn end_block(&mut self, _env: &Environment, _ir: &mut IrModify, _block: BlockId) {}
 }
 impl RewriteCtx for () {}
 
@@ -76,10 +76,10 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
     types: &Types,
     env: &Environment,
     ctx: &mut Ctx,
-    mut rewriter: R,
+    rewriter: &mut R,
 ) {
     for block in ir.block_ids() {
-        ctx.begin_block(ir, block);
+        ctx.begin_block(env, ir, block);
         let block_info = ir.get_block(block);
         let i = block_info.idx + block_info.arg_count;
         for idx in i..i + block_info.len {
@@ -96,7 +96,7 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
                 }
             }
         }
-        ctx.end_block(ir, block);
+        ctx.end_block(env, ir, block);
     }
 }
 /// Tracks renames of values to replace all uses of values with other values
