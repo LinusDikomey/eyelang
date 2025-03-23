@@ -1,18 +1,18 @@
 use ir::{
+    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
+    Parameter, Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
     mc::{Mc, McInsts, RegClass},
     modify::IrModify,
     optimize::FunctionPass,
     rewrite::{Rewrite, RewriteCtx, Visitor},
-    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
-    Parameter, Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
 };
 
 use crate::{
+    MCValue,
     arch::x86::{
         abi::{self, ReturnPlace},
         isa::Reg,
     },
-    MCValue,
 };
 
 use super::X86;
@@ -856,12 +856,20 @@ ir::visitor! {
         x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
     };
     (%r = cf.Ret value) => {
-        let MCValue::Reg(reg) = ctx.get(value) else {
-            todo!()
-        };
-        // TODO: physical registers for eax here
-        let eax = MCReg::from_phys(Reg::eax);
-        ir.add_before(env, r, parallel_copy(mc, &[eax, reg], ctx.unit));
+        match ctx.get(value) {
+            MCValue::None | MCValue::Undef => {}
+            MCValue::Imm(x) => {
+                // TODO: handle other than 32-bit values
+                let eax = MCReg::from_phys(Reg::eax);
+                ir.add_before(env, r, x86.movri32(eax, x as u32, ctx.unit));
+            }
+            MCValue::Reg(reg) => {
+                // TODO: othher sizes than 32 bits
+                let eax = MCReg::from_phys(Reg::eax);
+                ir.add_before(env, r, parallel_copy(mc, &[eax, reg], ctx.unit));
+            }
+            MCValue::TwoRegs(_, _) => todo!("handle returning 2 registers"),
+        }
         x86.ret32(ctx.unit)
     };
     (%r = cf.Goto (@b b_args)) => {
