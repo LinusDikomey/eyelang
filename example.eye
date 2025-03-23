@@ -22,11 +22,12 @@ circle_area :: fn(r f64) -> f64: PI * r * r
 
 Fruit :: enum { Apple, Banana }
 
-fruit_to_string :: fn(f Fruit) -> str:
-    if f == .Apple: "Apple"
-    else "Banana"
+fruit_to_string :: fn(f Fruit) -> str: match f {
+    .Apple: "Apple",
+    .Banana: "Banana"
+}
 
-# traits aren't finished yet and aren't usable right now
-# ToString :: trait {
-#     to_string :: fn -> *i8
-# }
+# a trait definition
+ToString :: trait {
+    to_string :: fn(self Self) -> *i8
+}

@@ -2,7 +2,7 @@
 
 A basic statically typed systems-level programming language.
 The compiler is written in rust using LLVM as its backend.
-A simple unoptimized x86_64 backend is also on it's way.
+A simple, fast x86_64 backend is also on it's way.
 
 ## Ideas
 - Runtime Speed: The language should make it possible to write code about as fast as C.
@@ -16,7 +16,7 @@ A simple unoptimized x86_64 backend is also on it's way.
 ### Basic
 ```rust
 main :: fn {
-    std.println("Hello World")
+    println("Hello World")
     x := 3
     y := 2 * x + 3
     y += 1
@@ -53,7 +53,7 @@ main :: fn {
 A :: 42
 
 main :: fn {
-    std.c.printf("%d\n".ptr, A) # prints 42
+    println(A) # prints 42
 
     # can be assigned to any integer
     x: u8 = A
@@ -111,9 +111,6 @@ main :: fn {
 Enum variants can also have arguments. This is known as sum types/algebraic data types in many other languages.
 Note that implicit enums can infer to explicitly typed enums without having to name the type.
 ```rust
-use std.print
-use std.println
-
 Fruit :: enum { Apple(i32), Banana, Citrus }
 
 main :: fn {
@@ -141,12 +138,14 @@ print_fruit :: fn(f Fruit): match f {
 
 ## Build Instructions
 
-You will need LLVM to build this project. Look at the [llvm-sys](https://crates.io/crates/llvm-sys)
-crate for detailed instructions on how to build or install llvm.
+You can use the nix flake for building and developing. Use `nix build` or `nix develop`.
 
-Nightly rust will also be required. I will try to stay mostly up to date with the newest nightly version.
+Otherwise, you will need to install LLVM to build this project.
+Look at the [llvm-sys](https://crates.io/crates/llvm-sys) crate for detailed instructions on how
+to build or install llvm.
 
-To run a program, use `cargo +nightly run -- run example.eye`
+To run a program, use `cargo run -- run example.eye`
 or install the compiler with `cargo install` and use
 `eye run example.eye` allthough this will require the std library to be present in the same
-directory as the binary or the working directory (for now).
+directory as the binary or the working directory. Installing via the nix flake will handle that
+part for you.
