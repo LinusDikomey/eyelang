@@ -1,5 +1,6 @@
 /// command line argument parsing
 mod args;
+mod std_path;
 
 use std::{
     ffi::CString,
@@ -92,16 +93,7 @@ fn main() -> Result<(), MainError> {
     println!("Compiling {} ...", name);
 
     // add standard library
-    let std_path = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|path| path.join("std/")))
-        .and_then(|std_path| {
-            std_path
-                .try_exists()
-                .is_ok_and(|exists| exists)
-                .then_some(std_path)
-        })
-        .unwrap_or(PathBuf::from("std/"));
+    let std_path = std_path::find();
     let std = compiler.add_project("std".to_owned(), std_path)?;
     compiler.add_dependency(project, std);
     compiler.builtins.set_std(std);
