@@ -635,10 +635,10 @@ pub fn check(
             cond,
             body,
         } => {
-            ctx.control_flow_stack.push(());
             let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let body_ty = ctx.hir.types.add_unknown();
+            ctx.control_flow_stack.push(());
             let body = check(ctx, body, scope, body_ty, return_ty, &mut false);
             ctx.control_flow_stack.pop();
             Node::While {
@@ -652,6 +652,7 @@ pub fn check(
             val,
             body,
         } => {
+            ctx.control_flow_stack.push(());
             let value_ty = ctx.hir.types.add_unknown();
             let val = check(ctx, val, scope, value_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
@@ -671,7 +672,9 @@ pub fn check(
             let pat = ctx.hir.add_pattern(pat);
             let val = ctx.hir.add(val);
             let body_ty = ctx.hir.types.add_unknown();
+            ctx.control_flow_stack.push(());
             let body = check(ctx, body, &mut body_scope, body_ty, return_ty, &mut false);
+            ctx.control_flow_stack.pop();
             Node::WhilePat {
                 pat,
                 val,
@@ -746,6 +749,7 @@ pub fn check(
             };
             let body_ty = ctx.hir.types.add_unknown();
             let mut body_noreturn = false;
+            ctx.control_flow_stack.push(());
             let body = check(
                 ctx,
                 body,
@@ -754,6 +758,7 @@ pub fn check(
                 return_ty,
                 &mut body_noreturn,
             );
+            ctx.control_flow_stack.pop();
             let loop_node = Node::WhilePat {
                 pat: ctx.hir.add_pattern(pat_node),
                 val: ctx.hir.add(next_call),

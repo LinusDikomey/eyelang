@@ -869,7 +869,13 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             ctx.builder.begin_block(loop_start, []);
             let val = lower(ctx, val)?;
             lower_pattern(ctx, pat, val, Some(after))?;
-            if lower(ctx, body).is_ok() {
+            ctx.control_flow_stack.push(ControlFlowEntry {
+                loop_begin: loop_start,
+                loop_after: after,
+            });
+            let body_value = lower(ctx, body);
+            ctx.control_flow_stack.pop();
+            if body_value.is_ok() {
                 ctx.builder
                     .append(cf.Goto(BlockTarget(loop_start, &[]), ctx.unit_ty));
             }
