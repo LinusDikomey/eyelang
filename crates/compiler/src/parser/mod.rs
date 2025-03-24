@@ -946,6 +946,19 @@ impl Parser<'_> {
                 }
             },
             Keyword While #as first => self.parse_while_from_cond(first, scope)?,
+            Keyword For #as first => {
+                //self.parse_
+                let pat = self.parse_expr(scope)?;
+                self.toks.step_expect(TokenType::Keyword(Keyword::In))?;
+                let iter = self.parse_expr(scope)?;
+                let body = self.parse_block_or_stmt(scope)?;
+                Expr::For {
+                    start: first.start,
+                    pat: self.ast.expr(pat),
+                    iter: self.ast.expr(iter),
+                    body: self.ast.expr(body),
+                }
+            },
             Keyword Primitive(primitive) #as first => Expr::Primitive {
                 primitive,
                 start: first.start,

@@ -5,4 +5,4 @@ mod isel;
 
 pub use emit::write;
 pub use isa::{Reg, X86};
-pub use isel::{codegen, InstructionSelector};
+pub use isel::{InstructionSelector, codegen};

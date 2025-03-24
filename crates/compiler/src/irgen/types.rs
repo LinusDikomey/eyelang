@@ -4,9 +4,9 @@ use id::TypeId;
 use types::Type;
 
 use crate::{
+    Compiler,
     compiler::ResolvedTypeDef,
     types::{LocalTypeIds, TypeInfo, TypeTable},
-    Compiler,
 };
 
 #[derive(Clone, Copy, Debug)]

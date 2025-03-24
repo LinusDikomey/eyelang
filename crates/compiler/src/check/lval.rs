@@ -10,7 +10,7 @@ use crate::{
     types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
-use super::{expr, Ctx};
+use super::{Ctx, expr};
 
 pub fn check(
     ctx: &mut Ctx,

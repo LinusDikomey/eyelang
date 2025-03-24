@@ -263,12 +263,12 @@ impl<'a, A0: Into<Argument<'a>>, A1: Into<Argument<'a>>, A2: Into<Argument<'a>>>
     }
 }
 impl<
-        'a,
-        A0: Into<Argument<'a>>,
-        A1: Into<Argument<'a>>,
-        A2: Into<Argument<'a>>,
-        A3: Into<Argument<'a>>,
-    > IntoArgs<'a> for (A0, A1, A2, A3)
+    'a,
+    A0: Into<Argument<'a>>,
+    A1: Into<Argument<'a>>,
+    A2: Into<Argument<'a>>,
+    A3: Into<Argument<'a>>,
+> IntoArgs<'a> for (A0, A1, A2, A3)
 {
     type Args = std::array::IntoIter<Argument<'a>, 4>;
 

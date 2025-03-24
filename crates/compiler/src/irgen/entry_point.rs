@@ -1,4 +1,4 @@
-use ir::{builder::Builder, Environment};
+use ir::{Environment, builder::Builder};
 use types::{Primitive, Type};
 
 use crate::compiler::Dialects;

@@ -5,10 +5,10 @@ use span::TSpan;
 use types::{InvalidTypeError, Primitive, Type};
 
 use crate::{
+    Compiler,
     compiler::Signature,
     error::Error,
     parser::ast::{self, Ast, TraitId},
-    Compiler,
 };
 
 pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {

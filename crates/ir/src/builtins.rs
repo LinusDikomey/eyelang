@@ -1,6 +1,6 @@
 //! Builtin dialect, instructions that users never directly interact with
 
-use crate::{instructions, Instruction, ModuleId, ModuleOf};
+use crate::{Instruction, ModuleId, ModuleOf, instructions};
 
 instructions! {
     Builtin "builtin" BuiltinInsts

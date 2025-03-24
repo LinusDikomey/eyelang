@@ -12,11 +12,11 @@ mod unify;
 use unify::unify;
 
 use crate::{
+    Compiler,
     check::{expr::int_ty_from_variant_count, traits},
     compiler::{Def, Generics, ResolvedTypeDef},
     error::Error,
     parser::ast::{self, TraitId},
-    Compiler,
 };
 
 id::id!(LocalTypeId);

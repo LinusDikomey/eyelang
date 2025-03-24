@@ -2,7 +2,10 @@ use id::{ModuleId, TypeId};
 use span::Span;
 use types::Type;
 
-use crate::{parser::ast::FunctionId, Compiler, ProjectId};
+use crate::{
+    Compiler, ProjectId,
+    parser::ast::{FunctionId, TraitId},
+};
 
 use super::Def;
 
@@ -14,6 +17,8 @@ pub struct Builtins {
     prelude: Option<ModuleId>,
     panic: Option<(ModuleId, FunctionId)>,
     intrinsic: Option<(ModuleId, FunctionId)>,
+    iterator: Option<(ModuleId, TraitId)>,
+    option: Option<TypeId>,
 }
 impl Builtins {
     pub fn set_std(&mut self, std: ProjectId) {
@@ -119,4 +124,41 @@ pub fn get_intrinsic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
     };
     compiler.builtins.intrinsic = Some((module, id));
     (module, id)
+}
+
+pub fn get_iterator(compiler: &mut Compiler) -> (ModuleId, TraitId) {
+    if let Some(iterator) = compiler.builtins.iterator {
+        return iterator;
+    }
+    let std = compiler.builtins.std;
+    let root = compiler.get_project(std).root_module;
+    let def = compiler.resolve_in_module(root, "iter", Span::MISSING);
+    let Def::Module(iter_module) = def else {
+        panic!("expected a module for std.iter but found {def:?}");
+    };
+    let def = compiler.resolve_in_module(iter_module, "Iterator", Span::MISSING);
+    let Def::Trait(module, id) = def else {
+        panic!("expected a trait for std.iter.Iterator but found {def:?}");
+    };
+    compiler.builtins.iterator = Some((module, id));
+    (module, id)
+}
+
+pub fn get_option(compiler: &mut Compiler) -> TypeId {
+    if let Some(option) = compiler.builtins.option {
+        return option;
+    }
+    let std = compiler.builtins.std;
+    let root = compiler.get_project(std).root_module;
+    let def = compiler.resolve_in_module(root, "option", Span::MISSING);
+    let Def::Module(option_module) = def else {
+        panic!("expected a module for std.option but found {def:?}");
+    };
+    let def = compiler.resolve_in_module(option_module, "Option", Span::MISSING);
+    let Def::GenericType(id) = def else {
+        panic!("expected a type for std.option.Option but found {def:?}");
+    };
+    debug_assert_eq!(compiler.types[id.idx()].generic_count, 1);
+    compiler.builtins.option = Some(id);
+    id
 }

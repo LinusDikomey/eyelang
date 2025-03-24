@@ -32,7 +32,9 @@ pub fn link(
     } else if let Some(cmd) = link_cmd(obj, out, linked_libraries) {
         cmd
     } else {
-        return Err(format!("No link command known for this OS. You can manually link the object file created: {obj}"));
+        return Err(format!(
+            "No link command known for this OS. You can manually link the object file created: {obj}"
+        ));
     };
 
     cmd.stdout(process::Stdio::piped());

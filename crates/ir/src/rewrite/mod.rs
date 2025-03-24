@@ -2,8 +2,8 @@ mod macros;
 pub use macros::visitor;
 
 use crate::{
-    modify::IrModify, BlockId, Environment, FunctionId, FunctionIr, Instruction, IntoArgs,
-    Parameter, Ref, TypeId, Types, INLINE_ARGS,
+    BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs, Parameter,
+    Ref, TypeId, Types, modify::IrModify,
 };
 
 pub trait Visitor<Ctx = ()> {

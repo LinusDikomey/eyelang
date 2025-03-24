@@ -1,10 +1,10 @@
 use std::rc::Rc;
 
 use crate::{
+    Compiler,
     check::expr::int_ty_from_variant_count,
     compiler::{Generics, ResolvedTypeDef},
-    types::{traits, TypeInfoOrIdx},
-    Compiler,
+    types::{TypeInfoOrIdx, traits},
 };
 
 use super::{LocalTypeId, TypeInfo, TypeTable};
@@ -17,8 +17,8 @@ pub fn unify(
     compiler: &mut Compiler,
     unified_id: LocalTypeId,
 ) -> Option<TypeInfo> {
-    use types::Primitive as P;
     use TypeInfo::*;
+    use types::Primitive as P;
     Some(match (a, b) {
         (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
         (UnknownSatisfying(bounds), Generic(generic_id))

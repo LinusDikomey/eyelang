@@ -1,6 +1,6 @@
 //! Example for using the ir crate. A function is constructed, printed, verified and evaluated.
 
-use ir::{builder::Builder, BlockTarget, Environment, Primitive};
+use ir::{BlockTarget, Environment, Primitive, builder::Builder};
 
 fn main() {
     let mut env = Environment::new(Primitive::create_infos());

@@ -2,9 +2,9 @@ use dmap::DHashMap;
 use types::Primitive;
 
 use crate::{
+    Compiler,
     compiler::ResolvedTypeDef,
     types::{TypeInfo, TypeTable},
-    Compiler,
 };
 
 #[derive(Clone, Copy)]

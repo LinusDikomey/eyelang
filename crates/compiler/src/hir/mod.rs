@@ -1,16 +1,16 @@
 use std::ops::{Index, IndexMut};
 
-use id::{id, ConstValueId, ModuleId};
+use id::{ConstValueId, ModuleId, id};
 use types::{FloatType, IntType, Primitive};
 
 use crate::{
+    Compiler,
     compiler::{CaptureId, Generics, VarId},
     parser::{
         ast::{FunctionId, GlobalId, TraitId},
         token::AssignType,
     },
     types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
-    Compiler,
 };
 
 /// High-level intermediate representation for a function. It is created during type checking and
@@ -401,7 +401,7 @@ impl Hir {
             } => {
                 eprint!(
                     "(call-trait-method <trait {}:{}",
-                    trait_id.0 .0, trait_id.1 .0
+                    trait_id.0.0, trait_id.1.0
                 );
                 if trait_generics.count > 0 {
                     eprint!("[");
@@ -631,6 +631,14 @@ impl NodeIds {
         self.count == 0
     }
 }
+impl From<NodeId> for NodeIds {
+    fn from(value: NodeId) -> Self {
+        Self {
+            index: value.0,
+            count: 1,
+        }
+    }
+}
 impl Index<NodeIds> for Hir {
     type Output = [Node];
     fn index(&self, index: NodeIds) -> &Self::Output {
@@ -656,6 +664,14 @@ impl Index<PatternId> for Hir {
 pub struct PatternIds {
     pub index: u32,
     pub count: u32,
+}
+impl From<PatternId> for PatternIds {
+    fn from(value: PatternId) -> Self {
+        Self {
+            index: value.0,
+            count: 1,
+        }
+    }
 }
 impl PatternIds {
     pub fn iter(self) -> impl Iterator<Item = PatternId> {

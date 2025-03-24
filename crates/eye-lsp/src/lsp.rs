@@ -4,8 +4,8 @@ use compiler::{Compiler, ProjectId};
 use serde_json::Value;
 
 use crate::{
+    ERROR_FAILED, Notification, ResponseError,
     types::{self, Hover},
-    Notification, ResponseError, ERROR_FAILED,
 };
 
 pub struct Lsp {
@@ -53,7 +53,7 @@ impl Lsp {
                     code: ERROR_FAILED,
                     message: "unsupported request".to_owned(),
                     data: Value::Null,
-                })
+                });
             }
         })
     }

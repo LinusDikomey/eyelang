@@ -4,9 +4,8 @@ use std::marker::PhantomData;
 use color_format::{cwrite, cwriteln};
 
 use crate::{
-    builtins,
+    Argument, Environment, Function, FunctionIr, MCReg, Module, Parameter, Ref, Types, builtins,
     mc::{Register, UnknownRegister},
-    Argument, Environment, Function, FunctionIr, MCReg, Module, Parameter, Ref, Types,
 };
 
 impl fmt::Display for Ref {

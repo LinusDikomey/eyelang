@@ -12,7 +12,7 @@ use crate::{
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
-use super::{expr, Ctx};
+use super::{Ctx, expr};
 
 pub fn check_call(
     ctx: &mut Ctx,

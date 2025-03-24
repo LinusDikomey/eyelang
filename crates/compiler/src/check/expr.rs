@@ -5,18 +5,18 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{builtins, Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeDef},
+    compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeDef, builtins},
     error::Error,
     eval::ConstValue,
-    hir::{self, Comparison, LValue, Logic, Node, NodeIds},
+    hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
     parser::{
         ast::{Ast, Expr, ExprExtra, ExprId, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
     },
-    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 
-use super::{call, closure::closure, exhaust::Exhaustion, lval, pattern, Ctx};
+use super::{Ctx, call, closure::closure, exhaust::Exhaustion, lval, pattern};
 
 pub fn check(
     ctx: &mut Ctx,
@@ -677,6 +677,89 @@ pub fn check(
                 val,
                 body: ctx.hir.add(body),
             }
+        }
+        &Expr::For {
+            start: _,
+            pat,
+            iter,
+            body,
+        } => {
+            let iterator_trait = builtins::get_iterator(ctx.compiler);
+            let option_ty = builtins::get_option(ctx.compiler);
+            let some_variant_types = ctx
+                .hir
+                .types
+                .add_multiple([TypeInfo::Primitive(Primitive::U8), TypeInfo::Unknown]);
+            let item_ty = some_variant_types.nth(1).unwrap();
+            let bounds = ctx.hir.types.add_bounds([Bound {
+                trait_id: iterator_trait,
+                generics: item_ty.into(),
+                span: ctx.ast[iter].span(ctx.ast),
+            }]);
+            let iter_ty = ctx.hir.types.add(TypeInfo::UnknownSatisfying(bounds));
+            let iter = check(ctx, iter, scope, iter_ty, return_ty, noreturn);
+            let iter_var_id = ctx.hir.add_var(iter_ty);
+            let decl_iter_var = Node::DeclareWithVal {
+                pattern: ctx.hir.add_pattern(Pattern::Variable(iter_var_id)),
+                val: ctx.hir.add(iter),
+            };
+
+            let mut body_scope = LocalScope {
+                parent: LocalScopeParent::Some(scope),
+                module: scope.module,
+                variables: dmap::new(),
+                static_scope: None,
+            };
+            let option_item_ty = ctx
+                .hir
+                .types
+                .add(TypeInfo::TypeDef(option_ty, item_ty.into()));
+            let iter_var_ref = Node::AddressOf {
+                value: ctx.hir.add_lvalue(LValue::Variable(iter_var_id)),
+                value_ty: iter_ty,
+            };
+            let next_call = Node::TraitCall {
+                trait_id: iterator_trait,
+                trait_generics: item_ty.into(),
+                method_index: 0, // TODO: don't hardcode index of next method
+                self_ty: iter_ty,
+                args: ctx.hir.add(iter_var_ref).into(),
+                return_ty: option_item_ty,
+                noreturn: false,
+            };
+            let mut exhaustion = Exhaustion::None;
+            let pat_item_node = pattern::check(
+                ctx,
+                &mut body_scope.variables,
+                &mut exhaustion,
+                pat,
+                item_ty,
+            );
+            if exhaustion.is_trivially_exhausted() {
+                ctx.deferred_exhaustions.push((exhaustion, item_ty, pat));
+            }
+            // TODO: don't hardcode 0 for Some
+            let pat_node = Pattern::EnumVariant {
+                ordinal: OrdinalType::Known(0),
+                types: some_variant_types.idx,
+                args: ctx.hir.add_pattern(pat_item_node).into(),
+            };
+            let body_ty = ctx.hir.types.add_unknown();
+            let mut body_noreturn = false;
+            let body = check(
+                ctx,
+                body,
+                &mut body_scope,
+                body_ty,
+                return_ty,
+                &mut body_noreturn,
+            );
+            let loop_node = Node::WhilePat {
+                pat: ctx.hir.add_pattern(pat_node),
+                val: ctx.hir.add(next_call),
+                body: ctx.hir.add(body),
+            };
+            Node::Block(ctx.hir.add_nodes([decl_iter_var, loop_node]))
         }
         &Expr::FunctionCall(call) => {
             call::check_call(ctx, &ast[call], expr, scope, expected, return_ty, noreturn)

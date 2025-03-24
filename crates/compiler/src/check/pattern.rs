@@ -3,7 +3,7 @@ use types::Primitive;
 
 use crate::{
     check::exhaust,
-    compiler::{builtins, VarId},
+    compiler::{VarId, builtins},
     error::Error,
     hir::Pattern,
     parser::{
@@ -13,7 +13,7 @@ use crate::{
     types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
-use super::{exhaust::Exhaustion, Ctx};
+use super::{Ctx, exhaust::Exhaustion};
 
 pub fn check(
     ctx: &mut Ctx,

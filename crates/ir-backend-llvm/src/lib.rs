@@ -37,11 +37,7 @@ const FALSE: LLVMBool = 0;
 const TRUE: LLVMBool = 1;
 
 fn llvm_bool(b: bool) -> LLVMBool {
-    if b {
-        TRUE
-    } else {
-        FALSE
-    }
+    if b { TRUE } else { FALSE }
 }
 impl Default for Backend {
     fn default() -> Self {

@@ -1,4 +1,4 @@
-use crate::parser::{token::TokenType, ExpectedTokens};
+use crate::parser::{ExpectedTokens, token::TokenType};
 use color_format::*;
 use core::fmt;
 use id::ModuleId;
@@ -361,27 +361,32 @@ impl Error {
                 "#r<internal compiler error> #y!<(this is a bug and not your fault)>: {}",
                 msg,
             ),
-            Error::UnexpectedEndOfFile { expected } => cformat!(
-                "expected {} instead",
-                expected,
-            ),
-            Error::UnexpectedToken { expected, found } => cformat!(
-                "expected {} but found {}",
-                expected, found
-            ),
+            Error::UnexpectedEndOfFile { expected } => cformat!("expected {} instead", expected,),
+            Error::UnexpectedToken { expected, found } => {
+                cformat!("expected {} but found {}", expected, found)
+            }
             Error::UnknownIdent(name) => cformat!("the identifier #c<{name}> was not found"),
-            Error::ExpectedValueFoundHole => cformat!(
-                "the name #r<_> is reserved for values that are thrown away"
-            ),
+            Error::ExpectedValueFoundHole => {
+                cformat!("the name #r<_> is reserved for values that are thrown away")
+            }
             Error::InvalidMainReturnType(ty) => cformat!(
                 "the main function should return either an integer or the unit type #m<()> but returns {}",
                 ty
             ),
             Error::MismatchedType { expected, found } => {
-                cformat!("expected value of type #m<{}> but found #m<{}>", expected, found)
+                cformat!(
+                    "expected value of type #m<{}> but found #m<{}>",
+                    expected,
+                    found
+                )
             }
-            &Error::InvalidArgCount { expected, varargs, found } => {
-                cformat!("expected #g<{}{}> argument{} but #r<{}> {} found",
+            &Error::InvalidArgCount {
+                expected,
+                varargs,
+                found,
+            } => {
+                cformat!(
+                    "expected #g<{}{}> argument{} but #r<{}> {} found",
                     if varargs { "at least " } else { "" },
                     expected,
                     if expected == 1 { "" } else { "s" },
@@ -404,39 +409,44 @@ impl Error {
                 text
             }
             Error::NonexistantMember(Some(hint)) => cformat!("#c<hint>: {}", hint.hint()),
-            Error::TypeMustBeKnownHere { needed_bound: Some(bound) } => {
+            Error::TypeMustBeKnownHere {
+                needed_bound: Some(bound),
+            } => {
                 cformat!("#c<hint>: a type satisfying #m<{bound}> is needed")
-            },
+            }
             Error::InvalidGenericCount { expected, found } => cformat!(
                 "expected #y<{}> parameters but found #r<{}>",
-                expected, found
+                expected,
+                found
             ),
-            Error::UnusedExpressionValue => cformat!(
-                "this expression only produces a value that is not used"
-            ),
-            Error::NotAPattern { coming_soon } => if *coming_soon {
-                cformat!("this might be a valid pattern #c<soon>")
-            } else {
-                cformat!("this expression is not a valid pattern")
+            Error::UnusedExpressionValue => {
+                cformat!("this expression only produces a value that is not used")
             }
-            Error::DuplicateDependency(name) => cformat!(
-                "multiple dependencies named '#m<{}>'",
-                name
-            ),
+            Error::NotAPattern { coming_soon } => {
+                if *coming_soon {
+                    cformat!("this might be a valid pattern #c<soon>")
+                } else {
+                    cformat!("this expression is not a valid pattern")
+                }
+            }
+            Error::DuplicateDependency(name) => {
+                cformat!("multiple dependencies named '#m<{}>'", name)
+            }
             Error::TooManyGenerics(count) => cformat!(
                 "the maximum number of generics allowed is #g<255> but found #r<{}>",
                 count
             ),
-            Error::HoleLHSOnly => cformat!(
-                "#r<_> is not a value and can only be used to ignore the value"
-            ),
-            Error::CantMutateHole => cformat!(
-                "#r<_> can only be assigned to"
-            ),
+            Error::HoleLHSOnly => {
+                cformat!("#r<_> is not a value and can only be used to ignore the value")
+            }
+            Error::CantMutateHole => cformat!("#r<_> can only be assigned to"),
             Error::InvalidGlobalVarPattern => cformat!(
                 "only a single #c<identifier> can be used as a pattern when creating global variables"
             ),
-            Error::NotATraitMember { trait_name, function } => cformat!(
+            Error::NotATraitMember {
+                trait_name,
+                function,
+            } => cformat!(
                 "the function #m<{function}> is not a member of the trait #m<{trait_name}>",
             ),
             Error::NotAllFunctionsImplemented { unimplemented } => {
@@ -457,10 +467,12 @@ impl Error {
                 ImplIncompatibility::Generics => "the generics differ".to_owned(),
                 ImplIncompatibility::VarargsNeeded => cformat!("#c<hint>: add varargs"),
                 ImplIncompatibility::NoVarargsNeeded => cformat!("#c<hint>: remove the varargs"),
-                ImplIncompatibility::ArgCount { base, impl_ } => cformat!("there are #r<{impl_}> arguments but #r<{base}> in the trait function"),
+                ImplIncompatibility::ArgCount { base, impl_ } => {
+                    cformat!("there are #r<{impl_}> arguments but #r<{base}> in the trait function")
+                }
                 ImplIncompatibility::Arg(i) => cformat!("argument #r<{i}> has the wrong type"), // TODO: concrete type mismatch errors
                 ImplIncompatibility::ReturnType => "the return type is different".to_owned(),
-            }
+            },
             Error::UnsatisfiedTraitBound { trait_name, ty } => {
                 cformat!("the type #m<{ty}> doesn't satisfy the #m<{trait_name}> trait")
             }
@@ -474,7 +486,8 @@ impl Error {
                 cformat!("#c<hint>: remove this cast")
             }
             Error::EvalFailed(ir::eval::Error::InfiniteLoop) => {
-                cformat!("#c<hint>: configuring the backwards jump limit \
+                cformat!(
+                    "#c<hint>: configuring the backwards jump limit \
                     (currently always #blue<{}>) will be configurable in the future",
                     ir::eval::BACKWARDS_JUMP_LIMIT
                 )
@@ -483,7 +496,7 @@ impl Error {
                 cformat!("#r<error>: {s}")
             }
             Error::CantInferFromBody { ty } => cformat!("got: {ty}"),
-            _ => return None
+            _ => return None,
         })
     }
     pub fn severity(&self) -> Severity {

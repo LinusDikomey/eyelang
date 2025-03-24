@@ -15,6 +15,7 @@ use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
 use crate::{
+    ProjectId,
     check::{self, traits},
     error::{CompileError, Error, Errors, ImplIncompatibility},
     eval::{self, ConstValue},
@@ -25,7 +26,6 @@ use crate::{
         ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
     },
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
-    ProjectId,
 };
 
 use builtins::Builtins;

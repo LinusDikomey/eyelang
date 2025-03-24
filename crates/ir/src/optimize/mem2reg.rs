@@ -4,9 +4,9 @@ use std::collections::VecDeque;
 use dmap::{DHashMap, DHashSet};
 
 use crate::{
+    Argument, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
     dialect::{self, Mem},
     modify::IrModify,
-    Argument, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
 };
 
 pub struct Mem2Reg {
@@ -212,7 +212,7 @@ impl super::FunctionPass for Mem2Reg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{optimize::FunctionPass, BlockId, BlockTarget, Environment, Ref};
+    use crate::{BlockId, BlockTarget, Environment, Ref, optimize::FunctionPass};
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,

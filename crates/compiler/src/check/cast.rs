@@ -1,8 +1,8 @@
 use crate::{
+    Compiler,
     error::Error,
     hir::CastType,
     types::{LocalTypeId, TypeInfo, TypeTable},
-    Compiler,
 };
 
 pub fn check(

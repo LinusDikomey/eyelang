@@ -630,6 +630,12 @@ pub enum Expr {
         val: ExprId,
         body: ExprId,
     },
+    For {
+        start: u32,
+        pat: ExprId,
+        iter: ExprId,
+        body: ExprId,
+    },
     FunctionCall(CallId),
 
     // ---------- other ----------
@@ -719,9 +725,9 @@ impl Expr {
             Expr::IfElse { start, else_, .. } | Expr::IfPatElse { start, else_, .. } => {
                 TSpan::new(*start, e(else_))
             }
-            Expr::While { start, body, .. } | Expr::WhilePat { start, body, .. } => {
-                TSpan::new(*start, e(body))
-            }
+            Expr::While { start, body, .. }
+            | Expr::WhilePat { start, body, .. }
+            | Expr::For { start, body, .. } => TSpan::new(*start, e(body)),
             Expr::FunctionCall(call_id) => {
                 let Call {
                     called_expr, end, ..

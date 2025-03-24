@@ -490,6 +490,24 @@ impl<C: Representer> Repr<C> for Expr {
                 }
                 body.repr(c);
             }
+            &Self::For {
+                start: _,
+                pat,
+                iter,
+                body,
+            } => {
+                c.write_add("for ");
+                ast[pat].repr(c);
+                c.write_add(" in ");
+                ast[iter].repr(c);
+                let body = &ast[body];
+                if body.is_block() {
+                    c.space();
+                } else {
+                    c.write_add(": ");
+                }
+                body.repr(c);
+            }
             Self::FunctionCall(call_id) => {
                 let Call {
                     called_expr, args, ..

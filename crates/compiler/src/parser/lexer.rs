@@ -1,6 +1,6 @@
 use super::{
-    token::{Token, TokenType},
     ExpectedTokens,
+    token::{Token, TokenType},
 };
 use crate::error::{Error, Errors};
 use id::ModuleId;

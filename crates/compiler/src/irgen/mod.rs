@@ -12,13 +12,13 @@ use id::ModuleId;
 use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
 
-use crate::compiler::{builtins, mangle_name, Dialects, FunctionToGenerate};
+use crate::Compiler;
+use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
 use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
 use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
-use crate::Compiler;
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},

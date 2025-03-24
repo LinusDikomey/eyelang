@@ -16,12 +16,12 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
+    Compiler,
     compiler::{CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId},
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
     parser::ast::{Ast, ExprId, ScopeId},
     types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
-    Compiler,
 };
 
 use self::exhaust::Exhaustion;

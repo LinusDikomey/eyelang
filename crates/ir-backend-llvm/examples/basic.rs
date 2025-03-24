@@ -1,7 +1,7 @@
 //! Example for compiling a function using this backend based on llvm. Creates a module, displays
 //! it and then emits it to an object file called 'out.o'.
 
-use ir::{dialect::Primitive, Environment, ModuleOf};
+use ir::{Environment, ModuleOf, dialect::Primitive};
 
 fn main() {
     let mut env = Environment::new(ir::dialect::Primitive::create_infos());

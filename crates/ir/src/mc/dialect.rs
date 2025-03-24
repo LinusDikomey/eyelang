@@ -1,4 +1,4 @@
-use crate::{instructions, Parameter, Usage};
+use crate::{Parameter, Usage, instructions};
 
 instructions! {
     Mc "mc" McInsts

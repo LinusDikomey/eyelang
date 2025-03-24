@@ -5,6 +5,7 @@ use ir::eval::Val;
 use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
+    Compiler, Def,
     compiler::{Generics, ResolvedPrimitive},
     error::Error,
     hir::HIRBuilder,
@@ -14,7 +15,6 @@ use crate::{
         token::{FloatLiteral, IntLiteral},
     },
     types::{TypeInfo, TypeTable},
-    Compiler, Def,
 };
 
 #[derive(Debug, Clone)]
@@ -439,7 +439,9 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
                 Val::Ptr(ptr)
             }
             name => {
-                return Err(format!("Can't evaluate extern function {name} at compile-time").into())
+                return Err(
+                    format!("Can't evaluate extern function {name} at compile-time").into(),
+                );
             }
         })
     }

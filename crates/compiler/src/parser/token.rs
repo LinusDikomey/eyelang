@@ -223,6 +223,7 @@ pub enum Keyword {
     Asm,
     Break,
     Continue,
+    In,
 }
 impl From<Keyword> for &'static str {
     fn from(k: Keyword) -> Self {
@@ -250,6 +251,7 @@ impl From<Keyword> for &'static str {
             Keyword::Asm => "asm",
             Keyword::Break => "break",
             Keyword::Continue => "continue",
+            Keyword::In => "in",
         }
     }
 }
@@ -306,6 +308,7 @@ impl FromStr for Keyword {
 
             "break" => Keyword::Break,
             "continue" => Keyword::Continue,
+            "in" => Keyword::In,
             _ => return Err(()),
         })
     }
