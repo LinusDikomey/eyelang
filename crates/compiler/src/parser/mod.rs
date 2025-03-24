@@ -5,6 +5,7 @@ pub mod token;
 
 use std::collections::hash_map::Entry;
 
+use ast::{InherentImpl, TraitFunctions};
 use dmap::DHashMap;
 pub use reader::ExpectedTokens;
 use reader::{step_or_unexpected, step_or_unexpected_value};
@@ -56,8 +57,6 @@ struct Parser<'a> {
     toks: reader::TokenReader,
     errors: &'a mut Errors,
 }
-
-type TraitFunctions = Box<[(TSpan, ast::FunctionId)]>;
 
 impl Parser<'_> {
     /// Parses a delimited list. The `item` function parses an item and is supposed to handle the result itself.
@@ -430,7 +429,7 @@ impl Parser<'_> {
         &mut self,
         struct_tok: Token,
         scope: ScopeId,
-    ) -> ParseResult<ast::StructDefinition> {
+    ) -> ParseResult<ast::TypeDef> {
         debug_assert_eq!(struct_tok.ty, TokenType::Keyword(Keyword::Struct));
         let generics = self.parse_optional_generics(Vec::new())?;
 
@@ -444,6 +443,10 @@ impl Parser<'_> {
         let mut members: Vec<(TSpan, UnresolvedType)> = Vec::new();
         let mut methods = dmap::new();
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
+            if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
+                p.parse_inherent_impl(impl_tok, scope, &generics)?;
+                return Ok(Delimit::No);
+            }
             let ident = p.toks.step_expect(TokenType::Ident)?;
             if p.toks.step_if(TokenType::DoubleColon).is_some() {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
@@ -466,19 +469,15 @@ impl Parser<'_> {
             }
         })?;
         self.ast.get_scope_mut(scope).span = TSpan::new(struct_tok.start, rbrace.end);
-        Ok(ast::StructDefinition {
+        Ok(ast::TypeDef {
             generics,
             scope,
-            members,
             methods,
+            content: ast::TypeContent::Struct { members },
         })
     }
 
-    fn enum_definition(
-        &mut self,
-        enum_tok: Token,
-        scope: ScopeId,
-    ) -> ParseResult<ast::EnumDefinition> {
+    fn enum_definition(&mut self, enum_tok: Token, scope: ScopeId) -> ParseResult<ast::TypeDef> {
         debug_assert_eq!(enum_tok.ty, TokenType::Keyword(Keyword::Enum));
         let generics = self.parse_optional_generics(Vec::new())?;
 
@@ -492,6 +491,10 @@ impl Parser<'_> {
 
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
+            if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
+                p.parse_inherent_impl(impl_tok, scope, &generics)?;
+                return Ok(Delimit::No);
+            }
             let ident = p.toks.step_expect(TokenType::Ident)?;
             match p.toks.peek().map(|t| t.ty) {
                 Some(TokenType::LParen) => {
@@ -541,11 +544,13 @@ impl Parser<'_> {
 
         self.ast.get_scope_mut(scope).span = TSpan::new(enum_tok.start, rbrace.end);
 
-        Ok(ast::EnumDefinition {
+        Ok(ast::TypeDef {
             generics,
             scope,
-            variants: variants.into_boxed_slice(),
             methods,
+            content: ast::TypeContent::Enum {
+                variants: variants.into_boxed_slice(),
+            },
         })
     }
 
@@ -749,6 +754,35 @@ impl Parser<'_> {
         Ok((functions.into_boxed_slice(), last.end))
     }
 
+    fn parse_inherent_impl(
+        &mut self,
+        impl_tok: Token,
+        outer_scope: ScopeId,
+        type_generics: &[GenericDef],
+    ) -> ParseResult<InherentImpl> {
+        let impl_generics = self.parse_optional_generics(type_generics.to_vec())?;
+        let scope = self.ast.scope(ast::Scope::from_generics(
+            outer_scope,
+            self.src,
+            &impl_generics,
+            TSpan::MISSING,
+        ));
+        let implemented_trait = self.parse_path()?;
+        let trait_generics = self
+            .parse_optional_generic_instance()?
+            .unwrap_or((Box::new([]), implemented_trait.span()));
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+        let (functions, end) = self.parse_trait_impl_body(lbrace, scope, &impl_generics)?;
+        self.ast.get_scope_mut(scope).span = TSpan::new(impl_tok.start, end);
+        Ok(InherentImpl {
+            scope,
+            generics: impl_generics,
+            implemented_trait,
+            trait_generics,
+            functions,
+        })
+    }
+
     fn parse_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr> {
         let expr = self.parse_expr(scope)?;
         self.stmt_postfix(expr, scope)
@@ -809,13 +843,13 @@ impl Parser<'_> {
                 Expr::Function { id: self.ast.function(func) }
             },
             Keyword Struct #as first => {
-                let struct_def = self.struct_definition(first, scope)?;
-                let id = self.ast.type_def(ast::TypeDef::Struct(struct_def));
+                let def = self.struct_definition(first, scope)?;
+                let id = self.ast.type_def(def);
                 Expr::Type { id }
             },
             Keyword Enum #as first => {
-                let enum_def = self.enum_definition(first, scope)?;
-                let id = self.ast.type_def(ast::TypeDef::Enum(enum_def));
+                let def = self.enum_definition(first, scope)?;
+                let id = self.ast.type_def(def);
                 Expr::Type { id }
             },
             Keyword Trait #as first => {

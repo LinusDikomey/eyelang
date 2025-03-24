@@ -180,58 +180,45 @@ impl Function {
 }
 impl TypeDef {
     fn repr<C: Representer>(&self, c: &C) {
-        match self {
-            TypeDef::Struct(s) => s.repr(c),
-            TypeDef::Enum(e) => e.repr(c),
-        }
-    }
-}
-
-impl StructDefinition {
-    fn repr<C: Representer>(&self, c: &C) {
-        c.write_add("struct {\n");
-        let child = c.child();
-        for (i, (name_span, ty)) in self.members.iter().enumerate() {
-            child.begin_line();
-            child.write_add(&c.ast()[*name_span]);
-            child.space();
-            ty.repr(&child);
-            child.write_add(if i == (self.members.len() - 1) {
-                "\n"
-            } else {
-                ",\n"
-            });
-        }
-        c.write_start("}");
-    }
-}
-
-impl EnumDefinition {
-    fn repr<C: Representer>(&self, c: &C) {
-        c.write_add("enum {\n");
-        let child = c.child();
-        for variant in &*self.variants {
-            child.begin_line();
-            let name = c.src(variant.name_span);
-            child.write_add(name);
-            if !variant.args.is_empty() {
-                child.write_add("(");
-                for (i, arg) in variant.args.iter().enumerate() {
-                    if i != 0 {
-                        child.write_add(", ");
-                    }
-                    arg.repr(&child);
+        // TODO: write generics, methods, impls
+        match &self.content {
+            TypeContent::Struct { members } => {
+                c.write_add("struct {\n");
+                let c = c.child();
+                for (name_span, ty) in members {
+                    c.begin_line();
+                    c.write_add(&c.ast()[*name_span]);
+                    c.space();
+                    ty.repr(&c);
+                    c.write_add("\n");
                 }
-                child.write_add(")");
             }
-            /*
-            if let Some(value) = value {
-                child.write_add(" = ");
-                child.write_add(value.to_string());
+            TypeContent::Enum { variants } => {
+                c.write_add("enum {\n");
+                let c = c.child();
+                for variant in variants {
+                    c.begin_line();
+                    let name = c.src(variant.name_span);
+                    c.write_add(name);
+                    if !variant.args.is_empty() {
+                        c.write_add("(");
+                        for (i, arg) in variant.args.iter().enumerate() {
+                            if i != 0 {
+                                c.write_add(", ");
+                            }
+                            arg.repr(&c);
+                        }
+                        c.write_add(")");
+                    }
+                    /*
+                    if let Some(value) = value {
+                        child.write_add(" = ");
+                        child.write_add(value.to_string());
+                    }
+                    */
+                }
             }
-            */
-        }
-        c.write_start("}");
+        };
     }
 }
 

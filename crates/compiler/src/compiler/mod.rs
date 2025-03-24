@@ -878,37 +878,26 @@ impl Compiler {
                 let ast_id = resolved_ty.id;
                 let ast = Rc::clone(self.get_module_ast(module));
                 let def = &ast[ast_id];
-                let methods;
-                // TODO: just make typedef a struct with enum member for struct/enum to share
-                // common fields
-                let (generics, scope): (&[GenericDef], _) = match def {
-                    ast::TypeDef::Struct(def) => (&def.generics, def.scope),
-                    ast::TypeDef::Enum(def) => (&def.generics, def.scope),
-                };
-                let generics = self.resolve_generics(generics, module, scope, &ast);
-                let def = match def {
-                    ast::TypeDef::Struct(struct_def) => {
-                        let named_fields = struct_def
-                            .members
+                let generics = self.resolve_generics(&def.generics, module, def.scope, &ast);
+                let resolved_def = match &def.content {
+                    ast::TypeContent::Struct { members } => {
+                        let named_fields = members
                             .iter()
                             .map(|(name_span, ty)| {
                                 (
                                     ast[*name_span].into(),
-                                    self.resolve_type(ty, module, struct_def.scope),
+                                    self.resolve_type(ty, module, def.scope),
                                     None,
                                 )
                             })
                             .collect();
-                        methods = struct_def.methods.clone();
                         ResolvedTypeDef::Struct(ResolvedStructDef {
                             fields: Box::new([]),
                             named_fields,
                         })
                     }
-                    ast::TypeDef::Enum(def) => {
-                        methods = def.methods.clone();
-                        let variants = def
-                            .variants
+                    ast::TypeContent::Enum { variants } => {
+                        let variants = variants
                             .iter()
                             .map(|variant| {
                                 let variant_name = ast[variant.name_span].to_owned();
@@ -925,9 +914,9 @@ impl Compiler {
                     }
                 };
                 let resolved = ResolvedType {
-                    def: Rc::new(def),
+                    def: Rc::new(resolved_def),
                     module,
-                    methods,
+                    methods: def.methods.clone(),
                     generics,
                 };
                 self.types[ty.idx()].resolved.put(resolved)

@@ -273,23 +273,29 @@ impl AstBuilder {
 }
 
 #[derive(Debug)]
-pub enum TypeDef {
-    Struct(StructDefinition),
-    Enum(EnumDefinition),
+pub struct TypeDef {
+    pub generics: Box<[GenericDef]>,
+    pub scope: ScopeId,
+    pub methods: DHashMap<String, FunctionId>,
+    pub content: TypeContent,
 }
 impl TypeDef {
     pub fn generic_count(&self) -> u8 {
-        match self {
-            TypeDef::Struct(s) => s.generic_count(),
-            TypeDef::Enum(e) => e.generic_count(),
-        }
+        self.generics.len() as u8
     }
     pub fn span(&self, scopes: &[Scope]) -> TSpan {
-        match self {
-            Self::Struct(struct_def) => scopes[struct_def.scope.idx()].span,
-            Self::Enum(enum_def) => scopes[enum_def.scope.idx()].span,
-        }
+        scopes[self.scope.idx()].span
     }
+}
+
+#[derive(Debug)]
+pub enum TypeContent {
+    Struct {
+        members: Vec<(TSpan, UnresolvedType)>,
+    },
+    Enum {
+        variants: Box<[EnumVariantDefinition]>,
+    },
 }
 
 #[derive(Debug)]
@@ -385,32 +391,6 @@ impl TraitImpl {
 */
 
 #[derive(Debug, Clone)]
-pub struct StructDefinition {
-    pub generics: Box<[GenericDef]>,
-    pub scope: ScopeId,
-    pub members: Vec<(TSpan, UnresolvedType)>,
-    pub methods: DHashMap<String, FunctionId>,
-}
-impl StructDefinition {
-    pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EnumDefinition {
-    pub generics: Box<[GenericDef]>,
-    pub scope: ScopeId,
-    pub variants: Box<[EnumVariantDefinition]>,
-    pub methods: DHashMap<String, FunctionId>,
-}
-impl EnumDefinition {
-    pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct EnumVariantDefinition {
     pub name_span: TSpan,
     pub args: Box<[UnresolvedType]>,
@@ -436,13 +416,23 @@ impl TraitDefinition {
     }
 }
 
+pub type TraitFunctions = Box<[(TSpan, FunctionId)]>;
+
 #[derive(Debug)]
 pub struct Impl {
     pub scope: ScopeId,
     pub generics: Box<[GenericDef]>,
     pub trait_generics: (Box<[UnresolvedType]>, TSpan),
     pub implemented_type: UnresolvedType,
-    pub functions: Box<[(TSpan, FunctionId)]>,
+    pub functions: TraitFunctions,
+}
+
+pub struct InherentImpl {
+    pub scope: ScopeId,
+    pub generics: Box<[GenericDef]>,
+    pub implemented_trait: IdentPath,
+    pub trait_generics: (Box<[UnresolvedType]>, TSpan),
+    pub functions: TraitFunctions,
 }
 
 #[derive(Debug)]
