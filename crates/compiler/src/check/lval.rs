@@ -3,7 +3,7 @@ use std::rc::Rc;
 use span::TSpan;
 
 use crate::{
-    compiler::{Def, LocalItem, LocalScope, ResolvedTypeDef},
+    compiler::{Def, LocalItem, LocalScope, ResolvedTypeContent},
     error::Error,
     hir::{LValue, Node},
     parser::ast::{Ast, Expr, ExprId, UnOp},
@@ -60,12 +60,11 @@ pub fn check(
 
             match dereffed_left_ty {
                 TypeInfo::TypeDef(id, generics) => {
-                    let ty = ctx.compiler.get_resolved_type_def(id);
+                    let ty = Rc::clone(ctx.compiler.get_resolved_type_def(id));
                     // TODO differentiate between nonexistant member and 'can't assign to
                     // member' in the case of methods, enum variants etc.
-                    let def = Rc::clone(&ty.def);
-                    match &*def {
-                        ResolvedTypeDef::Struct(struct_) => {
+                    match &ty.def {
+                        ResolvedTypeContent::Struct(struct_) => {
                             let (indexed_field, elem_types) =
                                 struct_.get_indexed_field(ctx, generics, name);
                             let Some((index, field_ty)) = indexed_field else {
@@ -89,7 +88,7 @@ pub fn check(
                                 field_ty,
                             )
                         }
-                        ResolvedTypeDef::Enum(_) => {
+                        ResolvedTypeContent::Enum(_) => {
                             ctx.compiler.errors.emit_err(
                                 Error::NonexistantMember(None)
                                     .at_span(name_span.in_mod(ctx.module)),

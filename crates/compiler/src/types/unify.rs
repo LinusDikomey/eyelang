@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::{
     Compiler,
     check::expr::int_ty_from_variant_count,
-    compiler::{Generics, ResolvedTypeDef},
+    compiler::{Generics, ResolvedTypeContent},
     types::{TypeInfoOrIdx, traits},
 };
 
@@ -113,9 +113,8 @@ pub fn unify(
             a
         }
         (TypeDef(id, generics), Enum(enum_id)) | (Enum(enum_id), TypeDef(id, generics)) => {
-            let ty = compiler.get_resolved_type_def(id);
-            let def = Rc::clone(&ty.def);
-            let ResolvedTypeDef::Enum(def) = &*def else {
+            let resolved = Rc::clone(compiler.get_resolved_type_def(id));
+            let ResolvedTypeContent::Enum(def) = &resolved.def else {
                 return None;
             };
             let variants = &types.enums[enum_id.idx()];

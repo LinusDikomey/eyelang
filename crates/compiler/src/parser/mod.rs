@@ -439,12 +439,13 @@ impl Parser<'_> {
         };
 
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-
         let mut members: Vec<(TSpan, UnresolvedType)> = Vec::new();
         let mut methods = dmap::new();
+        let mut impls = Vec::new();
+
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                p.parse_inherent_impl(impl_tok, scope, &generics)?;
+                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -473,6 +474,7 @@ impl Parser<'_> {
             generics,
             scope,
             methods,
+            impls: impls.into_boxed_slice(),
             content: ast::TypeContent::Struct { members },
         })
     }
@@ -488,11 +490,12 @@ impl Parser<'_> {
 
         let mut variants = Vec::new();
         let mut methods = dmap::new();
+        let mut impls = Vec::new();
 
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                p.parse_inherent_impl(impl_tok, scope, &generics)?;
+                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -548,6 +551,7 @@ impl Parser<'_> {
             generics,
             scope,
             methods,
+            impls: impls.into_boxed_slice(),
             content: ast::TypeContent::Enum {
                 variants: variants.into_boxed_slice(),
             },
@@ -710,11 +714,13 @@ impl Parser<'_> {
                         let (functions, end) = self.parse_trait_impl_body(lbrace, impl_scope, &generics)?;
                         self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, end);
                         impls.push(ast::Impl {
-                            scope: impl_scope,
-                            generics,
-                            trait_generics,
                             implemented_type,
-                            functions,
+                            base: ast::BaseImpl {
+                                scope: impl_scope,
+                                generics,
+                                trait_generics,
+                                functions,
+                            }
                         });
                     }
                 }
@@ -775,11 +781,13 @@ impl Parser<'_> {
         let (functions, end) = self.parse_trait_impl_body(lbrace, scope, &impl_generics)?;
         self.ast.get_scope_mut(scope).span = TSpan::new(impl_tok.start, end);
         Ok(InherentImpl {
-            scope,
-            generics: impl_generics,
             implemented_trait,
-            trait_generics,
-            functions,
+            base: ast::BaseImpl {
+                scope,
+                generics: impl_generics,
+                trait_generics,
+                functions,
+            },
         })
     }
 

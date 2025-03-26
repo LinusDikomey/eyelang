@@ -5,7 +5,7 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeDef, Signature},
+    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, Signature},
     error::Error,
     hir::{Node, NodeId, NodeIds},
     parser::ast::{Call, ExprExtra, ExprId},
@@ -83,10 +83,9 @@ pub fn check_call(
                     generics.count,
                     ctx.compiler.get_resolved_type_generic_count(id) as u32
                 );
-                let resolved = ctx.compiler.get_resolved_type_def(id);
-                let def = Rc::clone(&resolved.def);
-                match &*def {
-                    ResolvedTypeDef::Struct(struct_def) => {
+                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(id));
+                match &resolved.def {
+                    ResolvedTypeContent::Struct(struct_def) => {
                         ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
                         check_struct_initializer(
                             ctx, struct_def, generics, call, scope, return_ty, noreturn,
@@ -96,7 +95,7 @@ pub fn check_call(
                             Node::Invalid
                         })
                     }
-                    ResolvedTypeDef::Enum(_) => {
+                    ResolvedTypeContent::Enum(_) => {
                         ctx.compiler
                             .errors
                             .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));

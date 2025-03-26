@@ -5,7 +5,7 @@ use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
-    compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeDef, builtins},
+    compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeContent, builtins},
     error::Error,
     eval::ConstValue,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
@@ -1051,7 +1051,7 @@ fn check_member_access(
                 current_ty = pointee;
             }
             TypeInfo::TypeDef(id, generics) => {
-                let resolved = ctx.compiler.get_resolved_type_def(id);
+                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(id));
                 if let Some(&method) = resolved.methods.get(name) {
                     let module = resolved.module;
                     let signature = Rc::clone(ctx.compiler.get_signature(module, method));
@@ -1083,8 +1083,7 @@ fn check_member_access(
                     );
                     return self_value;
                 }
-                let def = Rc::clone(&resolved.def);
-                if let ResolvedTypeDef::Struct(def) = &*def {
+                if let ResolvedTypeContent::Struct(def) = &resolved.def {
                     let (indexed_field, elem_types) = def.get_indexed_field(ctx, generics, name);
                     if let Some((index, field_ty)) = indexed_field {
                         // perform auto deref first
@@ -1236,7 +1235,7 @@ fn check_type_item_member_access(
     match ctx.hir.types[ty] {
         TypeInfo::Invalid => return Node::Invalid,
         TypeInfo::TypeDef(id, generics) => {
-            let ty = ctx.compiler.get_resolved_type_def(id);
+            let ty = Rc::clone(ctx.compiler.get_resolved_type_def(id));
             if let Some(&method) = ty.methods.get(name) {
                 let module = ty.module;
                 let signature = ctx.compiler.get_signature(module, method);
@@ -1257,8 +1256,7 @@ fn check_type_item_member_access(
                 );
                 return Node::FunctionItem(module, method, call_generics);
             }
-            let def = Rc::clone(&ty.def);
-            if let ResolvedTypeDef::Enum(def) = &*def {
+            if let ResolvedTypeContent::Enum(def) = &ty.def {
                 if let Some((ordinal, args)) = def.get_by_name(name) {
                     let ordinal_ty = int_ty_from_variant_count(def.variants.len() as u32);
                     let node = if args.is_empty() {

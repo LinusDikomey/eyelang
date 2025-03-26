@@ -5,7 +5,7 @@ use types::Type;
 
 use crate::{
     Compiler,
-    compiler::ResolvedTypeDef,
+    compiler::ResolvedTypeContent,
     types::{LocalTypeIds, TypeInfo, TypeTable},
 };
 
@@ -86,10 +86,9 @@ pub fn get_def(
     def: TypeId,
     generics: Generics,
 ) -> Option<ir::Type> {
-    let resolved = compiler.get_resolved_type_def(def);
-    let def = Rc::clone(&resolved.def);
-    Some(match &*def {
-        ResolvedTypeDef::Struct(def) => {
+    let resolved = Rc::clone(compiler.get_resolved_type_def(def));
+    Some(match &resolved.def {
+        ResolvedTypeContent::Struct(def) => {
             let elems =
                 ir_types.add_multiple((0..def.field_count()).map(|_| ir::Primitive::Unit.into()));
             for ((_, field), r) in def.all_fields().zip(elems.iter()) {
@@ -98,7 +97,7 @@ pub fn get_def(
             }
             ir::Type::Tuple(elems)
         }
-        ResolvedTypeDef::Enum(def) => {
+        ResolvedTypeContent::Enum(def) => {
             let mut accumulated_layout = ir::Layout::EMPTY;
             // TODO: reduce number of variants if reduced by never types in variants
             let ordinal_type = int_from_variant_count(def.variants.len() as u32);

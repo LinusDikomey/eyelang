@@ -14,7 +14,7 @@ use unify::unify;
 use crate::{
     Compiler,
     check::{expr::int_ty_from_variant_count, traits},
-    compiler::{Def, Generics, ResolvedTypeDef},
+    compiler::{Def, Generics, ResolvedTypeContent},
     error::Error,
     parser::ast::{self, TraitId},
 };
@@ -783,8 +783,8 @@ impl TypeTable {
                 Ok((OrdinalType::Inferred(variant), arg_types))
             }
             TypeInfo::TypeDef(id, generics) => {
-                let def = Rc::clone(&compiler.get_resolved_type_def(id).def);
-                if let ResolvedTypeDef::Enum(enum_) = &*def {
+                let resolved_ty = Rc::clone(compiler.get_resolved_type_def(id));
+                if let ResolvedTypeContent::Enum(enum_) = &resolved_ty.def {
                     let variant = enum_.variants.iter().zip(0..).find_map(
                         |((variant_name, arg_types), i)| {
                             (variant_name == name).then_some((i, arg_types))

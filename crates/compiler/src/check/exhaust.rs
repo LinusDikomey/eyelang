@@ -3,7 +3,7 @@ use types::Primitive;
 
 use crate::{
     Compiler,
-    compiler::ResolvedTypeDef,
+    compiler::ResolvedTypeContent,
     types::{TypeInfo, TypeTable},
 };
 
@@ -62,10 +62,10 @@ impl Exhaustion {
                 TypeInfo::Primitive(Primitive::Never) => true,
                 TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
                 TypeInfo::TypeDef(id, _) => {
-                    match &*compiler.get_resolved_type_def(id).def {
+                    match &compiler.get_resolved_type_def(id).def {
                         // TODO: empty enum case
                         // crate::compiler::ResolvedTypeDef::Enum(def) => if def.variants.is_empty() => true,
-                        ResolvedTypeDef::Enum(enum_def) => {
+                        ResolvedTypeContent::Enum(enum_def) => {
                             enum_def.variants.iter().try_fold(true, |b, (_, args)| {
                                 Some(
                                     b && args.iter().try_fold(false, |b, arg| {
@@ -74,7 +74,7 @@ impl Exhaustion {
                                 )
                             })?
                         }
-                        ResolvedTypeDef::Struct(def) => {
+                        ResolvedTypeContent::Struct(def) => {
                             def.all_fields().try_fold(false, |b, (_, field)| {
                                 Some(b || field.uninhabited().ok()?)
                             })?

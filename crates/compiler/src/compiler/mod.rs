@@ -862,7 +862,7 @@ impl Compiler {
         self.types[ty.idx()].generic_count
     }
 
-    pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &ResolvedType {
+    pub fn get_resolved_type_def(&mut self, ty: TypeId) -> &Rc<ResolvedTypeDef> {
         match &self.types[ty.idx()].resolved {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
@@ -871,55 +871,10 @@ impl Compiler {
                 };
                 id
             }
-            Resolvable::Resolving => panic!("recursive type definition"),
+            Resolvable::Resolving => todo!("handle recursive type definition"),
             Resolvable::Unresolved => {
-                let resolved_ty = &self.types[ty.idx()];
-                let module = resolved_ty.module;
-                let ast_id = resolved_ty.id;
-                let ast = Rc::clone(self.get_module_ast(module));
-                let def = &ast[ast_id];
-                let generics = self.resolve_generics(&def.generics, module, def.scope, &ast);
-                let resolved_def = match &def.content {
-                    ast::TypeContent::Struct { members } => {
-                        let named_fields = members
-                            .iter()
-                            .map(|(name_span, ty)| {
-                                (
-                                    ast[*name_span].into(),
-                                    self.resolve_type(ty, module, def.scope),
-                                    None,
-                                )
-                            })
-                            .collect();
-                        ResolvedTypeDef::Struct(ResolvedStructDef {
-                            fields: Box::new([]),
-                            named_fields,
-                        })
-                    }
-                    ast::TypeContent::Enum { variants } => {
-                        let variants = variants
-                            .iter()
-                            .map(|variant| {
-                                let variant_name = ast[variant.name_span].to_owned();
-                                let args = variant
-                                    .args
-                                    .iter()
-                                    .map(|ty| self.resolve_type(ty, module, def.scope))
-                                    .collect();
-                                (variant_name, args)
-                            })
-                            .collect();
-
-                        ResolvedTypeDef::Enum(ResolvedEnumDef { variants })
-                    }
-                };
-                let resolved = ResolvedType {
-                    def: Rc::new(resolved_def),
-                    module,
-                    methods: def.methods.clone(),
-                    generics,
-                };
-                self.types[ty.idx()].resolved.put(resolved)
+                let resolved = check::ty(self, ty);
+                self.types[ty.idx()].resolved.put(Rc::new(resolved))
             }
         }
     }
@@ -1048,7 +1003,14 @@ impl Compiler {
                         id
                     }
                 };
-                self.get_resolved_type_def(id);
+                let resolved = Rc::clone(self.get_resolved_type_def(id));
+                for impls in resolved.inherent_trait_impls.values() {
+                    for impl_ in impls {
+                        for &id in &impl_.functions {
+                            self.get_hir(module, id);
+                        }
+                    }
+                }
             }
 
             for id in ast.global_ids() {
@@ -1056,7 +1018,14 @@ impl Compiler {
             }
 
             for id in ast.trait_ids() {
-                self.get_checked_trait(module, id);
+                if let Some(checked) = self.get_checked_trait(module, id) {
+                    let checked = Rc::clone(checked);
+                    for impl_ in &checked.impls {
+                        for &id in &impl_.functions {
+                            self.get_hir(module, id);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1696,17 +1665,16 @@ pub struct TraitBound {
 }
 
 #[derive(Debug)]
-pub struct ResolvedType {
-    /// PERF: could put the specific vecs with variants/members into an Rc and avoid one level of
-    /// indirection
-    pub def: Rc<ResolvedTypeDef>,
+pub struct ResolvedTypeDef {
+    pub def: ResolvedTypeContent,
     pub module: ModuleId,
     pub methods: DHashMap<String, FunctionId>,
     pub generics: Generics,
+    pub inherent_trait_impls: DHashMap<(ModuleId, TraitId), Vec<check::traits::Impl>>,
 }
 
 #[derive(Debug)]
-pub enum ResolvedTypeDef {
+pub enum ResolvedTypeContent {
     Struct(ResolvedStructDef),
     Enum(ResolvedEnumDef),
 }
@@ -1778,11 +1746,11 @@ impl ResolvedEnumDef {
 }
 
 pub struct ResolvableTypeDef {
-    module: ModuleId,
-    id: ast::TypeId,
-    name: Box<str>,
-    generic_count: u8,
-    resolved: Resolvable<ResolvedType>,
+    pub module: ModuleId,
+    pub id: ast::TypeId,
+    pub name: Box<str>,
+    pub generic_count: u8,
+    pub resolved: Resolvable<Rc<ResolvedTypeDef>>,
 }
 
 #[derive(Debug)]

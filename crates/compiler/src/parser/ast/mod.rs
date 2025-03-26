@@ -277,6 +277,7 @@ pub struct TypeDef {
     pub generics: Box<[GenericDef]>,
     pub scope: ScopeId,
     pub methods: DHashMap<String, FunctionId>,
+    pub impls: Box<[InherentImpl]>,
     pub content: TypeContent,
 }
 impl TypeDef {
@@ -420,17 +421,20 @@ pub type TraitFunctions = Box<[(TSpan, FunctionId)]>;
 
 #[derive(Debug)]
 pub struct Impl {
-    pub scope: ScopeId,
-    pub generics: Box<[GenericDef]>,
-    pub trait_generics: (Box<[UnresolvedType]>, TSpan),
     pub implemented_type: UnresolvedType,
-    pub functions: TraitFunctions,
+    pub base: BaseImpl,
 }
 
+#[derive(Debug)]
 pub struct InherentImpl {
+    pub implemented_trait: IdentPath,
+    pub base: BaseImpl,
+}
+
+#[derive(Debug)]
+pub struct BaseImpl {
     pub scope: ScopeId,
     pub generics: Box<[GenericDef]>,
-    pub implemented_trait: IdentPath,
     pub trait_generics: (Box<[UnresolvedType]>, TSpan),
     pub functions: TraitFunctions,
 }

@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use dmap::DHashMap;
 use id::{ModuleId, TypeId};
 use span::TSpan;
 use types::{InvalidTypeError, Primitive, Type};
@@ -32,93 +33,22 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
             compiler.check_signature(function, module, &ast)
         })
         .collect();
-    let base_offset = def.generics.len() as u8;
     let impls = def
         .impls
         .iter()
         .filter_map(|impl_| {
-            let impl_generics =
-                compiler.resolve_generics(&impl_.generics, module, impl_.scope, &ast);
-
-            let trait_generics: Vec<_> = impl_
-                .trait_generics
-                .0
-                .iter()
-                .map(|generic| compiler.resolve_type(generic, module, impl_.scope))
-                .collect();
-
-            if trait_generics.len() as u8 != generics.count() {
-                compiler.errors.emit_err(
-                    Error::InvalidGenericCount {
-                        expected: generics.count(),
-                        found: trait_generics.len() as _,
-                    }
-                    .at_span(impl_.trait_generics.1.in_mod(module)),
-                );
-                return None;
-            }
-
-            let impl_ty = compiler.resolve_type(&impl_.implemented_type, module, impl_.scope);
-            let impl_tree = ImplTree::from_type(&impl_ty);
-            let mut function_ids = vec![ast::FunctionId(u32::MAX); functions.len()];
-            let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
-                .chain(trait_generics.clone())
-                .collect();
-            for &(name_span, function) in &impl_.functions {
-                let name = &ast[name_span];
-                let Some(&function_idx) = functions_by_name.get(name) else {
-                    let trait_name = ast.src()[def.associated_name.range()].to_owned();
-                    compiler.errors.emit_err(
-                        Error::NotATraitMember {
-                            trait_name,
-                            function: name.to_owned(),
-                        }
-                        .at_span(name_span.in_mod(module)),
-                    );
-                    continue;
-                };
-                if function_ids[function_idx as usize].0 != u32::MAX {
-                    compiler
-                        .errors
-                        .emit_err(Error::DuplicateDefinition.at_span(name_span.in_mod(module)));
-                    continue;
-                }
-
-                let signature = compiler.get_signature(module, function);
-                let trait_signature = &functions[function_idx as usize];
-                let compatible = signature.compatible_with(
-                    trait_signature,
-                    impl_generics.count(),
-                    base_offset,
-                    &base_generics,
-                );
-                match compatible {
-                    Ok(None) | Err(InvalidTypeError) => {}
-                    Ok(Some(incompat)) => compiler.errors.emit_err(
-                        Error::TraitSignatureMismatch(incompat).at_span(name_span.in_mod(module)),
-                    ),
-                }
-                function_ids[function_idx as usize] = function;
-            }
-            let mut unimplemented = Vec::new();
-            for (name, &i) in &functions_by_name {
-                if function_ids[i as usize] == ast::FunctionId(u32::MAX) {
-                    unimplemented.push(name.clone());
-                }
-            }
-            if !unimplemented.is_empty() {
-                compiler.errors.emit_err(
-                    Error::NotAllFunctionsImplemented { unimplemented }
-                        .at_span(ast[impl_.scope].span.in_mod(module)),
-                );
-            }
-            Some(Impl {
-                generics: impl_generics,
-                trait_generics,
-                impl_ty: impl_tree,
-                impl_module: module,
-                functions: function_ids,
-            })
+            let impl_ty = compiler.resolve_type(&impl_.implemented_type, module, impl_.base.scope);
+            check_impl(
+                compiler,
+                &impl_.base,
+                &impl_ty,
+                module,
+                &ast,
+                generics.count(),
+                &functions,
+                &functions_by_name,
+                &ast.src()[def.associated_name.range()],
+            )
         })
         .collect();
     CheckedTrait {
@@ -132,6 +62,99 @@ pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId
         functions_by_name,
         impls,
     }
+}
+
+pub fn check_impl(
+    compiler: &mut Compiler,
+    impl_: &ast::BaseImpl,
+    impl_ty: &Type,
+    module: ModuleId,
+    ast: &Ast,
+    trait_generic_count: u8,
+    trait_functions: &[Signature],
+    trait_functions_by_name: &DHashMap<String, u16>,
+    trait_name: &str,
+) -> Option<Impl> {
+    let impl_generics = compiler.resolve_generics(&impl_.generics, module, impl_.scope, ast);
+
+    let trait_generics: Vec<_> = impl_
+        .trait_generics
+        .0
+        .iter()
+        .map(|generic| compiler.resolve_type(generic, module, impl_.scope))
+        .collect();
+
+    if trait_generics.len() as u8 != trait_generic_count {
+        compiler.errors.emit_err(
+            Error::InvalidGenericCount {
+                expected: trait_generic_count,
+                found: trait_generics.len() as _,
+            }
+            .at_span(impl_.trait_generics.1.in_mod(module)),
+        );
+        return None;
+    }
+
+    let impl_tree = ImplTree::from_type(impl_ty);
+    let mut function_ids = vec![ast::FunctionId(u32::MAX); trait_functions.len()];
+    let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
+        .chain(trait_generics.clone())
+        .collect();
+    let base_offset = base_generics.len() as u8;
+    for &(name_span, function) in &impl_.functions {
+        let name = &ast[name_span];
+        let Some(&function_idx) = trait_functions_by_name.get(name) else {
+            compiler.errors.emit_err(
+                Error::NotATraitMember {
+                    trait_name: trait_name.to_owned(),
+                    function: name.to_owned(),
+                }
+                .at_span(name_span.in_mod(module)),
+            );
+            continue;
+        };
+        if function_ids[function_idx as usize].0 != u32::MAX {
+            compiler
+                .errors
+                .emit_err(Error::DuplicateDefinition.at_span(name_span.in_mod(module)));
+            continue;
+        }
+
+        let signature = compiler.get_signature(module, function);
+        let trait_signature = &trait_functions[function_idx as usize];
+        let compatible = signature.compatible_with(
+            trait_signature,
+            impl_generics.count(),
+            base_offset,
+            &base_generics,
+        );
+        match compatible {
+            Ok(None) | Err(InvalidTypeError) => {}
+            Ok(Some(incompat)) => compiler.errors.emit_err(
+                Error::TraitSignatureMismatch(incompat).at_span(name_span.in_mod(module)),
+            ),
+        }
+        function_ids[function_idx as usize] = function;
+    }
+    let mut unimplemented = Vec::new();
+    for (name, &i) in trait_functions_by_name {
+        if function_ids[i as usize] == ast::FunctionId(u32::MAX) {
+            unimplemented.push(name.clone());
+        }
+    }
+    if !unimplemented.is_empty() {
+        compiler.errors.emit_err(
+            Error::NotAllFunctionsImplemented { unimplemented }
+                .at_span(ast[impl_.scope].span.in_mod(module)),
+        );
+    }
+    Some(Impl {
+        generics: impl_generics,
+        trait_generics,
+        impl_ty: impl_tree,
+        impl_module: module,
+        functions: function_ids,
+    })
 }
 
 use crate::{
