@@ -192,14 +192,18 @@ MapIter :: struct[K, V] {
     current *Slot[K, V]
     items u64
 
-    next :: fn(this *MapIter[K, V]) -> Option[(*K, *V)] {
-        if this.items == 0: ret .None
-        while !this.current.state.is_occupied() {
-            this.current = ptr_add(this.current, 1)
+    impl Iterator[(*K, *V)] {
+        next :: fn(self *MapIter[K, V]) -> Option[(*K, *V)] {        
+            if self.items == 0: ret .None
+            while !self.current.state.is_occupied() {
+                self.current = ptr_add(self.current, 1)
+            }
+            self.items -= 1
+            slot := self.current
+            self.current = ptr_add(self.current, 1)
+            ret .Some((&slot.key, &slot.value))
         }
-        this.items -= 1
-        slot := this.current
-        this.current = ptr_add(this.current, 1)
-        ret .Some((&slot.key, &slot.value))
     }
+    
+
 }

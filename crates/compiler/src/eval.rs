@@ -327,6 +327,9 @@ pub fn value_expr(
         expected,
         crate::compiler::LocalScopeParent::None,
     );
+    if let crate::hir::Node::Invalid = hir[hir.root_id()] {
+        return Ok(ConstValue::Undefined);
+    }
     let mut to_generate = Vec::new();
     let mut builder = ir::builder::Builder::new(&mut *compiler);
     builder.create_and_begin_block([]);

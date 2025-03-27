@@ -160,27 +160,28 @@ Split :: struct {
     string str
     pat str
 
-    # Returns the next match and true or an empty string and false otherwise.
-    # This will become an Option when sum types are ready.
-    next :: fn(this *Split) -> Option[str] {
-        if this.string.len == 0: ret .None
-        i := 0
-        matched := 0
-        while i < this.string.len {
-            if this.string.byte(i) == this.pat.byte(matched) {
-                matched += 1
-                if matched == this.pat.len {
-                    s := this.string.slice(0, i+1-matched)
-                    this.string = this.string.slice(i+1, this.string.len)
-                    ret .Some(s)
-                }
-            } else matched = 0
-            i += 1
-        }
 
-        s := this.string
-        this.string = this.string.slice(this.string.len, this.string.len)
-        ret .Some(s)
+    impl Iterator[str] {
+        next :: fn(self *Split) -> Option[str] {
+            if self.string.len == 0: ret .None
+            i := 0
+            matched := 0
+            while i < self.string.len {
+                if self.string.byte(i) == self.pat.byte(matched) {
+                    matched += 1
+                    if matched == self.pat.len {
+                        s := self.string.slice(0, i+1-matched)
+                        self.string = self.string.slice(i+1, self.string.len)
+                        ret .Some(s)
+                    }
+                } else matched = 0
+                i += 1
+            }
+
+            s := self.string
+            self.string = self.string.slice(self.string.len, self.string.len)
+            ret .Some(s)
+        }
     }
 }
 

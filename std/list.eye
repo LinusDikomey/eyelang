@@ -98,5 +98,15 @@ List :: struct[T] {
 ListIter :: struct[T] {
     current *T
     end *T
+
+    impl Iterator[T] {
+        next :: fn(self *ListIter[T]) -> Option[T] {
+            if self.current >= self.end: ret .None
+            v := self.current
+            self.current = root.ptr_add(self.current, 1)
+            ret .Some(v^)
+        }
+    }
+
 }
 
