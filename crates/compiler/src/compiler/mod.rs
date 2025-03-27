@@ -779,7 +779,7 @@ impl Compiler {
             }
             Resolvable::Unresolved => {
                 let ast = Rc::clone(&parsed.ast);
-                let checked = check::check_trait(self, ast, (module, id));
+                let checked = check::trait_def(self, ast, (module, id));
                 Some(self.get_parsed_module(module).symbols.traits[id.idx()].put(Rc::new(checked)))
             }
         }
@@ -886,7 +886,7 @@ impl Compiler {
             }
             Resolvable::Resolving => todo!("handle recursive type definition"),
             Resolvable::Unresolved => {
-                let resolved = check::ty(self, ty);
+                let resolved = check::type_def(self, ty);
                 self.types[ty.idx()].resolved.put(Rc::new(resolved))
             }
         }

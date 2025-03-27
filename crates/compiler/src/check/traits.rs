@@ -13,7 +13,7 @@ use crate::{
     types::Bound,
 };
 
-pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
+pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
     let module = id.0;
     let def = &ast[id.1];
     // don't include self type in generics, it is handled seperately
