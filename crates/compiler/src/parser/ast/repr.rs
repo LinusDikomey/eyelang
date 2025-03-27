@@ -185,11 +185,11 @@ impl TypeDef {
             TypeContent::Struct { members } => {
                 c.write_add("struct {\n");
                 let c = c.child();
-                for (name_span, ty) in members {
+                for member in members {
                     c.begin_line();
-                    c.write_add(&c.ast()[*name_span]);
+                    c.write_add(&c.ast()[member.name]);
                     c.space();
-                    ty.repr(&c);
+                    member.ty.repr(&c);
                     c.write_add("\n");
                 }
             }
@@ -424,7 +424,7 @@ impl<C: Representer> Repr<C> for Expr {
                 c.write_add("match ");
                 ast[*val].repr(c);
                 c.write_add(" {\n");
-                let extra = ExprExtra {
+                let extra = ExprIds {
                     idx: *extra_branches,
                     count: *branch_count * 2,
                 };

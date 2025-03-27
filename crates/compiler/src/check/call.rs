@@ -8,7 +8,7 @@ use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, Signature},
     error::Error,
     hir::{Node, NodeId, NodeIds},
-    parser::ast::{Call, ExprExtra, ExprId},
+    parser::ast::{Call, ExprIds, ExprId},
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
@@ -419,7 +419,7 @@ fn check_call_args(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
     span: TSpan,
-    args: ExprExtra,
+    args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     generics: LocalTypeIds,
     params: &[(Box<str>, Type)],
@@ -458,7 +458,7 @@ fn check_call_args_inner(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
     span: TSpan,
-    args: ExprExtra,
+    args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     param_count: u32,
     named_params: &[(Box<str>, Type, Option<ConstValueId>)],

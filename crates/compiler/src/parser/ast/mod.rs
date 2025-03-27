@@ -117,10 +117,10 @@ impl Index<DefExprId> for Ast {
         &self.def_exprs[index.0 as usize]
     }
 }
-impl Index<ExprExtra> for Ast {
+impl Index<ExprIds> for Ast {
     type Output = [Expr];
 
-    fn index(&self, index: ExprExtra) -> &Self::Output {
+    fn index(&self, index: ExprIds) -> &Self::Output {
         &self.exprs[index.idx as usize..index.idx as usize + index.count as usize]
     }
 }
@@ -204,11 +204,11 @@ impl AstBuilder {
         id
     }
 
-    pub fn exprs(&mut self, exprs: impl IntoIterator<Item = Expr>) -> ExprExtra {
+    pub fn exprs(&mut self, exprs: impl IntoIterator<Item = Expr>) -> ExprIds {
         let idx = self.exprs.len();
         self.exprs.extend(exprs);
         let count = self.exprs.len() - idx;
-        ExprExtra {
+        ExprIds {
             idx: idx as _,
             count: count as _,
         }
@@ -292,11 +292,18 @@ impl TypeDef {
 #[derive(Debug)]
 pub enum TypeContent {
     Struct {
-        members: Vec<(TSpan, UnresolvedType)>,
+        members: Vec<StructMember>,
     },
     Enum {
         variants: Box<[EnumVariantDefinition]>,
     },
+}
+
+#[derive(Debug)]
+pub struct StructMember {
+    pub attributes: Box<[Attribute]>,
+    pub name: TSpan,
+    pub ty: UnresolvedType,
 }
 
 #[derive(Debug)]
@@ -340,11 +347,11 @@ pub enum Definition {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ExprExtra {
+pub struct ExprIds {
     pub idx: u32,
     pub count: u32,
 }
-impl Iterator for ExprExtra {
+impl Iterator for ExprIds {
     type Item = ExprId;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -356,14 +363,20 @@ impl Iterator for ExprExtra {
         })
     }
 }
-impl ExactSizeIterator for ExprExtra {
+impl ExactSizeIterator for ExprIds {
     fn len(&self) -> usize {
         self.count as usize
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Item {
+#[derive(Debug)]
+pub struct Item {
+    pub attributes: Box<[Attribute]>,
+    pub value: ItemValue,
+}
+
+#[derive(Debug)]
+pub enum ItemValue {
     Definition {
         name: String,
         name_span: TSpan,
@@ -374,24 +387,14 @@ pub enum Item {
     Expr(Expr),
 }
 
-/*
-#[derive(Debug, Clone)]
-pub struct TraitImpl {
-    pub impl_generics: Box<[GenericDef]>,
-    pub trait_path: IdentPath,
-    pub trait_generics: Option<(Box<[UnresolvedType]>, TSpan)>,
-    pub ty: UnresolvedType,
-    pub functions: DHashMap<String, FunctionId>,
-    pub impl_keyword_start: u32,
+#[derive(Debug)]
+pub struct Attribute {
+    pub path: IdentPath,
+    pub args: ExprIds,
+    pub span: TSpan,
 }
-impl TraitImpl {
-    pub fn header_span(&self) -> TSpan {
-        TSpan::new(self.impl_keyword_start, self.ty.span().end)
-    }
-}
-*/
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EnumVariantDefinition {
     pub name_span: TSpan,
     pub args: Box<[UnresolvedType]>,
@@ -493,12 +496,12 @@ pub struct TraitBound {
     pub generics_span: TSpan,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Expr {
     Error(TSpan),
     Block {
         scope: ScopeId,
-        items: ExprExtra,
+        items: ExprIds,
     },
     Nested(TSpan, ExprId),
 
@@ -511,12 +514,12 @@ pub enum Expr {
         val: bool,
     },
     StringLiteral(TSpan),
-    Array(TSpan, ExprExtra),
-    Tuple(TSpan, ExprExtra),
+    Array(TSpan, ExprIds),
+    Tuple(TSpan, ExprIds),
     EnumLiteral {
         span: TSpan,
         ident: TSpan,
-        args: ExprExtra,
+        args: ExprIds,
     },
 
     // ---------- definition literals ----------
@@ -636,7 +639,7 @@ pub enum Expr {
     Asm {
         span: TSpan,
         asm_str_span: TSpan,
-        args: ExprExtra,
+        args: ExprIds,
     },
     Break {
         start: u32,
@@ -813,7 +816,7 @@ impl Expr {
 pub struct Call {
     pub called_expr: ExprId,
     pub open_paren_start: u32,
-    pub args: ExprExtra,
+    pub args: ExprIds,
     pub named_args: Vec<(TSpan, ExprId)>,
     pub end: u32,
 }

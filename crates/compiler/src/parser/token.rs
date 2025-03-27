@@ -57,6 +57,7 @@ pub enum TokenType {
     RBracket,
 
     Bang,
+    At,
 
     Plus,
     Minus,
@@ -126,6 +127,7 @@ impl TokenType {
             TokenType::LBracket => "[",
             TokenType::RBracket => "]",
             TokenType::Bang => "!",
+            TokenType::At => "@",
             TokenType::Plus => "+",
             TokenType::Minus => "-",
             TokenType::Star => "*",

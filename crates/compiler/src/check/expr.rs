@@ -10,7 +10,7 @@ use crate::{
     eval::ConstValue,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
     parser::{
-        ast::{Ast, Expr, ExprExtra, ExprId, FunctionId, UnOp},
+        ast::{Ast, Expr, ExprId, ExprIds, FunctionId, UnOp},
         token::{FloatLiteral, IntLiteral, Operator},
     },
     types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
@@ -913,7 +913,7 @@ fn check_enum_literal(
     return_ty: LocalTypeId,
     span: TSpan,
     ident: TSpan,
-    args: ExprExtra,
+    args: ExprIds,
     noreturn: &mut bool,
 ) -> Node {
     let name = &ctx.ast[ident];

@@ -24,10 +24,10 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
         ast::TypeContent::Struct { members } => {
             let named_fields = members
                 .iter()
-                .map(|(name_span, ty)| {
+                .map(|member| {
                     (
-                        ast[*name_span].into(),
-                        compiler.resolve_type(ty, module, def.scope),
+                        ast[member.name].into(),
+                        compiler.resolve_type(&member.ty, module, def.scope),
                         None,
                     )
                 })

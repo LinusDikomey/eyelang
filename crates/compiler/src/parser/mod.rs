@@ -5,7 +5,7 @@ pub mod token;
 
 use std::collections::hash_map::Entry;
 
-use ast::{InherentImpl, TraitFunctions};
+use ast::{Attribute, InherentImpl, ItemValue, StructMember, TraitFunctions};
 use dmap::DHashMap;
 pub use reader::ExpectedTokens;
 use reader::{step_or_unexpected, step_or_unexpected_value};
@@ -184,8 +184,8 @@ impl Parser<'_> {
                     continue;
                 }
             };
-            match item {
-                Item::Definition {
+            match item.value {
+                ItemValue::Definition {
                     name,
                     name_span,
                     annotated_ty,
@@ -213,7 +213,7 @@ impl Parser<'_> {
                         }
                     }
                 }
-                Item::Use(path) => {
+                ItemValue::Use(path) => {
                     let (_, _, name) = path.segments(self.src);
                     let name_span = name.map_or_else(|| path.span(), |(_, span)| span);
                     let name = name.map_or("root", |(name, _)| name).to_owned();
@@ -230,7 +230,7 @@ impl Parser<'_> {
                         }
                     }
                 }
-                Item::Expr(r) => {
+                ItemValue::Expr(r) => {
                     let span = Span {
                         start,
                         end: self.toks.current_end_pos(),
@@ -322,13 +322,14 @@ impl Parser<'_> {
     }
 
     fn parse_item(&mut self, scope: ScopeId) -> Result<Item, CompileError> {
+        let attributes = self.parse_attributes(scope)?;
         let cur = self.toks.current(ExpectedTokens::Item)?;
-        Ok(match cur.ty {
+        let value = match cur.ty {
             // use statement
             TokenType::Keyword(Keyword::Use) => {
                 self.toks.step_assert(TokenType::Keyword(Keyword::Use));
                 let path = self.parse_path()?;
-                Item::Use(path)
+                ItemValue::Use(path)
             }
             // either a variable or constant definition or just an identifier
             TokenType::Ident => {
@@ -345,7 +346,7 @@ impl Parser<'_> {
                             Expr::Error(span.tspan())
                         });
                         let value = self.ast.expr(value);
-                        Item::Definition {
+                        ItemValue::Definition {
                             name: name.to_owned(),
                             name_span: ident_span,
                             annotated_ty: UnresolvedType::Infer(double_colon.span()),
@@ -361,7 +362,7 @@ impl Parser<'_> {
                             let pat = self.ast.expr(Expr::Ident { span: ident_span });
                             let val = self.parse_expr(scope)?;
                             let val = self.ast.expr(val);
-                            Item::Expr(Expr::DeclareWithVal {
+                            ItemValue::Expr(Expr::DeclareWithVal {
                                 pat,
                                 annotated_ty,
                                 val,
@@ -369,7 +370,7 @@ impl Parser<'_> {
                         } else if self.toks.step_if(TokenType::Colon).is_some() {
                             // typed constant
                             let value = self.parse_expr(scope)?;
-                            Item::Definition {
+                            ItemValue::Definition {
                                 name: name.to_owned(),
                                 name_span: ident_span,
                                 annotated_ty,
@@ -378,7 +379,7 @@ impl Parser<'_> {
                         } else {
                             // typed variable without initial value
                             let pat = self.ast.expr(Expr::Ident { span: ident_span });
-                            Item::Expr(Expr::Declare { pat, annotated_ty })
+                            ItemValue::Expr(Expr::Declare { pat, annotated_ty })
                         }
                     }
                     // Variable declaration with inferred type
@@ -387,7 +388,7 @@ impl Parser<'_> {
                         let pat = self.ast.expr(Expr::Ident { span: ident_span });
                         let val = self.parse_expr(scope)?;
 
-                        Item::Expr(Expr::DeclareWithVal {
+                        ItemValue::Expr(Expr::DeclareWithVal {
                             pat,
                             annotated_ty: UnresolvedType::Infer(decl.span()),
                             val: self.ast.expr(val),
@@ -396,12 +397,41 @@ impl Parser<'_> {
                     _ => {
                         let var = Expr::Ident { span: ident_span };
                         let expr = self.parse_stmt_starting_with(var, scope)?;
-                        Item::Expr(expr)
+                        ItemValue::Expr(expr)
                     }
                 }
             }
-            _ => Item::Expr(self.parse_stmt(scope)?),
-        })
+            _ => ItemValue::Expr(self.parse_stmt(scope)?),
+        };
+        Ok(Item { attributes, value })
+    }
+
+    fn parse_attributes(&mut self, scope: ScopeId) -> ParseResult<Box<[Attribute]>> {
+        let mut attributes = Vec::new();
+        while let Some(at) = self.toks.step_if(TokenType::At) {
+            let path = self.parse_path()?;
+            let mut args = Vec::new();
+            let end = if self
+                .toks
+                .peek()
+                .is_some_and(|tok| !tok.new_line && tok.ty == TokenType::LParen)
+            {
+                let lparen = self.toks.step_assert(TokenType::LParen);
+                self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
+                    args.push(p.parse_expr(scope)?);
+                    Ok(Delimit::OptionalIfNewLine)
+                })?
+                .end
+            } else {
+                path.span().end
+            };
+            attributes.push(Attribute {
+                path,
+                args: self.ast.exprs(args),
+                span: TSpan::new(at.start, end),
+            });
+        }
+        Ok(attributes.into_boxed_slice())
     }
 
     fn parse_function_def(
@@ -439,11 +469,12 @@ impl Parser<'_> {
         };
 
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-        let mut members: Vec<(TSpan, UnresolvedType)> = Vec::new();
+        let mut members = Vec::new();
         let mut methods = dmap::new();
         let mut impls = Vec::new();
 
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
+            let attributes = p.parse_attributes(scope)?;
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
                 impls.push(p.parse_inherent_impl(impl_tok, scope, &generics)?);
                 return Ok(Delimit::No);
@@ -463,9 +494,13 @@ impl Parser<'_> {
                 }
                 Ok(Delimit::No)
             } else {
-                let member_span = ident.span();
-                let member_type = p.parse_type()?;
-                members.push((member_span, member_type));
+                let name = ident.span();
+                let ty = p.parse_type()?;
+                members.push(StructMember {
+                    attributes,
+                    name,
+                    ty,
+                });
                 Ok(Delimit::OptionalIfNewLine)
             }
         })?;

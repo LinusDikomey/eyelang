@@ -214,6 +214,7 @@ impl Lexer<'_> {
                     }
                     _ => TokenType::Bang,
                 },
+                '@' => TokenType::At,
 
                 '0'..='9' => {
                     // int/float literal
