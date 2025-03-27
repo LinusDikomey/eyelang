@@ -814,20 +814,16 @@ impl Compiler {
             if !impl_.impl_ty.matches_type(ty, &mut impl_generics) {
                 continue 'impls;
             }
+            debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
+            for (impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
+                if !impl_ty.instantiate_matches(ty, &mut impl_generics) {
+                    continue 'impls;
+                }
+            }
             debug_assert!(
                 impl_generics.iter().all(|ty| !matches!(ty, Type::Invalid)),
                 "impl generics were not properly instantiated"
             );
-            debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
-            for (impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
-                if !impl_ty
-                    .instantiate_generics(&impl_generics)
-                    .is_same_as(ty)
-                    .ok()?
-                {
-                    continue 'impls;
-                }
-            }
             return Some((
                 (impl_.impl_module, impl_.functions[method_index as usize]),
                 impl_generics,

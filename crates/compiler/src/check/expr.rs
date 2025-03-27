@@ -1230,6 +1230,8 @@ fn check_type_item_member_access(
 ) -> Node {
     // first check if the member is a special type property
     if let Some(property) = hir::TypeProperty::from_name(name) {
+        // TODO: usize type
+        ctx.specify(expected, TypeInfo::Primitive(Primitive::U64), span);
         return Node::TypeProperty(ty, property);
     }
     match ctx.hir.types[ty] {

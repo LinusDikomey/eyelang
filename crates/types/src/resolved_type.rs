@@ -116,6 +116,64 @@ impl Type {
         }
     }
 
+    pub fn instantiate_matches(&self, instance: &Type, generics: &mut [Type]) -> bool {
+        match self {
+            &Self::Generic(i) => {
+                generics[i as usize] = instance.clone();
+                true
+            }
+            Self::Invalid => true,
+            Self::Primitive(a) => matches!(instance, Self::Primitive(b) if a == b),
+            Self::DefId {
+                id: a,
+                generics: a_generics,
+            } => {
+                let Self::DefId {
+                    id: b,
+                    generics: b_generics,
+                } = instance
+                else {
+                    return false;
+                };
+                a == b
+                    && a_generics
+                        .iter()
+                        .zip(b_generics)
+                        .all(|(a, b)| a.instantiate_matches(b, generics))
+            }
+            Self::Pointer(a) => {
+                matches!(instance, Self::Pointer(b) if a.instantiate_matches(b, generics))
+            }
+            Self::Array(a) => {
+                let Self::Array(b) = instance else {
+                    return false;
+                };
+                a.1 == b.1 && a.0.instantiate_matches(&b.0, generics)
+            }
+            Self::Tuple(a) => {
+                let Self::Tuple(b) = instance else {
+                    return false;
+                };
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b)
+                        .all(|(a, b)| a.instantiate_matches(b, generics))
+            }
+            Self::LocalEnum(_) => unreachable!("impl types can't be LocalEnum"),
+            Self::Function(a) => {
+                let Self::Function(b) = instance else {
+                    return false;
+                };
+                a.params.len() == b.params.len()
+                    && a.return_type.instantiate_matches(&b.return_type, generics)
+                    && a.params
+                        .iter()
+                        .zip(&b.params)
+                        .all(|(a, b)| a.instantiate_matches(b, generics))
+            }
+        }
+    }
+
     pub fn is_same_as(&self, other: &Type) -> Result<bool, InvalidTypeError> {
         Ok(match (self, other) {
             (Self::Invalid, _) | (_, Self::Invalid) => return Err(InvalidTypeError),
