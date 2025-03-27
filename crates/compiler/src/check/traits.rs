@@ -10,6 +10,7 @@ use crate::{
     compiler::Signature,
     error::Error,
     parser::ast::{self, Ast, TraitId},
+    types::Bound,
 };
 
 pub fn check_trait(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
@@ -165,10 +166,11 @@ use crate::{
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
 #[derive(Debug)]
-pub enum Candidates<'a> {
+pub enum Candidates {
     None,
+    Invalid,
     Multiple,
-    Unique(&'a Impl),
+    Unique { instance: TypeInfoOrIdx },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,41 +184,76 @@ pub enum BaseType {
     Function,
 }
 
-pub fn get_impl_candidates<'t>(
+pub fn get_impl_candidates(
+    compiler: &mut Compiler,
+    bound: &Bound,
     ty: TypeInfo,
-    trait_generics: LocalTypeIds,
-    types: &TypeTable,
-    _function_generics: &Generics,
-    checked: &'t CheckedTrait,
-) -> Candidates<'t> {
-    let mut found = None;
-    'candidates: for (i, trait_impl) in checked.impls.iter().enumerate() {
-        debug_assert_eq!(trait_generics.count, trait_impl.trait_generics.len() as u32);
-        // eprintln!(
-        //     "  candidate: impl _{:?} for {:?}",
-        //     trait_impl.trait_generics, trait_impl.impl_ty
-        // );
-        for (idx, ty) in trait_generics.iter().zip(&trait_impl.trait_generics) {
-            if !types.compatible_with_type(types[idx], ty) {
-                //eprintln!("  -> incompatible trait generic {:?} {:?}", types[idx], ty);
-                continue 'candidates;
+    types: &mut TypeTable,
+    function_generics: &Generics,
+) -> Candidates {
+    let Some(checked_trait) = compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1) else {
+        return Candidates::Invalid;
+    };
+    let checked_trait = Rc::clone(checked_trait);
+    let resolved;
+    let mut found = match ty {
+        // could be a type with inherent impls
+        TypeInfo::Unknown | TypeInfo::UnknownSatisfying(_) => return Candidates::Multiple,
+        TypeInfo::TypeDef(id, _) => {
+            resolved = Rc::clone(compiler.get_resolved_type_def(id));
+            let impls_for_ty = resolved
+                .inherent_trait_impls
+                .get(&bound.trait_id)
+                .map_or(&[] as &[Impl], |v| v.as_slice());
+            let mut found = None;
+            for impl_ in impls_for_ty {
+                if is_candidate_valid(impl_, bound.generics, ty, types) {
+                    if found.is_some() {
+                        return Candidates::Multiple;
+                    }
+                    found = Some(impl_);
+                }
             }
-            //eprintln!("  -> compatible trait generic {:?} {:?}", types[idx], ty);
+            found
         }
-        if trait_impl.impl_ty.matches_type_info(ty, types) {
+        _ => None, // type doesn't have inherent impls
+    };
+    for impl_ in &checked_trait.impls {
+        if is_candidate_valid(impl_, bound.generics, ty, types) {
             if found.is_some() {
                 return Candidates::Multiple;
             }
-            found = Some(i);
-        } else {
-            // eprintln!("  -> incompatible impl ty");
+            found = Some(impl_);
         }
     }
     if let Some(found) = found {
-        Candidates::Unique(&checked.impls[found])
+        Candidates::Unique {
+            instance: found.instantiate(
+                bound.generics,
+                function_generics,
+                types,
+                compiler,
+                bound.span,
+            ),
+        }
     } else {
         Candidates::None
     }
+}
+
+fn is_candidate_valid(
+    impl_: &Impl,
+    trait_generics: LocalTypeIds,
+    ty: TypeInfo,
+    types: &TypeTable,
+) -> bool {
+    debug_assert_eq!(trait_generics.count, impl_.trait_generics.len() as u32);
+    for (idx, ty) in trait_generics.iter().zip(&impl_.trait_generics) {
+        if !types.compatible_with_type(types[idx], ty) {
+            return false;
+        }
+    }
+    impl_.impl_ty.matches_type_info(ty, types)
 }
 
 #[derive(Debug)]

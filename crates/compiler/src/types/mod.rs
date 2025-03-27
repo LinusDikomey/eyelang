@@ -1040,7 +1040,12 @@ impl TypeTable {
         }
     }
 
-    pub fn finish(&mut self, compiler: &mut Compiler, generics: &Generics, module: ModuleId) {
+    pub fn finish(
+        &mut self,
+        compiler: &mut Compiler,
+        function_generics: &Generics,
+        module: ModuleId,
+    ) {
         for (ty, bounds) in std::mem::take(&mut self.deferred_checks) {
             let mut idx = ty;
             let info = loop {
@@ -1053,7 +1058,7 @@ impl TypeTable {
                 continue;
             }
             for bound in bounds.iter() {
-                let bound = &self.bounds[bound.0 as usize];
+                let bound = self.bounds[bound.0 as usize];
                 let span = bound.span;
                 let Some(checked_trait) =
                     compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1)
@@ -1063,13 +1068,10 @@ impl TypeTable {
                 let checked_trait = Rc::clone(checked_trait);
                 // TODO: probably should retry impl candidates in a loop as long as one bound has
                 // multiple candidates but progress is made
-                match traits::get_impl_candidates(
-                    info,
-                    bound.generics,
-                    self,
-                    generics,
-                    &checked_trait,
-                ) {
+                match traits::get_impl_candidates(compiler, &bound, info, self, function_generics) {
+                    traits::Candidates::Invalid => {
+                        continue;
+                    }
                     traits::Candidates::None => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
@@ -1083,17 +1085,14 @@ impl TypeTable {
                         );
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                     }
-                    traits::Candidates::Unique(impl_) => {
-                        let self_ty =
-                            impl_.instantiate(bound.generics, generics, self, compiler, span);
-                        match self_ty {
+                    traits::Candidates::Unique { instance } => {
+                        let span = || span.in_mod(module);
+                        match instance {
                             TypeInfoOrIdx::TypeInfo(info) => {
-                                self.specify(ty, info, generics, compiler, || span.in_mod(module))
+                                self.specify(ty, info, function_generics, compiler, span)
                             }
                             TypeInfoOrIdx::Idx(self_idx) => {
-                                self.unify(idx, self_idx, generics, compiler, || {
-                                    span.in_mod(module)
-                                })
+                                self.unify(idx, self_idx, function_generics, compiler, span)
                             }
                         }
                     }
@@ -1106,20 +1105,19 @@ impl TypeTable {
                         };
                         let new_candidate = retry_with.and_then(|new_info| {
                             let new_candidates = traits::get_impl_candidates(
+                                compiler,
+                                &bound,
                                 new_info,
-                                bound.generics,
                                 self,
-                                generics,
-                                &checked_trait,
+                                function_generics,
                             );
-                            if let traits::Candidates::Unique(impl_) = new_candidates {
-                                Some((new_info, impl_))
+                            if let traits::Candidates::Unique { instance: _ } = new_candidates {
+                                Some(new_info)
                             } else {
                                 None
                             }
                         });
-                        if let Some((new_info, impl_)) = new_candidate {
-                            impl_.instantiate(bound.generics, generics, self, compiler, span);
+                        if let Some(new_info) = new_candidate {
                             self.replace(idx, new_info);
                         } else {
                             compiler.errors.emit_err(

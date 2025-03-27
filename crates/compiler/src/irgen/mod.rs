@@ -947,14 +947,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .iter()
                 .map(|ty| ctx.types.to_resolved(ctx.types[ty], ctx.generics))
                 .collect();
-            let Some((impl_, impl_generics)) =
+            let Some((function, impl_generics)) =
                 ctx.builder
                     .env
-                    .get_checked_trait_impl(trait_id, &self_ty, &trait_generics)
+                    .get_impl_method(trait_id, &self_ty, &trait_generics, method_index)
             else {
                 crash_point!(ctx)
             };
-            let function = (impl_.impl_module, impl_.functions[method_index as usize]);
+
             // TODO: handle impl/method generics
             let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
                 crash_point!(ctx)

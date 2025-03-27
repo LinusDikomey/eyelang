@@ -785,15 +785,30 @@ impl Compiler {
         }
     }
 
-    pub fn get_checked_trait_impl(
+    pub fn get_impl_method(
         &mut self,
         trait_id: (ModuleId, ast::TraitId),
         ty: &Type,
         trait_generics: &[Type],
-    ) -> Option<(&traits::Impl, Vec<Type>)> {
-        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        method_index: u16,
+    ) -> Option<((ModuleId, FunctionId), Vec<Type>)> {
         let mut impl_generics = Vec::new();
-        'impls: for impl_ in &checked_trait.impls {
+        let def = if let &Type::DefId { id, .. } = ty {
+            Some(Rc::clone(self.get_resolved_type_def(id)))
+        } else {
+            None
+        };
+
+        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        let impls = def
+            .iter()
+            .flat_map(|def| {
+                def.inherent_trait_impls
+                    .get(&trait_id)
+                    .map_or(&[] as &[_], |impls| impls.as_slice())
+            })
+            .chain(&checked_trait.impls);
+        'impls: for impl_ in impls {
             impl_generics.clear();
             impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
             if !impl_.impl_ty.matches_type(ty, &mut impl_generics) {
@@ -813,9 +828,11 @@ impl Compiler {
                     continue 'impls;
                 }
             }
-            return Some((impl_, impl_generics));
+            return Some((
+                (impl_.impl_module, impl_.functions[method_index as usize]),
+                impl_generics,
+            ));
         }
-        // TODO: check impls on type
         None
     }
 

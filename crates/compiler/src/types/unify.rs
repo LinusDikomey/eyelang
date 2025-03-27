@@ -43,56 +43,42 @@ pub fn unify(
             let mut chosen_ty = t;
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
-                let Some(checked_trait) =
-                    compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1)
-                else {
-                    return Some(TypeInfo::Invalid);
-                };
-                let checked_trait = Rc::clone(checked_trait);
                 let mut s = String::new();
                 types.type_to_string(compiler, chosen_ty, &mut s);
                 let candidates = traits::get_impl_candidates(
+                    compiler,
+                    &bound,
                     chosen_ty,
-                    bound.generics,
                     types,
                     function_generics,
-                    &checked_trait,
                 );
                 match candidates {
                     traits::Candidates::None => return None, // TODO: better errors
+                    traits::Candidates::Invalid => return Some(TypeInfo::Invalid),
                     traits::Candidates::Multiple => {
                         // TODO: might emit multiple checks since this path happens when a single
                         // bound is not fulfilled but will check all bounds again
                         types.defer_impl_check(unified_id, bounds);
                     }
-                    traits::Candidates::Unique(trait_impl) => {
-                        let self_ty = trait_impl.instantiate(
-                            bound.generics,
-                            function_generics,
-                            types,
-                            compiler,
-                            bound.span,
-                        );
-                        match self_ty {
-                            TypeInfoOrIdx::TypeInfo(info) => {
-                                chosen_ty = unify(
-                                    chosen_ty,
-                                    info,
-                                    types,
-                                    function_generics,
-                                    compiler,
-                                    unified_id,
-                                )?;
-                            }
-                            TypeInfoOrIdx::Idx(idx) => {
-                                types
-                                    .try_specify(idx, chosen_ty, function_generics, compiler)
-                                    .ok()?;
-                                chosen_ty = types[idx];
-                                types.replace(idx, TypeInfoOrIdx::Idx(unified_id));
-                            }
+                    traits::Candidates::Unique { instance } => match instance {
+                        TypeInfoOrIdx::TypeInfo(info) => {
+                            chosen_ty = unify(
+                                chosen_ty,
+                                info,
+                                types,
+                                function_generics,
+                                compiler,
+                                unified_id,
+                            )?;
                         }
-                    }
+                        TypeInfoOrIdx::Idx(idx) => {
+                            types
+                                .try_specify(idx, chosen_ty, function_generics, compiler)
+                                .ok()?;
+                            chosen_ty = types[idx];
+                            types.replace(idx, TypeInfoOrIdx::Idx(unified_id));
+                        }
+                    },
                 }
             }
             chosen_ty
