@@ -17,7 +17,6 @@ pub enum Type {
     /// a local enum that will only be created from inference
     LocalEnum(Box<[(u32, Box<[Type]>)]>),
     Function(FunctionType),
-    /// Self type (only used in trait definitions)
     Invalid,
 }
 impl Type {

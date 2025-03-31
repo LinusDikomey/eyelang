@@ -85,7 +85,7 @@ Slot :: struct[K, V] {
 
 stride_of_ptr :: fn[T](ptr *T) -> u64: ret T.stride
 
-FIRST_CAPACITY :: 4
+FIRST_CAPACITY: u64: 4
 new_cap :: fn(cap u64) -> u64: if cap == 0: FIRST_CAPACITY else cap * 2
 
 Map :: struct[K: Hash + Eq, V] {

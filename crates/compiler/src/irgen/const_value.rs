@@ -40,6 +40,11 @@ pub fn translate(
             Type::Primitive(Primitive::I128 | Primitive::U128) => {
                 b.copy_from_slice(&(val as u128).to_le_bytes());
             }
+            Type::DefId { id, generics } if *id == compiler.builtins.primitives.bool => {
+                debug_assert!(generics.is_empty());
+                debug_assert!(val < 2);
+                b.copy_from_slice(&[val as u8]);
+            }
             ty => unreachable!("unexpected type for integer ConstValue: {ty:?}"),
         },
         &eval::ConstValue::Float(val) => match ty {

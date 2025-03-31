@@ -47,25 +47,7 @@ main :: fn {
     std.c.printf("Result: %d\n".ptr, if 1 < 2: add(pointer^, 4) else -1)
 }
 ```
-### Constants
-```rust
-# this constant doesn't have a specific integer type
-A :: 42
 
-main :: fn {
-    println(A) # prints 42
-
-    # can be assigned to any integer
-    x: u8 = A
-    y: i32 = A
-
-    # also works with floats
-    PI :: 3.14
-
-    pi: f32 = PI
-    pi_squared: f64 = PI*PI
-}
-```
 ### Heap allocation
 ```rust
 use std.c

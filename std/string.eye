@@ -81,9 +81,6 @@ str :: struct {
     }
 
     parse :: fn[I: Int](this str) -> I {
-        ASCII_NINE: u8 : ASCII_ZERO + 9
-        ASCII_MINUS: u8 : 45
-
         negate := false
         x := Int.zero()
         i := 0
@@ -149,6 +146,7 @@ str :: struct {
 NEWLINE: i8 : 10
 CARRIAGE_RETURN: i8 : 13
 ASCII_ZERO: u8 : 48
+ASCII_NINE: u8 : 48 + 9
 ASCII_MINUS: u8 : 45
 
 len :: fn(s *i8) -> u64: root.c.strlen(s) as _

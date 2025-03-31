@@ -641,6 +641,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                             } else {
                                 eq
                             }));
+                        } else if id == ctx.builder.env.builtins.primitives.bool {
+                            // fall trough since a bool can be compared like an integer
                         } else {
                             panic!("invalid type for comparison, will change with traits");
                         }
