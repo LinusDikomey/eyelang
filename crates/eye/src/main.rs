@@ -60,6 +60,9 @@ fn main() -> Result<(), MainError> {
         eprintln!("enabling crash on error");
         compiler.errors.enable_crash_on_error();
     }
+    if args.debug_eval {
+        compiler.debug.eval = true;
+    }
 
     let (name, path) = match &args.path {
         Some(path_str) => {

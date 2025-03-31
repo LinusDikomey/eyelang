@@ -197,15 +197,20 @@ pub fn def_expr(
             }
             Def::Type(Type::Primitive(primitive))
         }
-        _ => match value_expr(compiler, module, scope, ast, expr, ty) {
-            Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
-            Err(err) => {
-                compiler
-                    .errors
-                    .emit_err(Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)));
-                Def::Invalid
+        _ => {
+            if compiler.debug.eval {
+                eprintln!("Running evaluator for definition of {name}:");
             }
-        },
+            match value_expr(compiler, module, scope, ast, expr, ty) {
+                Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
+                Err(err) => {
+                    compiler.errors.emit_err(
+                        Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)),
+                    );
+                    Def::Invalid
+                }
+            }
+        }
     }
 }
 
@@ -306,6 +311,10 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
 
     fn env_mut(&mut self) -> &mut ir::Environment {
         &mut self.compiler.ir
+    }
+
+    fn debug(&self) -> bool {
+        self.compiler.debug.eval
     }
 
     fn call_extern(

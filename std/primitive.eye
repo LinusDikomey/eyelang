@@ -12,6 +12,10 @@
 bool :: enum {
     false
     true
+
+    toggle :: fn(self *bool) {
+        self^ = !self^
+    }
 }
 
 #- 

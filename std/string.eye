@@ -231,8 +231,8 @@ ToString :: trait {
     }
     impl _ for bool {
         to_string :: fn(this *bool) -> str: match this^ {
-            false: "false".clone(),
-            true: "true".clone(),
+            .false: "false".clone(),
+            .true: "true".clone(),
         }
     }
 

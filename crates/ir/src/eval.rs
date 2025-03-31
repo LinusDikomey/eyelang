@@ -178,6 +178,7 @@ impl From<ProvenanceError> for Error {
 pub trait EvalEnvironment {
     fn env(&self) -> &Environment;
     fn env_mut(&mut self) -> &mut Environment;
+    fn debug(&self) -> bool;
 
     fn call_extern(
         &mut self,
@@ -195,6 +196,10 @@ impl EvalEnvironment for Environment {
 
     fn env_mut(&mut self) -> &mut Environment {
         self
+    }
+
+    fn debug(&self) -> bool {
+        false
     }
 }
 
@@ -224,10 +229,12 @@ pub fn eval<E: EvalEnvironment>(
     env: &mut E,
 ) -> Result<Val, Error> {
     let top_level_function = (top_level_ir, top_level_types);
-    eprintln!(
-        "Evaluating:\n{}",
-        top_level_ir.display(env.env(), top_level_types)
-    );
+    if env.debug() {
+        eprintln!(
+            "Evaluating:\n{}",
+            top_level_ir.display(env.env(), top_level_types)
+        );
+    }
     let dialects = Dialects::get(env.env_mut());
     let mut mem = Mem::new();
 

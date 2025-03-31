@@ -85,6 +85,10 @@ pub struct Args {
     #[clap(long)]
     pub log: bool,
 
+    /// Enable logging for debugging of compile-time constant evaluation
+    #[clap(long)]
+    pub debug_eval: bool,
+
     /// Used for providing a custom link command. Use '[OBJ]' and '[OUT]' as placeholders for object and out file.
     /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
     #[clap(long)]
