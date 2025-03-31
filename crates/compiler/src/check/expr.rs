@@ -7,7 +7,6 @@ use types::{Primitive, Type};
 use crate::{
     compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeContent, builtins},
     error::Error,
-    eval::ConstValue,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
     parser::{
         ast::{Ast, Expr, ExprId, ExprIds, FunctionId, UnOp},
@@ -1290,10 +1289,14 @@ fn check_type_item_member_access(
 }
 
 pub fn int_ty_from_variant_count(count: u32) -> TypeInfo {
+    TypeInfo::Primitive(int_primitive_from_variant_count(count))
+}
+
+pub fn int_primitive_from_variant_count(count: u32) -> Primitive {
     match count {
-        0 | 1 => TypeInfo::Primitive(Primitive::Unit),
-        2..=255 => TypeInfo::Primitive(Primitive::U8),
-        256..=65535 => TypeInfo::Primitive(Primitive::U16),
-        _ => TypeInfo::Primitive(Primitive::U32),
+        0 | 1 => Primitive::Unit,
+        2..=255 => Primitive::U8,
+        256..=65535 => Primitive::U16,
+        _ => Primitive::U32,
     }
 }

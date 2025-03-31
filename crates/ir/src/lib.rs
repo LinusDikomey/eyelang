@@ -615,11 +615,15 @@ impl FunctionIr {
         inst: &'a Instruction,
         env: &'a Environment,
     ) -> A {
-        A::get(self, inst, env).unwrap_or_else(|err| {
-            let module_name = &env[inst.module()].name;
-            let name = &env[inst.function].name;
-            panic!("Invalid arguments for {module_name}.{name}: {err:?}");
-        })
+        // intentionally not using unwrap_or_else here so track_caller works for the panic
+        match A::get(self, inst, env) {
+            Ok(args) => args,
+            Err(err) => {
+                let module_name = &env[inst.module()].name;
+                let name = &env[inst.function].name;
+                panic!("Invalid arguments for {module_name}.{name}: {err:?}");
+            }
+        }
     }
 
     pub fn args_iter<'a>(

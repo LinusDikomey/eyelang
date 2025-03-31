@@ -5,7 +5,7 @@ use std::{
 
 use id::{ModuleId, TypeId};
 use span::{Span, TSpan};
-use types::{Primitive, Type};
+use types::{InvalidTypeError, Layout, Primitive, Type};
 
 mod unify;
 
@@ -13,7 +13,10 @@ use unify::unify;
 
 use crate::{
     Compiler,
-    check::{expr::int_ty_from_variant_count, traits},
+    check::{
+        expr::{int_primitive_from_variant_count, int_ty_from_variant_count},
+        traits,
+    },
     compiler::{Def, Generics, ResolvedTypeContent},
     error::Error,
     parser::ast::{self, TraitId},
@@ -145,7 +148,7 @@ impl TypeTable {
             | TypeInfo::Array {
                 element: _,
                 count: None,
-            } => unreachable!(),
+            } => unreachable!("shouldn't convert unfinished type {info:?} to resolved"),
             TypeInfo::Pointer(pointee) => {
                 Type::Pointer(Box::new(self.to_resolved(self[pointee], generics)))
             }
@@ -1329,4 +1332,77 @@ pub struct InferredEnumVariant {
 pub enum OrdinalType {
     Inferred(VariantId),
     Known(u32),
+}
+
+pub fn resolved_layout(
+    ty: &Type,
+    compiler: &mut Compiler,
+    generics: &[Type],
+) -> Result<Layout, InvalidTypeError> {
+    Ok(match ty {
+        Type::Primitive(p) => p.layout(),
+        Type::DefId {
+            id,
+            generics: ty_generics,
+        } => {
+            let def = Rc::clone(compiler.get_resolved_type_def(*id));
+            let generics_storage: Box<[Type]>;
+            let generics = if generics.is_empty() {
+                ty_generics
+            } else {
+                // PERF: allocating generics here
+                generics_storage = ty_generics
+                    .iter()
+                    .map(|generic| generic.instantiate_generics(generics))
+                    .collect();
+                &generics_storage
+            };
+            match &def.def {
+                ResolvedTypeContent::Struct(struct_def) => {
+                    let mut layout = Layout::EMPTY;
+                    for (_, ty) in struct_def.all_fields() {
+                        layout.accumulate(resolved_layout(ty, compiler, generics)?);
+                    }
+                    layout
+                }
+                ResolvedTypeContent::Enum(enum_def) => {
+                    let variant_ty = int_primitive_from_variant_count(enum_def.variants.len() as _);
+                    let variant_ty_layout = variant_ty.layout();
+                    let mut layout = Layout::EMPTY;
+                    for (_, args) in &enum_def.variants {
+                        let mut variant_layout = variant_ty_layout;
+                        for arg in args {
+                            variant_layout.accumulate(resolved_layout(arg, compiler, generics)?);
+                        }
+                        layout.add_variant(variant_layout);
+                    }
+                    layout
+                }
+            }
+        }
+        Type::Pointer(_) | Type::Function(_) => Layout::PTR,
+        Type::Array(b) => Layout::array(resolved_layout(&b.0, compiler, generics)?, b.1),
+        Type::Tuple(fields) => {
+            let mut layout = Layout::EMPTY;
+            for field in fields {
+                layout.accumulate(resolved_layout(field, compiler, generics)?);
+            }
+            layout
+        }
+        &Type::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
+        Type::LocalEnum(variants) => {
+            let variant_ty = int_primitive_from_variant_count(variants.len() as _);
+            let variant_ty_layout = variant_ty.layout();
+            let mut layout = Layout::EMPTY;
+            for (_, args) in variants {
+                let mut variant_layout = variant_ty_layout;
+                for arg in args {
+                    variant_layout.accumulate(resolved_layout(arg, compiler, generics)?);
+                }
+                layout.add_variant(variant_layout);
+            }
+            layout
+        }
+        Type::Invalid => return Err(InvalidTypeError),
+    })
 }

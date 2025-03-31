@@ -2,11 +2,11 @@ use std::{num::NonZeroU64, rc::Rc};
 
 use id::ModuleId;
 use ir::eval::Val;
-use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
+use types::{Primitive, Type, UnresolvedType};
 
 use crate::{
     Compiler, Def,
-    compiler::{Generics, ResolvedPrimitive, ResolvedTypeContent},
+    compiler::{Generics, ResolvedPrimitive},
     error::Error,
     hir::HIRBuilder,
     irgen,
@@ -14,7 +14,7 @@ use crate::{
         ast::{Ast, Expr, ExprId, ScopeId},
         token::{FloatLiteral, IntLiteral},
     },
-    types::{TypeInfo, TypeTable},
+    types::TypeTable,
 };
 
 #[derive(Debug, Clone)]
@@ -220,7 +220,6 @@ pub fn value_expr(
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);
-    let ty = types.to_resolved(types[expected], &[]);
     let hir = HIRBuilder::new(types);
     let (hir, types) = crate::check::check(
         compiler,
@@ -234,9 +233,11 @@ pub fn value_expr(
         expected,
         crate::compiler::LocalScopeParent::None,
     );
+    let ty = types.to_resolved(types[expected], &[]);
     if let crate::hir::Node::Invalid = hir[hir.root_id()] {
         return Ok((ConstValue::Undefined, ty));
     }
+
     let mut to_generate = Vec::new();
     let mut builder = ir::builder::Builder::new(&mut *compiler);
     builder.create_and_begin_block([]);

@@ -21,50 +21,6 @@ pub enum Type {
     Invalid,
 }
 impl Type {
-    /*
-    pub fn layout<'a>(&self, ctx: impl Fn(TypeDefId) -> &'a ResolvedTypeDef + Copy, generics: &[Type]) -> Layout {
-        match self {
-            Type::Prim(p) => p.layout(),
-            Type::Id(key, generics) => ctx(*key).layout(
-                ctx,
-                generics
-                    .iter()
-                    .map(|ty| ty.instantiate_generics(generics))
-                    .collect::<Vec<_>>()
-                    .as_slice()
-                ),
-            Type::Pointer(_) => Layout::PTR,
-            Type::Array(b) => {
-                let (ty, size) = &**b;
-                Layout::array(ty.layout(ctx, generics), *size)
-            }
-            Type::Tuple(tuple) => {
-                let mut l = Layout::EMPTY;
-                for ty in tuple {
-                    l.accumulate(ty.layout(ctx, generics));
-                }
-                l
-            }
-            Type::Generic(idx) => generics[*idx as usize].layout(ctx, generics),
-            Type::LocalEnum(variants) => {
-                let tag_layout = Enum::int_ty_from_variant_count(variants.len() as _)
-                    .map_or(Layout::EMPTY, |int_ty| Primitive::from(int_ty).layout());
-                let mut layout = tag_layout;
-                for variant in variants {
-                    let mut variant_layout = tag_layout;
-                    for arg in variant {
-                        variant_layout.accumulate(arg.layout(ctx, generics));
-                    }
-                    layout.add_variant(variant_layout);
-                }
-                layout
-            }
-            Type::TraitSelf => unreachable!("TraitSelf should always be replaced in concrete instances"),
-            Type::Invalid => Layout::EMPTY,
-        }
-    }
-    */
-
     pub fn instantiate_generics(&self, generics: &[Type]) -> Self {
         match self {
             Type::Primitive(p) => Type::Primitive(*p),

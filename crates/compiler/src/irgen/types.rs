@@ -168,7 +168,6 @@ pub fn get_from_info(
                 else {
                     continue 'variants;
                 };
-                dbg!(args);
                 inhabited_variants += 1;
                 let variant_layout =
                     ir::type_layout(ir::Type::Tuple(args), ir_types, compiler.ir.primitives());

@@ -81,7 +81,6 @@ str :: struct {
     }
 
     parse :: fn[I: Int](this str) -> I {
-        ASCII_ZERO: u8 : 48
         ASCII_NINE: u8 : ASCII_ZERO + 9
         ASCII_MINUS: u8 : 45
 
@@ -149,8 +148,8 @@ str :: struct {
 
 NEWLINE: i8 : 10
 CARRIAGE_RETURN: i8 : 13
-ASCII_0 :: 48
-ASCII_MINUS :: 45
+ASCII_ZERO: u8 : 48
+ASCII_MINUS: u8 : 45
 
 len :: fn(s *i8) -> u64: root.c.strlen(s) as _
 
@@ -257,8 +256,8 @@ ToString :: trait {
 
 int_to_string :: fn[T: Int](x T) -> str {
     # 20 digits are needed at most for a u64/i64
-    MAX_LEN :: 20
-    buf: [u8; 20] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,ASCII_0]
+    MAX_LEN: u64 : 20
+    buf: [u8; 20] = [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,ASCII_ZERO]
     i := MAX_LEN - 1
     negative := false
     min_signed_int := false
@@ -275,12 +274,12 @@ int_to_string :: fn[T: Int](x T) -> str {
     }
     while x >= Int.ten() {
         last_digit := Int.mod(x, Int.ten())
-        buf[i] = ASCII_0 + Int.as_u8(last_digit)
+        buf[i] = ASCII_ZERO + Int.as_u8(last_digit)
         i -= 1
         x = Int.div(x, Int.ten())
     }
     if !Int.eq(x, Int.zero()) {
-        buf[i] = ASCII_0 + Int.as_u8(x)
+        buf[i] = ASCII_ZERO + Int.as_u8(x)
     } else if i != MAX_LEN - 1 {
         i += 1
     }

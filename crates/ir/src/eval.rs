@@ -1,4 +1,3 @@
-#![allow(unused)] // TODO: reimplement eval, then remove this
 use std::{
     cmp::Ordering,
     fmt,
@@ -6,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    Argument, BlockId, BlockInfo, BlockTarget, Environment, Function, FunctionId, FunctionIr,
-    IntoArgs, ModuleOf, PrimitiveId, PrimitiveInfo, Ref, Type, TypeId, Types,
+    Argument, BlockId, BlockInfo, BlockTarget, Environment, FunctionId, FunctionIr, ModuleOf,
+    PrimitiveInfo, Ref, Type, TypeId, Types,
     dialect::Primitive,
     layout::{Layout, type_layout},
 };
@@ -26,21 +25,6 @@ pub enum Val {
     Ptr(Ptr),
     Array(Box<[Val]>),
     Tuple(Box<[Val]>),
-}
-impl Val {
-    fn equals(&self, r: &Val) -> bool {
-        match (self, r) {
-            (Val::Int(a), Val::Int(b)) => a == b,
-            (Val::Unit, Val::Unit) => true,
-            (Val::F32(a), Val::F32(b)) => a == b,
-            (Val::F64(a), Val::F64(b)) => a == b,
-            (Val::Ptr(a), Val::Ptr(b)) => a.addr == b.addr,
-            (Val::Array(a), Val::Array(b)) | (Val::Tuple(a), Val::Tuple(b)) => {
-                a.iter().zip(b.iter()).all(|(a, b)| Val::equals(a, b))
-            }
-            _ => panic!("invalid types for equality check"),
-        }
-    }
 }
 
 const STACK_BIT: u32 = 1 << 31;
@@ -240,6 +224,10 @@ pub fn eval<E: EvalEnvironment>(
     env: &mut E,
 ) -> Result<Val, Error> {
     let top_level_function = (top_level_ir, top_level_types);
+    eprintln!(
+        "Evaluating:\n{}",
+        top_level_ir.display(env.env(), top_level_types)
+    );
     let dialects = Dialects::get(env.env_mut());
     let mut mem = Mem::new();
 
@@ -327,19 +315,6 @@ pub fn eval<E: EvalEnvironment>(
                         Val::F64(l_val.$float_f(r_val))
                     }
                     t => panic!("Invalid type for binary operation: {t:?}"),
-                }
-            }};
-        }
-        macro_rules! cmp_op {
-            ($op: tt, $inst: expr) => {{
-                let l = get_ref(&values, $inst.data.bin_op().0);
-                let r = get_ref(&values, $inst.data.bin_op().1);
-
-                match (l, r) {
-                    (Val::Int(l_val), Val::Int(r_val)) => Val::Int((l_val $op r_val) as u64),
-                    (Val::F32(l_val), Val::F32(r_val)) => Val::Int((l_val $op r_val) as u64),
-                    (Val::F64(l_val), Val::F64(r_val)) => Val::Int((l_val $op r_val) as u64),
-                    (l, r) => panic!("Invalid values for comparison: {l:?}, {r:?}")
                 }
             }};
         }
@@ -493,7 +468,9 @@ pub fn eval<E: EvalEnvironment>(
                         })
                     }
                     I::CastInt => {
-                        let x = ir.args(inst, env.env());
+                        let r = ir.args(inst, env.env());
+                        let x = get_int_ref(&values, r);
+                        // TODO: probably not correct for casting, especially sign-extension
                         Val::Int(x)
                     }
                     I::CastFloat => {
@@ -548,8 +525,8 @@ pub fn eval<E: EvalEnvironment>(
                             (Val::F32(x), Primitive::I32) => (x as i32) as _,
                             (Val::F32(x), Primitive::U64) => (x as u64) as _,
                             (Val::F32(x), Primitive::I64) => (x as i64) as _,
-                            (Val::F32(x), Primitive::U128) => todo!(),
-                            (Val::F32(x), Primitive::I128) => todo!(),
+                            (Val::F32(_), Primitive::U128) => todo!(),
+                            (Val::F32(_), Primitive::I128) => todo!(),
                             (Val::F64(x), Primitive::I1) => (x as u8 & 1) as _,
                             (Val::F64(x), Primitive::U8) => (x as u8) as _,
                             (Val::F64(x), Primitive::I8) => (x as i8) as _,
@@ -557,10 +534,8 @@ pub fn eval<E: EvalEnvironment>(
                             (Val::F64(x), Primitive::I16) => (x as i16) as _,
                             (Val::F64(x), Primitive::U32) => (x as u32) as _,
                             (Val::F64(x), Primitive::I32) => (x as i32) as _,
-                            (Val::F64(x), Primitive::U32) => (x as u64) as _,
-                            (Val::F64(x), Primitive::I32) => (x as i64) as _,
-                            (Val::F64(x), Primitive::U128) => todo!(),
-                            (Val::F64(x), Primitive::I128) => todo!(),
+                            (Val::F64(_), Primitive::U128) => todo!(),
+                            (Val::F64(_), Primitive::I128) => todo!(),
                             _ => panic!("invalid types for CastFloatToInt"),
                         })
                     }
@@ -584,14 +559,13 @@ pub fn eval<E: EvalEnvironment>(
                         let mut out_idx = values.slot_map[pc as usize];
                         for (elem_ty, i) in elem_types.iter().zip(0..) {
                             let slot_count = slot_count(types[elem_ty], types);
-                            let n = slot_count as usize;
-                            let dest = out_idx as usize + out_idx as usize + n;
                             let src = if i == insert_idx {
-                                values.slot_map[tuple.idx()]
+                                values.slot_map[value.idx()]
                             } else {
                                 in_idx
                             };
-                            let src = src as usize..src as usize + n;
+                            let src = src as usize..(src + slot_count) as usize;
+                            values.slot_map.copy_within(src, out_idx as usize);
                             in_idx += slot_count;
                             out_idx += slot_count;
                         }
@@ -791,7 +765,6 @@ pub fn eval<E: EvalEnvironment>(
                     pc += 1;
                     continue 'outer;
                 }
-                panic!("instruction from unknown module encountered during eval")
             };
             /*
             let value = match inst.tag {
@@ -1260,7 +1233,7 @@ impl Values {
                 Primitive::I128 | Primitive::U128 => {
                     let value = ((self.slots[*i as usize] as u128) << 64)
                         | self.slots[*i as usize + 1] as u128;
-                    visit(PrimitiveVal::I128(value));
+                    visit(PrimitiveVal::I128(value))?;
                     *i += 2;
                 }
             },
@@ -1506,6 +1479,7 @@ enum PrimitiveVal {
     I16(u16),
     I32(u32),
     I64(u64),
+    #[allow(unused)] // TODO: 128-bit support in eval
     I128(u128),
 }
 
@@ -1515,5 +1489,6 @@ enum PrimitiveSize {
     S16,
     S32,
     S64,
+    #[allow(unused)] // TODO: 128-bit support in eval
     S128,
 }

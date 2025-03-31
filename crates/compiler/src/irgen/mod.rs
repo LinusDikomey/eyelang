@@ -14,11 +14,10 @@ use ir::{BlockId, BlockTarget, Ref};
 
 use crate::Compiler;
 use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
-use crate::eval::ConstValue;
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::parser::ast;
-use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType};
+use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
@@ -283,17 +282,20 @@ impl Ctx<'_> {
             // PERF: cloning value, ty
             let value = value.clone();
             let ty = ty.clone();
-            let Ok((value, align)) = const_value::translate(&value, &ty, self.builder.env) else {
+            let layout = resolved_layout(&ty, self.builder.env, &[]).ok()?;
+            let mut storage = vec![0; layout.size as usize].into_boxed_slice();
+            if const_value::translate(&value, &ty, self.builder.env, &mut storage).is_err() {
                 // FIXME: this tries to translate invalid globals again every time they are
                 // requested since we never store to the instances. Maybe create the notion of
                 // invalid globals in ir? Or get layout of the value and return zeroes.
                 return None;
             };
-            let global_id =
-                self.builder
-                    .env
-                    .ir
-                    .add_global(self.builder.env.ir_module, name, align, value);
+            let global_id = self.builder.env.ir.add_global(
+                self.builder.env.ir_module,
+                name,
+                layout.alignment,
+                storage,
+            );
             self.builder.env.get_parsed_module(module).instances.globals[id.idx()] =
                 Some(global_id);
             Some(global_id)
@@ -526,18 +528,23 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
 
         &Node::Const { id, ty } => {
+            // TODO: don't create a new global constant on each usage
             // PERF: cloning const value
             let (const_val, resolved_ty) = ctx.builder.env.const_values[id.idx()].clone();
-            let Ok((value, align)) =
-                const_value::translate(&const_val, &resolved_ty, ctx.builder.env)
-            else {
+            let Ok(layout) = resolved_layout(&resolved_ty, ctx.builder.env, &[]) else {
                 crash_point!(ctx);
             };
+            let mut storage = vec![0; layout.size as usize].into_boxed_slice();
+            if const_value::translate(&const_val, &resolved_ty, ctx.builder.env, &mut storage)
+                .is_err()
+            {
+                crash_point!(ctx);
+            }
             let global = ctx.builder.env.ir.add_global(
                 ctx.builder.env.ir_module,
                 format!("const_{}", id.0),
-                align,
-                value,
+                layout.alignment,
+                storage,
             );
             ctx.builder.env.ir[global].readonly = true;
             let ir_ty = ctx.get_type(ctx.types[ty])?;

@@ -371,6 +371,7 @@ impl ExactSizeIterator for ExprIds {
 
 #[derive(Debug)]
 pub struct Item {
+    #[allow(unused)] // TODO: remove when using attributes
     pub attributes: Box<[Attribute]>,
     pub value: ItemValue,
 }
