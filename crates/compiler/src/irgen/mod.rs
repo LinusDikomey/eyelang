@@ -279,8 +279,11 @@ impl Ctx<'_> {
         } else {
             let parsed = self.builder.env.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
-            let (ty, value) = self.builder.env.get_checked_global(module, id);
-            let Ok((value, align)) = const_value::translate(value, ty) else {
+            let (value, ty) = self.builder.env.get_checked_global(module, id);
+            // PERF: cloning value, ty
+            let value = value.clone();
+            let ty = ty.clone();
+            let Ok((value, align)) = const_value::translate(&value, &ty, self.builder.env) else {
                 // FIXME: this tries to translate invalid globals again every time they are
                 // requested since we never store to the instances. Maybe create the notion of
                 // invalid globals in ir? Or get layout of the value and return zeroes.
@@ -523,39 +526,24 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
 
         &Node::Const { id, ty } => {
-            let const_val = &ctx.builder.env.const_values[id.idx()];
-            match const_val {
-                ConstValue::Unit => Ref::UNIT,
-                ConstValue::Bool(true) => Ref::TRUE,
-                ConstValue::Bool(false) => Ref::FALSE,
-                &ConstValue::Int(num, _) => {
-                    let ty = ctx.types[ty];
-                    match ty {
-                        TypeInfo::Primitive(p) => {
-                            debug_assert!(p.is_int());
-                            let ty = ctx.builder.types.add(get_primitive(p));
-                            ctx.builder.append(arith.Int(num, ty))
-                        }
-                        TypeInfo::Invalid => crash_point!(ctx),
-                        _ => unreachable!(),
-                    }
-                }
-                &ConstValue::Float(num, _) => {
-                    let ty = ctx.types[ty];
-                    match ty {
-                        TypeInfo::Primitive(p) => {
-                            debug_assert!(p.is_float());
-                            let ty = ctx.builder.types.add(get_primitive(p));
-                            ctx.builder.append(arith.Float(num, ty))
-                        }
-                        TypeInfo::Invalid => crash_point!(ctx),
-                        _ => unreachable!(),
-                    }
-                }
-                ConstValue::Undefined => crash_point!(ctx),
-                ConstValue::Tuple(_) => todo!(),
-                ConstValue::Typed(_, _) => todo!(),
-            }
+            // PERF: cloning const value
+            let (const_val, resolved_ty) = ctx.builder.env.const_values[id.idx()].clone();
+            let Ok((value, align)) =
+                const_value::translate(&const_val, &resolved_ty, ctx.builder.env)
+            else {
+                crash_point!(ctx);
+            };
+            let global = ctx.builder.env.ir.add_global(
+                ctx.builder.env.ir_module,
+                format!("const_{}", id.0),
+                align,
+                value,
+            );
+            ctx.builder.env.ir[global].readonly = true;
+            let ir_ty = ctx.get_type(ctx.types[ty])?;
+            let ir_ty = ctx.builder.types.add(ir_ty);
+            let global = ctx.builder.append(mem.Global(global, ir_ty));
+            ctx.builder.append(mem.Load(global, ir_ty))
         }
 
         &Node::Negate(value, ty) => {

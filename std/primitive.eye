@@ -3,18 +3,18 @@
 # special-cased in the compiler
 
 # things that are required for this:
-# - attributes
-#   - packed attribute
-#   - align attribute
-# - inherent trait impl syntax
-# - Operator overloading via traits like Add
+# - [x] attributes
+#   - [ ] packed attribute
+#   - [ ] align attribute
+# - [x] inherent trait impl syntax
+# - [ ] Operator overloading via traits like Add
 
-# also, this has to be really carefully implemented to not pessimize the performance of *all* code
-# using primitives
+bool :: enum {
+    false
+    true
+}
 
 #- 
-bool :: enum { false, true }
-
 u8 :: @packed struct {
     bit0 bool
     bit1 bool
@@ -25,7 +25,7 @@ u8 :: @packed struct {
     bit6 bool
     bit7 bool
 
-    impl Add[Self] for Self {
+    impl Add[Self] {
         fn add(l Self, r Self) -> Self: root.intrinsics.add(l, r)
     }
 }

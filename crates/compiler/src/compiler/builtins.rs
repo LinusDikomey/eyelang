@@ -5,6 +5,7 @@ use types::Type;
 use crate::{
     Compiler, ProjectId,
     parser::ast::{FunctionId, TraitId},
+    types::{LocalTypeIds, TypeInfo},
 };
 
 use super::Def;
@@ -12,6 +13,7 @@ use super::Def;
 #[derive(Default)]
 pub struct Builtins {
     pub std: ProjectId,
+    pub primitives: Primitives,
     str_type: Option<TypeId>,
     str_eq: Option<(ModuleId, FunctionId)>,
     prelude: Option<ModuleId>,
@@ -26,23 +28,68 @@ impl Builtins {
     }
 }
 
+pub struct Primitives {
+    pub bool: TypeId,
+}
+impl Primitives {
+    pub fn bool_info(&self) -> TypeInfo {
+        TypeInfo::TypeDef(self.bool, LocalTypeIds::EMPTY)
+    }
+
+    pub fn resolve(compiler: &mut Compiler) -> Primitives {
+        let std = compiler.get_project(compiler.builtins.std).root_module;
+        let primitive = resolve_module(compiler, std, "primitive");
+        Self {
+            bool: resolve_type(compiler, primitive, "bool", 0),
+        }
+    }
+}
+impl Default for Primitives {
+    fn default() -> Self {
+        Self {
+            bool: TypeId::MISSING,
+        }
+    }
+}
+
+fn resolve_module(compiler: &mut Compiler, module: ModuleId, name: &str) -> ModuleId {
+    let def = compiler.resolve_in_module(module, name, Span::MISSING);
+    let Def::Module(id) = def else {
+        panic!("Missing builtin module {name}, found {def:?}");
+    };
+    id
+}
+
+fn resolve_type(
+    compiler: &mut Compiler,
+    module: ModuleId,
+    name: &str,
+    generic_count: u8,
+) -> TypeId {
+    let def = compiler.resolve_in_module(module, name, Span::MISSING);
+    let Def::Type(ty) = def else {
+        panic!("Missing builtin type {name}, found {def:?}");
+    };
+    let Type::DefId { id, generics } = ty else {
+        panic!(
+            "Builtin type {name} has unexpected definition, expected a type def with {generic_count} generics but found {ty:?}"
+        );
+    };
+    if generics.len() != generic_count as usize {
+        panic!(
+            "Builtin type {name} has unexpected generic count, expected {generic_count} but found {}",
+            generics.len()
+        );
+    }
+    id
+}
+
 pub fn get_str(compiler: &mut Compiler) -> TypeId {
     if let Some(str_type) = compiler.builtins.str_type {
         return str_type;
     }
     let string_module = get_string_module(compiler);
-    let str = compiler.resolve_in_module(string_module, "str", Span::MISSING);
-    let Def::Type(Type::DefId {
-        id: str_type,
-        generics,
-    }) = str
-    else {
-        panic!("expected a type definition for builtin std.string.str, found {str:?}");
-    };
-    assert!(
-        generics.is_empty(),
-        "std.string.str shouldn't have generics"
-    );
+    let str_type = resolve_type(compiler, string_module, "str", 0);
     compiler.builtins.str_type = Some(str_type);
     str_type
 }
@@ -50,11 +97,7 @@ pub fn get_str(compiler: &mut Compiler) -> TypeId {
 fn get_string_module(compiler: &mut Compiler) -> ModuleId {
     let std = compiler.builtins.std;
     let root = compiler.get_project(std).root_module;
-    let string = compiler.resolve_in_module(root, "string", Span::MISSING);
-    let Def::Module(string_module) = string else {
-        panic!("expected a module for builtin std.string, found {string:?}");
-    };
-    string_module
+    resolve_module(compiler, root, "string")
 }
 
 pub fn get_str_eq(compiler: &mut Compiler) -> (ModuleId, FunctionId) {

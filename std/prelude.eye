@@ -1,6 +1,10 @@
 # All items defined here are included in all modules by default. They can be
 # shadowed by other definitions so adding new items here won't break anything.
 
+use root.primitive.bool
+true :: bool.true
+false :: bool.false
+
 use root.print
 use root.println
 use root.input

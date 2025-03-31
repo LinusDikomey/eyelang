@@ -205,8 +205,6 @@ pub enum Keyword {
     Primitive(Primitive),
     Fn,
     Ret,
-    True,
-    False,
     And,
     Or,
     As,
@@ -233,8 +231,6 @@ impl From<Keyword> for &'static str {
             Keyword::Primitive(p) => p.into(),
             Keyword::Fn => "fn",
             Keyword::Ret => "ret",
-            Keyword::True => "true",
-            Keyword::False => "false",
             Keyword::And => "and",
             Keyword::Or => "or",
             Keyword::As => "as",
@@ -279,14 +275,10 @@ impl FromStr for Keyword {
             "f32" => P(F32),
             "f64" => P(F64),
 
-            "bool" => P(Bool),
-
             "type" => P(Type),
 
             "fn" => Keyword::Fn,
             "ret" => Keyword::Ret,
-            "true" => Keyword::True,
-            "false" => Keyword::False,
             "and" => Keyword::And,
             "or" => Keyword::Or,
             "as" => Keyword::As,

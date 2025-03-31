@@ -959,8 +959,6 @@ impl Parser<'_> {
             IntLiteral #as first => Expr::IntLiteral(first.span()),
             FloatLiteral #as first => Expr::FloatLiteral(first.span()),
             StringLiteral #as first => Expr::StringLiteral(TSpan::new(first.start, first.end)),
-            Keyword True #as first => Expr::BoolLiteral { start: first.start, val: true },
-            Keyword False #as first => Expr::BoolLiteral { start: first.start, val: false },
             Ident #as first => Expr::Ident { span: first.span() },
             Underscore #as first => Expr::Hole(first.start),
             Keyword If #as first => {

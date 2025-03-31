@@ -16,7 +16,6 @@ pub enum Primitive {
     U128,
     F32,
     F64,
-    Bool,
     Unit,
     Never,
     Type,
@@ -58,7 +57,7 @@ impl Primitive {
         use Primitive::*;
         let size_and_align = match self {
             Unit | Never | Type => 0,
-            I8 | U8 | Bool => 1,
+            I8 | U8 => 1,
             I16 | U16 => 2,
             I32 | U32 | F32 => 4,
             I64 | U64 | F64 => 8,
@@ -78,7 +77,7 @@ impl Primitive {
             P::I16 | P::I32 | P::I64 | P::U16 | P::U32 | P::U64 | P::F32 | P::F64 => {
                 NonZeroU32::new(3).unwrap()
             }
-            P::I128 | P::U128 | P::Bool | P::Type => NonZeroU32::new(4).unwrap(),
+            P::I128 | P::U128 | P::Type => NonZeroU32::new(4).unwrap(),
         };
         debug_assert_eq!(Into::<&'static str>::into(self).len(), len.get() as usize);
         len
@@ -100,7 +99,6 @@ impl From<Primitive> for &'static str {
             U128 => "u128",
             F32 => "f32",
             F64 => "f64",
-            Bool => "bool",
             Unit => "()",
             Never => "!",
             Type => "type",

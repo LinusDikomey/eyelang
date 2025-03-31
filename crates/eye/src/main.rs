@@ -96,7 +96,7 @@ fn main() -> Result<(), MainError> {
     let std_path = std_path::find();
     let std = compiler.add_project("std".to_owned(), std_path)?;
     compiler.add_dependency(project, std);
-    compiler.builtins.set_std(std);
+    compiler.resolve_builtins(std);
 
     if args.reconstruct_src {
         let ast = compiler.get_module_ast(root_module);

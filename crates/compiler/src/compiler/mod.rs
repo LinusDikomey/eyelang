@@ -33,7 +33,7 @@ use builtins::Builtins;
 pub struct Compiler {
     projects: Vec<Project>,
     pub modules: Vec<Module>,
-    pub const_values: Vec<ConstValue>,
+    pub const_values: Vec<(ConstValue, Type)>,
     pub types: Vec<ResolvableTypeDef>,
     pub ir: ir::Environment,
     pub ir_module: ir::ModuleId,
@@ -140,9 +140,9 @@ impl Compiler {
         type_id
     }
 
-    pub fn add_const_value(&mut self, value: ConstValue) -> ConstValueId {
+    pub fn add_const_value(&mut self, value: ConstValue, ty: Type) -> ConstValueId {
         let id = ConstValueId(self.const_values.len() as _);
-        self.const_values.push(value);
+        self.const_values.push((value, ty));
         id
     }
 
@@ -379,23 +379,20 @@ impl Compiler {
         self.get_parsed_module(module).symbols.def_exprs[id.0 as usize].put(def)
     }
 
-    pub fn resolve_path(&mut self, module: ModuleId, scope: ScopeId, path: IdentPath) -> Def {
+    pub fn resolve_path(&mut self, module: ModuleId, mut scope: ScopeId, path: IdentPath) -> Def {
         let ast = self.get_module_ast(module).clone();
         let (root, segments, last) = path.segments(ast.src());
-        let mut scope = Some(scope);
         let mut current_module = module;
         if root.is_some() {
             let module = &self.modules[current_module.idx()];
             current_module = module.root;
-            scope = None;
+            scope = self.get_module_ast(current_module).top_level_scope_id();
         }
         for (name, name_span) in segments {
-            let scope_id =
-                scope.unwrap_or_else(|| self.get_module_ast(module).top_level_scope_id());
-            match self.resolve_in_scope(current_module, scope_id, name, name_span.in_mod(module)) {
+            match self.resolve_in_scope(current_module, scope, name, name_span.in_mod(module)) {
                 Def::Module(new_mod) => {
                     current_module = new_mod;
-                    scope = None;
+                    scope = self.get_module_ast(current_module).top_level_scope_id();
                 }
                 Def::Invalid => return Def::Invalid,
                 _ => {
@@ -408,8 +405,7 @@ impl Compiler {
         let Some((name, name_span)) = last else {
             return Def::Module(current_module);
         };
-        let scope_id = scope.unwrap_or_else(|| self.get_module_ast(module).top_level_scope_id());
-        self.resolve_in_scope(current_module, scope_id, name, name_span.in_mod(module))
+        self.resolve_in_scope(current_module, scope, name, name_span.in_mod(module))
     }
 
     pub fn resolve_type(&mut self, ty: &UnresolvedType, module: ModuleId, scope: ScopeId) -> Type {
@@ -717,11 +713,11 @@ impl Compiler {
                                 Error::EvalFailed(err)
                                     .at_span(ast[default_value].span(ast).in_mod(module)),
                             );
-                            ConstValue::Undefined
+                            (ConstValue::Undefined, Type::Invalid)
                         }
                     }
                 }) {
-                    Some(value) => (value.ty(), Some(self.add_const_value(value))),
+                    Some((value, ty)) => (ty.clone(), Some(self.add_const_value(value, ty))),
                     None => (self.resolve_type(ty, module, scope), None),
                 };
                 (name, ty, default_value)
@@ -892,7 +888,7 @@ impl Compiler {
         }
     }
 
-    pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(Type, ConstValue) {
+    pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(ConstValue, Type) {
         let parsed = self.get_parsed_module(module);
         let ast = parsed.ast.clone();
         match &parsed.symbols.globals[id.idx()] {
@@ -909,12 +905,12 @@ impl Compiler {
                 self.errors
                     .emit_err(Error::RecursiveDefinition.at_span(span));
                 self.get_parsed_module(module).symbols.globals[id.idx()]
-                    .put((Type::Invalid, ConstValue::Undefined))
+                    .put((ConstValue::Undefined, Type::Invalid))
             }
             Resolvable::Unresolved => {
                 parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
                 let global = &ast[id];
-                let const_value = match eval::def_expr(
+                let (const_value, ty) = match eval::def_expr(
                     self,
                     module,
                     global.scope,
@@ -924,41 +920,23 @@ impl Compiler {
                     &global.ty,
                 ) {
                     Def::ConstValue(id) => self.const_values[id.idx()].clone(),
-                    Def::Invalid => ConstValue::Undefined,
-                    _ => {
-                        let error =
-                            Error::ExpectedValue.at_span(ast[global.val].span_in(&ast, module));
-                        self.errors.emit_err(error);
-                        ConstValue::Undefined
-                    }
-                };
-                let value = const_value.check_with_type(module, global.scope, self, &global.ty);
-                let val = match value {
-                    Ok(None) => const_value,
-                    Ok(Some(value)) => value,
-                    Err(found) => {
-                        if let Some(found) = found {
-                            let mut expected = String::new();
-                            global.ty.to_string(&mut expected, ast.src());
-                            self.errors.emit_err(
-                                Error::MismatchedType {
-                                    expected,
-                                    found: found.to_owned(),
-                                }
-                                .at_span(ast[global.val].span(&ast).in_mod(module)),
-                            );
+                    Def::Invalid => (ConstValue::Undefined, Type::Invalid),
+                    def => {
+                        if !matches!(def, Def::Invalid) {
+                            let error =
+                                Error::ExpectedValue.at_span(ast[global.val].span_in(&ast, module));
+                            self.errors.emit_err(error);
                         }
-                        ConstValue::Undefined
+                        (ConstValue::Undefined, Type::Invalid)
                     }
                 };
-                let ty = val.ty();
                 self.modules[module.idx()]
                     .ast
                     .as_mut()
                     .unwrap()
                     .symbols
                     .globals[id.idx()]
-                .put((ty, val))
+                .put((const_value, ty))
             }
         }
     }
@@ -1238,6 +1216,11 @@ impl Compiler {
         }
         false
     }
+
+    pub fn resolve_builtins(&mut self, std: ProjectId) {
+        self.builtins.std = std;
+        self.builtins.primitives = builtins::Primitives::resolve(self);
+    }
 }
 
 pub enum ProjectError {
@@ -1389,13 +1372,17 @@ impl Def {
                 UnresolvedType::Infer(_) => Ok(self),
                 _ => Err(Some("a trait")),
             },
-            Def::ConstValue(const_val_id) => {
-                // PERF: cloning ConstValue but it might be fine
-                let const_val = compiler.const_values[const_val_id.idx()].clone();
+            Def::ConstValue(_const_val_id) => {
+                todo!("check const value with type")
+                /*
+                // PERF: cloning ConstValue
+                let (const_val, const_val_ty) = compiler.const_values[const_val_id.idx()].clone();
+                let ty = compiler.resolve_type(ty, module, scope);
                 match const_val.check_with_type(module, scope, compiler, ty)? {
                     None => Ok(self),
                     Some(new_val) => Ok(Def::ConstValue(compiler.add_const_value(new_val))),
                 }
+                */
             }
             Def::Global(_, _) => todo!("handle globals in constants"),
         }
@@ -1408,7 +1395,11 @@ impl Def {
             Self::GenericType(id) => print!("GenericType({id:?})"),
             Self::Type(ty) => print!("Type({:?})", ty),
             Self::Trait(module, id) => print!("Trait({}, {})", module.idx(), id.idx()),
-            Self::ConstValue(value) => compiler.const_values[value.idx()].dump(),
+            Self::ConstValue(value) => {
+                let (val, ty) = &compiler.const_values[value.idx()];
+                val.dump();
+                print!(": {ty}");
+            }
             Self::Module(id) => print!("Module({})", id.idx()),
             Self::Global(module, id) => print!("Global({}, {})", module.idx(), id.idx()),
         }
@@ -1771,7 +1762,7 @@ pub struct ModuleSymbols {
     pub function_signatures: Box<[Resolvable<Rc<Signature>>]>,
     pub functions: Box<[Resolvable<Rc<CheckedFunction>>]>,
     pub types: Box<[Option<TypeId>]>,
-    pub globals: Box<[Resolvable<(Type, ConstValue)>]>,
+    pub globals: Box<[Resolvable<(ConstValue, Type)>]>,
     pub traits: Box<[Resolvable<Rc<CheckedTrait>>]>,
     pub def_exprs: Box<[Resolvable<Def>]>,
 }

@@ -296,7 +296,6 @@ impl<C: Representer> Repr<C> for Expr {
             Self::IntLiteral(span) | Self::FloatLiteral(span) | Self::StringLiteral(span) => {
                 c.write_add(c.src(*span))
             }
-            Self::BoolLiteral { start: _, val } => c.write_add(if *val { "true" } else { "false" }),
             Self::EnumLiteral {
                 span: _,
                 ident,
@@ -682,7 +681,6 @@ impl<C: Representer> Repr<C> for Primitive {
             | Self::I128
             | Self::U128 => self.as_int().unwrap().repr(c),
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
-            Self::Bool => c.write_add("bool"),
             Self::Unit => c.write_add("()"),
             Self::Never => c.write_add("!"),
             Self::Type => c.write_add("type"),

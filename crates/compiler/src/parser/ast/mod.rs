@@ -509,10 +509,6 @@ pub enum Expr {
     Unit(TSpan),
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
-    BoolLiteral {
-        start: u32,
-        val: bool,
-    },
     StringLiteral(TSpan),
     Array(TSpan, ExprIds),
     Tuple(TSpan, ExprIds),
@@ -712,9 +708,6 @@ impl Expr {
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
             Expr::ReturnUnit { start } => TSpan::new(*start, start + 2),
-            Expr::BoolLiteral { start, val } => {
-                TSpan::new(*start, start + if *val { 4 } else { 5 })
-            }
             &Expr::Hole(start) => TSpan::new(start, start),
             Expr::If { start, then, .. } | Expr::IfPat { start, then, .. } => {
                 TSpan::new(*start, e(then))

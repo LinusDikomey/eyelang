@@ -93,12 +93,6 @@ pub fn check(
                 ty: expected,
             }
         }
-        &Expr::BoolLiteral { start: _, val } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| {
-                ast[expr].span(ast)
-            });
-            Node::BoolLiteral(val)
-        }
         &Expr::StringLiteral(span) => {
             let str = super::get_string_literal(ctx.ast.src(), span);
             let str_ty = builtins::get_str(ctx.compiler);
@@ -232,7 +226,7 @@ pub fn check(
                     Node::Negate(ctx.hir.add(value), expected)
                 }
                 UnOp::Not => {
-                    ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| {
+                    ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
                         ast[expr].span(ast)
                     });
                     let value = check(ctx, value, scope, expected, return_ty, noreturn);
@@ -294,7 +288,9 @@ pub fn check(
                     Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val), assign_ty, ty)
                 }
                 Operator::Or | Operator::And => {
-                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
+                    ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
+                        ast[expr].span(ast)
+                    });
                     let l = check(ctx, l, scope, expected, return_ty, noreturn);
                     let r = check(ctx, r, scope, expected, return_ty, noreturn);
                     let l = ctx.hir.add(l);
@@ -307,7 +303,9 @@ pub fn check(
                     Node::Logic { l, r, logic }
                 }
                 Operator::Equals | Operator::NotEquals => {
-                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
+                    ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
+                        ast[expr].span(ast)
+                    });
                     let compared = ctx.hir.types.add_unknown();
                     let l = check(ctx, l, scope, compared, return_ty, noreturn);
                     let r = check(ctx, r, scope, compared, return_ty, noreturn);
@@ -326,7 +324,9 @@ pub fn check(
                     }
                 }
                 Operator::LT | Operator::GT | Operator::LE | Operator::GE => {
-                    ctx.specify(expected, Primitive::Bool, |ast| ast[expr].span(ast));
+                    ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
+                        ast[expr].span(ast)
+                    });
                     // FIXME: this will have to be bound by type like Ord
                     let compared = ctx.hir.types.add_unknown();
                     let l = check(ctx, l, scope, compared, return_ty, noreturn);
@@ -449,7 +449,7 @@ pub fn check(
             ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
                 ast[expr].span(ast)
             });
-            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let then = check(ctx, then, scope, expected, return_ty, &mut false);
             Node::IfElse {
@@ -465,7 +465,7 @@ pub fn check(
             then,
             else_,
         } => {
-            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let mut then_noreturn = false;
             let then = check(ctx, then, scope, expected, return_ty, &mut then_noreturn);
@@ -635,7 +635,7 @@ pub fn check(
             cond,
             body,
         } => {
-            let bool_ty = ctx.hir.types.add(TypeInfo::Primitive(Primitive::Bool));
+            let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let body_ty = ctx.hir.types.add_unknown();
             ctx.control_flow_stack.push(());
@@ -847,7 +847,7 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
             Node::Invalid
         }
         Def::Global(module, id) => {
-            let (ty, _) = ctx.compiler.get_checked_global(module, id);
+            let (_, ty) = ctx.compiler.get_checked_global(module, id);
             // PERF: cloning type
             let ty = ty.clone();
             ctx.specify_resolved(expected, &ty, LocalTypeIds::EMPTY, |_| span);
@@ -862,47 +862,13 @@ fn const_value_to_node(
     const_val: ConstValueId,
     span: TSpan,
 ) -> Node {
-    // PERF: clone of potentially heap allocating const value. Could use Rc or create ConstValueIds
-    // for Tuples/structs etc.
-    let val = ctx.compiler.const_values[const_val.idx()].clone();
-    const_value_ty(ctx, expected, &val, span);
+    let (_, ty) = &ctx.compiler.const_values[const_val.idx()];
+    // PERF: clone of Type
+    let ty = ty.clone();
+    ctx.specify_resolved(expected, &ty, LocalTypeIds::EMPTY, |_| span);
     Node::Const {
         id: const_val,
         ty: expected,
-    }
-}
-
-fn const_value_ty(ctx: &mut Ctx, expected: LocalTypeId, const_val: &ConstValue, span: TSpan) {
-    match const_val {
-        ConstValue::Undefined => ctx.invalidate(expected),
-        ConstValue::Unit => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
-        }
-        ConstValue::Bool(_) => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |_| span)
-        }
-        ConstValue::Int(_, ty) => {
-            ctx.specify(
-                expected,
-                ty.map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into())),
-                |_| span,
-            );
-        }
-        ConstValue::Float(_, ty) => {
-            ctx.specify(
-                expected,
-                ty.map_or(TypeInfo::Float, |ty| TypeInfo::Primitive(ty.into())),
-                |_| span,
-            );
-        }
-        ConstValue::Tuple(elems) => {
-            let elem_types = ctx.hir.types.add_multiple_unknown(elems.len() as _);
-            for (elem, ty) in elems.iter().zip(elem_types.iter()) {
-                const_value_ty(ctx, ty, elem, span);
-            }
-            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| span);
-        }
-        ConstValue::Typed(_, _) => todo!(),
     }
 }
 

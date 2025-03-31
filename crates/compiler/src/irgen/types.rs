@@ -101,7 +101,11 @@ pub fn get_def(
             let mut accumulated_layout = ir::Layout::EMPTY;
             // TODO: reduce number of variants if reduced by never types in variants
             let ordinal_type = int_from_variant_count(def.variants.len() as u32);
+            let mut has_content = false;
             'variants: for (_variant_name, args) in &*def.variants {
+                if !args.is_empty() {
+                    has_content = true;
+                }
                 let elems =
                     ir_types.add_multiple((0..args.len() + 1).map(|_| ir::Primitive::Unit.into()));
                 let mut elem_iter = elems.iter();
@@ -116,7 +120,11 @@ pub fn get_def(
                     ir::type_layout(ir::Type::Tuple(elems), ir_types, compiler.ir.primitives());
                 accumulated_layout.accumulate_variant(variant_layout);
             }
-            type_from_layout(ir_types, accumulated_layout)
+            if has_content {
+                type_from_layout(ir_types, accumulated_layout)
+            } else {
+                ordinal_type.into()
+            }
         }
     })
 }
@@ -160,6 +168,7 @@ pub fn get_from_info(
                 else {
                     continue 'variants;
                 };
+                dbg!(args);
                 inhabited_variants += 1;
                 let variant_layout =
                     ir::type_layout(ir::Type::Tuple(args), ir_types, compiler.ir.primitives());
@@ -238,7 +247,6 @@ pub fn get_primitive(p: types::Primitive) -> ir::Primitive {
         P::U128 => I::U128,
         P::F32 => I::F32,
         P::F64 => I::F64,
-        P::Bool => I::I1,
         // TODO: is mapping never to unit correct?
         P::Unit | P::Never => I::Unit,
         P::Type => I::U64, // TODO

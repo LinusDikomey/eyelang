@@ -19,7 +19,9 @@ use types::{Primitive, Type};
 
 use crate::{
     Compiler,
-    compiler::{CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId},
+    compiler::{
+        CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId, builtins,
+    },
     error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
     parser::ast::{Ast, ExprId, ScopeId},
@@ -186,6 +188,10 @@ pub struct Ctx<'a> {
     pub capture_elements_to_replace: Vec<NodeId>,
 }
 impl Ctx<'_> {
+    fn primitives(&self) -> &builtins::Primitives {
+        &self.compiler.builtins.primitives
+    }
+
     fn span(&self, expr: ExprId) -> span::Span {
         self.ast[expr].span_in(self.ast, self.module)
     }

@@ -1,5 +1,4 @@
 use dmap::DHashMap;
-use types::Primitive;
 
 use crate::{
     check::exhaust,
@@ -63,13 +62,6 @@ pub fn check(
                     Pattern::Invalid
                 }
             }
-        }
-        &Expr::BoolLiteral { start: _, val } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Bool), |ast| {
-                ast[pat].span(ast)
-            });
-            exhaustion.exhaust_bool(val);
-            Pattern::Bool(val)
         }
         Expr::Ident { span, .. } => {
             let var = ctx.hir.add_var(expected);

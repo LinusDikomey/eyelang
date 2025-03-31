@@ -6,7 +6,7 @@ use types::{FloatType, IntType, Primitive, Type, UnresolvedType};
 
 use crate::{
     Compiler, Def,
-    compiler::{Generics, ResolvedPrimitive},
+    compiler::{Generics, ResolvedPrimitive, ResolvedTypeContent},
     error::Error,
     hir::HIRBuilder,
     irgen,
@@ -22,31 +22,22 @@ pub enum ConstValue {
     /// represents an undefined value, for example when a global is not initialized
     Undefined,
     Unit,
-    Bool(bool),
-    Int(u64, Option<IntType>),
-    Float(f64, Option<FloatType>),
-    Tuple(Box<[ConstValue]>),
-    Typed(id::TypeId, Box<[ConstValue]>),
+    Int(u64),
+    Float(f64),
+    Aggregate(Box<[ConstValue]>),
 }
 impl ConstValue {
     pub fn dump(&self) {
         match self {
             Self::Undefined => print!("undefined"),
             Self::Unit => print!("()"),
-            Self::Bool(b) => print!("{b}"),
-            Self::Int(n, ty) => {
+            Self::Int(n) => {
                 print!("{n}");
-                if let Some(ty) = ty {
-                    print!(": {ty}");
-                }
             }
-            Self::Float(n, ty) => {
+            Self::Float(n) => {
                 print!("{n}");
-                if let Some(ty) = ty {
-                    print!(": {ty}");
-                }
             }
-            Self::Tuple(elems) => {
+            Self::Aggregate(elems) => {
                 print!("(");
                 for (i, elem) in elems.iter().enumerate() {
                     if i != 0 {
@@ -55,101 +46,6 @@ impl ConstValue {
                     elem.dump();
                 }
             }
-            Self::Typed(id, elems) => {
-                print!("{id:?}(");
-                for (i, elem) in elems.iter().enumerate() {
-                    if i != 0 {
-                        print!(", ");
-                    }
-                    elem.dump();
-                }
-            }
-        }
-    }
-
-    /// returns a potentially changed ConstValue or Err with either an expected type or None in
-    /// the case that something was invalid
-    pub fn check_with_type(
-        &self,
-        module: ModuleId,
-        scope: ScopeId,
-        compiler: &mut Compiler,
-        ty: &UnresolvedType,
-    ) -> Result<Option<ConstValue>, Option<&'static str>> {
-        match self {
-            Self::Undefined => Ok(None),
-            Self::Unit => {
-                if compiler
-                    .unresolved_matches_primitive(ty, Primitive::Unit, module, scope)
-                    .map_err(|_| None)?
-                {
-                    Ok(None)
-                } else {
-                    Err(Some(Primitive::Unit.into()))
-                }
-            }
-            Self::Bool(_) => {
-                if compiler
-                    .unresolved_matches_primitive(ty, Primitive::Bool, module, scope)
-                    .map_err(|_| None)?
-                {
-                    Ok(None)
-                } else {
-                    Err(Some(Primitive::Bool.into()))
-                }
-            }
-            &Self::Int(val, current_ty) => match compiler.unresolved_primitive(ty, module, scope) {
-                ResolvedPrimitive::Infer => Ok(None),
-                ResolvedPrimitive::Primitive(p) => {
-                    if let Some(current) = current_ty {
-                        if Primitive::from(current) == p {
-                            Ok(None)
-                        } else {
-                            Err(Some(Primitive::from(current).into()))
-                        }
-                    } else if let Some(int_ty) = p.as_int() {
-                        Ok(Some(ConstValue::Int(val, Some(int_ty))))
-                    } else {
-                        Err(Some("<integer>"))
-                    }
-                }
-                ResolvedPrimitive::Invalid => Err(None),
-                ResolvedPrimitive::Other => Err(Some("<integer>")),
-            },
-            &Self::Float(val, current_ty) => {
-                match compiler.unresolved_primitive(ty, module, scope) {
-                    ResolvedPrimitive::Infer => Ok(None),
-                    ResolvedPrimitive::Primitive(p) => {
-                        if let Some(current) = current_ty {
-                            if Primitive::from(current) == p {
-                                Ok(None)
-                            } else {
-                                Err(Some(Primitive::from(current).into()))
-                            }
-                        } else if let Some(float_ty) = p.as_float() {
-                            Ok(Some(ConstValue::Float(val, Some(float_ty))))
-                        } else {
-                            Err(Some("<float>"))
-                        }
-                    }
-                    ResolvedPrimitive::Other => Err(Some("<float>")),
-                    ResolvedPrimitive::Invalid => Err(None),
-                }
-            }
-            Self::Tuple(_) => todo!(),
-            Self::Typed(_, _) => todo!(),
-        }
-    }
-
-    pub fn ty(&self) -> Type {
-        match self {
-            ConstValue::Undefined => Type::Invalid,
-            ConstValue::Unit => Type::Primitive(Primitive::Unit),
-            ConstValue::Bool(_) => Type::Primitive(Primitive::Bool),
-            ConstValue::Int(_, ty) => Type::Primitive(ty.map_or(Primitive::I32, Primitive::from)),
-            ConstValue::Float(_, ty) => Type::Primitive(ty.map_or(Primitive::F32, Primitive::from)),
-            ConstValue::Tuple(elems) => Type::Tuple(elems.iter().map(Self::ty).collect()),
-            ConstValue::Typed(_, _) => todo!("generics from values with default types?"),
         }
     }
 }
@@ -170,34 +66,42 @@ pub fn def_expr(
             Error::MismatchedType { expected, found }.at_span(ast[expr].span(ast).in_mod(module)),
         );
     };
+    // TODO: support untyped number constants again
     match &ast[expr] {
         &Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ast[span]);
             let Ok(val) = lit.val.try_into() else {
                 todo!("handle large constants")
             };
-            let val = ConstValue::Int(val, None);
-            match val.check_with_type(module, scope, compiler, ty) {
-                Ok(None) => Def::ConstValue(compiler.add_const_value(val)),
-                Ok(Some(val)) => Def::ConstValue(compiler.add_const_value(val)),
-                Err(found) => {
-                    if let Some(found) = found {
-                        mismatched_type(compiler, found.to_owned());
-                    }
+            let val = ConstValue::Int(val);
+
+            match compiler.unresolved_primitive(ty, module, scope) {
+                ResolvedPrimitive::Primitive(p) if p.is_int() => {
+                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(p)))
+                }
+                ResolvedPrimitive::Infer => {
+                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(Primitive::I32)))
+                }
+                ResolvedPrimitive::Invalid => Def::Invalid,
+                _ => {
+                    mismatched_type(compiler, "an integer".to_owned());
                     Def::Invalid
                 }
             }
         }
         &Expr::FloatLiteral(span) => {
             let lit = FloatLiteral::parse(&ast[span]);
-            let val = ConstValue::Float(lit.val, None);
-            match val.check_with_type(module, scope, compiler, ty) {
-                Ok(None) => Def::ConstValue(compiler.add_const_value(val)),
-                Ok(Some(val)) => Def::ConstValue(compiler.add_const_value(val)),
-                Err(found) => {
-                    if let Some(found) = found {
-                        mismatched_type(compiler, found.to_owned());
-                    }
+            let val = ConstValue::Float(lit.val);
+            match compiler.unresolved_primitive(ty, module, scope) {
+                ResolvedPrimitive::Primitive(p) if p.is_float() => {
+                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(p)))
+                }
+                ResolvedPrimitive::Infer => {
+                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(Primitive::F32)))
+                }
+                ResolvedPrimitive::Invalid => Def::Invalid,
+                _ => {
+                    mismatched_type(compiler, "a float".to_owned());
                     Def::Invalid
                 }
             }
@@ -225,7 +129,9 @@ pub fn def_expr(
                 mismatched_type(compiler, Primitive::Unit.to_string());
                 return Def::Invalid;
             }
-            Def::ConstValue(compiler.add_const_value(ConstValue::Unit))
+            Def::ConstValue(
+                compiler.add_const_value(ConstValue::Unit, Type::Primitive(Primitive::Unit)),
+            )
         }
         &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val, name, ty),
         &Expr::Function { id } => {
@@ -292,7 +198,7 @@ pub fn def_expr(
             Def::Type(Type::Primitive(primitive))
         }
         _ => match value_expr(compiler, module, scope, ast, expr, ty) {
-            Ok(val) => Def::ConstValue(compiler.add_const_value(val)),
+            Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
             Err(err) => {
                 compiler
                     .errors
@@ -310,10 +216,11 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
-) -> Result<ConstValue, ir::eval::Error> {
+) -> Result<(ConstValue, Type), ir::eval::Error> {
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);
+    let ty = types.to_resolved(types[expected], &[]);
     let hir = HIRBuilder::new(types);
     let (hir, types) = crate::check::check(
         compiler,
@@ -328,7 +235,7 @@ pub fn value_expr(
         crate::compiler::LocalScopeParent::None,
     );
     if let crate::hir::Node::Invalid = hir[hir.root_id()] {
-        return Ok(ConstValue::Undefined);
+        return Ok((ConstValue::Undefined, ty));
     }
     let mut to_generate = Vec::new();
     let mut builder = ir::builder::Builder::new(&mut *compiler);
@@ -340,7 +247,7 @@ pub fn value_expr(
         types[expected],
         crate::irgen::types::Generics::Empty,
     ) else {
-        return Ok(ConstValue::Undefined);
+        return Ok((ConstValue::Undefined, ty));
     };
     let return_ty = builder.types.add(return_ty);
     let (ir, ir_types) = crate::irgen::lower_hir(
@@ -371,41 +278,20 @@ pub fn value_expr(
         }
     }
     let mut env = LazyEvalEnv { compiler };
-    ir::eval::eval(&ir, &ir_types, &[], &mut env)
-        .map(|val| to_const_val(val, types[expected], &types))
+    ir::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| (to_const_val(val), ty))
 }
 
-fn to_const_val(val: Val, ty: TypeInfo, types: &TypeTable) -> ConstValue {
+fn to_const_val(val: Val) -> ConstValue {
     match val {
         Val::Invalid => ConstValue::Undefined,
         Val::Unit => ConstValue::Unit,
-        Val::Int(n) if matches!(ty, TypeInfo::Primitive(Primitive::Bool)) => {
-            debug_assert!(n < 2);
-            ConstValue::Bool(n != 0)
-        }
-        Val::Int(n) => {
-            let TypeInfo::Primitive(p) = ty else {
-                unreachable!()
-            };
-            let int_ty = p.as_int().unwrap();
-            ConstValue::Int(n, Some(int_ty))
-        }
-        Val::F32(n) => ConstValue::Float(n as f64, Some(FloatType::F32)),
-        Val::F64(n) => ConstValue::Float(n, Some(FloatType::F64)),
+        Val::Int(n) => ConstValue::Int(n),
+        Val::F32(n) => ConstValue::Float(n as f64),
+        Val::F64(n) => ConstValue::Float(n),
         Val::Ptr(_) => todo!("handle constants with compile-time pointers"),
-        Val::Array(_) => todo!("constant arrays"),
-        Val::Tuple(elems) => match ty {
-            TypeInfo::Tuple(elem_types) => {
-                assert_eq!(elems.len(), elem_types.count as usize);
-                let elems = IntoIterator::into_iter(elems)
-                    .zip(elem_types.iter())
-                    .map(|(elem, ty)| to_const_val(elem, types[ty], types))
-                    .collect();
-                ConstValue::Tuple(elems)
-            }
-            TypeInfo::TypeDef(_, _) => todo!("const value from typed Val"),
-            _ => ConstValue::Undefined,
-        },
+        Val::Array(elems) | Val::Tuple(elems) => {
+            ConstValue::Aggregate(elems.into_iter().map(to_const_val).collect())
+        }
     }
 }
 
