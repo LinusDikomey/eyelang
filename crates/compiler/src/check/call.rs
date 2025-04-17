@@ -8,7 +8,7 @@ use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, Signature},
     error::Error,
     hir::{Node, NodeId, NodeIds},
-    parser::ast::{Call, ExprIds, ExprId},
+    parser::ast::{Call, ExprId, ExprIds},
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
@@ -46,9 +46,8 @@ pub fn check_call(
                     if *noreturn {
                         return Node::Invalid;
                     }
-                    let call_noreturn =
-                        matches!(signature.return_type, Type::Primitive(Primitive::Never));
-                    if call_noreturn {
+                    let call_noreturn = signature.return_type.uninhabited();
+                    if let Ok(true) = call_noreturn {
                         *noreturn = true;
                     }
 
@@ -57,7 +56,7 @@ pub fn check_call(
                         args,
                         return_ty: expected,
                         arg_types,
-                        noreturn: call_noreturn,
+                        noreturn: *noreturn,
                     }
                 }
                 Err(err) => {
