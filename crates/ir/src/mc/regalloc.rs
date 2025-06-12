@@ -12,6 +12,7 @@ pub fn regalloc<R: Register>(
     ir: &mut FunctionIr,
     types: &crate::Types,
     log: bool,
+    preoccupied_bits: R::RegisterBits,
 ) {
     let graph = BlockGraph::calculate(ir, env);
     let mut intersecting_precolored = vec![R::NO_BITS; ir.mc_reg_count() as usize];
@@ -36,7 +37,15 @@ pub fn regalloc<R: Register>(
         eprintln!();
         eprintln!("After liveness analysis:\n{}", ir.display(env, types))
     }
-    perform_regalloc::<R>(env, mc, ir, &graph, &intersecting_precolored, &liveins);
+    perform_regalloc::<R>(
+        env,
+        mc,
+        ir,
+        &graph,
+        &intersecting_precolored,
+        &liveins,
+        preoccupied_bits,
+    );
 }
 
 fn analyze_liveness<R: Register>(
@@ -160,12 +169,14 @@ fn perform_regalloc<R: Register>(
     graph: &BlockGraph<FunctionIr>,
     intersecting_precolored: &[R::RegisterBits],
     liveins: &[Bitmap],
+    preoccupied_bits: R::RegisterBits,
 ) {
+    let default_free = R::ALL_BITS & !preoccupied_bits;
     let mut chosen = vec![R::DEFAULT; ir.mc_reg_count() as usize];
 
     // first choose the registers for all block arguments
     for &block in graph.postorder().iter() {
-        let mut free = R::ALL_BITS;
+        let mut free = default_free;
         let incoming = ir.get_block(block).next().unwrap().1;
         debug_assert_eq!(
             incoming.function,
@@ -193,7 +204,7 @@ fn perform_regalloc<R: Register>(
 
     // then go over the blocks again to fill in the remaining registers
     for &block in graph.postorder().iter().rev() {
-        let mut free = R::ALL_BITS;
+        let mut free = default_free;
         liveins[block.idx()].visit_set_bits(|livein| {
             chosen[livein].set_bit(&mut free, false);
         });

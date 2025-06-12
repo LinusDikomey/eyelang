@@ -48,7 +48,7 @@ pub fn write(
                             let from = args.next().unwrap();
                             let to = to.phys::<Reg>().unwrap();
                             let from = from.phys::<Reg>().unwrap();
-                            if to == from {
+                            if to.bit() == from.bit() {
                                 continue;
                             }
                             // FIXME: assumes 32 bits right now

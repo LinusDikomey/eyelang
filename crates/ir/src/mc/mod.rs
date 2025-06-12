@@ -4,12 +4,14 @@ mod regalloc;
 pub use dialect::{Mc, McInsts};
 pub use regalloc::regalloc;
 
-use std::ops::BitAnd;
-use std::ops::Not;
+use std::ops::{BitAnd, BitOr, Not};
 
 pub trait Register: 'static + Copy {
     const DEFAULT: Self;
-    type RegisterBits: Copy + BitAnd<Output = Self::RegisterBits> + Not<Output = Self::RegisterBits>;
+    type RegisterBits: Copy
+        + BitAnd<Output = Self::RegisterBits>
+        + Not<Output = Self::RegisterBits>
+        + BitOr<Output = Self::RegisterBits>;
     const NO_BITS: Self::RegisterBits;
     const ALL_BITS: Self::RegisterBits;
 

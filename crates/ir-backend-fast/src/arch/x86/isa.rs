@@ -14,13 +14,16 @@ ir::mc::registers! { Reg RegisterBits
     GP8 => r8b r9b r10b r11b r12b r13b r14b r15b;
     Flags => eflags;
 }
+
+pub const PREOCCUPIED_REGISTERS: RegisterBits = RegisterBits(Reg::rbp.bit().0 | Reg::rsp.bit().0);
+
 impl fmt::Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 impl Reg {
-    pub const fn bit(self) -> u32 {
+    pub const fn bit(self) -> RegisterBits {
         use Reg::*;
         let bit_index = match self {
             rax | eax | ax | ah | al => 0,
@@ -41,12 +44,12 @@ impl Reg {
             r15 | r15d | r15w | r15b => 15,
             eflags => 16,
         };
-        1 << bit_index
+        RegisterBits(1 << bit_index)
     }
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegisterBits(u32);
 impl ops::Not for RegisterBits {
     type Output = Self;
@@ -62,6 +65,13 @@ impl ops::BitAnd for RegisterBits {
         Self(self.0 & rhs.0)
     }
 }
+impl ops::BitOr for RegisterBits {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
 impl RegisterBits {
     const fn new() -> Self {
         Self(0)
@@ -72,15 +82,15 @@ impl RegisterBits {
     }
 
     fn get(&self, r: Reg) -> bool {
-        self.0 & r.bit() != 0
+        self.0 & r.bit().0 != 0
     }
 
     fn set(&mut self, r: Reg, set: bool) {
         let bit = r.bit();
         if set {
-            self.0 |= bit;
+            self.0 |= bit.0;
         } else {
-            self.0 &= !bit;
+            self.0 &= !bit.0;
         }
     }
 }

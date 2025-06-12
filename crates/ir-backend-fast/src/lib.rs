@@ -77,7 +77,14 @@ impl Backend {
                         mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
                     );
                 }
-                ir::mc::regalloc::<arch::x86::Reg>(env, mc, &mut mir, &types, self.log);
+                ir::mc::regalloc::<arch::x86::Reg>(
+                    env,
+                    mc,
+                    &mut mir,
+                    &types,
+                    self.log,
+                    arch::x86::PREOCCUPIED_REGISTERS,
+                );
                 if self.log {
                     println!(
                         "mir for {}: (post-regalloc)\n{}\n",
