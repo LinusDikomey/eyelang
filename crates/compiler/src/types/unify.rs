@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-use types::Type;
-
 use crate::{
     Compiler,
     check::expr::int_primitive_from_variant_count,

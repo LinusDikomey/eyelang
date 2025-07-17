@@ -5,9 +5,9 @@ use span::TSpan;
 use types::Type;
 
 use crate::{
-    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, Signature},
+    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent},
     error::Error,
-    hir::{Node, NodeId, NodeIds},
+    hir::{Node, NodeIds},
     parser::ast::{Call, ExprId, ExprIds},
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
