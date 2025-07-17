@@ -21,30 +21,7 @@ pub fn unify(
 ) -> Option<TypeInfo> {
     use TypeInfo::*;
     Some(match (a, b) {
-        // TODO: model this with all uninhabited types
-        // (Primitive(P::Never), t) | (t, Primitive(P::Never)) => t,
         (t, Unknown) | (Unknown, t) => t,
-        // check for uninhabited types and unify to other
-        (TypeInfo::TypeDef(id, generics), t) | (t, TypeInfo::TypeDef(id, generics))
-            if matches!(
-                Rc::clone(compiler.get_resolved_type_def(id))
-                    .def
-                    .uninhabited(
-                        compiler,
-                        &generics
-                            .iter()
-                            .map(|ty| {
-                                types
-                                    .to_generic_resolved(types[ty])
-                                    .unwrap_or(Type::Invalid)
-                            })
-                            .collect::<Box<[Type]>>(),
-                    ),
-                Ok(true)
-            ) =>
-        {
-            t
-        }
         (UnknownSatisfying(bounds), Generic(generic_id))
         | (Generic(generic_id), UnknownSatisfying(bounds)) => {
             for bound in bounds.iter() {

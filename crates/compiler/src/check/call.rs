@@ -26,56 +26,6 @@ pub fn check_call(
     let called_ty = ctx.hir.types.add_unknown();
     let called_node = expr::check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     let call_span = TSpan::new(call.open_paren_start, call.end);
-    let mut call_with_function =
-        |ctx: &mut Ctx, function: NodeId, signature: &Signature, generics| {
-            match check_call_args(
-                ctx,
-                scope,
-                return_ty,
-                noreturn,
-                call_span,
-                call.args,
-                &call.named_args,
-                generics,
-                &signature.params,
-                &signature.named_params,
-                signature.varargs,
-                false,
-            ) {
-                Ok((args, arg_types)) => {
-                    if *noreturn {
-                        return Node::Invalid;
-                    }
-                    // TODO: figure out noreturn checking, maybe after typecheck is done?
-                    let generics: Box<[Type]> = generics
-                        .iter()
-                        .map(|ty| {
-                            ctx.hir
-                                .types
-                                .to_generic_resolved(ctx.hir.types[ty])
-                                .unwrap_or(Type::Invalid)
-                        })
-                        .collect();
-                    let call_noreturn = ctx.compiler.uninhabited(&signature.return_type, &generics);
-                    if let Ok(true) = call_noreturn {
-                        *noreturn = true;
-                    }
-
-                    Node::Call {
-                        function,
-                        args,
-                        return_ty: expected,
-                        arg_types,
-                        noreturn: *noreturn,
-                    }
-                }
-                Err(err) => {
-                    ctx.compiler.errors.emit_err(err);
-                    ctx.invalidate(expected);
-                    Node::Invalid
-                }
-            }
-        };
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => {
             ctx.invalidate(expected);
@@ -122,11 +72,62 @@ pub fn check_call(
             generics,
         } => {
             let signature = Rc::clone(ctx.compiler.get_signature(module, function));
-            ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
-                ast[expr].span(ast)
-            });
             let function = ctx.hir.add(Node::FunctionItem(module, function, generics));
-            call_with_function(ctx, function, &signature, generics)
+            match check_call_args(
+                ctx,
+                scope,
+                return_ty,
+                noreturn,
+                call_span,
+                call.args,
+                &call.named_args,
+                generics,
+                &signature.params,
+                &signature.named_params,
+                signature.varargs,
+                false,
+            ) {
+                Ok((args, arg_types)) => {
+                    if *noreturn {
+                        return Node::Invalid;
+                    }
+                    // TODO: figure out noreturn checking, maybe after typecheck is done?
+                    let resolved_generics: Box<[Type]> = generics
+                        .iter()
+                        .map(|ty| {
+                            ctx.hir
+                                .types
+                                .to_generic_resolved(ctx.hir.types[ty])
+                                .unwrap_or(Type::Invalid)
+                        })
+                        .collect();
+                    let call_noreturn = ctx
+                        .compiler
+                        .uninhabited(&signature.return_type, &resolved_generics);
+                    if let Ok(true) = call_noreturn {
+                        *noreturn = true;
+                    } else {
+                        // only specify the return type if we are *not* noreturn, otherwise the type
+                        // can be anything since it is a "never" type
+                        ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
+                            ast[expr].span(ast)
+                        });
+                    }
+
+                    Node::Call {
+                        function,
+                        args,
+                        return_ty: expected,
+                        arg_types,
+                        noreturn: *noreturn,
+                    }
+                }
+                Err(err) => {
+                    ctx.compiler.errors.emit_err(err);
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                }
+            }
         }
         TypeInfo::Function {
             params,
