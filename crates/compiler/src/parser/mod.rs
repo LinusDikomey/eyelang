@@ -14,11 +14,11 @@ use id::ModuleId;
 
 use span::{IdentPath, Span, TSpan};
 use token::Token;
-use types::{Primitive, UnresolvedType};
+use types::UnresolvedType;
 
 use crate::{
     error::{CompileError, Error, Errors},
-    parser::ast::EnumVariantDefinition,
+    parser::ast::{EnumVariantDefinition, ExprIds},
 };
 
 use self::{
@@ -651,10 +651,8 @@ impl Parser<'_> {
             end = ty.span().end;
             ty
         } else {
-            UnresolvedType::Primitive {
-                ty: Primitive::Unit,
-                span_start: self.toks.previous().unwrap().start,
-            }
+            let end = self.toks.previous().unwrap().end;
+            UnresolvedType::Tuple(Vec::new(), TSpan::new(end, end))
         };
 
         let span = TSpan::new(start, end);
@@ -914,7 +912,7 @@ impl Parser<'_> {
             },
             LParen #as first => {
                 if let Some(closing) = self.toks.step_if(TokenType::RParen) {
-                    Expr::Unit(TSpan::new(first.start, closing.end))
+                    Expr::Tuple(TSpan::new(first.start, closing.end), ExprIds::EMPTY)
                 } else {
                     let expr = self.parse_expr(scope)?;
                     step_or_unexpected! { self,
@@ -1294,12 +1292,6 @@ impl Parser<'_> {
                 })
             },
             LParen #as lparen => {
-                if self.toks.step_if(TokenType::RParen).is_some() {
-                    return Ok(UnresolvedType::Primitive {
-                        ty: Primitive::Unit,
-                        span_start: lparen.start,
-                    })
-                }
                 let mut tuple_types = Vec::new();
                 let rparen_end = self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                     tuple_types.push(p.parse_type()?);
@@ -1331,9 +1323,6 @@ impl Parser<'_> {
             Star #as type_tok => {
                 Ok(UnresolvedType::Pointer(Box::new((self.parse_type()?, type_tok.start))))
             },
-            Bang #as type_tok => {
-                Ok(UnresolvedType::Primitive { ty: Primitive::Never, span_start: type_tok.start })
-            },
             Keyword Fn #as type_tok => {
                 let start = type_tok.start;
                 let mut params = Vec::new();
@@ -1348,7 +1337,7 @@ impl Parser<'_> {
                 let return_type = if self.toks.step_if(TokenType::Arrow).is_some() {
                     self.parse_type()?
                 } else {
-                    UnresolvedType::Primitive {ty: Primitive::Unit, span_start: end }
+                    UnresolvedType::Tuple(Vec::new(), TSpan::new(end, end))
                 };
                 Ok(UnresolvedType::Function {
                     span_and_return_type: Box::new((TSpan::new(start, end), return_type)),

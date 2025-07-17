@@ -1,8 +1,10 @@
 use std::rc::Rc;
 
+use types::Type;
+
 use crate::{
     Compiler,
-    check::expr::int_ty_from_variant_count,
+    check::expr::int_primitive_from_variant_count,
     compiler::{Generics, ResolvedTypeContent},
     types::{TypeInfoOrIdx, traits},
 };
@@ -18,9 +20,31 @@ pub fn unify(
     unified_id: LocalTypeId,
 ) -> Option<TypeInfo> {
     use TypeInfo::*;
-    use types::Primitive as P;
     Some(match (a, b) {
-        (t, Unknown | Primitive(P::Never)) | (Unknown | Primitive(P::Never), t) => t,
+        // TODO: model this with all uninhabited types
+        // (Primitive(P::Never), t) | (t, Primitive(P::Never)) => t,
+        (t, Unknown) | (Unknown, t) => t,
+        // check for uninhabited types and unify to other
+        (TypeInfo::TypeDef(id, generics), t) | (t, TypeInfo::TypeDef(id, generics))
+            if matches!(
+                Rc::clone(compiler.get_resolved_type_def(id))
+                    .def
+                    .uninhabited(
+                        compiler,
+                        &generics
+                            .iter()
+                            .map(|ty| {
+                                types
+                                    .to_generic_resolved(types[ty])
+                                    .unwrap_or(Type::Invalid)
+                            })
+                            .collect::<Box<[Type]>>(),
+                    ),
+                Ok(true)
+            ) =>
+        {
+            t
+        }
         (UnknownSatisfying(bounds), Generic(generic_id))
         | (Generic(generic_id), UnknownSatisfying(bounds)) => {
             for bound in bounds.iter() {
@@ -110,8 +134,10 @@ pub fn unify(
                     types.types[ordinal_type.idx()],
                     TypeInfoOrIdx::TypeInfo(_)
                 ));
-                types.types[ordinal_type.idx()] =
-                    TypeInfoOrIdx::TypeInfo(int_ty_from_variant_count(def.variants.len() as u32));
+                types.types[ordinal_type.idx()] = TypeInfoOrIdx::TypeInfo(
+                    int_primitive_from_variant_count(def.variants.len() as u32)
+                        .map_or(TypeInfo::UNIT, TypeInfo::Primitive),
+                );
             }
             // iterate by index because we need to borrow types mutably during the loop
             for variant_index in 0..variants.variants.len() {

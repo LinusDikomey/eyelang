@@ -14,7 +14,7 @@ use unify::unify;
 use crate::{
     Compiler,
     check::{
-        expr::{int_primitive_from_variant_count, int_ty_from_variant_count},
+        expr::{int_primitive_from_variant_count, type_info_from_variant_count},
         traits,
     },
     compiler::{Def, Generics, ResolvedTypeContent},
@@ -114,7 +114,7 @@ impl TypeTable {
         );
         let variants = &mut self.enums[id.idx()].variants;
         if let Some(&first) = variants.first() {
-            let ordinal_ty = int_ty_from_variant_count((variants.len() + 1) as u32);
+            let ordinal_ty = type_info_from_variant_count((variants.len() + 1) as u32);
             let idx = self.variants[first.0 as usize].args.idx;
             // update the ordinal type because it could have changed with the increased variant
             // count
@@ -124,8 +124,7 @@ impl TypeTable {
         } else {
             // we are adding the first variant so we can fill in the ordinal type into the first
             // arg (as unit for now since only one variant is present)
-            self.types[args.idx as usize] =
-                TypeInfoOrIdx::TypeInfo(TypeInfo::Primitive(Primitive::Unit));
+            self.types[args.idx as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::UNIT);
         }
         let ordinal = variants.len() as u32;
         let variant_id = VariantId(self.variants.len() as _);
@@ -806,7 +805,7 @@ impl TypeTable {
                             let mut arg_type_iter = arg_type_ids.iter();
                             self.replace(
                                 arg_type_iter.next().unwrap(),
-                                int_ty_from_variant_count(enum_.variants.len() as u32),
+                                type_info_from_variant_count(enum_.variants.len() as u32),
                             );
                             for (r, ty) in arg_type_iter.zip(arg_types.iter()) {
                                 let ty = self.from_generic_resolved(ty, generics);
@@ -1140,7 +1139,7 @@ impl TypeTable {
                 continue;
             };
             match ty {
-                TypeInfo::Unknown => *ty = TypeInfo::Primitive(Primitive::Unit),
+                TypeInfo::Unknown => *ty = TypeInfo::Tuple(LocalTypeIds::EMPTY),
                 TypeInfo::UnknownSatisfying(bounds) => {
                     if let Some(first_bound) = bounds.iter().next() {
                         let bound = &self.bounds[first_bound.0 as usize];
@@ -1155,7 +1154,7 @@ impl TypeTable {
                         );
                         *ty = TypeInfo::Invalid;
                     } else {
-                        *ty = TypeInfo::Primitive(Primitive::Unit);
+                        *ty = TypeInfo::UNIT;
                     }
                 }
                 TypeInfo::Integer => *ty = TypeInfo::Primitive(Primitive::I32),
@@ -1166,15 +1165,6 @@ impl TypeTable {
                 } => *count = Some(0),
                 _ => {}
             }
-        }
-    }
-
-    pub fn is_uninhabited(&self, info: TypeInfo) -> bool {
-        match info {
-            TypeInfo::Primitive(Primitive::Never) => true,
-            TypeInfo::TypeDef(_id, _generics) => false, // TODO: check if the type is uninhabited
-            TypeInfo::Tuple(elems) => elems.iter().any(|ty| self.is_uninhabited(self[ty])),
-            _ => false,
         }
     }
 }
@@ -1202,6 +1192,10 @@ pub struct LocalTypeIds {
 }
 impl LocalTypeIds {
     pub const EMPTY: Self = Self { idx: 0, count: 0 };
+
+    pub fn is_empty(self) -> bool {
+        self.count == 0
+    }
 
     pub fn iter(self) -> impl ExactSizeIterator<Item = LocalTypeId> {
         (self.idx..self.idx + self.count).map(LocalTypeId)
@@ -1303,6 +1297,8 @@ pub enum TypeInfo {
     Invalid,
 }
 impl TypeInfo {
+    pub const UNIT: Self = Self::Tuple(LocalTypeIds::EMPTY);
+
     pub fn is_invalid(&self) -> bool {
         matches!(self, Self::Invalid)
     }
@@ -1367,7 +1363,7 @@ pub fn resolved_layout(
                 }
                 ResolvedTypeContent::Enum(enum_def) => {
                     let variant_ty = int_primitive_from_variant_count(enum_def.variants.len() as _);
-                    let variant_ty_layout = variant_ty.layout();
+                    let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Primitive::layout);
                     let mut layout = Layout::EMPTY;
                     for (_, args) in &enum_def.variants {
                         let mut variant_layout = variant_ty_layout;
@@ -1392,7 +1388,7 @@ pub fn resolved_layout(
         &Type::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
         Type::LocalEnum(variants) => {
             let variant_ty = int_primitive_from_variant_count(variants.len() as _);
-            let variant_ty_layout = variant_ty.layout();
+            let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Primitive::layout);
             let mut layout = Layout::EMPTY;
             for (_, args) in variants {
                 let mut variant_layout = variant_ty_layout;

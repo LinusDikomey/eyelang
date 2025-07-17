@@ -58,18 +58,13 @@ pub fn check(
                 }
             }
             if !*noreturn {
-                ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
+                ctx.specify(expected, TypeInfo::Tuple(LocalTypeIds::EMPTY), |ast| {
                     ast[expr].span(ast)
                 });
             }
             Node::Block(item_nodes)
         }
         &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty, noreturn),
-
-        &Expr::Unit(span) => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |_| span);
-            Node::Unit
-        }
         &Expr::IntLiteral(span) => {
             let lit = IntLiteral::parse(&ast.src()[span.range()]);
             let info = lit
@@ -188,7 +183,7 @@ pub fn check(
             annotated_ty,
             val,
         } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
+            ctx.specify(expected, TypeInfo::Tuple(LocalTypeIds::EMPTY), |ast| {
                 ast[expr].span(ast)
             });
             let mut exhaustion = Exhaustion::None;
@@ -281,7 +276,7 @@ pub fn check(
                 }
                 Operator::Assignment(assign_ty) => {
                     // TODO: arithmetic assignment operations will be have to bound/handled by traits
-                    ctx.specify(expected, Primitive::Unit, |ast| ast[expr].span(ast));
+                    ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
                     let (lval, ty) = lval::check(ctx, l, scope, return_ty, noreturn);
                     let val = check(ctx, r, scope, ty, return_ty, noreturn);
                     Node::Assign(ctx.hir.add_lvalue(lval), ctx.hir.add(val), assign_ty, ty)
@@ -428,9 +423,7 @@ pub fn check(
         }
 
         Expr::ReturnUnit { .. } => {
-            ctx.specify(return_ty, TypeInfo::Primitive(Primitive::Unit), |ast| {
-                ast[expr].span(ast)
-            });
+            ctx.specify(return_ty, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             Node::Return(ctx.hir.add(Node::Unit))
         }
         &Expr::Return { val, .. } => {
@@ -445,9 +438,7 @@ pub fn check(
             cond,
             then,
         } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
-                ast[expr].span(ast)
-            });
+            ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let then = check(ctx, then, scope, expected, return_ty, &mut false);
@@ -486,9 +477,7 @@ pub fn check(
             value,
             then,
         } => {
-            ctx.specify(expected, TypeInfo::Primitive(Primitive::Unit), |ast| {
-                ast[expr].span(ast)
-            });
+            ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             let pattern_ty = ctx.hir.types.add_unknown();
             let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
             let mut body_scope = LocalScope {
@@ -1225,7 +1214,7 @@ fn check_type_item_member_access(
             }
             if let ResolvedTypeContent::Enum(def) = &ty.def {
                 if let Some((ordinal, args)) = def.get_by_name(name) {
-                    let ordinal_ty = int_ty_from_variant_count(def.variants.len() as u32);
+                    let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
                     let node = if args.is_empty() {
                         ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
                         let ordinal_ty = ctx.hir.types.add(ordinal_ty);
@@ -1288,15 +1277,19 @@ fn check_type_item_member_access(
     Node::Invalid
 }
 
-pub fn int_ty_from_variant_count(count: u32) -> TypeInfo {
-    TypeInfo::Primitive(int_primitive_from_variant_count(count))
+pub fn type_from_variant_count(count: u32) -> Type {
+    int_primitive_from_variant_count(count).map_or(Type::Tuple(Box::new([])), Type::Primitive)
 }
 
-pub fn int_primitive_from_variant_count(count: u32) -> Primitive {
+pub fn type_info_from_variant_count(count: u32) -> TypeInfo {
+    int_primitive_from_variant_count(count).map_or(TypeInfo::UNIT, TypeInfo::Primitive)
+}
+
+pub fn int_primitive_from_variant_count(count: u32) -> Option<Primitive> {
     match count {
-        0 | 1 => Primitive::Unit,
-        2..=255 => Primitive::U8,
-        256..=65535 => Primitive::U16,
-        _ => Primitive::U32,
+        0 | 1 => None,
+        2..=255 => Some(Primitive::U8),
+        256..=65535 => Some(Primitive::U16),
+        _ => Some(Primitive::U32),
     }
 }

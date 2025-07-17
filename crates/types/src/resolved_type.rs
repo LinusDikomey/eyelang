@@ -173,27 +173,6 @@ impl Type {
             _ => false,
         })
     }
-
-    pub fn uninhabited(&self) -> Result<bool, InvalidTypeError> {
-        Ok(match self {
-            Self::Primitive(Primitive::Never) => true,
-            Self::Primitive(_) => false,
-            Self::DefId { .. } => false, // TODO
-            Self::Pointer(_) => false,
-            Self::Array(arr) => arr.1 != 0 && arr.0.uninhabited()?,
-            Self::Tuple(fields) => fields
-                .iter()
-                .try_fold(false, |b, field| Ok(b || field.uninhabited()?))?,
-            Self::Generic(_) => false, // TODO
-            Self::LocalEnum(variants) => variants.iter().try_fold(true, |b, (_, args)| {
-                Ok(b && args
-                    .iter()
-                    .try_fold(false, |b, arg| Ok(b || arg.uninhabited()?))?)
-            })?,
-            Self::Function(_) => false,
-            Self::Invalid => return Err(InvalidTypeError),
-        })
-    }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -30,4 +30,4 @@ time :: fn(time *i64) -> i64 extern
 rand :: fn -> i32 extern
 srand :: fn(seed u32) extern
 
-exit :: fn(status i32) -> ! extern
+exit :: fn(status i32) -> Never extern

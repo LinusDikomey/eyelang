@@ -351,6 +351,9 @@ pub struct ExprIds {
     pub idx: u32,
     pub count: u32,
 }
+impl ExprIds {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+}
 impl Iterator for ExprIds {
     type Item = ExprId;
 
@@ -507,7 +510,6 @@ pub enum Expr {
     Nested(TSpan, ExprId),
 
     // ---------- value literals ----------
-    Unit(TSpan),
     IntLiteral(TSpan),
     FloatLiteral(TSpan),
     StringLiteral(TSpan),
@@ -693,7 +695,6 @@ impl Expr {
             | Expr::IntLiteral(span)
             | Expr::FloatLiteral(span)
             | Expr::Nested(span, _)
-            | Expr::Unit(span)
             | Expr::Ident { span, .. }
             | Expr::Array(span, _)
             | Expr::Tuple(span, _)

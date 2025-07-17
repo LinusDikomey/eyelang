@@ -4,7 +4,7 @@ use types::{Layout, Primitive, Type};
 
 use crate::{
     Compiler,
-    check::expr::int_primitive_from_variant_count,
+    check::expr::{int_primitive_from_variant_count, type_from_variant_count},
     compiler::ResolvedTypeContent,
     eval::{self, ConstValue},
     types::resolved_layout,
@@ -76,12 +76,13 @@ pub fn translate(
                         let ConstValue::Int(active_variant) = elems[0] else {
                             unreachable!()
                         };
-                        let variant_ty =
-                            int_primitive_from_variant_count(enum_def.variants.len() as _);
-                        let variant_layout = variant_ty.layout();
+                        let variant_layout =
+                            int_primitive_from_variant_count(enum_def.variants.len() as _)
+                                .map_or(Layout::EMPTY, |p| p.layout());
+                        let ty = type_from_variant_count(enum_def.variants.len() as _);
                         translate(
                             &elems[0],
-                            &Type::Primitive(variant_ty),
+                            &ty,
                             compiler,
                             &mut b[..variant_layout.size as usize],
                         )?;

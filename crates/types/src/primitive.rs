@@ -16,8 +16,6 @@ pub enum Primitive {
     U128,
     F32,
     F64,
-    Unit,
-    Never,
     Type,
 }
 impl Primitive {
@@ -54,14 +52,13 @@ impl Primitive {
     }
 
     pub fn layout(self) -> Layout {
-        use Primitive::*;
         let size_and_align = match self {
-            Unit | Never | Type => 0,
-            I8 | U8 => 1,
-            I16 | U16 => 2,
-            I32 | U32 | F32 => 4,
-            I64 | U64 | F64 => 8,
-            I128 | U128 => 16,
+            Self::Type => 0,
+            Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 | Self::F32 => 4,
+            Self::I64 | Self::U64 | Self::F64 => 8,
+            Self::I128 | Self::U128 => 16,
         };
         Layout {
             size: size_and_align,
@@ -72,8 +69,7 @@ impl Primitive {
     pub fn token_len(self) -> NonZeroU32 {
         use Primitive as P;
         let len = match self {
-            P::Never => NonZeroU32::new(1).unwrap(),
-            P::I8 | P::U8 | P::Unit => NonZeroU32::new(2).unwrap(),
+            P::I8 | P::U8 => NonZeroU32::new(2).unwrap(),
             P::I16 | P::I32 | P::I64 | P::U16 | P::U32 | P::U64 | P::F32 | P::F64 => {
                 NonZeroU32::new(3).unwrap()
             }
@@ -99,8 +95,6 @@ impl From<Primitive> for &'static str {
             U128 => "u128",
             F32 => "f32",
             F64 => "f64",
-            Unit => "()",
-            Never => "!",
             Type => "type",
         }
     }

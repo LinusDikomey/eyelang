@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use id::ConstValueId;
 use span::TSpan;
-use types::{Primitive, Type};
+use types::Type;
 
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, Signature},
@@ -28,7 +28,7 @@ pub fn check_call(
     let call_span = TSpan::new(call.open_paren_start, call.end);
     let mut call_with_function =
         |ctx: &mut Ctx, function: NodeId, signature: &Signature, generics| {
-            let call_node = match check_call_args(
+            match check_call_args(
                 ctx,
                 scope,
                 return_ty,
@@ -46,7 +46,17 @@ pub fn check_call(
                     if *noreturn {
                         return Node::Invalid;
                     }
-                    let call_noreturn = signature.return_type.uninhabited();
+                    // TODO: figure out noreturn checking, maybe after typecheck is done?
+                    let generics: Box<[Type]> = generics
+                        .iter()
+                        .map(|ty| {
+                            ctx.hir
+                                .types
+                                .to_generic_resolved(ctx.hir.types[ty])
+                                .unwrap_or(Type::Invalid)
+                        })
+                        .collect();
+                    let call_noreturn = ctx.compiler.uninhabited(&signature.return_type, &generics);
                     if let Ok(true) = call_noreturn {
                         *noreturn = true;
                     }
@@ -64,12 +74,7 @@ pub fn check_call(
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
-            };
-            // TODO: check that the type is never type recursively, handling empty enums as never
-            if signature.return_type == Type::Primitive(Primitive::Never) {
-                *noreturn = true;
             }
-            call_node
         };
     match ctx.hir.types[called_ty] {
         TypeInfo::Invalid => {
@@ -127,8 +132,16 @@ pub fn check_call(
             params,
             return_type,
         } => {
-            // check the partially inferred type. If we know it is uninhabited, the function is noreturn
-            let call_noreturn = ctx.hir.types.is_uninhabited(ctx.hir.types[return_type]);
+            let call_noreturn = matches!(
+                ctx.compiler.uninhabited(
+                    &ctx.hir
+                        .types
+                        .to_generic_resolved(ctx.hir.types[return_type])
+                        .unwrap_or(Type::Invalid),
+                    &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
+                ),
+                Ok(true)
+            );
             ctx.unify(expected, return_type, |_| call_span);
             match check_call_args_inner(
                 ctx,
@@ -157,7 +170,7 @@ pub fn check_call(
                         args,
                         return_ty: expected,
                         arg_types,
-                        noreturn: call_noreturn,
+                        noreturn: false, // TODO: call_noreturn,
                     }
                 }
                 Err(err) => {
@@ -206,18 +219,23 @@ pub fn check_call(
                     ctx.hir
                         .types
                         .replace(arg_types.iter().next().unwrap(), self_type);
-                    let call_noreturn =
-                        matches!(signature.return_type, Type::Primitive(Primitive::Never));
+                    // TODO: figure out noreturn checking
+                    /*
+                    let call_noreturn = matches!(
+                        ctx.compiler.uninhabited(&signature.return_type, generics),
+                        Ok(true)
+                    );
                     if call_noreturn {
                         *noreturn = true;
                     }
+                    */
 
                     Node::Call {
                         function: ctx.hir.add(Node::FunctionItem(module, function, generics)),
                         args,
                         return_ty: expected,
                         arg_types,
-                        noreturn: call_noreturn,
+                        noreturn: false, // TODO
                     }
                 }
                 Err(err) => {
@@ -320,11 +338,16 @@ pub fn check_call(
                 false,
             ) {
                 Ok((args, _)) => {
-                    let call_noreturn =
-                        matches!(signature.return_type, Type::Primitive(Primitive::Never));
+                    /*
+                    let call_noreturn = matches!(
+                        ctx.compiler
+                            .uninhabited(&signature.return_type, generics),
+                        Ok(true)
+                    );
                     if call_noreturn {
                         *noreturn = true;
                     }
+                    */
                     Node::TraitCall {
                         trait_id: (trait_module, trait_id),
                         trait_generics,
@@ -332,7 +355,7 @@ pub fn check_call(
                         self_ty,
                         args,
                         return_ty: expected,
-                        noreturn: call_noreturn,
+                        noreturn: false, // call_noreturn, // TODO
                     }
                 }
                 Err(err) => {

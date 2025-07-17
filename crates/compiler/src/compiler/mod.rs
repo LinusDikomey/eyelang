@@ -896,6 +896,36 @@ impl Compiler {
         }
     }
 
+    pub fn uninhabited(&mut self, ty: &Type, generics: &[Type]) -> Result<bool, InvalidTypeError> {
+        Ok(match ty {
+            Type::Primitive(_) => false,
+            Type::DefId {
+                id,
+                generics: inner_generics,
+            } => {
+                let inner_generics: Box<[Type]> = inner_generics
+                    .iter()
+                    .map(|ty| ty.instantiate_generics(generics))
+                    .collect();
+                let def = Rc::clone(self.get_resolved_type_def(*id));
+                def.def.uninhabited(self, &inner_generics)?
+            }
+            Type::Pointer(_) => false,
+            Type::Array(arr) => arr.1 != 0 && self.uninhabited(&arr.0, generics)?,
+            Type::Tuple(fields) => fields.iter().try_fold(false, |b, field| {
+                Ok(b || self.uninhabited(field, generics)?)
+            })?,
+            Type::Generic(_) => false, // TODO: does this cause problems anywhere? a generic type is not *known* to be uninhabited
+            Type::LocalEnum(variants) => variants.iter().try_fold(true, |b, (_, args)| {
+                Ok(b && args
+                    .iter()
+                    .try_fold(false, |b, arg| Ok(b || self.uninhabited(arg, generics)?))?)
+            })?,
+            Type::Function(_) => false,
+            Type::Invalid => return Err(InvalidTypeError),
+        })
+    }
+
     pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(ConstValue, Type) {
         let parsed = self.get_parsed_module(module);
         let ast = parsed.ast.clone();
@@ -1689,6 +1719,31 @@ pub struct ResolvedTypeDef {
 pub enum ResolvedTypeContent {
     Struct(ResolvedStructDef),
     Enum(ResolvedEnumDef),
+}
+impl ResolvedTypeContent {
+    pub fn uninhabited(
+        &self,
+        compiler: &mut Compiler,
+        generics: &[Type],
+    ) -> Result<bool, InvalidTypeError> {
+        Ok(match self {
+            Self::Struct(struct_def) => struct_def
+                .all_fields()
+                .try_fold(false, |s, (_, field_ty)| {
+                    Ok(s || compiler.uninhabited(field_ty, generics)?)
+                })?,
+            Self::Enum(enum_def) => {
+                enum_def
+                    .variants
+                    .iter()
+                    .try_fold(true, |s, (_, variant_param_types)| {
+                        Ok(s && variant_param_types.iter().try_fold(false, |s, ty| {
+                            Ok(s || compiler.uninhabited(ty, generics)?)
+                        })?)
+                    })?
+            }
+        })
+    }
 }
 
 #[derive(Debug)]

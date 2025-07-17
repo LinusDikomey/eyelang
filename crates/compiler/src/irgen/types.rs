@@ -246,8 +246,6 @@ pub fn get_primitive(p: types::Primitive) -> ir::Primitive {
         P::U128 => I::U128,
         P::F32 => I::F32,
         P::F64 => I::F64,
-        // TODO: is mapping never to unit correct?
-        P::Unit | P::Never => I::Unit,
         P::Type => I::U64, // TODO
     }
 }

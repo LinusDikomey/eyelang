@@ -120,18 +120,12 @@ pub fn def_expr(
             }
         }
         Expr::ReturnUnit { .. } => {
-            let Ok(matches) =
-                compiler.unresolved_matches_primitive(ty, Primitive::Unit, module, scope)
-            else {
-                return Def::Invalid;
-            };
-            if !matches {
-                mismatched_type(compiler, Primitive::Unit.to_string());
+            let ty = compiler.resolve_type(ty, module, scope);
+            if !matches!(&ty, Type::Tuple(elems) if elems.is_empty()) {
+                mismatched_type(compiler, Type::Tuple(Box::new([])).to_string());
                 return Def::Invalid;
             }
-            Def::ConstValue(
-                compiler.add_const_value(ConstValue::Unit, Type::Primitive(Primitive::Unit)),
-            )
+            Def::ConstValue(compiler.add_const_value(ConstValue::Unit, ty))
         }
         &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val, name, ty),
         &Expr::Function { id } => {

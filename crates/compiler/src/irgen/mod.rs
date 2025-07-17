@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 pub use entry_point::entry_point;
 
-use ::types::{Primitive, Type};
+use ::types::Type;
 use id::ModuleId;
 use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
@@ -467,7 +467,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let variant = &ctx.types[variant];
             let ty = ctx.types[variant.args.iter().next().unwrap()];
             match ty {
-                TypeInfo::Primitive(Primitive::Unit) => Ref::UNIT,
+                TypeInfo::Tuple(elems) if elems.is_empty() => Ref::UNIT,
                 _ => {
                     let ty = ctx.get_type(ty)?;
                     let ty = ctx.builder.types.add(ty);
@@ -1192,7 +1192,7 @@ fn lower_pattern(
             };
             match ctx.types[ordinal_ty] {
                 TypeInfo::Invalid => crash_point!(ctx),
-                TypeInfo::Primitive(Primitive::Unit) => {}
+                TypeInfo::Tuple(elems) if elems.is_empty() => {}
                 TypeInfo::Primitive(p) => {
                     let int_ty = p.as_int().unwrap();
                     let ordinal_ty = ctx.builder.types.add(get_primitive(int_ty.into()));

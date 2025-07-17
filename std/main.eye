@@ -73,7 +73,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
     ret buf
 }
 
-panic :: fn(msg str) -> ! {
+panic :: fn(msg str) -> Never {
     c.printf("[PANIC]: %.*s\n".ptr, msg.len as i32, msg.ptr)
     c.exit(1)
 }

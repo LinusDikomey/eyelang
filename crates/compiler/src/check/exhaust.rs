@@ -1,9 +1,9 @@
+use std::rc::Rc;
+
 use dmap::DHashMap;
-use types::Primitive;
 
 use crate::{
     Compiler,
-    compiler::ResolvedTypeContent,
     types::{TypeInfo, TypeTable},
 };
 
@@ -59,27 +59,18 @@ impl Exhaustion {
     ) -> Option<bool> {
         Some(match self {
             Exhaustion::None => match ty {
-                TypeInfo::Primitive(Primitive::Never) => true,
                 TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
-                TypeInfo::TypeDef(id, _) => {
-                    match &compiler.get_resolved_type_def(id).def {
-                        // TODO: empty enum case
-                        // crate::compiler::ResolvedTypeDef::Enum(def) => if def.variants.is_empty() => true,
-                        ResolvedTypeContent::Enum(enum_def) => {
-                            enum_def.variants.iter().try_fold(true, |b, (_, args)| {
-                                Some(
-                                    b && args.iter().try_fold(false, |b, arg| {
-                                        Some(b || arg.uninhabited().ok()?)
-                                    })?,
-                                )
-                            })?
-                        }
-                        ResolvedTypeContent::Struct(def) => {
-                            def.all_fields().try_fold(false, |b, (_, field)| {
-                                Some(b || field.uninhabited().ok()?)
-                            })?
-                        }
-                    }
+                TypeInfo::TypeDef(id, generics) => {
+                    let generics: Box<[types::Type]> = generics
+                        .iter()
+                        .map(|ty| types.to_generic_resolved(types[ty]).expect("TODO"))
+                        .collect();
+                    matches!(
+                        Rc::clone(compiler.get_resolved_type_def(id))
+                            .def
+                            .uninhabited(compiler, &generics),
+                        Ok(true) | Err(_)
+                    )
                 }
                 _ => false,
             },

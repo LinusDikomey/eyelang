@@ -1,5 +1,5 @@
 use ir::{Environment, builder::Builder};
-use types::{Primitive, Type};
+use types::Type;
 
 use crate::compiler::Dialects;
 
@@ -18,7 +18,7 @@ pub fn entry_point(
     builder.create_and_begin_block([]);
 
     let main_return = match main_return_ty {
-        Type::Primitive(Primitive::Unit) => ir::dialect::Primitive::Unit,
+        Type::Tuple(elems) if elems.is_empty() => ir::dialect::Primitive::Unit,
         &Type::Primitive(p) if p.is_int() => super::types::get_primitive(p),
         _ => unreachable!(),
     };

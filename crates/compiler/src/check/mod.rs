@@ -15,7 +15,7 @@ pub use type_def::type_def;
 
 use id::ModuleId;
 use span::TSpan;
-use types::{Primitive, Type};
+use types::Type;
 
 use crate::{
     Compiler,
@@ -203,9 +203,6 @@ impl Ctx<'_> {
         span: impl FnOnce(&Ast) -> TSpan,
     ) {
         let info = info.into();
-        if matches!(info, TypeInfo::Tuple(ids) if ids.count == 0) {
-            panic!("bruh");
-        }
         self.hir
             .types
             .specify(ty, info, self.generics, self.compiler, || {
@@ -344,7 +341,8 @@ pub fn verify_main_signature(
     }
     match &signature.return_type {
         Type::Invalid => Err(None),
-        Type::Primitive(p) if p.is_int() | matches!(p, Primitive::Unit) => Ok(()),
+        Type::Tuple(elems) if elems.is_empty() => Ok(()),
+        Type::Primitive(p) if p.is_int() => Ok(()),
         ty => Err(Some(
             Error::InvalidMainReturnType(ty.to_string())
                 .at_span(signature.span.in_mod(main_module)),

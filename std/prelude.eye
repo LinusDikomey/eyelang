@@ -5,6 +5,8 @@ use root.primitive.bool
 true :: bool.true
 false :: bool.false
 
+use root.primitive.Never
+
 use root.print
 use root.println
 use root.input

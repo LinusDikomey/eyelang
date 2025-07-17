@@ -316,7 +316,6 @@ impl<C: Representer> Repr<C> for Expr {
                 ast[*inner].repr(c);
                 c.char(')');
             }
-            Self::Unit(_) => c.write_add("()"),
             Self::Ident { span, .. } => c.write_add(c.src(*span)),
             Self::Hole(_) => c.char('_'),
             Self::Array(_, elems) => {
@@ -681,8 +680,6 @@ impl<C: Representer> Repr<C> for Primitive {
             | Self::I128
             | Self::U128 => self.as_int().unwrap().repr(c),
             Self::F32 | Self::F64 => self.as_float().unwrap().repr(c),
-            Self::Unit => c.write_add("()"),
-            Self::Never => c.write_add("!"),
             Self::Type => c.write_add("type"),
         }
     }

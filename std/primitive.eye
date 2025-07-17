@@ -18,6 +18,8 @@ bool :: enum {
     }
 }
 
+Never :: enum {}
+
 #- 
 u8 :: @packed struct {
     bit0 bool
