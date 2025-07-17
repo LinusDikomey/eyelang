@@ -9,10 +9,10 @@ use root.int.Int
 
 # represents a string slice
 str :: struct {
-    ptr *i8
+    ptr *u8
     len u64
 
-    from_cstr :: fn(ptr *i8) -> str: str(ptr: ptr, len: len(ptr))
+    from_cstr :: fn(ptr *i8) -> str: str(ptr: ptr as *u8, len: len(ptr))
 
     is_empty :: fn(this str) -> bool: this.len == 0
 
@@ -48,10 +48,10 @@ str :: struct {
 
     byte :: fn(this str, index u64) -> u8 {
         if index >= this.len {
-            printf("[PANIC]: str byte index out of range: %d >= %d".ptr, index, this.len)
+            printf("[PANIC]: str byte index out of range: %d >= %d".ptr as *i8, index, this.len)
             exit(1)
         }
-        ret ptr_add(this.ptr, index)^ as u8
+        ret ptr_add(this.ptr, index)^
     }
 
     split :: fn(this str, pat str) -> Split {
@@ -204,7 +204,7 @@ is_whitespace :: fn(c u8) -> bool: match c {
 # append a string to a list of bytes
 push_str :: fn(l *List[u8], s str) {
     p := l.reserve(s.len)
-    memcpy(p as *i8, s.ptr, s.len)
+    memcpy(p, s.ptr, s.len)
     l.len += s.len
 }
 
@@ -300,6 +300,6 @@ int_to_string :: fn[T: Int](x T) -> str {
     }
     len := MAX_LEN - i
     ptr := malloc(len)
-    memcpy(ptr, (&buf[i]) as *i8, len)
+    memcpy(ptr, &buf[i], len)
     ret str(ptr: ptr, len: len)
 }

@@ -6,9 +6,9 @@ use std.print
 main :: fn {
     x: u16 = 257 # 1_00000001
     ptr := &x
-    std.c.printf("x = %d, ptr^ = %d\n".ptr, x as i64, ptr^ as i64)
+    std.c.printf("x = %d, ptr^ = %d\n".ptr as *i8, x as i64, ptr^ as i64)
     u8_ptr := ptr as *u8
-    std.c.printf("u8_ptr^ = %d\n".ptr, u8_ptr^ as i64) # should be the same address but a value of 1
+    std.c.printf("u8_ptr^ = %d\n".ptr as *i8, u8_ptr^ as i64) # should be the same address but a value of 1
 
     if 257 as u8 != 257 as u8 {
         print("Something went wrong with casts")
@@ -16,5 +16,5 @@ main :: fn {
     x := 555
     # pointer casts are only possible with 'as'
     x := "Helo".ptr as *u32
-    std.c.printf("Truncated: %d, 'Helo' as int x: %d\n".ptr, 257 as u8 as i64, x^ as i64)
+    std.c.printf("Truncated: %d, 'Helo' as int x: %d\n".ptr as *i8, 257 as u8 as i64, x^ as i64)
 }

@@ -17,14 +17,14 @@ main :: fn {
     x: i32 = X
     y: u64 = 42 # X
     z: i16 = 1 # ONE
-    std.c.printf("%d, %d, %d, %d\n".ptr, x, y, z as i64, CALC)
+    std.c.printf("%d, %d, %d, %d\n".ptr as *i8, x, y, z as i64, CALC)
 
     A :: 1 < 2
     B :: 1 > 2
 
     if !A or B {
-        std.c.printf("Invalid constant values: %d, %d\n".ptr, A, B)
+        std.c.printf("Invalid constant values: %d, %d\n".ptr as *i8, A, B)
     }
 
-    std.c.printf("%.1f, %.1f\n".ptr, PI as f64, PI_SQUARED as f64)
+    std.c.printf("%.1f, %.1f\n".ptr as *i8, PI as f64, PI_SQUARED as f64)
 }

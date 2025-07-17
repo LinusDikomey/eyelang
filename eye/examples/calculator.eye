@@ -3,7 +3,8 @@ main :: fn {
     mode := input("Enter operation: ")
     a := input("First number: ").parse()
     b := input("Second number: ").parse()
-    std.c.printf("Result: %d\n".ptr, calc(mode, a, b))
+    print("Result: ")
+    println(calc(mode, a, b))
 }
 
 calc :: fn(mode str, a i64, b i64) -> i64: match mode {

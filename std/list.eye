@@ -39,7 +39,7 @@ List :: struct[T] {
     realloc_to_cap :: fn(this *List[T], new_cap u64) {
         new_buf := malloc(new_cap * T.stride) as *T
         if this^.len != 0 {
-            memcpy(new_buf as *i8, this^.buf as *i8, this^.len * T.stride)
+            memcpy(new_buf as *u8, this^.buf as *u8, this^.len * T.stride)
         }
         this^.buf = new_buf
         this^.cap = new_cap

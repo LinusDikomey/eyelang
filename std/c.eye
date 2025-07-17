@@ -6,9 +6,9 @@ scanf :: fn(fmt *i8, ...) -> i32 extern
 strcmp :: fn(str1 *i8, str2 *i8) -> i32 extern
 strlen :: fn(str *i8) -> i32 extern
 
-malloc :: fn(size u64) -> *i8 extern
-free :: fn(ptr *i8) extern
-memcpy :: fn(dest *i8, src *i8, n u64) extern
+malloc :: fn(size u64) -> *u8 extern
+free :: fn(ptr *u8) extern
+memcpy :: fn(dest *u8, src *u8, n u64) extern
 
 atoi :: fn(s *i8) -> i32 extern
 

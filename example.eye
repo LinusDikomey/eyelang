@@ -3,7 +3,7 @@ main :: fn {
     println("Hello, World")
     r := 2.5
     area := circle_area(r)
-    std.c.printf("Area of circle with radius %.1f: %.2f\n".ptr, r, area)
+    std.c.printf("Area of circle with radius %.1f: %.2f\n".ptr as *i8, r, area)
 
     f := .Apple
     if area < 20.0 {

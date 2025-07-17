@@ -3,23 +3,23 @@ use option.Option
 
 print :: fn[T: ToString](value T) {
     s := ToString.to_string(&value)
-    c.printf("%.*s".ptr, s.len as i32, s.ptr)
+    c.printf("%.*s".ptr as *i8, s.len as i32, s.ptr)
     c.free(s.ptr)
 }
 println :: fn[T: ToString](value T) {
     s := ToString.to_string(&value)
-    c.printf("%.*s\n".ptr, s.len as i32, s.ptr)
+    c.printf("%.*s\n".ptr as *i8, s.len as i32, s.ptr)
     c.free(s.ptr)
 }
 
 skip_char :: fn {
     tmp: u64 = 0
-    c.scanf("%c".ptr, (&tmp) as *i8)
+    c.scanf("%c".ptr as *i8, (&tmp) as *i8)
 }
 
 readline :: fn -> str {
-    line: *i8 = c.malloc(1024)
-    c.scanf("%1023[^\n]".ptr, line)
+    line := c.malloc(1024) as *i8
+    c.scanf("%1023[^\n]".ptr as *i8, line)
     skip_char()
     ret str.from_cstr(line)
 }
@@ -32,8 +32,8 @@ input :: fn(msg str) -> str {
 
 int_to_str :: fn(i i32) -> str {
     max_len := 10
-    buffer := c.malloc(max_len)
-    c.snprintf(buffer, max_len, "%d".ptr, i)
+    buffer := c.malloc(max_len) as *i8
+    c.snprintf(buffer, max_len, "%d".ptr as *i8, i)
     ret str.from_cstr(buffer)
 }
 
@@ -46,27 +46,27 @@ streq :: fn(a *i8, b *i8) -> bool {
 }
 
 Buf :: struct {
-    ptr *i8,
-    size u64,
+    ptr *u8
+    size u64
     cap u64
 }
 
 buf :: fn(initial_cap u64) -> Buf: Buf(ptr: c.malloc(initial_cap), size: 0, cap: initial_cap)
 
-buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
+buf_write :: fn(buf Buf, ptr *u8, len u64) -> Buf {
     if buf.cap - buf.size >= len {
         # enough capacity
-        c.memcpy((buf.ptr as u64 + buf.size) as *i8, ptr as *i8, len)
+        c.memcpy((buf.ptr as u64 + buf.size) as *u8, ptr, len)
         buf.size += len
     } else {
         # not enough capacity, reallocate
         new_size := buf.size + len
         new_cap := new_size
         new_ptr := c.malloc(new_size)
-        c.memcpy(new_ptr, buf.ptr as *i8, buf.size)
-        c.free(buf.ptr as *i8)
+        c.memcpy(new_ptr, buf.ptr, buf.size)
+        c.free(buf.ptr)
 
-        c.memcpy((new_ptr as u64 + buf.size) as *i8, ptr as *i8, len)
+        c.memcpy((new_ptr as u64 + buf.size) as *u8, ptr, len)
 
         buf = Buf(ptr: new_ptr, size: new_size, cap: new_cap)
     }
@@ -74,7 +74,7 @@ buf_write :: fn(buf Buf, ptr *i8, len u64) -> Buf {
 }
 
 panic :: fn(msg str) -> Never {
-    c.printf("[PANIC]: %.*s\n".ptr, msg.len as i32, msg.ptr)
+    c.printf("[PANIC]: %.*s\n".ptr as *i8, msg.len as i32, msg.ptr)
     c.exit(1)
 }
 

@@ -19,6 +19,6 @@ Vec2 :: struct {
         a.y += b.y
         ret a
     }
-    print :: fn(v Vec2) { std.c.printf("[%d, %d]\n".ptr, v.x, v.y) }
+    print :: fn(v Vec2) { std.c.printf("[%d, %d]\n".ptr as *i8, v.x, v.y) }
 
 }

@@ -10,7 +10,7 @@ main :: fn {
         .Banana: "a banana",
         .Pineapple: "a pineapple", # comma is optional for the last match arm
     }
-    printf("I'm eating %s\n".ptr, text.ptr)
+    printf("I'm eating %s\n".ptr as *i8, text.ptr)
 
     num := 3
     s := match num {
@@ -28,11 +28,11 @@ main :: fn {
             println("hello")
         } # no comma needed after block
         2 {
-            x := 1 + 1
-            printf("result of calculation: %d\n".ptr)
-        }, # comma can still be used
-        3 {
             println("bye")
+        }, # comma can still be used 
+        3 {
+            x := 1 + 1 + num
+            printf("result of calculation: %d\n".ptr as *i8, x)
         }
         _other {}
     }

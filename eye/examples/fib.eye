@@ -7,12 +7,12 @@ fibs :: fn(n i32) {
     # possible syntax
     # for i in 0..n: print(...)
     if n > 0: fibs(n-1)
-    printf("The %d th fibonacci number is %d\n".ptr, n, fib(n))
+    printf("The %d th fibonacci number is %d\n".ptr as *i8, n, fib(n))
 }
 
 Point :: struct { x i32, y i32 }
 
 main :: fn {
     x := Point(x: 3, y: 5)
-    printf("Result: %d\n".ptr, fib(x.x + x.y))
+    printf("Result: %d\n".ptr as *i8, fib(x.x + x.y))
 }

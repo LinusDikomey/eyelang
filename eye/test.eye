@@ -47,13 +47,13 @@ main :: fn {
     i := 5
     while i < 10: i = incAndPrint(i)
     incAndPrint :: fn(i i32) -> i32 {
-        std.c.printf("I is %d\n".ptr, i)
+        std.c.printf("I is %d\n".ptr as *i8, i)
         ret i + 1
     }
 
     {
         obj := PhysicsObject(pos: Vec3(x: 1, y: 2, z: 3), rot: Vec3(x: 4, y: 5, z: 6))
-        std.c.printf("Physics Object: %d\n".ptr, obj.pos.y + obj.rot.z)
+        std.c.printf("Physics Object: %d\n".ptr as *i8, obj.pos.y + obj.rot.z)
         PhysicsObject :: struct {
             pos Vec3,
             rot Vec3
@@ -74,7 +74,7 @@ Vec3 :: struct {
 
 addVec3 :: fn(a Vec3, b Vec3) -> Vec3: Vec3(x: a.x + b.x, y: a.y + b.y, z: a.z + b.z)
 printVec3 :: fn(v Vec3) {
-    std.c.printf("Vec3[%d, %d, %d]\n".ptr, v.x as i32, v.y as i32, v.z as i32)
+    std.c.printf("Vec3[%d, %d, %d]\n".ptr as *i8, v.x as i32, v.y as i32, v.z as i32)
 }
 
 Transform :: struct {

@@ -1,6 +1,6 @@
 
 main :: fn {
-    std.c.printf("%d, %d, %d, %d\n".ptr, half(-3), half(0), half(1), half(7))
+    std.c.printf("%d, %d, %d, %d\n".ptr as *i8, half(-3), half(0), half(1), half(7))
     print(test(7))
     print(", ")
     println(test(11))
@@ -10,7 +10,7 @@ main :: fn {
 
 do_nothing :: fn {
     ret
-    std.c.printf("This should never be printed!\n".ptr)
+    println("This should never be printed!")
 }
 
 half :: fn(x i32) -> i32 {

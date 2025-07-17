@@ -21,9 +21,9 @@ main :: fn {
     fib_a := fib(10)
     fib_b := fib(10)
 
-    printf("%d, %d\n".ptr, fib_a, fib_b)
+    printf("%d, %d\n".ptr as *i8, fib_a, fib_b)
 
-    printf("%d = %d, %f = %f\n".ptr, x, x2, y, y2)
+    printf("%d = %d, %f = %f\n".ptr as *i8, x, x2, y, y2)
     z: i64 = x # makes x infer to i64
 
     v := Vec2(x: 1, y: 2)
@@ -52,7 +52,7 @@ use std.c.malloc
 
 new :: fn[T] -> *T {
     size := T.size
-    printf("Instantiating with size %d\n".ptr, size)
+    printf("Instantiating with size %d\n".ptr as *i8, size)
     ret malloc(size) as *T
 }
 
@@ -62,7 +62,7 @@ Vec2 :: struct[T] {
 
     print :: fn(this *Vec2[T]) {
         x := this^.x
-        printf("[%d, %d]\n".ptr, x, this^.y)
+        printf("[%d, %d]\n".ptr as *i8, x, this^.y)
     }
 
     mul :: fn(this *Vec2[u64], scalar u64) {

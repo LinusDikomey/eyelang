@@ -20,7 +20,10 @@ main :: fn {
     x := 3
     y := 2 * x + 3
     y += 1
-    std.c.printf("X is %d and y is %d\n".ptr, x, y)
+    print("X is ")
+    print(x)
+    print(" and y is ")
+    println(y)
 }
 ```
 
@@ -33,7 +36,8 @@ add_pointer_values :: fn(x *i32, y *i32) -> i32: x^ + y^
 main :: fn {
     x := 5
     y := 7
-    printf("Result: %d\n".ptr, add_pointer_values(&x, &y))
+    print("Result: ")
+    println(add_pointer_values(&x, &y))
 }
 ```
 
@@ -44,7 +48,8 @@ add :: fn(x i64, y i64) -> i64: x + y
 main :: fn {
     x := 3 # x is inferred to have type i64
     pointer := &x
-    std.c.printf("Result: %d\n".ptr, if 1 < 2: add(pointer^, 4) else -1)
+    print("Result: ")
+    println(if 1 < 2: add(pointer^, 4) else -1)
 }
 ```
 
@@ -55,7 +60,7 @@ use std.c
 Vec3 :: struct { x f64, y f64, z f64 }
 
 print_vec3 :: fn(v *Vec3) {
-    c.printf("Vec3: [%.1f, %.1f, %.1f]\n".ptr, v^.x, v^.y, v^.z)
+    c.printf("Vec3: [%.1f, %.1f, %.1f]\n".ptr as *i8, v^.x, v^.y, v^.z)
 }
 
 main :: fn {

@@ -8,7 +8,7 @@ File :: struct {
     handle *FILE
 
     open :: fn(path str, mode FileMode) -> File {
-        handle := c.fopen(path.ptr, file_mode_str(mode))
+        handle := c.fopen(path.ptr, file_mode_str(mode).ptr as *i8)
         if handle as u64 == 0 {
             panic("failed to open file")
         }
@@ -21,26 +21,26 @@ File :: struct {
 }
 FileMode :: enum { Read, ReadWrite, Create, CreateReadWrite, Append, AppendReadWrite }
 
-file_mode_str :: fn(m FileMode) -> *i8: match m {
+file_mode_str :: fn(m FileMode) -> str: match m {
     .Read: "r",
     .ReadWrite: "r+",
     .Create: "w",
     .CreateReadWrite: "w+",
     .Append: "a",
     .AppendReadWrite: "a+",
-}.ptr
+}
 
 
 read_to_string :: fn(path str) -> str {
     chunk_size := 64
-    buf := List.with_capacity(chunk_size)
+    buf: List[u8] = List.with_capacity(chunk_size)
 
     file := File.open(path, FileMode.Read)
 
     finished := false
     while !finished {
         ptr := buf.reserve(chunk_size)
-        read_count := root.c.fread(ptr, 1, chunk_size, file.handle)
+        read_count := root.c.fread(ptr as *i8, 1, chunk_size, file.handle)
         if read_count > chunk_size {
             panic("unexpected buf count encountered during file read")
         }
