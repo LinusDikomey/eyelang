@@ -7,7 +7,7 @@ use ir::{
     dialect::Primitive,
 };
 use llvm_sys::{
-    LLVMIntPredicate, LLVMRealPredicate,
+    LLVMIntPredicate, LLVMRealPredicate, LLVMTypeKind,
     core::{
         self, LLVMAddFunction, LLVMAddGlobal, LLVMAddIncoming, LLVMBuildAdd, LLVMBuildAlloca,
         LLVMBuildAnd, LLVMBuildBr, LLVMBuildCall2, LLVMBuildCondBr, LLVMBuildExtractValue,
@@ -16,9 +16,10 @@ use llvm_sys::{
         LLVMBuildNeg, LLVMBuildNot, LLVMBuildOr, LLVMBuildPhi, LLVMBuildRet, LLVMBuildRetVoid,
         LLVMBuildSDiv, LLVMBuildSRem, LLVMBuildStore, LLVMBuildSub, LLVMBuildUDiv, LLVMBuildURem,
         LLVMConstInt, LLVMConstReal, LLVMFunctionType, LLVMGetEnumAttributeKindForName,
-        LLVMGetParam, LLVMGetUndef, LLVMInt1TypeInContext, LLVMInt8TypeInContext,
-        LLVMInt32TypeInContext, LLVMPointerTypeInContext, LLVMPositionBuilderAtEnd,
-        LLVMPrintValueToString, LLVMSetInitializer, LLVMVoidTypeInContext,
+        LLVMGetParam, LLVMGetReturnType, LLVMGetTypeKind, LLVMGetUndef, LLVMInt1TypeInContext,
+        LLVMInt8TypeInContext, LLVMInt32TypeInContext, LLVMPointerTypeInContext,
+        LLVMPositionBuilderAtEnd, LLVMPrintValueToString, LLVMSetInitializer,
+        LLVMVoidTypeInContext,
     },
     prelude::{LLVMBuilderRef, LLVMContextRef, LLVMModuleRef, LLVMTypeRef, LLVMValueRef},
 };
@@ -863,14 +864,19 @@ unsafe fn build_func(
                         get_ref(&instructions, r)
                     })
                     .collect();
-                LLVMBuildCall2(
+                let is_void = LLVMGetTypeKind(LLVMGetReturnType(llvm_func_ty))
+                    == LLVMTypeKind::LLVMVoidTypeKind;
+                let value = LLVMBuildCall2(
                     builder,
                     llvm_func_ty,
                     llvm_func,
                     args.as_mut_ptr(),
                     args.len() as u32,
                     NONE,
-                )
+                );
+                // don't put the return value if the function returns void because void should
+                // not be used
+                if is_void { ptr::null_mut() } else { value }
             } else {
                 panic!("unknown module")
             };
