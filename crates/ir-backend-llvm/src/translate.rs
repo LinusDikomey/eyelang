@@ -185,8 +185,11 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTy
             }
             let mut types = elems
                 .iter()
-                .map(|ty| llvm_ty(ctx, types[ty], types))
-                .collect::<Option<Vec<_>>>()?;
+                .filter_map(|ty| llvm_ty(ctx, types[ty], types))
+                .collect::<Vec<_>>();
+            if types.is_empty() {
+                return None;
+            }
             Some(core::LLVMStructTypeInContext(
                 ctx,
                 types.as_mut_ptr(),
