@@ -2,6 +2,9 @@
 # shadowed by other definitions so adding new items here won't break anything.
 
 use root.primitive.bool
+use root.primitive.usize 
+use root.primitive.isize
+
 true :: bool.true
 false :: bool.false
 
@@ -13,6 +16,7 @@ use root.input
 use root.panic
 
 use root.option.Option
+use root.result.Result
 
 use root.string.str
 use root.string.ToString

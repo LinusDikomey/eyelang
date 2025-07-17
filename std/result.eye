@@ -7,4 +7,10 @@ Result :: enum[T, E] {
         .Ok(value): value,
         .Err(_): panic("tried to unwrap an `Err` result")
     }
+
+    expect :: fn(this Result[T, E], message str) -> T: match this {
+        .Ok(value): value,
+        .Err(_): panic(message)
+    }
+
 }

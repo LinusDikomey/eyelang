@@ -20,6 +20,10 @@ bool :: enum {
 
 Never :: enum {}
 
+# TODO: this should be architecture-dependent in the future
+usize :: u64
+isize :: i64
+
 #- 
 u8 :: @packed struct {
     bit0 bool

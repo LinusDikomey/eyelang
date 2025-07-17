@@ -16,6 +16,11 @@ str :: struct {
 
     is_empty :: fn(this str) -> bool: this.len == 0
 
+    from_utf8 :: fn(bytes List[u8]) -> str {
+        # TODO: utf-8 validation, allocation resizing
+        ret str(ptr: bytes.buf as *i8, len: bytes.len)
+    }
+
     eq :: fn(this str, other str) -> bool {
         if this.len != other.len: ret false
         i := 0
@@ -72,9 +77,16 @@ str :: struct {
                     if cur < this.len: if this.byte(cur) == 13: cur += 1
                     start = cur
                 }
-                _ {
-                    cur += 1
+                13 {
+                    # handle \r\n
+                    if cur + 1 < this.len and this.byte(cur + 1) == 10 {
+                        list.push(this.slice(start, cur))
+                        cur += 2
+                    } else {
+                        cur += 1
+                    }
                 }
+                _: cur += 1
             }
         }
         ret list
@@ -190,9 +202,9 @@ is_whitespace :: fn(c u8) -> bool: match c {
 }
 
 # append a string to a list of bytes
-push_str :: fn(l *List[i8], s str) {
+push_str :: fn(l *List[u8], s str) {
     p := l.reserve(s.len)
-    memcpy(p, s.ptr, s.len)
+    memcpy(p as *i8, s.ptr, s.len)
     l.len += s.len
 }
 
