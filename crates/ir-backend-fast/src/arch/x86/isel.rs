@@ -775,13 +775,13 @@ pub struct IselCtx {
 }
 impl ir::rewrite::RewriteCtx for IselCtx {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
+        let args: &[MCReg] = &self.block_arg_regs[block.idx()];
         let start = ir.get_block(block);
         let f = FunctionId {
             module: self.mc.id(),
             function: Mc::IncomingBlockArgs.id(),
         };
         let start = ir.get_original_block_start(block);
-        let args: &[MCReg] = &self.block_arg_regs[block.idx()];
         ir.add_before(env, start, (f, ((), args), self.unit));
     }
 }

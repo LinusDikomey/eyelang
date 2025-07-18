@@ -105,16 +105,13 @@ fn analyze_inst_liveness<R: Register>(
                     };
                     if arg_idx % 2 == 0 {
                         // to
-                        eprintln!("Copy to@{arg_idx} {r}");
                         if let Some(i) = r.virt() {
-                            dbg!(i);
                             live.set(i as usize, false);
                         };
                     } else {
                         // from
-                        eprintln!("Copy from@{arg_idx} {r}");
                         if let Some(i) = r.virt() {
-                            if !dbg!(live.get(i as usize)) {
+                            if !live.get(i as usize) {
                                 live.set(i as usize, true);
                                 r.set_dead();
                             }
@@ -213,12 +210,12 @@ fn perform_regalloc<R: Register>(
             chosen[arg.0 as usize].set_bit(&mut free, false);
         }
         */
-        for r in ir.block_refs(block).iter() {
-            if let Some(inst) = ir.get_inst(r).as_module(mc) {
+        for block_ref in ir.block_refs(block).iter() {
+            if let Some(inst) = ir.get_inst(block_ref).as_module(mc) {
                 match inst.op() {
                     Mc::IncomingBlockArgs => {}
                     Mc::Copy => {
-                        for (arg_idx, arg) in ir.args_mut(r, env).enumerate() {
+                        for (arg_idx, arg) in ir.args_mut(block_ref, env).enumerate() {
                             let ArgumentMut::MCReg(_, r) = arg else {
                                 unreachable!();
                             };
@@ -283,7 +280,7 @@ fn perform_regalloc<R: Register>(
                 }
             }
             */
-            for arg in ir.args_mut(r, env) {
+            for arg in ir.args_mut(block_ref, env) {
                 match arg {
                     ArgumentMut::MCReg(Usage::Def, _) => {}
                     ArgumentMut::MCReg(_, reg) => {
@@ -302,7 +299,7 @@ fn perform_regalloc<R: Register>(
                     _ => {}
                 }
             }
-            for arg in ir.args_mut(r, env).rev() {
+            for arg in ir.args_mut(block_ref, env).rev() {
                 if let ArgumentMut::MCReg(usage, r) = arg {
                     if let Some(phys) = r.phys::<R>() {
                         phys.set_bit(&mut free, r.is_dead());
