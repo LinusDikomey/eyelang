@@ -40,18 +40,11 @@ pub struct Compiler {
     pub dialects: Dialects,
     pub errors: Errors,
     pub builtins: Builtins,
-    pub debug: Debug,
 }
 impl ir::builder::HasEnvironment for &mut Compiler {
     fn env(&self) -> &ir::Environment {
         &self.ir
     }
-}
-
-#[derive(Default)]
-pub struct Debug {
-    /// debug evaluation of constants
-    pub eval: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -81,7 +74,6 @@ impl Compiler {
             dialects,
             errors: Errors::new(),
             builtins: Builtins::default(),
-            debug: Debug::default(),
         }
     }
 
@@ -1171,7 +1163,7 @@ impl Compiler {
             let ast = Rc::clone(self.get_module_ast(module));
             let functions = ast.function_ids();
             for function in functions {
-                if ast[function].generics.len() == 0 {
+                if ast[function].generics.is_empty() {
                     self.emit_ir_from_root((module, function));
                 }
             }
@@ -1431,7 +1423,7 @@ impl Def {
             Self::Invalid => print!("<invalid>"),
             Self::Function(module, id) => print!("Function({}, {})", module.idx(), id.idx()),
             Self::GenericType(id) => print!("GenericType({id:?})"),
-            Self::Type(ty) => print!("Type({:?})", ty),
+            Self::Type(ty) => print!("Type({ty:?})"),
             Self::Trait(module, id) => print!("Trait({}, {})", module.idx(), id.idx()),
             Self::ConstValue(value) => {
                 let (val, ty) = &compiler.const_values[value.idx()];

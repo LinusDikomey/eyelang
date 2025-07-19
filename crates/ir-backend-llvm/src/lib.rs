@@ -26,7 +26,6 @@ pub enum Error {
 }
 
 pub struct Backend {
-    log: bool,
     context: LLVMContextRef,
     attribs: Attribs,
     intrinsics: Intrinsics,
@@ -39,26 +38,15 @@ const TRUE: LLVMBool = 1;
 fn llvm_bool(b: bool) -> LLVMBool {
     if b { TRUE } else { FALSE }
 }
-impl Default for Backend {
-    fn default() -> Self {
+impl Backend {
+    pub fn new() -> Self {
         let context = unsafe { llvm::core::LLVMContextCreate() };
         let attribs = Attribs::lookup();
-
         Self {
-            log: false,
             context,
             attribs,
             intrinsics: Intrinsics::lookup(),
         }
-    }
-}
-impl Backend {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn enable_logging(&mut self) {
-        self.log = true;
     }
 
     pub fn emit_module(
@@ -124,7 +112,6 @@ impl Backend {
                     builder,
                     func,
                     &self.intrinsics,
-                    self.log,
                 )?
             };
         }
@@ -156,6 +143,12 @@ impl Backend {
         unsafe { emit::emit(llvm_module, target_triple, out_cstr.as_ptr())? };
 
         Ok(())
+    }
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

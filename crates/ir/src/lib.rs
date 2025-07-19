@@ -872,7 +872,7 @@ fn decode_args<'a>(
         .chain(
             varargs
                 .into_iter()
-                .flat_map(move |p| std::iter::repeat(p).take(vararg_count)),
+                .flat_map(move |p| std::iter::repeat_n(p, vararg_count)),
         )
         .map(move |param| match param {
             Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),

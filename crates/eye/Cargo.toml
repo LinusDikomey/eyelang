@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = [
   "llvm-backend",
-  "fast-backend"
+  "fast-backend",
 ]
 llvm-backend = ["dep:ir-backend-llvm"]
 fast-backend = ["dep:ir-backend-fast"]
@@ -18,6 +18,8 @@ color-format = { git = "https://github.com/LinusDikomey/color-format" }
 clap = { version = "4.4.13", features = ["derive"] }
 eye-lsp = { path = "../eye-lsp", optional = true }
 ir = { path = "../ir" }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }

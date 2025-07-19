@@ -214,7 +214,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                     for _ in 0..digits - r_digits {
                         cwrite!(f, " ")?;
                     }
-                    write!(f, "{} = ", r)?;
+                    write!(f, "{r} = ")?;
                 } else {
                     for _ in 0..digits + 4 {
                         write!(f, " ")?;
@@ -224,7 +224,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 cwrite!(f, "#b<{}>", called.name)?;
                 for arg in inst.args_inner(&called.params, called.varargs, &ir.blocks, &ir.extra) {
                     match arg {
-                        Argument::Ref(r) => write!(f, " {}", r)?,
+                        Argument::Ref(r) => write!(f, " {r}")?,
                         Argument::BlockId(id) => cwrite!(f, " {}", id)?,
                         Argument::BlockTarget(target) => {
                             cwrite!(f, " {}", target.0)?;

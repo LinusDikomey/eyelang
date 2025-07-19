@@ -575,7 +575,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     } else {
         (&src[s..=e]).into()
     };
-    assert!(src_loc.len() > 0, "empty source location in error");
+    assert!(!src_loc.is_empty(), "empty source location in error");
 
     let pre = &src[start_of_line_byte..s];
 

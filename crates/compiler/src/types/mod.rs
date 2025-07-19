@@ -266,9 +266,10 @@ impl TypeTable {
 
     pub fn add_multiple_unknown(&mut self, count: u32) -> LocalTypeIds {
         let start = self.types.len() as _;
-        self.types.extend(
-            std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(count as usize),
-        );
+        self.types.extend(std::iter::repeat_n(
+            TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown),
+            count as usize,
+        ));
         LocalTypeIds { idx: start, count }
     }
 
@@ -515,9 +516,10 @@ impl TypeTable {
                     idx: self.types.len() as _,
                     count: elems.len() as _,
                 };
-                self.types.extend(
-                    std::iter::repeat(TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown)).take(elems.len()),
-                );
+                self.types.extend(std::iter::repeat_n(
+                    TypeInfoOrIdx::TypeInfo(TypeInfo::Unknown),
+                    elems.len(),
+                ));
 
                 for (id, unresolved) in ids.iter().zip(elems) {
                     let info = self.info_from_unresolved(unresolved, compiler, module, scope);
@@ -960,7 +962,7 @@ impl TypeTable {
                 self.type_to_string(compiler, self[element], s);
                 s.push_str("; ");
                 if let Some(count) = count {
-                    write!(s, "{}]", count).unwrap();
+                    write!(s, "{count}]").unwrap();
                 } else {
                     s.push_str("_]");
                 }

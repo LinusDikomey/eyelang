@@ -15,3 +15,6 @@ members = [
 default-members = ["crates/eye"]
 
 resolver = "2"
+
+[workspace.dependencies]
+tracing = { version = "0.1.41", features = ["release_max_level_off"] }

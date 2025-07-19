@@ -1,5 +1,5 @@
 #![allow(unused)] // TODO: remove when x86 backend is worked on again
-use std::{ffi::CStr, path::Path};
+use std::{collections::HashSet, ffi::CStr, path::Path};
 
 use ir::MCReg;
 
@@ -12,23 +12,16 @@ pub enum Error {
 }
 
 #[derive(Default)]
-pub struct Backend {
-    log: bool,
-}
+pub struct Backend {}
 impl Backend {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn enable_logging(&mut self) {
-        self.log = true;
     }
 
     pub fn emit_module(
         &self,
         env: &mut ir::Environment,
         module_id: ir::ModuleId,
-        print_ir: bool,
         target: Option<&str>,
         out_file: &Path,
     ) -> Result<(), Error> {
@@ -70,28 +63,26 @@ impl Backend {
                 let (mut mir, types) =
                     arch::x86::codegen(env, ir, func, func.types(), &mut isel, mc);
                 let offset = text_section.len() as u64;
-                if print_ir {
-                    println!(
-                        "mir for {}:\n{}\n",
-                        func.name,
-                        mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
-                    );
-                }
+                tracing::debug!(
+                    target: "backend-ir",
+                    function = func.name,
+                    "mir:\n{}",
+                    mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
+                );
                 ir::mc::regalloc::<arch::x86::Reg>(
                     env,
                     mc,
                     &mut mir,
                     &types,
-                    self.log,
                     arch::x86::PREOCCUPIED_REGISTERS,
+                    &func.name,
                 );
-                if self.log {
-                    println!(
-                        "mir for {}: (post-regalloc)\n{}\n",
-                        func.name,
-                        mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
-                    );
-                }
+                tracing::debug!(
+                    target: "regalloc",
+                    function = func.name,
+                    "mir (post-regalloc):\n{}",
+                    mir.display_with_phys_regs::<arch::x86::Reg>(env, &types),
+                );
                 arch::x86::write(env, mc, x86, &mir, &mut text_section);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);

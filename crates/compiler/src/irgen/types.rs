@@ -270,9 +270,10 @@ pub fn type_from_layout(ir_types: &mut ir::Types, layout: ir::Layout) -> ir::Typ
         "can't represent a type with larger align than size"
     );
     let final_layout = ir_types.add_multiple(
-        std::iter::repeat(base_type)
-            .take(base_type_count as usize)
-            .chain(std::iter::repeat(ir::Primitive::U8.into()).take(u8_count as usize)),
+        std::iter::repeat_n(base_type, base_type_count as usize).chain(std::iter::repeat_n(
+            ir::Primitive::U8.into(),
+            u8_count as usize,
+        )),
     );
     ir::Type::Tuple(final_layout)
 }

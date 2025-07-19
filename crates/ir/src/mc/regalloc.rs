@@ -11,8 +11,8 @@ pub fn regalloc<R: Register>(
     mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     types: &crate::Types,
-    log: bool,
     preoccupied_bits: R::RegisterBits,
+    function: &str,
 ) {
     let graph = BlockGraph::calculate(ir, env);
     let mut intersecting_precolored = vec![R::NO_BITS; ir.mc_reg_count() as usize];
@@ -27,15 +27,17 @@ pub fn regalloc<R: Register>(
         &mut liveins,
         &mut intersecting_precolored,
     );
-    if log {
-        eprintln!("liveins:");
+    if tracing::enabled!(target: "regalloc", tracing::Level::DEBUG) {
         for (i, liveins) in liveins.iter().enumerate() {
-            eprint!("  bb{i}:");
-            liveins.visit_set_bits(|vreg| eprint!(" ${vreg}"));
-            eprintln!();
+            let mut liveins_list = Vec::new();
+            liveins.visit_set_bits(|vreg| liveins_list.push(format!("${vreg}")));
+            tracing::debug!(target: "regalloc", function, "liveins at bb{i}: {liveins_list:#?}");
         }
-        eprintln!();
-        eprintln!("After liveness analysis:\n{}", ir.display(env, types))
+        tracing::debug!(target: "regalloc",
+            function,
+            "IR After liveness analysis:\n{}",
+            ir.display(env, types)
+        )
     }
     perform_regalloc::<R>(
         env,

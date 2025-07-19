@@ -329,7 +329,7 @@ pub fn verify_main_signature(
     signature: &Signature,
     main_module: ModuleId,
 ) -> Result<(), Option<CompileError>> {
-    if signature.params.len() != 0 || signature.varargs {
+    if !signature.params.is_empty() || signature.varargs {
         return Err(Some(
             Error::MainArgs.at_span(signature.span.in_mod(main_module)),
         ));

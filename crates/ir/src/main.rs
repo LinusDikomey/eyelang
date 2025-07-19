@@ -1,6 +1,8 @@
 use ir::Environment;
 
 fn main() {
+    std::concat!();
+    std::eprintln!();
     let mut file = None;
     let mut output = None;
     let mut optimize = false;

@@ -16,8 +16,7 @@ fn main() {
 
     println!("{}", env.display_module(module));
 
-    let mut backend = ir_backend_llvm::Backend::new();
-    backend.enable_logging();
+    let backend = ir_backend_llvm::Backend::new();
     backend
         .emit_module(&env, module, true, None, std::path::Path::new("out.o"))
         .expect("Backend failed");

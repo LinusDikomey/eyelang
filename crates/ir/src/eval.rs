@@ -75,7 +75,7 @@ impl Mem {
             size: layout.size as u32,
         };
         self.heap
-            .extend(std::iter::repeat(0).take(layout.size as usize));
+            .extend(std::iter::repeat_n(0, layout.size as usize));
         Ok(addr)
     }
 
@@ -1185,7 +1185,7 @@ impl Values {
                     return u32::MAX;
                 }
                 let idx = slots.len() as u32;
-                slots.extend(std::iter::repeat(0).take(count as usize));
+                slots.extend(std::iter::repeat_n(0, count as usize));
                 idx
             })
             .collect();

@@ -319,7 +319,7 @@ pub(crate) fn write_args<'a>(
         */
         if let Some(vararg_param) = varargs {
             let vararg_count = args.len();
-            extra.extend(std::iter::repeat(0).take(vararg_count));
+            extra.extend(std::iter::repeat_n(0, vararg_count));
             for arg in args {
                 for val in encode_arg(extra, block, blocks, arg, vararg_param) {
                     extra[i] = val;

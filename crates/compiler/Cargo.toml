@@ -14,3 +14,4 @@ color-format = { git = "https://github.com/LinusDikomey/color-format" }
 ir = { path = "../ir" }
 pathdiff = "0.2.1"
 indexmap = "2.7.0"
+tracing.workspace = true

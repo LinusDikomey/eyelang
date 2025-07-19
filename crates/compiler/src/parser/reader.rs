@@ -76,12 +76,11 @@ impl TokenReader {
     ) -> Result<Token, CompileError> {
         let expected = expected.into();
         let module = self.module;
-        if self.tokens.get(self.index).is_some_and(|tok| {
-            expected
-                .0
-                .iter()
-                .any(|expected_tok| *expected_tok == tok.ty)
-        }) {
+        if self
+            .tokens
+            .get(self.index)
+            .is_some_and(|tok| expected.0.contains(&tok.ty))
+        {
             let i = self.index;
             self.index += 1;
             Ok(self.tokens[i])
@@ -242,7 +241,7 @@ impl std::fmt::Display for ExpectedTokens {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             &Self::Specific(tok) => {
-                write!(f, "{}", tok)
+                write!(f, "{tok}")
             }
             Self::AnyOf(toks) => {
                 for (i, tok) in toks.iter().enumerate() {

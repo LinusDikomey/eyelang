@@ -81,13 +81,11 @@ pub struct Args {
     /// Path to a file or project directory
     pub path: Option<String>,
 
-    /// Enable debug logging
-    #[clap(long)]
-    pub log: bool,
+    #[clap(short, long, value_delimiter = ',', num_args = 1..)]
+    pub debug: Vec<Box<str>>,
 
-    /// Enable logging for debugging of compile-time constant evaluation
-    #[clap(long)]
-    pub debug_eval: bool,
+    #[clap(long, value_delimiter = ',', num_args = 1..)]
+    pub debug_functions: Vec<Box<str>>,
 
     /// Used for providing a custom link command. Use '[OBJ]' and '[OUT]' as placeholders for object and out file.
     /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
@@ -113,21 +111,6 @@ pub struct Args {
     /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
     #[clap(short, long)]
     pub reconstruct_src: bool,
-
-    /// Print the internal HIR (high-level intermediate representation) to stderr.
-    /// This will still normally execute the subcommand.
-    #[clap(long)]
-    pub hir: bool,
-
-    /// Print the internal IR (intermediate representation) to stderr.
-    /// This will still normally execute the subcommand.
-    #[clap(long)]
-    pub ir: bool,
-
-    /// Print the IR of the selected backend (if the backend creates an ir) to stderr.
-    /// This will still normally execute the subcommand.
-    #[clap(long)]
-    pub backend_ir: bool,
 
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
     #[clap(long)]

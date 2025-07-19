@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::{collections::VecDeque, ffi::CString, io::Write, ptr};
+use std::{collections::VecDeque, ffi::CString, ptr};
 
 use ir::{
     Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId, Types,
@@ -125,7 +125,6 @@ pub unsafe fn function(
     builder: LLVMBuilderRef,
     function: &ir::Function,
     intrinsics: &Intrinsics,
-    log: bool,
 ) -> Result<(), Error> {
     if let Some(ir) = function.ir() {
         build_func(
@@ -141,7 +140,6 @@ pub unsafe fn function(
             builder,
             llvm_func,
             intrinsics,
-            log,
         );
     }
     Ok(())
@@ -214,14 +212,12 @@ unsafe fn build_func(
     builder: LLVMBuilderRef,
     llvm_func: LLVMValueRef,
     intrinsics: &Intrinsics,
-    log: bool,
 ) {
-    if log {
-        println!(
-            "----------\nTranslating function {} to LLVM IR\n----------",
-            func.name
-        );
-    }
+    tracing::debug!(
+        target: "backend-translate",
+        "Translating function {} to LLVM IR",
+        func.name
+    );
 
     let types = func.types();
 
@@ -318,10 +314,7 @@ unsafe fn build_func(
 
         LLVMPositionBuilderAtEnd(builder, llvm_block);
         for (i, inst) in ir.get_block(block) {
-            if log {
-                print!("Generating %{i:?} = {:?} ->", inst);
-                std::io::stdout().flush().unwrap();
-            }
+            tracing::debug!(debug_flag = "backend-gen", "Generating %{i:?} = {inst:?}");
             let val: LLVMValueRef = if let Some(inst) = inst.as_module(ir::BUILTIN) {
                 match inst.op() {
                     ir::Builtin::Nothing => ptr::null_mut(),
@@ -1443,13 +1436,8 @@ unsafe fn build_func(
                 }
             };
             */
-            if log {
-                if val.is_null() {
-                    println!("null");
-                } else {
-                    let cstr = val_str(val);
-                    println!("{cstr:?}");
-                }
+            if !val.is_null() {
+                tracing::debug!(debug_flag = "backend-gen", "  -> {:?}", val_str(val));
             }
             instructions[i.idx()] = val;
         }

@@ -3,6 +3,7 @@ mod args;
 mod std_path;
 
 use std::{
+    collections::HashSet,
     ffi::CString,
     path::{Path, PathBuf},
 };
@@ -13,6 +14,7 @@ pub use compiler::{Compiler, Span};
 use compiler::Def;
 
 use compiler::error::Error;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug)]
 pub enum MainError {
@@ -39,6 +41,7 @@ impl From<compiler::ProjectError> for MainError {
 
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
+    enable_tracing(&args);
     match args.cmd {
         args::Cmd::ListTargets => {
             list_targets(args.backend);
@@ -59,9 +62,6 @@ fn main() -> Result<(), MainError> {
     if args.crash_on_error {
         eprintln!("enabling crash on error");
         compiler.errors.enable_crash_on_error();
-    }
-    if args.debug_eval {
-        compiler.debug.eval = true;
     }
 
     let (name, path) = match &args.path {
@@ -93,7 +93,7 @@ fn main() -> Result<(), MainError> {
     let project = compiler.add_project(name.to_owned(), path.to_path_buf())?;
     let root_module = compiler.get_project(project).root_module;
 
-    println!("Compiling {} ...", name);
+    println!("Compiling {name} ...");
 
     // add standard library
     let std_path = std_path::find();
@@ -143,16 +143,18 @@ fn main() -> Result<(), MainError> {
         })
         .transpose()?;
 
-    if args.hir {
+    if tracing::enabled!(target: "hir", tracing::Level::DEBUG) {
+        eprintln!("[hir]: Displaying HIR:");
         compiler.print_project_hir(project);
     }
-    if args.ir {
+
+    if tracing::enabled!(target: "ir", tracing::Level::DEBUG) {
         // TODO: right now, backends just codegen all functions that are emitted so this causes
         // functions to be emitted unnecessarily. Could maybe be solved by collecting a list of ir
         // function ids required for compiling main and passing it to the backend.
         compiler.emit_whole_project_ir(project);
-        println!(
-            "Displaying IR:\n{}",
+        eprintln!(
+            "[ir]: Displaying IR:\n{}",
             compiler.ir.display_module(compiler.ir_module)
         );
     }
@@ -193,15 +195,11 @@ fn main() -> Result<(), MainError> {
                 Backend::C => todo!("reimplement C backend"),
                 #[cfg(feature = "fast-backend")]
                 Backend::Fast => {
-                    let mut backend = ir_backend_fast::Backend::new();
-                    if args.log {
-                        backend.enable_logging();
-                    }
+                    let backend = ir_backend_fast::Backend::new();
                     backend
                         .emit_module(
                             &mut compiler.ir,
                             compiler.ir_module,
-                            args.backend_ir,
                             args.target.as_deref(),
                             Path::new(&obj_file),
                         )
@@ -209,10 +207,7 @@ fn main() -> Result<(), MainError> {
                 }
                 #[cfg(feature = "llvm-backend")]
                 Backend::Llvm => {
-                    let mut backend = ir_backend_llvm::Backend::new();
-                    if args.log {
-                        backend.enable_logging();
-                    }
+                    let backend = ir_backend_llvm::Backend::new();
                     let target = args.target.as_ref().map(|target| {
                         CString::new(target.as_bytes()).expect("invalid target string")
                     });
@@ -220,7 +215,7 @@ fn main() -> Result<(), MainError> {
                         .emit_module(
                             &compiler.ir,
                             compiler.ir_module,
-                            args.backend_ir,
+                            tracing::enabled!(target: "backend-ir", tracing::Level::DEBUG),
                             target.as_deref(),
                             Path::new(&obj_file),
                         )
@@ -244,7 +239,7 @@ fn main() -> Result<(), MainError> {
                 return Err(MainError::LinkingFailed(err));
             }
             if args.cmd == args::Cmd::Run {
-                println!("Running {}...", name);
+                println!("Running {name}...");
                 // make sure to clean up compiler resources before running
                 drop(compiler);
                 let mut command = std::process::Command::new(exe_file);
@@ -271,6 +266,70 @@ fn main() -> Result<(), MainError> {
     }
 
     Ok(())
+}
+
+fn enable_tracing(args: &args::Args) {
+    use tracing_subscriber::{EnvFilter, Layer};
+
+    struct FunctionFilter {
+        allowed: HashSet<Box<str>>,
+    }
+    impl<S> tracing_subscriber::layer::Filter<S> for FunctionFilter {
+        fn enabled(
+            &self,
+            _meta: &tracing::Metadata<'_>,
+            _cx: &tracing_subscriber::layer::Context<'_, S>,
+        ) -> bool {
+            true
+        }
+
+        fn event_enabled(
+            &self,
+            event: &tracing::Event<'_>,
+            _cx: &tracing_subscriber::layer::Context<'_, S>,
+        ) -> bool {
+            let mut matched = None;
+            struct StringVisitor<'a> {
+                allowed: &'a HashSet<Box<str>>,
+                matched: &'a mut Option<bool>,
+            }
+            impl<'a> tracing::field::Visit for StringVisitor<'a> {
+                fn record_debug(
+                    &mut self,
+                    _field: &tracing::field::Field,
+                    _value: &dyn std::fmt::Debug,
+                ) {
+                }
+
+                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                    if field.name() == "function" {
+                        *self.matched = Some(self.allowed.contains(value))
+                    }
+                }
+            }
+            event.record(&mut StringVisitor {
+                allowed: &self.allowed,
+                matched: &mut matched,
+            });
+            matched.unwrap_or(true)
+        }
+    }
+    let mut env_filter = EnvFilter::new("info");
+    for flag in &args.debug {
+        env_filter = env_filter.add_directive(format!("{flag}=debug").parse().unwrap());
+    }
+    let subscriber = tracing_subscriber::registry().with(env_filter);
+    let fmt_layer = tracing_subscriber::fmt::layer().compact().without_time();
+
+    if !args.debug_functions.is_empty() {
+        subscriber
+            .with(fmt_layer.with_filter(FunctionFilter {
+                allowed: args.debug_functions.iter().cloned().collect(),
+            }))
+            .init();
+    } else {
+        subscriber.with(fmt_layer).init();
+    }
 }
 
 fn list_targets(backend: args::Backend) {

@@ -192,9 +192,7 @@ pub fn def_expr(
             Def::Type(Type::Primitive(primitive))
         }
         _ => {
-            if compiler.debug.eval {
-                eprintln!("Running evaluator for definition of {name}:");
-            }
+            tracing::debug!(target: "eval", "Running evaluator for definition of {name}:");
             match value_expr(compiler, module, scope, ast, expr, ty) {
                 Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
                 Err(err) => {
@@ -308,7 +306,14 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
     }
 
     fn debug(&self) -> bool {
-        self.compiler.debug.eval
+        #[cfg(debug_assertions)]
+        {
+            tracing::enabled!(target: "foo", tracing::Level::DEBUG)
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            false
+        }
     }
 
     fn call_extern(

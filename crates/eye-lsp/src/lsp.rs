@@ -20,7 +20,7 @@ impl Lsp {
             |uri| Some(PathBuf::from(uri.path())),
         );
         let project = project_path.and_then(|path| {
-            let name = path.components().last().map_or_else(
+            let name = path.components().next_back().map_or_else(
                 || "<unnamed project>".to_owned(),
                 |s| s.as_os_str().to_string_lossy().into_owned(),
             );

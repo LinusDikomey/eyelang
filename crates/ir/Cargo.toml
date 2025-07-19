@@ -7,3 +7,4 @@ edition = "2024"
 color-format = { git = "https://github.com/LinusDikomey/color-format", version = "0.1.0" }
 strum = { version = "0.26.3", features = ["derive"] }
 dmap = { path = "../dmap" }
+tracing.workspace = true
