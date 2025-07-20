@@ -3,7 +3,6 @@ mod args;
 mod std_path;
 
 use std::{
-    collections::HashSet,
     ffi::CString,
     path::{Path, PathBuf},
 };
@@ -14,7 +13,6 @@ pub use compiler::{Compiler, Span};
 use compiler::Def;
 
 use compiler::error::Error;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug)]
 pub enum MainError {
@@ -264,71 +262,85 @@ fn main() -> Result<(), MainError> {
 }
 
 fn enable_tracing(args: &args::Args) {
-    use tracing_subscriber::{EnvFilter, Layer};
-
-    struct FunctionFilter {
-        allowed: HashSet<Box<str>>,
-    }
-    impl<S> tracing_subscriber::layer::Filter<S> for FunctionFilter {
-        fn enabled(
-            &self,
-            _meta: &tracing::Metadata<'_>,
-            _cx: &tracing_subscriber::layer::Context<'_, S>,
-        ) -> bool {
-            true
+    #[cfg(not(debug_assertions))]
+    {
+        if !args.debug.is_empty() {
+            eprintln!(
+                "Tried to enable debugging in a release build which doesn't support debug tracing"
+            );
         }
+        return;
+    }
 
-        fn event_enabled(
-            &self,
-            event: &tracing::Event<'_>,
-            _cx: &tracing_subscriber::layer::Context<'_, S>,
-        ) -> bool {
-            let mut matched = None;
-            struct StringVisitor<'a> {
-                allowed: &'a HashSet<Box<str>>,
-                matched: &'a mut Option<bool>,
+    #[cfg(debug_assertions)]
+    {
+        use std::collections::HashSet;
+        use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
+
+        struct FunctionFilter {
+            allowed: HashSet<Box<str>>,
+        }
+        impl<S> tracing_subscriber::layer::Filter<S> for FunctionFilter {
+            fn enabled(
+                &self,
+                _meta: &tracing::Metadata<'_>,
+                _cx: &tracing_subscriber::layer::Context<'_, S>,
+            ) -> bool {
+                true
             }
-            impl<'a> tracing::field::Visit for StringVisitor<'a> {
-                fn record_debug(
-                    &mut self,
-                    _field: &tracing::field::Field,
-                    _value: &dyn std::fmt::Debug,
-                ) {
-                }
 
-                fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-                    if field.name() == "function" {
-                        *self.matched = Some(self.allowed.contains(value))
+            fn event_enabled(
+                &self,
+                event: &tracing::Event<'_>,
+                _cx: &tracing_subscriber::layer::Context<'_, S>,
+            ) -> bool {
+                let mut matched = None;
+                struct StringVisitor<'a> {
+                    allowed: &'a HashSet<Box<str>>,
+                    matched: &'a mut Option<bool>,
+                }
+                impl<'a> tracing::field::Visit for StringVisitor<'a> {
+                    fn record_debug(
+                        &mut self,
+                        _field: &tracing::field::Field,
+                        _value: &dyn std::fmt::Debug,
+                    ) {
+                    }
+
+                    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                        if field.name() == "function" {
+                            *self.matched = Some(self.allowed.contains(value))
+                        }
                     }
                 }
+                event.record(&mut StringVisitor {
+                    allowed: &self.allowed,
+                    matched: &mut matched,
+                });
+                matched.unwrap_or(true)
             }
-            event.record(&mut StringVisitor {
-                allowed: &self.allowed,
-                matched: &mut matched,
-            });
-            matched.unwrap_or(true)
         }
-    }
-    let mut env_filter;
-    if args.debug.iter().any(|s| &**s == "all") {
-        env_filter = EnvFilter::new("debug")
-    } else {
-        env_filter = EnvFilter::new("info");
-        for flag in &args.debug {
-            env_filter = env_filter.add_directive(format!("{flag}=debug").parse().unwrap());
-        }
-    };
-    let subscriber = tracing_subscriber::registry().with(env_filter);
-    let fmt_layer = tracing_subscriber::fmt::layer().without_time();
+        let mut env_filter;
+        if args.debug.iter().any(|s| &**s == "all") {
+            env_filter = EnvFilter::new("debug")
+        } else {
+            env_filter = EnvFilter::new("info");
+            for flag in &args.debug {
+                env_filter = env_filter.add_directive(format!("{flag}=debug").parse().unwrap());
+            }
+        };
+        let subscriber = tracing_subscriber::registry().with(env_filter);
+        let fmt_layer = tracing_subscriber::fmt::layer().without_time();
 
-    if !args.debug_functions.is_empty() {
-        subscriber
-            .with(fmt_layer.with_filter(FunctionFilter {
-                allowed: args.debug_functions.iter().cloned().collect(),
-            }))
-            .init();
-    } else {
-        subscriber.with(fmt_layer).init();
+        if !args.debug_functions.is_empty() {
+            subscriber
+                .with(fmt_layer.with_filter(FunctionFilter {
+                    allowed: args.debug_functions.iter().cloned().collect(),
+                }))
+                .init();
+        } else {
+            subscriber.with(fmt_layer).init();
+        }
     }
 }
 
