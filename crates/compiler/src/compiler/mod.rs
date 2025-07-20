@@ -1,4 +1,5 @@
 pub mod builtins;
+mod display;
 
 use std::{
     cell::RefCell,
@@ -1136,7 +1137,7 @@ impl Compiler {
                 else {
                     unreachable!()
                 };
-                hir.dump(self);
+                tracing::debug!(target: "hir", function = hir.name, "\n{}", hir.display(self));
             }
             module_queue.extend(self.get_parsed_module(module).child_modules.iter().copied())
         }
@@ -1855,44 +1856,11 @@ pub struct CheckedFunction {
     pub body: Option<Hir>,
 }
 impl CheckedFunction {
-    pub fn dump(&self, compiler: &Compiler) {
-        eprint!("BEGIN HIR {}", self.name);
-        if self.generic_count != 0 {
-            eprint!("[");
-            for i in 0..self.generic_count {
-                if i != 0 {
-                    eprint!(", ");
-                }
-                eprint!("${i}");
-            }
-            eprint!("]");
+    pub fn display<'a>(&'a self, compiler: &'a Compiler) -> display::CheckedFunctionDisplay<'a> {
+        display::CheckedFunctionDisplay {
+            function: self,
+            compiler,
         }
-        eprint!("(");
-        for (i, param) in self.params.iter().enumerate() {
-            if i != 0 {
-                eprint!(", ");
-            }
-            eprint!("(var {i}): ");
-            self.types.dump_type(compiler, param);
-        }
-        if self.varargs {
-            if self.params.count != 0 {
-                eprint!(", ");
-            }
-            eprint!("...");
-        }
-        eprint!(") -> ");
-        self.types.dump_type(compiler, self.return_type);
-        eprint!("\n  ");
-        match &self.body {
-            Some(body) => {
-                body.dump(body.root_id(), compiler, &self.types, 1);
-            }
-            None => {
-                eprintln!("  <extern>");
-            }
-        }
-        eprintln!("\nEND HIR\n");
     }
 }
 

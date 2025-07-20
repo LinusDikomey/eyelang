@@ -1,5 +1,3 @@
-use color_format::ceprintln;
-
 mod mem2reg;
 
 pub use mem2reg::Mem2Reg;
@@ -13,7 +11,6 @@ pub trait FunctionPass: std::fmt::Debug {
 #[derive(Default)]
 pub struct Pipeline {
     function_passes: Vec<Box<dyn FunctionPass>>,
-    print_passes: bool,
 }
 impl Pipeline {
     pub fn new() -> Self {
@@ -30,36 +27,29 @@ impl Pipeline {
         self.function_passes.push(pass);
     }
 
-    pub fn enable_print_passes(&mut self) {
-        self.print_passes = true;
-    }
-
     pub fn optimize_module(&self, env: &mut Environment, module: ModuleId) {
         for i in 0..env[module].functions().len() {
             let Some(mut ir) = env.modules[module.idx()].functions[i].ir.take() else {
                 continue;
             };
-            if self.print_passes {
-                for _ in 0..env[module].functions[i].name.len() {
-                    eprint!("-");
-                }
-                ceprintln!(
-                    "-----------------------------\n\
-                    IR for #r<{}> before optimizations:\n{}",
-                    env[module].functions[i].name,
-                    ir.display(env, &env[module].functions[i].types),
-                );
-            }
+            tracing::debug!(
+                target: "passes",
+                function = env[module].functions[i].name,
+                "IR for {} before optimizations:\n{}",
+                env[module].functions[i].name,
+                ir.display(env, &env[module].functions[i].types),
+            );
 
             for pass in &self.function_passes {
                 ir = pass.run(env, &env[module].functions[i].types, ir);
-                if self.print_passes {
-                    eprintln!(
-                        "after {pass:?}:\n{}",
-                        ir.display(env, &env[module].functions[i].types),
-                    );
-                }
+                tracing::debug!(
+                    target: "passes",
+                    function = env[module].functions[i].name,
+                    "After {pass:?}:\n{}",
+                    ir.display(env, &env[module].functions[i].types),
+                );
             }
+            tracing::debug!(target: "passes", function = env[module].functions[i].name, "Done optimizing");
             env.modules[module.idx()].functions[i].ir = Some(ir);
         }
     }
@@ -70,15 +60,11 @@ impl Pipeline {
         mut ir: FunctionIr,
         types: &mut Types,
     ) -> FunctionIr {
-        if self.print_passes {
-            ceprintln!("IR before optimizations:\n{}", ir.display(env, types),);
-        }
+        tracing::debug!(target: "passes", "IR before optimizations:\n{}", ir.display(env, types));
 
         for pass in &self.function_passes {
             ir = pass.run(env, types, ir);
-            if self.print_passes {
-                eprintln!("after {pass:?}:\n{}", ir.display(env, types));
-            }
+            tracing::debug!(target: "passes", "After {pass:?}:\n{}", ir.display(env, types));
         }
         ir
     }

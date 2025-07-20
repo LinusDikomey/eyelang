@@ -314,7 +314,7 @@ unsafe fn build_func(
 
         LLVMPositionBuilderAtEnd(builder, llvm_block);
         for (i, inst) in ir.get_block(block) {
-            tracing::debug!(debug_flag = "backend-gen", "Generating %{i:?} = {inst:?}");
+            tracing::debug!(target: "backend-gen", "Generating %{i:?} = {inst:?}");
             let val: LLVMValueRef = if let Some(inst) = inst.as_module(ir::BUILTIN) {
                 match inst.op() {
                     ir::Builtin::Nothing => ptr::null_mut(),
@@ -1437,7 +1437,7 @@ unsafe fn build_func(
             };
             */
             if !val.is_null() {
-                tracing::debug!(debug_flag = "backend-gen", "  -> {:?}", val_str(val));
+                tracing::debug!(target: "backend-gen", "  -> {:?}", val_str(val));
             }
             instructions[i.idx()] = val;
         }

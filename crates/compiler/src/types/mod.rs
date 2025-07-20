@@ -7,6 +7,7 @@ use id::{ModuleId, TypeId};
 use span::{Span, TSpan};
 use types::{InvalidTypeError, Layout, Primitive, Type};
 
+mod display;
 mod unify;
 
 use unify::unify;
@@ -906,10 +907,16 @@ impl TypeTable {
         }
     }
 
-    pub fn dump_type(&self, compiler: &Compiler, ty: LocalTypeId) {
-        let mut s = String::new();
-        self.type_to_string(compiler, self[ty], &mut s);
-        eprint!("{s}");
+    pub fn display<'a>(
+        &'a self,
+        compiler: &'a Compiler,
+        ty: LocalTypeId,
+    ) -> display::TypeDisplay<'a> {
+        display::TypeDisplay {
+            ty,
+            table: self,
+            compiler,
+        }
     }
 
     pub fn type_to_string(&self, compiler: &Compiler, ty: TypeInfo, s: &mut String) {

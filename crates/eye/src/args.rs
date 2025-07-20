@@ -135,8 +135,4 @@ pub struct Args {
 
     #[clap(short('O'), long)]
     pub optimize: bool,
-
-    /// Print the ir again after each optimization pass to show changes made by optimizations.
-    #[clap(long)]
-    pub passes: bool,
 }

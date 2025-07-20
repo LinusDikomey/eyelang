@@ -153,10 +153,9 @@ fn main() -> Result<(), MainError> {
         // functions to be emitted unnecessarily. Could maybe be solved by collecting a list of ir
         // function ids required for compiling main and passing it to the backend.
         compiler.emit_whole_project_ir(project);
-        eprintln!(
-            "[ir]: Displaying IR:\n{}",
-            compiler.ir.display_module(compiler.ir_module)
-        );
+        for func in compiler.ir.get_module(compiler.ir_module).functions() {
+            tracing::debug!(target: "ir", function = func.name, "\n{}", func.display(&compiler.ir));
+        }
     }
     if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
@@ -176,10 +175,7 @@ fn main() -> Result<(), MainError> {
             ir::verify::module(&compiler.ir, compiler.ir_module);
 
             if args.optimize {
-                let mut pipeline = ir::optimize::Pipeline::optimizing(&mut compiler.ir);
-                if args.passes {
-                    pipeline.enable_print_passes();
-                }
+                let pipeline = ir::optimize::Pipeline::optimizing(&mut compiler.ir);
                 pipeline.optimize_module(&mut compiler.ir, compiler.ir_module);
 
                 #[cfg(debug_assertions)]
@@ -215,7 +211,6 @@ fn main() -> Result<(), MainError> {
                         .emit_module(
                             &compiler.ir,
                             compiler.ir_module,
-                            tracing::enabled!(target: "backend-ir", tracing::Level::DEBUG),
                             target.as_deref(),
                             Path::new(&obj_file),
                         )
@@ -314,12 +309,17 @@ fn enable_tracing(args: &args::Args) {
             matched.unwrap_or(true)
         }
     }
-    let mut env_filter = EnvFilter::new("info");
-    for flag in &args.debug {
-        env_filter = env_filter.add_directive(format!("{flag}=debug").parse().unwrap());
-    }
+    let mut env_filter;
+    if args.debug.iter().any(|s| &**s == "all") {
+        env_filter = EnvFilter::new("debug")
+    } else {
+        env_filter = EnvFilter::new("info");
+        for flag in &args.debug {
+            env_filter = env_filter.add_directive(format!("{flag}=debug").parse().unwrap());
+        }
+    };
     let subscriber = tracing_subscriber::registry().with(env_filter);
-    let fmt_layer = tracing_subscriber::fmt::layer().compact().without_time();
+    let fmt_layer = tracing_subscriber::fmt::layer().without_time();
 
     if !args.debug_functions.is_empty() {
         subscriber

@@ -53,7 +53,6 @@ impl Backend {
         &self,
         env: &ir::Environment,
         module_id: ModuleId,
-        print_ir: bool,
         target: Option<&CStr>,
         out_file: &Path,
     ) -> Result<(), Error> {
@@ -116,11 +115,10 @@ impl Backend {
             };
         }
 
-        if print_ir {
-            eprintln!("\n ---------- LLVM IR BEGIN ----------\n");
-            unsafe { core::LLVMDumpModule(llvm_module) };
-            eprintln!("\n ---------- LLVM IR END ------------\n");
-        }
+        tracing::debug!(target: "backend-ir",
+            "\n---------- LLVM IR BEGIN ----------\n{}\n---------- LLVM IR END ------------",
+            unsafe { CStr::from_ptr(core::LLVMPrintModuleToString(llvm_module)).to_string_lossy() }
+        );
 
         #[cfg(debug_assertions)]
         {

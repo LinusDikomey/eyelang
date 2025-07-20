@@ -16,7 +16,7 @@ main :: fn {
     println(fruit_to_string(f))
 }
 
-PI :: 3.14
+PI: f64 : 3.14
 
 circle_area :: fn(r f64) -> f64: PI * r * r
 

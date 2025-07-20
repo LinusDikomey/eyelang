@@ -6,12 +6,10 @@ fn main() {
     let mut file = None;
     let mut output = None;
     let mut optimize = false;
-    let mut passes = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--optimize" => optimize = true,
-            "--passes" => passes = true,
             "-o" => {
                 if output.is_some() {
                     panic!("duplicate option -o");
@@ -34,10 +32,7 @@ fn main() {
     let (mut ir, mut types) = ir::parse::parse_function_body(&env, &contents);
     println!("Parsed function body:\n{}", ir.display(&env, &types));
     if optimize {
-        let mut pipeline = ir::optimize::Pipeline::optimizing(&mut env);
-        if passes {
-            pipeline.enable_print_passes();
-        }
+        let pipeline = ir::optimize::Pipeline::optimizing(&mut env);
         ir = pipeline.optimize_function(&mut env, ir, &mut types);
         println!("Final IR:\n{}", ir.display(&env, &types));
     }
