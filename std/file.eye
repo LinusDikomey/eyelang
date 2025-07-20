@@ -8,7 +8,7 @@ File :: struct {
     handle *FILE
 
     open :: fn(path str, mode FileMode) -> File {
-        handle := c.fopen(path.ptr, file_mode_str(mode).ptr as *i8)
+        handle := c.fopen(path.ptr as *i8, file_mode_str(mode).ptr as *i8)
         if handle as u64 == 0 {
             panic("failed to open file")
         }

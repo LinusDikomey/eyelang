@@ -29,6 +29,6 @@ Vec2 :: struct {
     y i32,
 
     print :: fn(self Vec2) {
-        std.c.printf("[%d, %d]\n".ptr, self.x, self.y)
+        std.c.printf("[%d, %d]\n".ptr as *i8, self.x, self.y)
     }
 }

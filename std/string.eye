@@ -18,7 +18,7 @@ str :: struct {
 
     from_utf8 :: fn(bytes List[u8]) -> str {
         # TODO: utf-8 validation, allocation resizing
-        ret str(ptr: bytes.buf as *i8, len: bytes.len)
+        ret str(ptr: bytes.buf, len: bytes.len)
     }
 
     eq :: fn(this str, other str) -> bool {
@@ -39,7 +39,12 @@ str :: struct {
 
     slice :: fn(this str, start u64, end u64) -> str {
         if end > this.len {
-            printf("[PANIC]: string slice out of range: %d..%d > %d\n".ptr, start, end, this.len)
+            print("[PANIC]: string slice out of range: ")
+            print(start)
+            print("..")
+            print(end)
+            print(" > ")
+            println(this.len)
             exit(1)
         }
         if start > end: start = end

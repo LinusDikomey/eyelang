@@ -45,12 +45,12 @@ Queue :: struct[T] {
             new_buf := malloc(new_cap * T.stride) as *T
             if this.len != 0 {
                 if this.head + this.len <= this.cap {
-                    memcpy(ptr_add(new_buf as *i8, 1), ptr_add(this.buf, this.head) as *i8, this.len * T.stride)
+                    memcpy(ptr_add(new_buf as *u8, 1), ptr_add(this.buf, this.head) as *u8, this.len * T.stride)
                 } else {
                     first_len := this.cap - this.head
                     second_len := this.len - first_len
-                    memcpy(ptr_add(new_buf as *i8, 1), ptr_add(this.buf, this.head) as *i8, first_len * T.stride)
-                    memcpy(ptr_add(new_buf, first_len + 1) as *i8, this.buf as *i8, second_len * T.stride)
+                    memcpy(ptr_add(new_buf as *u8, 1), ptr_add(this.buf, this.head) as *u8, first_len * T.stride)
+                    memcpy(ptr_add(new_buf, first_len + 1) as *u8, this.buf as *u8, second_len * T.stride)
                 }
             }
             this.buf^ = item
