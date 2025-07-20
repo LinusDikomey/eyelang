@@ -1026,6 +1026,9 @@ impl Compiler {
                     }
                 };
                 let resolved = Rc::clone(self.get_resolved_type_def(id));
+                for &method in resolved.methods.values() {
+                    self.get_hir(module, method);
+                }
                 for impls in resolved.inherent_trait_impls.values() {
                     for impl_ in impls {
                         for &id in &impl_.functions {

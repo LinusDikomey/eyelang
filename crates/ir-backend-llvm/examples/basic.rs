@@ -18,7 +18,7 @@ fn main() {
 
     let backend = ir_backend_llvm::Backend::new();
     backend
-        .emit_module(&env, module, true, None, std::path::Path::new("out.o"))
+        .emit_module(&env, module, None, std::path::Path::new("out.o"))
         .expect("Backend failed");
 }
 
