@@ -217,71 +217,53 @@ fn perform_regalloc<R: Register>(
                 match inst.op() {
                     Mc::IncomingBlockArgs => {}
                     Mc::Copy => {
-                        for (arg_idx, arg) in ir.args_mut(block_ref, env).enumerate() {
+                        // handle source arguments first
+                        for arg in ir.args_mut(block_ref, env).skip(1).step_by(2) {
                             let ArgumentMut::MCReg(_, r) = arg else {
                                 unreachable!();
                             };
-                            if arg_idx % 2 == 0 {
-                                // to
-                                if let Some(i) = r.virt() {
-                                    let dead = r.is_dead();
-                                    *r = MCReg::from_phys(chosen[i as usize]);
-                                    if dead {
-                                        r.set_dead();
-                                    }
+                            if let Some(i) = r.virt() {
+                                let chosen = chosen[i as usize];
+                                let dead = r.is_dead();
+                                *r = MCReg::from_phys(chosen);
+                                if dead {
+                                    chosen.set_bit(&mut free, true);
+                                    // always preserve the dead bit
+                                    r.set_dead();
+                                }
+                            } else if r.is_dead() {
+                                r.phys::<R>().unwrap().set_bit(&mut free, true);
+                            }
+                        }
+                        // then handle destinations so that the dead dead source registers can be reused
+                        // TODO: could try to fill in trivial copies (dest = dead src) first to
+                        // always maximize reusing registers
+                        for arg in ir.args_mut(block_ref, env).step_by(2) {
+                            let ArgumentMut::MCReg(_, r) = arg else {
+                                unreachable!();
+                            };
+                            if let Some(i) = r.virt() {
+                                let dead = r.is_dead();
+                                let occupied = intersecting_precolored[i as usize];
+                                let avail = free & !occupied;
+                                let chosen_reg = R::allocate_reg(avail, super::RegClass::GP32)
+                                    .expect("register allocation failed, TODO: spilling");
+                                chosen[i as usize] = chosen_reg;
+                                *r = MCReg::from_phys(chosen_reg);
+                                if dead {
+                                    r.set_dead();
+                                } else {
+                                    chosen_reg.set_bit(&mut free, false);
                                 }
                             } else {
-                                // from
-                                if let Some(i) = r.virt() {
-                                    let chosen = chosen[i as usize];
-                                    let dead = r.is_dead();
-                                    *r = MCReg::from_phys(chosen);
-                                    if dead {
-                                        chosen.set_bit(&mut free, true);
-                                        // always preserve the dead bit
-                                        r.set_dead();
-                                    }
-                                } else {
-                                    r.phys::<R>().unwrap().set_bit(&mut free, false);
-                                }
-                            };
+                                r.phys::<R>().unwrap().set_bit(&mut free, false);
+                            }
                         }
                         continue;
                     }
                 }
             }
 
-            /*
-            if inst.inst.is_copy() && inst.ops[1] & DEAD_BIT != 0 {
-                let a = decode_reg::<I::Register>(inst.ops[0]);
-                let b = decode_reg::<I::Register>(inst.ops[1]);
-                match (a, b) {
-                    (RegType::Virtual(a), RegType::Reg(b)) => {
-                        if !b.get_bit(&intersecting_precolored[a.0 as usize]) {
-                            // theoretically not necessary but right now argument registers are not
-                            // handled too well so this is needed
-                            b.set_bit(&mut free, false);
-                            debug_assert!(!b.get_bit(&free));
-                            chosen[a.0 as usize] = b;
-                            inst.ops[0] = PHYSICAL_BIT | b.encode() as u64;
-                            continue;
-                        }
-                    }
-                    (RegType::Virtual(a), RegType::Virtual(b)) => {
-                        let b_reg = chosen[b.0 as usize];
-                        if !b_reg.get_bit(&intersecting_precolored[a.0 as usize]) {
-                            debug_assert!(!b_reg.get_bit(&free), "{block:?}:{i}");
-                            chosen[a.0 as usize] = b_reg;
-                            let encoded = PHYSICAL_BIT | b_reg.encode() as u64;
-                            inst.ops[0] = encoded;
-                            inst.ops[1] = encoded;
-                            continue;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            */
             for arg in ir.args_mut(block_ref, env) {
                 match arg {
                     ArgumentMut::MCReg(Usage::Def, _) => {}
