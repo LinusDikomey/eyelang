@@ -1,9 +1,9 @@
 use dmap::DHashMap;
 
 use crate::{
-    Argument, BUILTIN, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr,
-    INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId,
-    TypedInstruction, builder::write_args,
+    Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
+    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction,
+    builder::write_args,
 };
 
 pub struct IrModify {
@@ -226,18 +226,19 @@ impl IrModify {
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
         let Self {
             mut ir,
-            mut additional,
+            additional,
             renames: rename_map,
         } = self;
         if additional.is_empty() && rename_map.is_empty() {
             return ir;
         }
-        additional.sort_by_key(|add| add.before.0);
         let inst_count = ir.insts.len() + additional.len();
         let mut insts = Vec::with_capacity(inst_count);
         let new_refs = (ir.insts.len() as u32..).map(Ref);
         let mut old_insts = ir.insts.into_iter();
-        let mut new_insts = additional.into_iter().zip(new_refs).peekable();
+        let mut new_insts: Vec<_> = additional.into_iter().zip(new_refs).collect();
+        new_insts.sort_by_key(|(inst, _r)| inst.before.0);
+        let mut new_insts = new_insts.into_iter().peekable();
 
         let mut block_start_indices: DHashMap<u32, BlockId> = ir
             .blocks
@@ -273,19 +274,11 @@ impl IrModify {
             else {
                 break;
             };
-            if inst
-                .as_module(BUILTIN)
-                .is_some_and(|inst| inst.op() == Builtin::BlockArg)
-            {
-                tracing::debug!(target: "ir-compress", "Adding block arg at {}, new: {is_new}", insts.len());
-            } else {
-                tracing::debug!(target: "ir-compress", "Adding {inst:?}, new: {is_new} next_before: {:?}", new_insts.peek().map(|(inst, _)| inst.before));
-            }
             if let Some(block) = block_start_indices.remove(&before_idx.0) {
                 let info = &mut ir.blocks[block.idx()];
                 current_block = block;
                 info.idx = insts.len() as u32;
-                tracing::debug!(target: "ir-compress", "Starting block {block} at with {inst:?}, info: {info:?}");
+                tracing::debug!(target: "ir-compress", "Starting block {block} at {}, info: {info:?}", insts.len());
             }
             if inst
                 .as_module(crate::BUILTIN)
@@ -304,6 +297,7 @@ impl IrModify {
             }
             let new_r = Ref(insts.len() as _);
             renames[r.idx()] = new_r;
+            tracing::debug!(target: "ir-compress", "Renamed due to new position {r} -> {new_r}");
             insts.push(inst);
         }
 

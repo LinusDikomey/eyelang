@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use dmap::{DHashMap, DHashSet};
 
 use crate::{
-    Argument, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
+    Argument, BUILTIN, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
     dialect::{self, Mem},
     modify::IrModify,
 };
@@ -122,23 +122,26 @@ impl super::FunctionPass for Mem2Reg {
             .collect();
 
         // insert block arguments
-        let variables: DHashMap<Ref, DHashMap<BlockId, (Ref, u32)>> = variables
+        let variables: DHashMap<Ref, (TypeId, DHashMap<BlockId, (Ref, u32)>)> = variables
             .into_iter()
             .map(|(var, (ty, blocks))| {
                 (
                     var,
-                    blocks
-                        .into_iter()
-                        .map(|block| {
-                            let arg = ir.add_block_arg(env, block, ty);
-                            tracing::debug!(
-                                target: "mem2reg",
-                                "Added block arg {} (index {}) for {var} in {block}",
-                                arg.0, arg.1,
-                            );
-                            (block, arg)
-                        })
-                        .collect(),
+                    (
+                        ty,
+                        blocks
+                            .into_iter()
+                            .map(|block| {
+                                let arg = ir.add_block_arg(env, block, ty);
+                                tracing::debug!(
+                                    target: "mem2reg",
+                                    "Added block arg {} (index {}) for {var} in {block}",
+                                    arg.0, arg.1,
+                                );
+                                (block, arg)
+                            })
+                            .collect(),
+                    ),
                 )
             })
             .collect();
@@ -150,11 +153,8 @@ impl super::FunctionPass for Mem2Reg {
         let mut stack = vec![Op::Enter(BlockId::ENTRY)];
         let mut vars_stack = vec![];
 
-        fn decide_value(vars: &[DHashMap<Ref, Ref>], var: Ref) -> Ref {
-            vars.iter()
-                .rev()
-                .find_map(|map| map.get(&var).copied())
-                .unwrap_or(Ref::UNIT) // FIXME: unit is generally not a valid value
+        fn decide_value(vars: &[DHashMap<Ref, Ref>], var: Ref) -> Option<Ref> {
+            vars.iter().rev().find_map(|map| map.get(&var).copied())
         }
 
         let mut seen = Bitmap::new(ir.block_ids().len());
@@ -167,7 +167,7 @@ impl super::FunctionPass for Mem2Reg {
                     }
                     seen.set(block.idx(), true);
                     let mut block_vars = dmap::new();
-                    for (&var, blocks) in &variables {
+                    for (&var, (_ty, blocks)) in &variables {
                         if let Some(&(arg, _)) = blocks.get(&block) {
                             block_vars.insert(var, arg);
                         }
@@ -188,7 +188,11 @@ impl super::FunctionPass for Mem2Reg {
                                         unreachable!()
                                     };
                                     if variables.contains_key(&ptr) {
-                                        ir.replace_with(r, decide_value(&vars_stack, ptr));
+                                        if let Some(value) = decide_value(&vars_stack, ptr) {
+                                            ir.replace_with(r, value);
+                                        } else {
+                                            ir.replace(env, r, BUILTIN.Undef(inst.ty()));
+                                        }
                                     }
                                 }
                                 Mem::Store => {
@@ -207,14 +211,37 @@ impl super::FunctionPass for Mem2Reg {
                         }
                     }
                     let terminator = refs.iter().last().unwrap();
+                    let mut undefined_args = Vec::new();
                     ir.visit_block_targets_mut(terminator, env, |target, args| {
-                        for (&var, blocks) in &variables {
+                        for (&var, (_ty, blocks)) in &variables {
                             if let Some(&(_, idx)) = blocks.get(&target) {
-                                args[idx as usize] = decide_value(&vars_stack, var);
+                                if let Some(value) = decide_value(&vars_stack, var) {
+                                    args[idx as usize] = value;
+                                } else {
+                                    undefined_args.push((target, idx, var, Ref::UNIT));
+                                    // args[idx as usize] = Ref::UNIT;
+                                    //todo!("handle missing mem2reg values in block args")
+                                }
                             }
                         }
                         stack.push(Op::Enter(target));
                     });
+                    // FIXME: this is very hacky and most likely doesn't work in all cases
+                    // (for example with the same target block mutliple times)
+                    for (_target, _idx, var, r) in &mut undefined_args {
+                        let ty = variables.get(var).unwrap().0;
+                        *r = ir.add_before(env, terminator, BUILTIN.Undef(ty));
+                    }
+                    if !undefined_args.is_empty() {
+                        ir.visit_block_targets_mut(terminator, env, |target, args| {
+                            for (t, idx, _, r) in &undefined_args {
+                                if *t == target {
+                                    tracing::debug!(target: "mem2reg", "Replaced undefined argument with {r}");
+                                    args[*idx as usize] = *r;
+                                }
+                            }
+                        });
+                    }
                 }
                 Op::Leave => {
                     vars_stack.pop();
