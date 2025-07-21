@@ -779,7 +779,7 @@ impl block_graph::Blocks for FunctionIr {
     */
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockInfo {
     arg_count: u32,
     idx: u32,

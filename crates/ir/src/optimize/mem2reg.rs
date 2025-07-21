@@ -25,7 +25,7 @@ impl fmt::Debug for Mem2Reg {
     }
 }
 impl super::FunctionPass for Mem2Reg {
-    fn run(&self, env: &crate::Environment, _types: &crate::Types, ir: FunctionIr) -> FunctionIr {
+    fn run(&self, env: &crate::Environment, types: &crate::Types, ir: FunctionIr) -> FunctionIr {
         let Self { mem } = *self;
         let mut can_alias = Bitmap::new(ir.inst_count() as usize);
         let mut variables = dmap::new();
@@ -88,6 +88,14 @@ impl super::FunctionPass for Mem2Reg {
             }
         }
 
+        for (variable, (blocks, ty)) in &variables {
+            tracing::debug!(
+                target: "mem2reg",
+                "Unaliased variable {variable}: {} with stores in {blocks:?}",
+                types.display_type(*ty, env.primitives())
+            );
+        }
+
         let block_graph = BlockGraph::calculate(&ir, env);
 
         let mut ir = IrModify::new(ir);
@@ -121,7 +129,15 @@ impl super::FunctionPass for Mem2Reg {
                     var,
                     blocks
                         .into_iter()
-                        .map(|block| (block, ir.add_block_arg(env, block, ty)))
+                        .map(|block| {
+                            let arg = ir.add_block_arg(env, block, ty);
+                            tracing::debug!(
+                                target: "mem2reg",
+                                "Added block arg {} (index {}) for {var} in {block}",
+                                arg.0, arg.1,
+                            );
+                            (block, arg)
+                        })
                         .collect(),
                 )
             })
@@ -138,7 +154,7 @@ impl super::FunctionPass for Mem2Reg {
             vars.iter()
                 .rev()
                 .find_map(|map| map.get(&var).copied())
-                .unwrap_or(Ref::UNIT)
+                .unwrap_or(Ref::UNIT) // FIXME: unit is generally not a valid value
         }
 
         let mut seen = Bitmap::new(ir.block_ids().len());

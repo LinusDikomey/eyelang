@@ -1,9 +1,9 @@
 use dmap::DHashMap;
 
 use crate::{
-    Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
-    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction,
-    builder::write_args,
+    Argument, BUILTIN, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr,
+    INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId,
+    TypedInstruction, builder::write_args,
 };
 
 pub struct IrModify {
@@ -118,7 +118,7 @@ impl IrModify {
     pub fn add_block_arg(&mut self, env: &Environment, block: BlockId, ty: TypeId) -> (Ref, u32) {
         let r = Ref((self.ir.insts.len() + self.additional.len()) as u32);
         let block_info = &mut self.ir.blocks[block.idx()];
-        let before = Ref(block_info.idx + block_info.arg_count);
+        let before = Ref(block_info.idx); // before the first instruction of the body block
         let prev_arg_count = block_info.arg_count;
         block_info.arg_count += 1;
         self.additional.push(AdditionalInst {
@@ -273,10 +273,19 @@ impl IrModify {
             else {
                 break;
             };
+            if inst
+                .as_module(BUILTIN)
+                .is_some_and(|inst| inst.op() == Builtin::BlockArg)
+            {
+                tracing::debug!(target: "ir-compress", "Adding block arg at {}, new: {is_new}", insts.len());
+            } else {
+                tracing::debug!(target: "ir-compress", "Adding {inst:?}, new: {is_new} next_before: {:?}", new_insts.peek().map(|(inst, _)| inst.before));
+            }
             if let Some(block) = block_start_indices.remove(&before_idx.0) {
                 let info = &mut ir.blocks[block.idx()];
                 current_block = block;
                 info.idx = insts.len() as u32;
+                tracing::debug!(target: "ir-compress", "Starting block {block} at with {inst:?}, info: {info:?}");
             }
             if inst
                 .as_module(crate::BUILTIN)
@@ -453,6 +462,7 @@ impl IrModify {
     }
 }
 
+#[derive(Debug)]
 struct AdditionalInst {
     before: Ref,
     inst: Instruction,
