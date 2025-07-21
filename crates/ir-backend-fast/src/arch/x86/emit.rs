@@ -3,7 +3,7 @@ use std::{collections::VecDeque, hint::unreachable_unchecked};
 use ir::{
     Argument, BlockId, BlockTarget, Environment, FunctionIr, MCReg, ModuleOf,
     block_graph::Blocks,
-    mc::{Mc, OpType, RegClass},
+    mc::{Mc, OpType, ParcopySolver, RegClass},
 };
 
 use super::isa::{Reg, X86};
@@ -15,6 +15,7 @@ pub fn write(
     ir: &FunctionIr,
     text: &mut Vec<u8>,
 ) {
+    let mut parcopy = ParcopySolver::new();
     let start = text.len();
     let mut block_queue = VecDeque::from([BlockId::ENTRY]);
     let mut block_offsets: Box<[Option<u32>]> =
@@ -34,30 +35,27 @@ pub fn write(
             if let Some(inst) = i.as_module(mc) {
                 match inst.op() {
                     Mc::IncomingBlockArgs => {}
-                    Mc::Copy => {
+                    Mc::Copy | Mc::AssignBlockArgs => {
                         let mut args = ir.args_iter(i, env).map(|arg| {
                             let Argument::MCReg(r) = arg else {
                                 unreachable!()
                             };
                             r
                         });
-                        // FIXME: this doesn't handle conflicting copies, will require a proper
-                        // parallel copy algo in the future
-                        loop {
-                            let Some(to) = args.next() else { break };
-                            let from = args.next().unwrap();
-                            let to = to.phys::<Reg>().unwrap();
-                            let from = from.phys::<Reg>().unwrap();
-                            if to.bit() == from.bit() {
-                                continue;
-                            }
-                            // FIXME: assumes 32 bits right now
-                            let modrm = encode_modrm_rr(to, from, false);
-                            if modrm.rex != 0 {
-                                text.push(modrm.rex);
-                            }
-                            text.extend([0x89, modrm.modrm]);
-                        }
+                        parcopy.parcopy(
+                            args,
+                            |to, from| {
+                                // FIXME: assumes 32 bits right now
+                                let to = to.phys().unwrap();
+                                let from = from.phys().unwrap();
+                                let modrm = encode_modrm_rr(to, from, false);
+                                if modrm.rex != 0 {
+                                    text.push(modrm.rex);
+                                }
+                                text.extend([0x89, modrm.modrm]);
+                            },
+                            MCReg::from_phys(super::TMP_REGISTER),
+                        );
                     }
                 }
                 continue;

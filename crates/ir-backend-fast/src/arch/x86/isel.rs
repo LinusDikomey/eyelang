@@ -830,7 +830,11 @@ impl IselCtx {
             })
             .collect();
         if !copyargs.is_empty() {
-            ir.add_before(env, before, parallel_copy(mc, &copyargs, self.unit));
+            ir.add_before(
+                env,
+                before,
+                ir::mc::parallel_copy_args(mc, &copyargs, self.unit),
+            );
         }
     }
 }
@@ -866,7 +870,7 @@ ir::visitor! {
             MCValue::Reg(reg) => {
                 // TODO: othher sizes than 32 bits
                 let eax = MCReg::from_phys(Reg::eax);
-                ir.add_before(env, r, parallel_copy(mc, &[eax, reg], ctx.unit));
+                ir.add_before(env, r, ir::mc::parallel_copy(mc, &[eax, reg], ctx.unit));
             }
             MCValue::TwoRegs(_, _) => todo!("handle returning 2 registers"),
         }
@@ -900,7 +904,7 @@ ir::visitor! {
         let MCValue::Reg(a) = ctx.get(a) else { todo!() };
         let MCValue::Reg(b) = ctx.get(b) else { todo!() };
         let out = ir.new_reg();
-        ir.add_before(env, r, parallel_copy(mc, &[out, a], ctx.unit));
+        ir.add_before(env, r, ir::mc::parallel_copy(mc, &[out, a], ctx.unit));
         ctx.set(r, MCValue::Reg(out));
         x86.addrr32(out, b, ctx.unit)
     };
@@ -909,18 +913,6 @@ ir::visitor! {
         #[allow(clippy::unused_unit)]
         ()
     };
-}
-
-fn parallel_copy(
-    mc: ModuleOf<Mc>,
-    args: &[MCReg],
-    unit: ir::TypeId,
-) -> (FunctionId, impl ir::IntoArgs<'_>, ir::TypeId) {
-    let f = ir::FunctionId {
-        module: mc.id(),
-        function: ir::mc::Mc::Copy.id(),
-    };
-    (f, ((), args), unit)
 }
 
 /*

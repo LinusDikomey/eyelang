@@ -1,7 +1,9 @@
 mod dialect;
+mod parcopy;
 mod regalloc;
 
 pub use dialect::{Mc, McInsts};
+pub use parcopy::ParcopySolver;
 pub use regalloc::regalloc;
 
 use std::ops::{BitAnd, BitOr, Not};
@@ -87,6 +89,30 @@ pub enum RegClass {
 pub struct StackSlot {
     pub offset: u32,
     pub size: u32,
+}
+
+pub fn parallel_copy(
+    mc: ModuleOf<Mc>,
+    args: &[MCReg],
+    unit: crate::TypeId,
+) -> (FunctionId, impl crate::IntoArgs<'_>, crate::TypeId) {
+    let f = crate::FunctionId {
+        module: mc.id(),
+        function: Mc::Copy.id(),
+    };
+    (f, ((), args), unit)
+}
+
+pub fn parallel_copy_args(
+    mc: ModuleOf<Mc>,
+    args: &[MCReg],
+    unit: crate::TypeId,
+) -> (FunctionId, impl crate::IntoArgs<'_>, crate::TypeId) {
+    let f = crate::FunctionId {
+        module: mc.id(),
+        function: Mc::AssignBlockArgs.id(),
+    };
+    (f, ((), args), unit)
 }
 
 #[macro_export]
@@ -189,4 +215,7 @@ macro_rules! registers {
 
     };
 }
+use crate::FunctionId;
+use crate::MCReg;
+use crate::ModuleOf;
 pub use crate::registers;

@@ -15,7 +15,9 @@ ir::mc::registers! { Reg RegisterBits
     Flags => eflags;
 }
 
-pub const PREOCCUPIED_REGISTERS: RegisterBits = RegisterBits(Reg::rbp.bit().0 | Reg::rsp.bit().0);
+pub const TMP_REGISTER: Reg = Reg::r15;
+pub const PREOCCUPIED_REGISTERS: RegisterBits =
+    RegisterBits(Reg::rbp.bit().0 | Reg::rsp.bit().0 | TMP_REGISTER.bit().0);
 
 impl fmt::Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

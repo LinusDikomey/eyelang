@@ -100,7 +100,7 @@ fn analyze_inst_liveness<R: Register>(
     if let Some(inst) = ir.get_inst(inst_r).as_module(mc) {
         match inst.op() {
             Mc::IncomingBlockArgs => {}
-            Mc::Copy => {
+            Mc::Copy | Mc::AssignBlockArgs => {
                 for (arg_idx, arg) in ir.args_mut(inst_r, env).enumerate() {
                     let ArgumentMut::MCReg(_, r) = arg else {
                         unreachable!();
@@ -216,7 +216,8 @@ fn perform_regalloc<R: Register>(
             if let Some(inst) = ir.get_inst(block_ref).as_module(mc) {
                 match inst.op() {
                     Mc::IncomingBlockArgs => {}
-                    Mc::Copy => {
+                    Mc::Copy | Mc::AssignBlockArgs => {
+                        let is_block_args = inst.op() == Mc::AssignBlockArgs;
                         // handle source arguments first
                         for arg in ir.args_mut(block_ref, env).skip(1).step_by(2) {
                             let ArgumentMut::MCReg(_, r) = arg else {
@@ -244,11 +245,17 @@ fn perform_regalloc<R: Register>(
                             };
                             if let Some(i) = r.virt() {
                                 let dead = r.is_dead();
-                                let occupied = intersecting_precolored[i as usize];
-                                let avail = free & !occupied;
-                                let chosen_reg = R::allocate_reg(avail, super::RegClass::GP32)
-                                    .expect("register allocation failed, TODO: spilling");
-                                chosen[i as usize] = chosen_reg;
+                                let chosen_reg;
+                                if is_block_args {
+                                    // in the case of block args, the registers were already assigned
+                                    chosen_reg = chosen[i as usize];
+                                } else {
+                                    let occupied = intersecting_precolored[i as usize];
+                                    let avail = free & !occupied;
+                                    chosen_reg = R::allocate_reg(avail, super::RegClass::GP32)
+                                        .expect("register allocation failed, TODO: spilling");
+                                    chosen[i as usize] = chosen_reg;
+                                };
                                 *r = MCReg::from_phys(chosen_reg);
                                 if dead {
                                     r.set_dead();

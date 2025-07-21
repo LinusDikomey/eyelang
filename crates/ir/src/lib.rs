@@ -222,9 +222,22 @@ impl BlockId {
 #[derive(Debug, Clone, Copy)]
 pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct MCReg(u32);
+impl fmt::Debug for MCReg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_dead() {
+            write!(f, "!")?;
+        }
+        if let Some(i) = self.virt() {
+            write!(f, "${i}")
+        } else {
+            let i: mc::UnknownRegister = self.phys().unwrap();
+            write!(f, "%{}", i.encode())
+        }
+    }
+}
 impl MCReg {
     const VIRT_BIT: u32 = 1 << 31;
     const DEAD_BIT: u32 = 1 << 30;
@@ -263,7 +276,7 @@ impl MCReg {
             .then_some(self.0 & !(Self::VIRT_BIT | Self::DEAD_BIT))
     }
 
-    fn from_virt(r: u32) -> MCReg {
+    const fn from_virt(r: u32) -> MCReg {
         if r & (Self::VIRT_BIT | Self::DEAD_BIT) != 0 {
             panic!("virtual register value too high")
         }
@@ -630,7 +643,7 @@ impl FunctionIr {
         &'a self,
         inst: &'a Instruction,
         env: &'a Environment,
-    ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
+    ) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
         let func = &env[inst.function];
         decode_args(
             &inst.args,
@@ -848,7 +861,7 @@ fn decode_args<'a>(
     varargs: Option<Parameter>,
     blocks: &'a [BlockInfo],
     extra: &'a [u32],
-) -> impl Iterator<Item = Argument<'a>> + use<'a> {
+) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
     let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
     let mut vararg_count = 0;
     let mut args = if count <= INLINE_ARGS && varargs.is_none() {
