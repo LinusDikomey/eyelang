@@ -166,6 +166,16 @@ impl fmt::Display for FunctionDisplay<'_> {
     }
 }
 
+pub struct InstName<'a> {
+    pub module: &'a str,
+    pub function: &'a str,
+}
+impl<'a> fmt::Display for InstName<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        cwrite!(f, "#c<{}>.#b<{}>", self.module, self.function)
+    }
+}
+
 pub struct BodyDisplay<'a, R: Register = UnknownRegister> {
     pub env: &'a Environment,
     pub types: &'a crate::Types,
@@ -220,8 +230,14 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                         write!(f, " ")?;
                     }
                 }
-                cwrite!(f, "#c<{}>.", called_module.name)?;
-                cwrite!(f, "#b<{}>", called.name)?;
+                write!(
+                    f,
+                    "{}",
+                    InstName {
+                        module: &called_module.name,
+                        function: &called.name,
+                    }
+                )?;
                 for arg in inst.args_inner(&called.params, called.varargs, &ir.blocks, &ir.extra) {
                     match arg {
                         Argument::Ref(r) => write!(f, " {r}")?,

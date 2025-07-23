@@ -783,11 +783,11 @@ impl block_graph::Blocks for FunctionIr {
 
 #[derive(Clone, Debug)]
 pub struct BlockInfo {
-    arg_count: u32,
-    idx: u32,
-    len: u32,
-    preds: DHashSet<BlockId>,
-    succs: DHashSet<BlockId>,
+    pub arg_count: u32,
+    pub idx: u32,
+    pub len: u32,
+    pub preds: DHashSet<BlockId>,
+    pub succs: DHashSet<BlockId>,
 }
 
 #[derive(Debug, Clone, Copy)]

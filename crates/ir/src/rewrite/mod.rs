@@ -48,7 +48,8 @@ impl RewriteStrategy for LinearRewriteOrder {
 
     fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
         let info = ir.get_block(block);
-        info.idx..info.idx + info.len
+        let s = info.idx + info.arg_count;
+        s..s + info.len
     }
 }
 pub struct ReverseRewriteOrder {
@@ -70,7 +71,9 @@ impl RewriteStrategy for ReverseRewriteOrder {
 
     fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
         let info = ir.get_block(block);
-        (info.idx..info.idx + info.len).rev()
+        let s = info.idx + info.arg_count;
+        dbg!(info);
+        (s..s + info.len).rev()
     }
 }
 
@@ -137,7 +140,11 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
         ctx.begin_block(env, ir, block);
         for idx in strategy.iterate_block(ir, block) {
             let r = Ref(idx);
-            let inst = *ir.get_inst(r);
+            dbg!(r);
+            let Ok(&inst) = ir.try_get_inst(r) else {
+                // instruction was deleted, skip it
+                continue;
+            };
             let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
             match rewrite {
                 None => {}

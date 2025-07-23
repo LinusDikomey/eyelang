@@ -102,7 +102,6 @@ pub fn codegen(
     let mut ctx = IselCtx {
         unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
         regs,
-        block_arg_regs: body.block_ids().map(|_| Vec::new()).collect(),
         mc,
         use_counts,
     };
@@ -779,13 +778,16 @@ impl Gen<'_> {
 pub struct IselCtx {
     unit: ir::TypeId,
     regs: Slots<MCReg>,
-    block_arg_regs: Box<[Vec<MCReg>]>,
     mc: ModuleOf<Mc>,
     use_counts: Box<[u32]>,
 }
 impl ir::rewrite::RewriteCtx for IselCtx {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
-        let args: &[MCReg] = &self.block_arg_regs[block.idx()];
+        let info = ir.get_block(block);
+        let start = info.idx;
+        let args = self
+            .regs
+            .get_range(Ref::index(info.idx), Ref::index(info.idx + info.arg_count));
         let start = ir.get_block(block);
         let f = FunctionId {
             module: self.mc.id(),
@@ -819,14 +821,21 @@ impl IselCtx {
             .iter()
             .zip(args)
             .flat_map(|(to, &from)| {
-                let to = self.values[to
-                    .into_ref()
-                    .expect("Copyargs target regs should not be values")
-                    as usize];
-                match from.into_ref() {
-                    Some(from) => [to, self.values[from as usize]],
-                    None => todo!("handle value arguments in copyargs"),
-                }
+                let to = self.regs.get(to);
+                let from = if from.is_ref() {
+                    self.regs.get(from)
+                } else {
+                    match from {
+                        Ref::UNIT => &[],
+                        Ref::TRUE | Ref::FALSE => todo!("bools in copyargs"),
+                        _ => unreachable!(),
+                    }
+                };
+                debug_assert_eq!(from.len(), to.len());
+                to.iter()
+                    .copied()
+                    .zip(from.iter().copied())
+                    .flat_map(|(a, b)| [a, b])
             })
             .collect();
         if !copyargs.is_empty() {
@@ -856,11 +865,11 @@ ir::visitor! {
     patterns:
     (%r = arith.Int (#x)) => {
         let regs = ctx.regs.get(r);
-        match regs {
-            &[reg] => {
+        match *regs {
+            [reg] => {
                 x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
             }
-            &[_a, _b] => todo!("large ints"),
+            [_a, _b] => todo!("large ints"),
             _ => unreachable!()
         }
     };
@@ -901,15 +910,16 @@ ir::visitor! {
         x86.jmp(b2, ctx.unit)
     };
     (%r = arith.Add a b) => {
-        let MCValue::Reg(a) = ctx.get(a) else { todo!() };
-        let MCValue::Reg(b) = ctx.get(b) else { todo!() };
-        let out = ir.new_reg();
-        ir.add_before(env, r, ir::mc::parallel_copy(mc, &[out, a], ctx.unit));
-        ctx.set(r, MCValue::Reg(out));
-        x86.addrr32(out, b, ctx.unit)
+        match (ctx.regs.get(a), ctx.regs.get(b), ctx.regs.get(r)) {
+            (&[a], &[b], &[out]) => {
+                ir.add_before(env, r, ir::mc::parallel_copy(mc, &[out, a], ctx.unit));
+                x86.addrr32(out, b, ctx.unit)
+            }
+            _ => todo!("large int adds"),
+        }
     };
     (%r = _) => {
-        todo!("unhandled instruction at {r}");
+        todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
         #[allow(clippy::unused_unit)]
         ()
     };

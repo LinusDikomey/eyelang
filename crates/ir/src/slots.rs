@@ -10,13 +10,12 @@ impl<V: Copy> Slots<V> {
         let slot_map = ir
             .insts
             .iter()
-            .map(|inst| {
+            .enumerate()
+            .map(|(i, inst)| {
                 let count = slot_count(types[inst.ty], types);
-                if count == 0 {
-                    return u32::MAX;
-                }
                 let idx = slots.len() as u32;
                 slots.extend(std::iter::repeat_n(default, count as usize));
+                tracing::debug!(target: "slots", "%{i} = {inst:?} -> @{idx}..+{count}");
                 idx
             })
             .collect();
@@ -29,6 +28,19 @@ impl<V: Copy> Slots<V> {
         let end = self
             .slot_map
             .get(r + 1)
+            .map(|i| *i as usize)
+            .unwrap_or(self.slots.len());
+        tracing::debug!(target: "slots", "getting {r} -> {start}..{end} with {} slots", self.slot_map.len());
+        &self.slots[start..end]
+    }
+
+    // gets an exclusive range of values
+    pub fn get_range(&self, start: Ref, end: Ref) -> &[V] {
+        let start = self.slot_map[start.into_ref().expect("Can't get slots for value ref") as usize]
+            as usize;
+        let end = self
+            .slot_map
+            .get(end.into_ref().expect("Can't get slots for value ref") as usize)
             .map(|i| *i as usize)
             .unwrap_or(self.slots.len());
         &self.slots[start..end]

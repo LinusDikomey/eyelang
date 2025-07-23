@@ -51,18 +51,26 @@ impl IrModify {
         self.ir.args_n(inst)
     }
 
-    pub fn get_inst(&self, r: Ref) -> &Instruction {
-        let r = self.renames.get(&r).copied().unwrap_or(r);
+    pub(crate) fn try_get_inst(&self, r: Ref) -> Result<&Instruction, ()> {
         debug_assert!(
             r.is_ref(),
-            "Tried to get an instruction from a Ref value or a Ref that was renamed to one"
+            "Tried to get an instruction from a Ref value: {r}"
         );
+        let r = self.renames.get(&r).copied().unwrap_or(r);
+        if !r.is_ref() {
+            return Err(());
+        }
         let i = r.0 as usize;
-        if i < self.ir.insts.len() {
+        Ok(if i < self.ir.insts.len() {
             &self.ir.insts[i]
         } else {
             &self.additional[i - self.ir.insts.len()].inst
-        }
+        })
+    }
+
+    pub fn get_inst(&self, r: Ref) -> &Instruction {
+        self.try_get_inst(r)
+            .expect("Retrieved instruction was deleted")
     }
 
     pub fn visit_block_targets_mut(
