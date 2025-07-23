@@ -4,7 +4,8 @@ use ir::{
     mc::{Mc, McInsts, RegClass},
     modify::IrModify,
     optimize::FunctionPass,
-    rewrite::{Rewrite, RewriteCtx, Visitor},
+    rewrite::{ReverseRewriteOrder, Rewrite, RewriteCtx, Visitor},
+    slots::Slots,
 };
 
 use crate::{
@@ -63,51 +64,59 @@ pub fn codegen(
     );
     */
 
-    let mut values = vec![MCValue::None; body.inst_count() as usize].into_boxed_slice();
     let mut body = body.clone();
+
+    let mut regs = Slots::with_default(&body, types, MCReg::from_virt(0));
+    for slot in &mut regs.slots {
+        *slot = body.new_reg();
+    }
     let mut types = types.clone();
-    let mut ctx = IselCtx {
-        unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
-        values,
-        block_arg_regs: body.block_ids().map(|_| Vec::new()).collect(),
-        mc,
-    };
-
-    for block in body.block_ids() {
-        for arg in body.get_block_args(block).iter() {
-            let mir_classes = block_arg_regs(types[body.get_ref_ty(arg)], &types, env.primitives());
-
-            // TODO: register classes
-            let value = match mir_classes {
-                ZeroToTwo::Zero => MCValue::None,
-                ZeroToTwo::One(a) => {
-                    let a = body.new_reg();
-                    ctx.block_arg_regs[block.idx()].push(a);
-                    MCValue::Reg(a)
+    let block_graph = BlockGraph::calculate(&body, env);
+    let mut use_counts = vec![0; body.inst_count() as usize].into_boxed_slice();
+    for i in 0..body.inst_count() {
+        let inst = body.get_inst(Ref::index(i));
+        for arg in body.args_iter(inst, env) {
+            match arg {
+                ir::Argument::Ref(r) => {
+                    if let Some(r) = r.into_ref() {
+                        use_counts[r as usize] += 1;
+                    }
                 }
-                ZeroToTwo::Two(a, b) => {
-                    let a = body.new_reg();
-                    let b = body.new_reg();
-                    ctx.block_arg_regs[block.idx()].extend([a, b]);
-                    MCValue::TwoRegs(a, b)
+                ir::Argument::BlockTarget(BlockTarget(_block, args)) => {
+                    for r in args {
+                        if let Some(r) = r.into_ref() {
+                            use_counts[r as usize] += 1;
+                        }
+                    }
                 }
-            };
-            ctx.set(arg, value);
+                ir::Argument::BlockId(_)
+                | ir::Argument::Int(_)
+                | ir::Argument::Float(_)
+                | ir::Argument::TypeId(_)
+                | ir::Argument::FunctionId(_)
+                | ir::Argument::GlobalId(_)
+                | ir::Argument::MCReg(_) => {}
+            }
         }
     }
+    let mut ctx = IselCtx {
+        unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
+        regs,
+        block_arg_regs: body.block_ids().map(|_| Vec::new()).collect(),
+        mc,
+        use_counts,
+    };
 
     let mut body = IrModify::new(body);
 
-    ir::rewrite::rewrite_in_place(&mut body, &types, env, &mut ctx, isel);
-
-    /*
-        let mir_block = gen.block_map[block.idx()].0;
-        let mut builder = mir.begin_block(mir_block);
-        for (i, inst) in body.get_block(block) {
-            values[i.idx()] = gen.gen_inst(inst, block, &mut builder, &values, body);
-        }
-    }
-    */
+    ir::rewrite::rewrite_in_place(
+        &mut body,
+        &types,
+        env,
+        &mut ctx,
+        isel,
+        ReverseRewriteOrder::new(&block_graph),
+    );
 
     /*
     for idx in stack_setup_indices {
@@ -769,9 +778,10 @@ impl Gen<'_> {
 
 pub struct IselCtx {
     unit: ir::TypeId,
-    values: Box<[MCValue]>,
+    regs: Slots<MCReg>,
     block_arg_regs: Box<[Vec<MCReg>]>,
     mc: ModuleOf<Mc>,
+    use_counts: Box<[u32]>,
 }
 impl ir::rewrite::RewriteCtx for IselCtx {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
@@ -786,16 +796,11 @@ impl ir::rewrite::RewriteCtx for IselCtx {
     }
 }
 impl IselCtx {
-    fn set(&mut self, r: Ref, value: MCValue) {
-        self.values[r.idx()] = value;
-    }
-
-    fn get(&mut self, r: Ref) -> MCValue {
-        match r {
-            Ref::TRUE => MCValue::Imm(1),
-            Ref::FALSE => MCValue::Imm(0),
-            Ref::UNIT => MCValue::None,
-            r => self.values[r.idx()],
+    fn use_count(&self, r: Ref) -> u32 {
+        if let Some(r) = r.into_ref() {
+            self.use_counts[r as usize]
+        } else {
+            0
         }
     }
 
@@ -814,19 +819,14 @@ impl IselCtx {
             .iter()
             .zip(args)
             .flat_map(|(to, &from)| {
-                let to = self.get(to);
-                let from = self.get(from);
-                let values = match (to, from) {
-                    (MCValue::None, MCValue::None) => None,
-                    (MCValue::Reg(a), MCValue::Reg(b)) => Some(([a, b], None)),
-                    (MCValue::TwoRegs(a1, a2), MCValue::TwoRegs(b1, b2)) => {
-                        Some(([a1, b1], Some([a2, b2])))
-                    }
-                    _ => unreachable!("shouldn't copy {to:?} {from:?}"),
-                };
-                values
-                    .into_iter()
-                    .flat_map(|(xs, rest)| xs.into_iter().chain(rest.into_iter().flatten()))
+                let to = self.values[to
+                    .into_ref()
+                    .expect("Copyargs target regs should not be values")
+                    as usize];
+                match from.into_ref() {
+                    Some(from) => [to, self.values[from as usize]],
+                    None => todo!("handle value arguments in copyargs"),
+                }
             })
             .collect();
         if !copyargs.is_empty() {
@@ -855,24 +855,23 @@ ir::visitor! {
 
     patterns:
     (%r = arith.Int (#x)) => {
-        let reg = ir.new_reg();
-        ctx.set(r, MCValue::Reg(reg));
-        x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
+        let regs = ctx.regs.get(r);
+        match regs {
+            &[reg] => {
+                x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
+            }
+            &[_a, _b] => todo!("large ints"),
+            _ => unreachable!()
+        }
     };
     (%r = cf.Ret value) => {
-        match ctx.get(value) {
-            MCValue::None | MCValue::Undef => {}
-            MCValue::Imm(x) => {
-                // TODO: handle other than 32-bit values
-                let eax = MCReg::from_phys(Reg::eax);
-                ir.add_before(env, r, x86.movri32(eax, x as u32, ctx.unit));
-            }
-            MCValue::Reg(reg) => {
-                // TODO: othher sizes than 32 bits
+        match ctx.regs.get(value) {
+            [] => {}
+            &[reg] => {
                 let eax = MCReg::from_phys(Reg::eax);
                 ir.add_before(env, r, ir::mc::parallel_copy(mc, &[eax, reg], ctx.unit));
             }
-            MCValue::TwoRegs(_, _) => todo!("handle returning 2 registers"),
+            _ => todo!("multi-reg return values"),
         }
         x86.ret32(ctx.unit)
     };
@@ -881,19 +880,20 @@ ir::visitor! {
         ctx.create_args_copy(env, r, mc, ir, b, &b_args);
         x86.jmp(b, ctx.unit)
     };
-    (arith.LT a b) => {}; // FIXME: this is only to temporarily make the Branch below work
+    (arith.LT a b) => { panic!(); Rewrite::Rename(Ref::UNIT)}; // FIXME: this is only to temporarily make the Branch below work
     (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) => {
-        let MCValue::Reg(a) = ctx.get(a) else {
-            todo!()
-        };
-        let MCValue::Reg(b) = ctx.get(b) else {
-            todo!()
-        };
+        // FIXmE: should be condition on this pattern
+        assert_eq!(ctx.use_count(lt), 1);
+        // PERF: cloning the args here
         let b1_args = b1_args.to_vec();
         let b2_args = b2_args.to_vec();
-        // FIXME: this is only valid when this is the only use of the LT
-        ir.replace(env, lt, x86.cmprr32(a, b, ctx.unit));
-        // TODO: copyargs values.get(ir.block_args(b1)) b1_args
+        ir.replace_with(lt, Ref::UNIT);
+        match (ctx.regs.get(a), ctx.regs.get(b)) {
+            (&[a], &[b]) => {
+                ir.replace(env, lt, x86.cmprr32(a, b, ctx.unit));
+            }
+            _ => todo!("large int comparisons"),
+        }
         ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
         let jl = x86.jl(b1, ctx.unit);
         ir.add_before(env, r, jl);

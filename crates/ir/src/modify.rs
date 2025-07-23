@@ -278,7 +278,7 @@ impl IrModify {
                 let info = &mut ir.blocks[block.idx()];
                 current_block = block;
                 info.idx = insts.len() as u32;
-                tracing::debug!(target: "ir-compress", "Starting block {block} at {}, info: {info:?}", insts.len());
+                tracing::debug!(target: "compress", "Starting block {block} at {}, info: {info:?}", insts.len());
             }
             if inst
                 .as_module(crate::BUILTIN)
@@ -297,7 +297,7 @@ impl IrModify {
             }
             let new_r = Ref(insts.len() as _);
             renames[r.idx()] = new_r;
-            tracing::debug!(target: "ir-compress", "Renamed due to new position {r} -> {new_r}");
+            tracing::debug!(target: "compress", "Renamed due to new position {r} -> {new_r}");
             insts.push(inst);
         }
 
