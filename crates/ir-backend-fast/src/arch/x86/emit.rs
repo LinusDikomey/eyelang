@@ -135,7 +135,7 @@ pub fn write(
                 I::mov_rm32 | I::mov_rm64 => {
                     inst_rm(text, &[0x8B], ir.args(i, env), inst.op() == I::mov_rm64)
                 }
-                I::ret => {
+                I::ret0 | I::ret64 | I::ret128 => {
                     text.push(0xc3);
                 }
                 I::cmp_rr32 => {

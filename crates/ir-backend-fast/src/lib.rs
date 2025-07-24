@@ -69,7 +69,7 @@ impl Backend {
                     "mir:\n{}",
                     mir.display_with_phys_regs::<arch::x86::Reg>(env, &types)
                 );
-                ir::mc::regalloc::<arch::x86::Reg>(
+                ir::mc::regalloc::<arch::x86::X86>(
                     env,
                     mc,
                     &mut mir,

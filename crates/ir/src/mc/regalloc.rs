@@ -2,25 +2,26 @@ use std::collections::VecDeque;
 
 use crate::{
     Argument, ArgumentMut, Bitmap, BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleOf,
-    Ref, Usage, mc::RegClass,
+    Ref, Usage,
+    mc::{McInst, RegClass},
 };
 
 use super::{Mc, Register};
 
-pub fn regalloc<R: Register>(
+pub fn regalloc<I: McInst>(
     env: &Environment,
     mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     types: &crate::Types,
-    preoccupied_bits: R::RegisterBits,
+    preoccupied_bits: <I::Reg as Register>::RegisterBits,
     function: &str,
 ) {
     let graph = BlockGraph::calculate(ir, env);
-    let mut intersecting_precolored = vec![R::NO_BITS; ir.mc_reg_count() as usize];
+    let mut intersecting_precolored = vec![I::Reg::NO_BITS; ir.mc_reg_count() as usize];
     let mut liveins: Box<[Bitmap]> = (0..ir.block_count())
         .map(|_| Bitmap::new(ir.mc_reg_count() as usize))
         .collect();
-    analyze_liveness::<R>(
+    analyze_liveness::<I>(
         env,
         mc,
         ir,
@@ -37,10 +38,10 @@ pub fn regalloc<R: Register>(
         tracing::debug!(target: "regalloc",
             function,
             "IR after liveness analysis:\n{}",
-            ir.display_with_phys_regs::<R>(env, types)
+            ir.display_with_phys_regs::<I::Reg>(env, types)
         )
     }
-    perform_regalloc::<R>(
+    perform_regalloc::<I::Reg>(
         env,
         mc,
         ir,
@@ -51,13 +52,13 @@ pub fn regalloc<R: Register>(
     );
 }
 
-fn analyze_liveness<R: Register>(
+fn analyze_liveness<I: McInst>(
     env: &Environment,
     mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     graph: &BlockGraph<FunctionIr>,
     liveins: &mut [Bitmap],
-    intersecting_precolored: &mut [R::RegisterBits],
+    intersecting_precolored: &mut [<I::Reg as Register>::RegisterBits],
 ) {
     let mut workqueue: VecDeque<_> = graph.postorder().iter().copied().collect();
     let mut workqueue_set: Bitmap = Bitmap::new_with_ones(ir.block_count() as usize);
@@ -67,9 +68,9 @@ fn analyze_liveness<R: Register>(
         workqueue_set.set(block.idx(), false);
         // PERF: just reuse one bitmap in the future and copy over
         let mut live = liveouts[block.idx()].clone();
-        let mut live_precolored = R::NO_BITS;
+        let mut live_precolored = <I::Reg as Register>::NO_BITS;
         for r in ir.block_refs(block).iter().rev() {
-            analyze_inst_liveness::<R>(
+            analyze_inst_liveness::<I>(
                 env,
                 mc,
                 ir,
@@ -89,13 +90,13 @@ fn analyze_liveness<R: Register>(
     }
 }
 
-fn analyze_inst_liveness<R: Register>(
+fn analyze_inst_liveness<I: McInst>(
     env: &Environment,
     mc: ModuleOf<Mc>,
     ir: &mut FunctionIr,
     live: &mut Bitmap,
-    live_precolored: &mut R::RegisterBits,
-    intersecting_precolored: &mut [R::RegisterBits],
+    live_precolored: &mut <I::Reg as Register>::RegisterBits,
+    intersecting_precolored: &mut [<I::Reg as Register>::RegisterBits],
     inst_r: Ref,
 ) {
     if let Some(inst) = ir.get_inst(inst_r).as_module(mc) {
@@ -112,8 +113,8 @@ fn analyze_inst_liveness<R: Register>(
                             r.set_dead();
                         }
                         live.set(i as usize, false);
-                    } else if !r.phys::<R>().unwrap().get_bit(live_precolored) {
-                        r.phys::<R>().unwrap().set_bit(live_precolored, false);
+                    } else if !r.phys::<I::Reg>().unwrap().get_bit(live_precolored) {
+                        r.phys::<I::Reg>().unwrap().set_bit(live_precolored, false);
                         r.set_dead();
                     }
                 }
@@ -138,7 +139,7 @@ fn analyze_inst_liveness<R: Register>(
         let ArgumentMut::MCReg(usage, r) = arg else {
             continue;
         };
-        if let Some(p) = r.phys::<R>() {
+        if let Some(p) = r.phys::<I::Reg>() {
             if !p.get_bit(live_precolored) {
                 r.set_dead();
             }

@@ -956,7 +956,7 @@ impl<I: Inst> TypedInstruction<I> {
     }
 }
 
-pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy {
+pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy + 'static {
     const MODULE_NAME: &'static str;
 
     type InstTable: 'static;

@@ -1,15 +1,14 @@
 use std::convert::Infallible;
 
 use ir::{
-    BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
-    Primitive, Ref, Type, Types,
-    mc::{Mc, parallel_copy},
+    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleOf, Primitive, Ref, Type, Types,
+    mc::{Abi, IselCtx, Mc},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
 };
 
-use crate::arch::x86::{abi::Abi, isa::Reg};
+use crate::arch::x86::{X86, isa::Reg};
 
 pub fn codegen(
     env: &Environment,
@@ -17,7 +16,7 @@ pub fn codegen(
     types: &ir::Types,
     isel: &mut InstructionSelector,
     mc: ModuleOf<Mc>,
-    abi: &'static dyn Abi,
+    abi: &'static dyn Abi<X86>,
 ) -> (FunctionIr, ir::Types) {
     /*
     let mut mir = MachineIR::new();
@@ -31,30 +30,6 @@ pub fn codegen(
     // slots.
     let stack_setup_indices = vec![builder.next_inst_index()];
     builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
-    */
-
-    /*
-    let abi = abi::get_function_abi(
-        types,
-        function.params().iter().map(|p| {
-            let Parameter::RefOf(ty) = p else { panic!() };
-            ty
-        }),
-        function.return_type().unwrap(),
-        env.primitives(),
-    );
-    */
-
-    //let (mir_entry_block, entry_block_args) =
-    //    builder.create_block(abi.arg_registers().iter().map(|r| r.class()));
-    //let (mir_entry_block, entry_block_args) = builder.create_block([]);
-    //builder.register_successor(mir_entry_block);
-    /*
-    builder.build_copyargs(
-        Inst::Copyargs,
-        entry_block_args.iter().map(|vreg| vreg.op()),
-        abi.arg_registers().iter().copied().map(Op::Reg),
-    );
     */
 
     let mut body = body.clone();
@@ -83,47 +58,12 @@ pub fn codegen(
     }
     let mut types = types.clone();
     let block_graph = BlockGraph::calculate(&body, env);
-    let mut use_counts = vec![0; body.inst_count() as usize].into_boxed_slice();
-    for i in 0..body.inst_count() {
-        let inst = body.get_inst(Ref::index(i));
-        for arg in body.args_iter(inst, env) {
-            match arg {
-                ir::Argument::Ref(r) => {
-                    if let Some(r) = r.into_ref() {
-                        use_counts[r as usize] += 1;
-                    }
-                }
-                ir::Argument::BlockTarget(BlockTarget(_block, args)) => {
-                    for r in args {
-                        if let Some(r) = r.into_ref() {
-                            use_counts[r as usize] += 1;
-                        }
-                    }
-                }
-                ir::Argument::BlockId(_)
-                | ir::Argument::Int(_)
-                | ir::Argument::Float(_)
-                | ir::Argument::TypeId(_)
-                | ir::Argument::FunctionId(_)
-                | ir::Argument::GlobalId(_)
-                | ir::Argument::MCReg(_) => {}
-            }
-        }
-    }
     let unit = types.add(Type::Tuple(ir::TypeIds::EMPTY));
 
     let mut body = IrModify::new(body);
     let args = body.get_block_args(BlockId::ENTRY);
     abi.implement_params(args, &mut body, env, mc, &types, &regs, unit);
-
-    let mut ctx = IselCtx {
-        stack_size: 0,
-        unit,
-        regs,
-        mc,
-        use_counts,
-        abi,
-    };
+    let mut ctx = IselCtx::new(env, &body, regs, mc, unit, abi);
 
     ir::rewrite::rewrite_in_place(
         &mut body,
@@ -141,93 +81,6 @@ pub fn codegen(
     mir
     */
     (body.finish_and_compress(env), types)
-}
-
-pub struct IselCtx {
-    stack_size: u32,
-    unit: ir::TypeId,
-    regs: Slots<MCReg>,
-    mc: ModuleOf<Mc>,
-    use_counts: Box<[u32]>,
-    abi: &'static dyn Abi,
-}
-impl ir::rewrite::RewriteCtx for IselCtx {
-    fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
-        if block == BlockId::ENTRY {
-            return;
-        }
-        let info = ir.get_block(block);
-        let args = self
-            .regs
-            .get_range(Ref::index(info.idx), Ref::index(info.idx + info.arg_count));
-        let f = FunctionId {
-            module: self.mc.id(),
-            function: Mc::IncomingBlockArgs.id(),
-        };
-        let start = ir.get_original_block_start(block);
-        ir.add_before(env, start, (f, ((), args), self.unit));
-    }
-}
-impl IselCtx {
-    fn use_count(&self, r: Ref) -> u32 {
-        if let Some(r) = r.into_ref() {
-            self.use_counts[r as usize]
-        } else {
-            0
-        }
-    }
-
-    fn create_args_copy(
-        &mut self,
-        env: &Environment,
-        before: Ref,
-        mc: ModuleOf<Mc>,
-        ir: &mut IrModify,
-        target: BlockId,
-        args: &[Ref],
-    ) {
-        let arg_refs = ir.get_block_args(target);
-        debug_assert_eq!(args.len(), arg_refs.count() as usize);
-        let copyargs: Vec<MCReg> = arg_refs
-            .iter()
-            .zip(args)
-            .flat_map(|(to, &from)| {
-                let to = self.regs.get(to);
-                let from = if from.is_ref() {
-                    self.regs.get(from)
-                } else {
-                    match from {
-                        Ref::UNIT => &[],
-                        Ref::TRUE | Ref::FALSE => todo!("bools in copyargs"),
-                        _ => unreachable!(),
-                    }
-                };
-                debug_assert_eq!(from.len(), to.len());
-                to.iter()
-                    .copied()
-                    .zip(from.iter().copied())
-                    .flat_map(|(a, b)| [a, b])
-            })
-            .collect();
-        if !copyargs.is_empty() {
-            ir.add_before(
-                env,
-                before,
-                ir::mc::parallel_copy_args(mc, &copyargs, self.unit),
-            );
-        }
-    }
-
-    pub fn copy(
-        &mut self,
-        env: &Environment,
-        before: Ref,
-        mc: ModuleOf<Mc>,
-        ir: &mut IrModify,
-        args: &[MCReg],
-    ) {
-        ir.add_before(env, before, parallel_copy(mc, args, self.unit));
-    }
 }
 
 fn primitive_of_ref(r: Ref, ir: &IrModify, types: &Types) -> Primitive {
@@ -262,7 +115,7 @@ ir::visitor! {
     InstructionSelector,
     Rewrite,
     ir, types, inst, env,
-    ctx: IselCtx;
+    ctx: IselCtx<X86>;
 
     use builtin: ir::Builtin;
     use arith: ir::dialect::Arith;
@@ -270,7 +123,7 @@ ir::visitor! {
     use mem: ir::dialect::Mem;
     use cf: ir::dialect::Cf;
 
-    use x86: crate::arch::x86::isa::X86;
+    use x86: X86;
     use mc: ir::mc::Mc;
 
     patterns:
@@ -321,8 +174,7 @@ ir::visitor! {
         }
     };
     (%r = cf.Ret value) => {
-        ctx.abi.implement_return(value, ir, env, mc, types, &ctx.regs, r, ctx.unit);
-        x86.ret(ctx.unit)
+        ctx.abi.implement_return(value, ir, env, mc, x86, types, &ctx.regs, r, ctx.unit);
     };
     (%r = cf.Goto (@b b_args)) => {
         let b_args = b_args.to_vec();
@@ -384,12 +236,7 @@ ir::visitor! {
     };
     (%r = mem.Decl (type ty)) => {
         let layout = ir::type_layout(types[ty], types, env.primitives());
-        let align = layout.align.get() as u32;
-        if ctx.stack_size % align != 0 {
-            ctx.stack_size += align - (ctx.stack_size % align);
-        }
-        ctx.stack_size += layout.size as u32;
-        let offset = ctx.stack_size;
+        let offset = ctx.alloc_stack(layout);
         let out = ctx.regs.get_one(r);
         x86.lea_rm64(out, MCReg::from_phys(Reg::rsp), (-(offset as i32)) as u32, ctx.unit)
     };

@@ -1,12 +1,35 @@
+mod abi;
 mod dialect;
 mod parcopy;
 mod regalloc;
 
+#[doc(hidden)]
+pub mod macros;
+
+pub use abi::Abi;
 pub use dialect::{Mc, McInsts};
+pub use macros::registers;
 pub use parcopy::ParcopySolver;
 pub use regalloc::regalloc;
 
+use crate::BlockId;
+use crate::Environment;
+use crate::FunctionId;
+use crate::Inst;
+use crate::Layout;
+use crate::MCReg;
+use crate::ModuleOf;
+use crate::Ref;
+use crate::TypeId;
+use crate::modify::IrModify;
+use crate::slots::Slots;
 use std::ops::{BitAnd, BitOr, Not};
+
+pub trait McInst: Inst {
+    type Reg: Register;
+    fn implicit_def(&self) -> <Self::Reg as Register>::RegisterBits;
+    fn implicit_use(&self) -> <Self::Reg as Register>::RegisterBits;
+}
 
 pub trait Register: 'static + Copy {
     const DEFAULT: Self;
@@ -114,108 +137,144 @@ pub fn parallel_copy_args(
     };
     (f, ((), args), unit)
 }
-
-#[macro_export]
-macro_rules! ident_count {
-    () => {
-        0
-    };
-    ($i: ident $($rest: ident)*) => {
-        1 + $crate::mc::ident_count!($($rest)*)
-    };
+pub struct IselCtx<I: McInst> {
+    pub regs: Slots<MCReg>,
+    pub abi: &'static dyn Abi<I>,
+    pub unit: crate::TypeId,
+    mc: ModuleOf<Mc>,
+    use_counts: Box<[u32]>,
+    stack_size: u32,
 }
-pub use crate::ident_count;
-
-#[macro_export]
-macro_rules! first_reg {
-    () => {
-        compile_error!("Register list can't be empty");
-    };
-    ($id: ident $($rest: ident)*) => {
-        Self::$id
-    };
-}
-pub use crate::first_reg;
-
-#[macro_export]
-macro_rules! registers {
-    ($name: ident $bits: ident $($size: ident => $($variant: ident)*;)*) => {
-        #[rustfmt::skip]
-        #[allow(non_camel_case_types)]
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-        #[repr(u8)]
-        pub enum $name {
-            $($($variant,)*)*
-        }
-
-        impl $name {
-            pub fn class(self) -> $crate::mc::RegClass {
-                match self {
-                    $($(Self::$variant => $crate::mc::RegClass::$size,)*)*
-                }
-            }
-        }
-        impl $crate::mc::Register for $name {
-            const DEFAULT: Self = $crate::mc::first_reg!($($($variant)*)*);
-            const NO_BITS: $bits = $bits::new();
-            const ALL_BITS: $bits = $bits::all();
-            type RegisterBits = $bits;
-
-            fn to_str(self) -> &'static str {
-                match self {
-                    $($(Self::$variant => stringify!($variant),)*)*
-                }
-            }
-
-            fn encode(self) -> u32 {
-                self as u32
-            }
-
-            fn decode(value: u32) -> Self {
-                let count = $crate::mc::ident_count!($($($variant)*)*);
-                assert!(value < count, "can't decode invalid physical register {}", value);
-                unsafe { std::mem::transmute(value as u8) }
-            }
-
-            fn get_bit(self, bits: &$bits) -> bool {
-                bits.get(self)
-            }
-
-            fn set_bit(self, bits: &mut $bits, set: bool) {
-                bits.set(self, set);
-            }
-
-            fn allocate_reg(free: Self::RegisterBits, class: $crate::mc::RegClass) -> Option<Self> {
-                $(
-                    if class == $crate::mc::RegClass::$size {
-                        $(if Self::$variant.get_bit(&free) {
-                            return Some(Self::$variant)
-                        })*
+impl<I: McInst> IselCtx<I> {
+    pub fn new(
+        env: &Environment,
+        ir: &IrModify,
+        regs: Slots<MCReg>,
+        mc: ModuleOf<Mc>,
+        unit: TypeId,
+        abi: &'static dyn Abi<I>,
+    ) -> Self {
+        let mut use_counts = vec![0; ir.inst_count() as usize].into_boxed_slice();
+        for i in 0..ir.inst_count() {
+            let inst = ir.get_inst(Ref::index(i));
+            for arg in ir.args_iter(inst, env) {
+                match arg {
+                    crate::Argument::Ref(r) => {
+                        if let Some(r) = r.into_ref() {
+                            use_counts[r as usize] += 1;
+                        }
                     }
-                )*
-                None
+                    crate::Argument::BlockTarget(crate::BlockTarget(_block, args)) => {
+                        for r in args {
+                            if let Some(r) = r.into_ref() {
+                                use_counts[r as usize] += 1;
+                            }
+                        }
+                    }
+                    crate::Argument::BlockId(_)
+                    | crate::Argument::Int(_)
+                    | crate::Argument::Float(_)
+                    | crate::Argument::TypeId(_)
+                    | crate::Argument::FunctionId(_)
+                    | crate::Argument::GlobalId(_)
+                    | crate::Argument::MCReg(_) => {}
+                }
             }
         }
-
-
-        impl ::core::convert::TryFrom<$crate::Argument<'_>> for $name {
-            type Error = $crate::ArgError;
-            fn try_from(value: $crate::Argument<'_>) -> Result<Self, Self::Error> {
-                let $crate::Argument::MCReg(value) = value else {
-                    return Err($crate::ArgError {
-                        expected: $crate::Parameter::MCReg($crate::Usage::Def),
-                        found: value.parameter_ty(),
-                    });
-                };
-                Ok(value
-                    .phys()
-                    .expect("expected physical register, found virtual"))
-            }
+        Self {
+            stack_size: 0,
+            unit,
+            regs,
+            mc,
+            use_counts,
+            abi,
         }
+    }
 
-    };
+    /// creates a properly aligned stack index assuming the stack frame's total alignment is at least
+    /// as large as the one from the Layout.
+    /// Assumes a stack growing down, subtract layout.size if the stack should grow up.
+    pub fn alloc_stack(&mut self, layout: Layout) -> u32 {
+        let align = layout.align.get() as u32;
+        if self.stack_size % align != 0 {
+            self.stack_size += align - (self.stack_size % align);
+        }
+        self.stack_size += layout.size as u32;
+        self.stack_size
+    }
 }
-use crate::FunctionId;
-use crate::MCReg;
-use crate::ModuleOf;
-pub use crate::registers;
+impl<I: McInst> crate::rewrite::RewriteCtx for IselCtx<I> {
+    fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
+        if block == BlockId::ENTRY {
+            return;
+        }
+        let info = ir.get_block(block);
+        let args = self
+            .regs
+            .get_range(Ref::index(info.idx), Ref::index(info.idx + info.arg_count));
+        let f = FunctionId {
+            module: self.mc.id(),
+            function: Mc::IncomingBlockArgs.id(),
+        };
+        let start = ir.get_original_block_start(block);
+        ir.add_before(env, start, (f, ((), args), self.unit));
+    }
+}
+
+impl<I: McInst> IselCtx<I> {
+    pub fn use_count(&self, r: Ref) -> u32 {
+        if let Some(r) = r.into_ref() {
+            self.use_counts[r as usize]
+        } else {
+            0
+        }
+    }
+
+    pub fn create_args_copy(
+        &mut self,
+        env: &Environment,
+        before: Ref,
+        mc: ModuleOf<Mc>,
+        ir: &mut IrModify,
+        target: BlockId,
+        args: &[Ref],
+    ) {
+        let arg_refs = ir.get_block_args(target);
+        debug_assert_eq!(args.len(), arg_refs.count() as usize);
+        let copyargs: Vec<MCReg> = arg_refs
+            .iter()
+            .zip(args)
+            .flat_map(|(to, &from)| {
+                let to = self.regs.get(to);
+                let from = if from.is_ref() {
+                    self.regs.get(from)
+                } else {
+                    match from {
+                        Ref::UNIT => &[],
+                        Ref::TRUE | Ref::FALSE => todo!("bools in copyargs"),
+                        _ => unreachable!(),
+                    }
+                };
+                debug_assert_eq!(from.len(), to.len());
+                to.iter()
+                    .copied()
+                    .zip(from.iter().copied())
+                    .flat_map(|(a, b)| [a, b])
+            })
+            .collect();
+        if !copyargs.is_empty() {
+            ir.add_before(env, before, parallel_copy_args(mc, &copyargs, self.unit));
+        }
+    }
+
+    pub fn copy(
+        &mut self,
+        env: &Environment,
+        before: Ref,
+        mc: ModuleOf<Mc>,
+        ir: &mut IrModify,
+        args: &[MCReg],
+    ) {
+        ir.add_before(env, before, parallel_copy(mc, args, self.unit));
+    }
+}

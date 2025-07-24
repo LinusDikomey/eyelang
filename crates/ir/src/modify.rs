@@ -462,6 +462,14 @@ impl IrModify {
     ) -> Instruction {
         self.ir.prepare_instruction(params, varargs, block, arg)
     }
+
+    pub fn args_iter<'a>(
+        &'a self,
+        inst: &'a Instruction,
+        env: &'a Environment,
+    ) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
+        self.ir.args_iter(inst, env)
+    }
 }
 
 #[derive(Debug)]

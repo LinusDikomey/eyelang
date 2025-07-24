@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use ir::{BlockId, Environment, MCReg, ModuleOf, Primitive, Ref, Type, TypeId, Types, mc::Mc};
 
-use crate::arch::x86::isa::Reg;
+use crate::arch::x86::{X86, isa::Reg};
 
 use super::Abi;
 
@@ -20,7 +20,7 @@ const RETURN_REGS: [[Reg; 4]; 2] = [
 ];
 
 pub struct SystemV;
-impl Abi for SystemV {
+impl Abi<X86> for SystemV {
     fn implement_params(
         &self,
         args: ir::Refs,
@@ -79,27 +79,32 @@ impl Abi for SystemV {
         ir: &mut ir::modify::IrModify,
         env: &Environment,
         mc: ModuleOf<Mc>,
+        x86: ModuleOf<X86>,
         types: &Types,
         regs: &ir::slots::Slots<MCReg>,
-        before: ir::Ref,
+        r: ir::Ref,
         unit: TypeId,
     ) {
         let ty = types[ir.get_ref_ty(value)];
-        let mut copy = |args| ir.add_before(env, before, ir::mc::parallel_copy(mc, args, unit));
+        let mut copy = |args| ir.add_before(env, r, ir::mc::parallel_copy(mc, args, unit));
         match ty {
             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                Primitive::Unit => {}
+                Primitive::Unit => ir.replace(env, r, x86.ret0(unit)),
                 Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                     copy(&[MCReg::from_phys(RETURN_REGS[0][3]), regs.get_one(value)]);
+                    ir.replace(env, r, x86.ret64(unit));
                 }
                 Primitive::I16 | Primitive::U16 => {
                     copy(&[MCReg::from_phys(RETURN_REGS[0][2]), regs.get_one(value)]);
+                    ir.replace(env, r, x86.ret64(unit));
                 }
                 Primitive::I32 | Primitive::U32 => {
                     copy(&[MCReg::from_phys(RETURN_REGS[0][1]), regs.get_one(value)]);
+                    ir.replace(env, r, x86.ret64(unit));
                 }
                 Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
                     copy(&[MCReg::from_phys(RETURN_REGS[0][0]), regs.get_one(value)]);
+                    ir.replace(env, r, x86.ret64(unit));
                 }
                 Primitive::I128 | Primitive::U128 => {
                     let &[a, b] = regs.get(value) else {
@@ -111,6 +116,7 @@ impl Abi for SystemV {
                         MCReg::from_phys(RETURN_REGS[1][0]),
                         b,
                     ]);
+                    ir.replace(env, r, x86.ret128(unit));
                 }
                 Primitive::F32 | Primitive::F64 => todo!("abi: float return values"),
             },

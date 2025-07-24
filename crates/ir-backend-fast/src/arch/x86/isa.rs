@@ -1,6 +1,9 @@
 use std::{fmt, ops};
 
-use ir::mc::Register as _;
+use ir::{
+    Usage,
+    mc::{McInst, Register},
+};
 
 ir::mc::registers! { Reg RegisterBits
     GP64 => rax rbx rcx rdx rbp rsi rdi rsp;
@@ -97,7 +100,6 @@ impl RegisterBits {
     }
 }
 
-use ir::Usage;
 ir::instructions! {
     X86 "x86" X86Insts
 
@@ -114,7 +116,9 @@ ir::instructions! {
     mov_rm32 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
     mov_rm64 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
 
-    ret !terminator;
+    ret0 !terminator;
+    ret64 !terminator;
+    ret128 !terminator;
 
 
     jmp addr: BlockId !terminator;
@@ -133,4 +137,23 @@ ir::instructions! {
 
     lea_rm32 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
     lea_rm64 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
+}
+impl McInst for X86 {
+    type Reg = Reg;
+    fn implicit_def(&self) -> RegisterBits {
+        match self {
+            Self::cmp_rr32 => Reg::eflags.bit(),
+            Self::add_rr8 => Reg::eflags.bit(),
+            _ => Reg::NO_BITS,
+        }
+    }
+
+    fn implicit_use(&self) -> RegisterBits {
+        match self {
+            // TODO: this depends on the Abi
+            Self::ret64 => Reg::eax.bit(),
+            Self::ret128 => Reg::eax.bit() | Reg::rdx.bit(),
+            _ => Reg::NO_BITS,
+        }
+    }
 }

@@ -184,7 +184,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
             )?,
             &Node::Promote { value, variable } => cwrite!(
                 f,
-                "(#b<promote> {} #m<into> (#m<var> #y<{}>))",
+                "(#b<promote> {} #m<into> (#b<var> #y<{}>))",
                 hir.display(value, compiler, types, indent_count),
                 variable.0,
             )?,
@@ -513,7 +513,12 @@ impl<'a> fmt::Display for PatternDisplay<'a> {
             Pattern::Invalid => cwrite!(f, "#m<invalid>"),
             Pattern::Variable(id) => {
                 let var_ty = hir.vars[id.idx()];
-                cwrite!(f, "(var #y<{}>): {}", id.0, types.display(compiler, var_ty),)
+                cwrite!(
+                    f,
+                    "(#b<var> #y<{}>): {}",
+                    id.0,
+                    types.display(compiler, var_ty),
+                )
             }
             Pattern::Ignore => cwrite!(f, "_"),
             &Pattern::Tuple {
