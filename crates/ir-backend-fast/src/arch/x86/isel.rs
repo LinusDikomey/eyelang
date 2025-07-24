@@ -100,6 +100,7 @@ pub fn codegen(
         }
     }
     let mut ctx = IselCtx {
+        stack_size: 0,
         unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
         regs,
         mc,
@@ -776,6 +777,7 @@ impl Gen<'_> {
 }
 
 pub struct IselCtx {
+    stack_size: u32,
     unit: ir::TypeId,
     regs: Slots<MCReg>,
     mc: ModuleOf<Mc>,
@@ -910,19 +912,19 @@ ir::visitor! {
         let regs = ctx.regs.get(r);
         match int_size_of_ref(r, ir, types) {
             IntSize::I8 => {
-                ir.replace(env, r, x86.movri8(regs[0], x as u8 as u32, ctx.unit));
+                ir.replace(env, r, x86.mov_ri8(regs[0], x as u8 as u32, ctx.unit));
             }
             IntSize::I16 => {
-                ir.replace(env, r, x86.movri16(regs[0], x as u16 as u32, ctx.unit));
+                ir.replace(env, r, x86.mov_ri16(regs[0], x as u16 as u32, ctx.unit));
             }
             IntSize::I32 => {
-                ir.replace(env, r, x86.movri32(regs[0], x as u32, ctx.unit));
+                ir.replace(env, r, x86.mov_ri32(regs[0], x as u32, ctx.unit));
             }
             IntSize::I64 => {
                 if x > u32::MAX as u64 {
                     todo!()
                 }
-                ir.replace(env, r, x86.movri64(regs[0], x.try_into().unwrap(), ctx.unit));
+                ir.replace(env, r, x86.mov_ri64(regs[0], x.try_into().unwrap(), ctx.unit));
             }
             IntSize::I128 => todo!("128 bit ints"),
         }
@@ -934,17 +936,17 @@ ir::visitor! {
             IntSize::I8 => {
                 let (&[out], &[x]) = (out, x) else { unreachable!() };
                 ctx.copy(env, r, mc, ir, &[out, x]);
-                ir.replace(env, r, x86.negr8(out, ctx.unit));
+                ir.replace(env, r, x86.neg_r8(out, ctx.unit));
             }
             IntSize::I16 | IntSize::I32 => {
                 let (&[out], &[x]) = (out, x) else { unreachable!() };
                 ctx.copy(env, r, mc, ir, &[out, x]);
-                ir.replace(env, r, x86.negr32(x, ctx.unit));
+                ir.replace(env, r, x86.neg_r32(x, ctx.unit));
             }
             IntSize::I64 => {
                 let (&[out], &[x]) = (out, x) else { unreachable!() };
                 ctx.copy(env, r, mc, ir, &[out, x]);
-                ir.replace(env, r, x86.negr64(x, ctx.unit));
+                ir.replace(env, r, x86.neg_r64(x, ctx.unit));
             }
             IntSize::I128 => todo!(),
         }
@@ -958,7 +960,7 @@ ir::visitor! {
             }
             _ => todo!("multi-reg return values"),
         }
-        x86.ret32(ctx.unit)
+        x86.ret_32(ctx.unit)
     };
     (%r = cf.Goto (@b b_args)) => {
         let b_args = b_args.to_vec();
@@ -975,7 +977,7 @@ ir::visitor! {
         ir.replace_with(lt, Ref::UNIT);
         match (ctx.regs.get(a), ctx.regs.get(b)) {
             (&[a], &[b]) => {
-                ir.replace(env, lt, x86.cmprr32(a, b, ctx.unit));
+                ir.replace(env, lt, x86.cmp_rr32(a, b, ctx.unit));
             }
             _ => todo!("large int comparisons"),
         }
@@ -986,12 +988,71 @@ ir::visitor! {
         x86.jmp(b2, ctx.unit)
     };
     (%r = arith.Add a b) => {
-        match (ctx.regs.get(a), ctx.regs.get(b), ctx.regs.get(r)) {
-            (&[a], &[b], &[out]) => {
-                ir.add_before(env, r, ir::mc::parallel_copy(mc, &[out, a], ctx.unit));
-                x86.addrr32(out, b, ctx.unit)
+        let primitive = primitive_of_ref(r, ir, types);
+        let mut single_reg = || {
+            let out = ctx.regs.get_one(r);
+            let a = ctx.regs.get_one(a);
+            let b = ctx.regs.get_one(b);
+            ctx.copy(env, r, mc, ir, &[out, a]);
+            (out, a, b)
+        };
+        match primitive {
+            Primitive::I1 => todo!(),
+            Primitive::I8 | Primitive::U8 => {
+                let (out, a, b) = single_reg();
+                ir.replace(env, r, x86.add_rr8(out, b, ctx.unit));
             }
-            _ => todo!("large int adds"),
+            Primitive::I16 | Primitive::U16 => {
+                let (out, a, b) = single_reg();
+                ir.replace(env, r, x86.add_rr16(out, b, ctx.unit));
+            }
+            Primitive::I32 | Primitive::U32 => {
+                let (out, a, b) = single_reg();
+                ir.replace(env, r, x86.add_rr32(out, b, ctx.unit));
+            }
+            Primitive::I64 | Primitive::U64 => {
+                let (out, a, b) = single_reg();
+                ir.replace(env, r, x86.add_rr64(out, b, ctx.unit));
+            }
+            Primitive::I128 | Primitive::U128 => todo!("128-bit add"),
+            Primitive::F32 => todo!(),
+            Primitive::F64 => todo!(),
+            Primitive::Unit | Primitive::Ptr => unreachable!(),
+        }
+    };
+    (%r = mem.Decl (type ty)) => {
+        let layout = ir::type_layout(types[ty], types, env.primitives());
+        let align = layout.align.get() as u32;
+        if ctx.stack_size % align != 0 {
+            ctx.stack_size += align - (ctx.stack_size % align);
+        }
+        ctx.stack_size += layout.size as u32;
+        let offset = ctx.stack_size;
+        let out = ctx.regs.get_one(r);
+        x86.lea_rm64(out, MCReg::from_phys(Reg::rsp), (-(offset as i32)) as u32, ctx.unit)
+    };
+    (%r = mem.Load ptr) => {
+        let ptr = ctx.regs.get_one(ptr);
+        match types[ir.get_ref_ty(r)] {
+            Type::Primitive(primitive_id) => match Primitive::try_from(primitive_id).unwrap() {
+                Primitive::Unit => {}
+                Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                    ir.replace(env, r, x86.mov_rm8(ctx.regs.get_one(r), ptr, 0, ctx.unit));
+                }
+                Primitive::I16 | Primitive::U16 => {
+                    ir.replace(env, r, x86.mov_rm16(ctx.regs.get_one(r), ptr, 0, ctx.unit));
+                }
+                Primitive::I32 | Primitive::U32 | Primitive::F32 => {
+                    ir.replace(env, r, x86.mov_rm32(ctx.regs.get_one(r), ptr, 0, ctx.unit));
+                }
+                Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Ptr => {
+                    ir.replace(env, r, x86.mov_rm64(ctx.regs.get_one(r), ptr, 0, ctx.unit));
+                }
+                Primitive::I128 => todo!(),
+                Primitive::U128 => todo!(),
+            }
+            Type::Array(type_id, _) => todo!(),
+            Type::Tuple(type_ids) => todo!(),
         }
     };
     (%r = _) => {

@@ -101,27 +101,38 @@ use ir::Usage;
 ir::instructions! {
     X86 "x86" X86Insts
 
-    movri8 to: MCReg(Usage::Def) i: Int32;
-    movri16 to: MCReg(Usage::Def) i: Int32;
-    movri32 to: MCReg(Usage::Def) i: Int32;
-    movri64 to: MCReg(Usage::Def) i: Int32;
+    mov_ri8 to: MCReg(Usage::Def) i: Int32;
+    mov_ri16 to: MCReg(Usage::Def) i: Int32;
+    mov_ri32 to: MCReg(Usage::Def) i: Int32;
+    mov_ri64 to: MCReg(Usage::Def) i: Int32;
 
-    movrr32 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
-    movrr64 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
+    mov_rr32 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
+    mov_rr64 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
 
-    ret32 !terminator;
+    mov_rm8 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+    mov_rm16 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+    mov_rm32 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+    mov_rm64 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+
+    ret_32 !terminator;
 
 
     jmp addr: BlockId !terminator;
     jl addr: BlockId;
 
-    cmprr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);        /* !implicit_def eflags */
+    cmp_rr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);        /* !implicit_def eflags */
 
-    addrr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+    add_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+    add_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+    add_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+    add_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
 
-    negr8 a: MCReg(Usage::DefUse);
-    negr32 a: MCReg(Usage::DefUse);
-    negr64 a: MCReg(Usage::DefUse);
+    neg_r8 a: MCReg(Usage::DefUse);
+    neg_r32 a: MCReg(Usage::DefUse);
+    neg_r64 a: MCReg(Usage::DefUse);
+
+    lea_rm32 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
+    lea_rm64 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
 }
 
 /*

@@ -24,6 +24,11 @@ macro_rules! arg {
             unreachable!("invalid argument type, expected BlockTarget");
         };
     };
+    ($modules: ident, $ir: ident, $env: ident, $arg: ident, (type $ty: ident)) => {
+        let $crate::Argument::TypeId($ty) = $arg else {
+            unreachable!("invalid argument type, expected TypeId");
+        };
+    };
     ($modules: ident, $ir: ident, $env: ident, $arg: ident, $($inner: tt)*) => {
         let $crate::Argument::Ref(r) = $arg else {
             unreachable!("invalid argument type, expected Ref");

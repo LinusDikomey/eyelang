@@ -31,6 +31,14 @@ impl<V: Copy> Slots<V> {
         &self.slots[start..end]
     }
 
+    pub fn get_one(&self, r: Ref) -> V {
+        let r = self.get(r);
+        match r {
+            &[v] => v,
+            _ => panic!("expected one value but got {}", r.len()),
+        }
+    }
+
     // gets an exclusive range of values
     pub fn get_range(&self, start: Ref, end: Ref) -> &[V] {
         let start = self.slot_map[start.into_ref().expect("Can't get slots for value ref") as usize]
