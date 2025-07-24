@@ -36,8 +36,8 @@ pub fn regalloc<R: Register>(
         }
         tracing::debug!(target: "regalloc",
             function,
-            "IR After liveness analysis:\n{}",
-            ir.display(env, types)
+            "IR after liveness analysis:\n{}",
+            ir.display_with_phys_regs::<R>(env, types)
         )
     }
     perform_regalloc::<R>(
@@ -102,24 +102,32 @@ fn analyze_inst_liveness<R: Register>(
         match inst.op() {
             Mc::IncomingBlockArgs => {}
             Mc::Copy | Mc::AssignBlockArgs => {
-                for (arg_idx, arg) in ir.args_mut(inst_r, env).enumerate() {
+                // to
+                for arg in ir.args_mut(inst_r, env).step_by(2) {
                     let ArgumentMut::MCReg(_, r) = arg else {
                         unreachable!();
                     };
-                    if arg_idx % 2 == 0 {
-                        // to
-                        if let Some(i) = r.virt() {
-                            live.set(i as usize, false);
-                        };
-                    } else {
-                        // from
-                        if let Some(i) = r.virt() {
-                            if !live.get(i as usize) {
-                                live.set(i as usize, true);
-                                r.set_dead();
-                            }
+                    if let Some(i) = r.virt() {
+                        if !live.get(i as usize) {
+                            r.set_dead();
                         }
+                        live.set(i as usize, false);
+                    } else if !r.phys::<R>().unwrap().get_bit(live_precolored) {
+                        r.phys::<R>().unwrap().set_bit(live_precolored, false);
+                        r.set_dead();
+                    }
+                }
+                // from
+                for arg in ir.args_mut(inst_r, env).skip(1).step_by(2) {
+                    let ArgumentMut::MCReg(_, r) = arg else {
+                        unreachable!();
                     };
+                    if let Some(i) = r.virt() {
+                        if !live.get(i as usize) {
+                            live.set(i as usize, true);
+                            r.set_dead();
+                        }
+                    }
                 }
                 return;
             }
