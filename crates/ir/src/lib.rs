@@ -17,6 +17,7 @@ pub mod modify;
 pub mod optimize;
 pub mod parse;
 pub mod rewrite;
+pub mod slots;
 pub mod verify;
 
 mod argument;
@@ -245,7 +246,7 @@ impl MCReg {
     pub fn from_phys<R: Register>(phys: R) -> Self {
         let v = phys.encode();
         debug_assert!(
-            v & (1 << 31) == 0,
+            v & (Self::VIRT_BIT | Self::DEAD_BIT) == 0,
             "highest bit shouldn't be set for physical register encoding"
         );
         Self(v)
@@ -276,10 +277,11 @@ impl MCReg {
             .then_some(self.0 & !(Self::VIRT_BIT | Self::DEAD_BIT))
     }
 
-    const fn from_virt(r: u32) -> MCReg {
-        if r & (Self::VIRT_BIT | Self::DEAD_BIT) != 0 {
-            panic!("virtual register value too high")
-        }
+    pub const fn from_virt(r: u32) -> MCReg {
+        assert!(
+            r & (Self::VIRT_BIT | Self::DEAD_BIT) == 0,
+            "virtual register value too high"
+        );
         Self(r | Self::VIRT_BIT)
     }
 }
@@ -781,11 +783,11 @@ impl block_graph::Blocks for FunctionIr {
 
 #[derive(Clone, Debug)]
 pub struct BlockInfo {
-    arg_count: u32,
-    idx: u32,
-    len: u32,
-    preds: DHashSet<BlockId>,
-    succs: DHashSet<BlockId>,
+    pub arg_count: u32,
+    pub idx: u32,
+    pub len: u32,
+    pub preds: DHashSet<BlockId>,
+    pub succs: DHashSet<BlockId>,
 }
 
 #[derive(Debug, Clone, Copy)]

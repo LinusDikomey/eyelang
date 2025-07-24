@@ -1,4 +1,4 @@
-use ir::{dialect::Primitive, modify::IrModify};
+use ir::{dialect::Primitive, modify::IrModify, rewrite::LinearRewriteOrder};
 
 fn main() {
     let mut env = ir::Environment::new(Primitive::create_infos());
@@ -15,6 +15,7 @@ fn main() {
         &env,
         &mut (),
         &mut rewriter,
+        LinearRewriteOrder::new(),
     );
     env.reattach_body(func_id, func_ir.finish_and_compress(&env));
 

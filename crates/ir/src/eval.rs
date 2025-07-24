@@ -9,6 +9,7 @@ use crate::{
     PrimitiveInfo, Ref, Type, TypeId, Types,
     dialect::Primitive,
     layout::{Layout, type_layout},
+    slots::slot_count,
 };
 
 pub const BACKWARDS_JUMP_LIMIT: usize = 1000;
@@ -1169,30 +1170,9 @@ struct StackFrame {
     values: Values,
 }
 
-struct Values {
-    slots: Vec<u64>,
-    slot_map: Vec<u32>,
-}
+type Values = crate::slots::Slots<u64>;
 impl Values {
-    pub fn new(ir: &FunctionIr, types: &Types) -> Self {
-        let mut slots = Vec::new();
-        let slot_map = ir
-            .insts
-            .iter()
-            .map(|inst| {
-                let count = slot_count(types[inst.ty], types);
-                if count == 0 {
-                    return u32::MAX;
-                }
-                let idx = slots.len() as u32;
-                slots.extend(std::iter::repeat_n(0, count as usize));
-                idx
-            })
-            .collect();
-        Self { slots, slot_map }
-    }
-
-    pub fn visit_primitives(
+    fn visit_primitives(
         &mut self,
         r: Ref,
         ir: &FunctionIr,
@@ -1258,7 +1238,7 @@ impl Values {
         Ok(())
     }
 
-    pub fn load_primitives(
+    fn load_primitives(
         &mut self,
         i: u32,
         ty: Type,
@@ -1270,7 +1250,7 @@ impl Values {
         self.load_primitives_inner(&mut { slot_index }, 0, ty, types, primitives, &mut visit)
     }
 
-    pub fn load_primitives_inner(
+    fn load_primitives_inner(
         &mut self,
         i: &mut u32,
         offset: u32,
@@ -1451,21 +1431,6 @@ impl Values {
             let n = slot_count(types[ir.get_ref_ty(r)], types) as usize;
             self.slots.copy_within(src..src + n, dst);
         }
-    }
-}
-
-fn slot_count(ty: Type, types: &Types) -> u32 {
-    match ty {
-        Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-            Primitive::Unit => 0,
-            Primitive::I128 | Primitive::U128 => 2,
-            _ => 1,
-        },
-        Type::Array(type_ref, count) => slot_count(types[type_ref], types) * count,
-        Type::Tuple(type_refs) => type_refs
-            .iter()
-            .map(|ty| slot_count(types[ty], types))
-            .sum(),
     }
 }
 

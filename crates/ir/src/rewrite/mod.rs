@@ -2,8 +2,8 @@ mod macros;
 pub use macros::visitor;
 
 use crate::{
-    BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs, Parameter,
-    Ref, TypeId, Types, modify::IrModify,
+    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs,
+    Parameter, Ref, TypeId, Types, modify::IrModify,
 };
 
 pub trait Visitor<Ctx = ()> {
@@ -18,6 +18,62 @@ pub trait Visitor<Ctx = ()> {
         block: BlockId,
         ctx: &mut Ctx,
     ) -> Option<Self::Output>;
+}
+pub trait RewriteStrategy {
+    type BlockInstructions: IntoIterator<Item = u32>;
+    fn next_block(&mut self, ir: &IrModify) -> Option<BlockId>;
+    fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions;
+}
+#[derive(Default)]
+pub struct LinearRewriteOrder {
+    next_block: u32,
+}
+impl LinearRewriteOrder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+impl RewriteStrategy for LinearRewriteOrder {
+    type BlockInstructions = std::ops::Range<u32>;
+    fn next_block(&mut self, ir: &IrModify) -> Option<BlockId> {
+        ir.block_ids()
+            .last()
+            .is_some_and(|last| self.next_block < last.0)
+            .then(|| {
+                let id = BlockId(self.next_block);
+                self.next_block += 1;
+                id
+            })
+    }
+
+    fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
+        let info = ir.get_block(block);
+        let s = info.idx + info.arg_count;
+        s..s + info.len
+    }
+}
+pub struct ReverseRewriteOrder {
+    blocks: std::vec::IntoIter<BlockId>,
+}
+impl ReverseRewriteOrder {
+    pub fn new(graph: &BlockGraph<FunctionIr>) -> Self {
+        Self {
+            blocks: graph.postorder().to_vec().into_iter(),
+        }
+    }
+}
+impl RewriteStrategy for ReverseRewriteOrder {
+    type BlockInstructions = std::iter::Rev<std::ops::Range<u32>>;
+
+    fn next_block(&mut self, _ir: &IrModify) -> Option<BlockId> {
+        self.blocks.next()
+    }
+
+    fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
+        let info = ir.get_block(block);
+        let s = info.idx + info.arg_count;
+        (s..s + info.len).rev()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,14 +133,16 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
     env: &Environment,
     ctx: &mut Ctx,
     rewriter: &mut R,
+    mut strategy: impl RewriteStrategy,
 ) {
-    for block in ir.block_ids() {
+    while let Some(block) = strategy.next_block(ir) {
         ctx.begin_block(env, ir, block);
-        let block_info = ir.get_block(block);
-        let i = block_info.idx + block_info.arg_count;
-        for idx in i..i + block_info.len {
+        for idx in strategy.iterate_block(ir, block) {
             let r = Ref(idx);
-            let inst = *ir.get_inst(r);
+            let Ok(&inst) = ir.try_get_inst(r) else {
+                // instruction was deleted, skip it
+                continue;
+            };
             let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
             match rewrite {
                 None => {}

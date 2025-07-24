@@ -101,6 +101,8 @@ use ir::Usage;
 ir::instructions! {
     X86 "x86" X86Insts
 
+    movri8 to: MCReg(Usage::Def) i: Int32;
+    movri16 to: MCReg(Usage::Def) i: Int32;
     movri32 to: MCReg(Usage::Def) i: Int32;
     movri64 to: MCReg(Usage::Def) i: Int32;
 
@@ -116,6 +118,10 @@ ir::instructions! {
     cmprr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);        /* !implicit_def eflags */
 
     addrr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+
+    negr8 a: MCReg(Usage::DefUse);
+    negr32 a: MCReg(Usage::DefUse);
+    negr64 a: MCReg(Usage::DefUse);
 }
 
 /*

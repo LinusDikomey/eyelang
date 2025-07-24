@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    Function, FunctionId, FunctionIr, Global, GlobalId, Inst, LocalFunctionId, Module, ModuleId,
-    ModuleOf, PrimitiveInfo,
+    Function, FunctionId, FunctionIr, Global, GlobalId, Inst, Instruction, LocalFunctionId, Module,
+    ModuleId, ModuleOf, PrimitiveInfo, display::InstName,
 };
 
 pub struct Environment {
@@ -169,6 +169,14 @@ impl Environment {
 
     pub fn reattach_body(&mut self, id: FunctionId, ir: FunctionIr) {
         self.modules[id.module.idx()].functions[id.function.idx()].ir = Some(ir);
+    }
+
+    pub fn get_inst_name(&self, inst: &Instruction) -> InstName {
+        let module = self.get_module(inst.module());
+        InstName {
+            module: &module.name,
+            function: &module[inst.function.function].name,
+        }
     }
 }
 impl fmt::Display for Environment {
