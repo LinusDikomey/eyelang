@@ -72,7 +72,6 @@ impl RewriteStrategy for ReverseRewriteOrder {
     fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
         let info = ir.get_block(block);
         let s = info.idx + info.arg_count;
-        dbg!(info);
         (s..s + info.len).rev()
     }
 }
@@ -140,7 +139,6 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
         ctx.begin_block(env, ir, block);
         for idx in strategy.iterate_block(ir, block) {
             let r = Ref(idx);
-            dbg!(r);
             let Ok(&inst) = ir.try_get_inst(r) else {
                 // instruction was deleted, skip it
                 continue;

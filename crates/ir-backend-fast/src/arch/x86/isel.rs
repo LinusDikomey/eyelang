@@ -1,7 +1,7 @@
 use ir::{
     BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
     Parameter, Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
-    mc::{Mc, McInsts, RegClass},
+    mc::{Mc, McInsts, RegClass, parallel_copy},
     modify::IrModify,
     optimize::FunctionPass,
     rewrite::{ReverseRewriteOrder, Rewrite, RewriteCtx, Visitor},
@@ -846,6 +846,45 @@ impl IselCtx {
             );
         }
     }
+
+    pub fn copy(
+        &mut self,
+        env: &Environment,
+        before: Ref,
+        mc: ModuleOf<Mc>,
+        ir: &mut IrModify,
+        args: &[MCReg],
+    ) {
+        ir.add_before(env, before, parallel_copy(mc, args, self.unit));
+    }
+}
+
+fn primitive_of_ref(r: Ref, ir: &IrModify, types: &Types) -> Primitive {
+    let Type::Primitive(p) = types[ir.get_ref_ty(r)] else {
+        unreachable!()
+    };
+    p.try_into().expect("Invalid primitive encountered")
+}
+
+enum IntSize {
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+}
+
+fn int_size_of_ref(r: Ref, ir: &IrModify, types: &Types) -> IntSize {
+    match primitive_of_ref(r, ir, types) {
+        Primitive::I8 | Primitive::U8 => IntSize::I8,
+        Primitive::I16 | Primitive::U16 => IntSize::I16,
+        Primitive::I32 | Primitive::U32 => IntSize::I32,
+        Primitive::I64 | Primitive::U64 => IntSize::I64,
+        Primitive::I128 | Primitive::U128 => IntSize::I128,
+        Primitive::Unit | Primitive::I1 | Primitive::F32 | Primitive::F64 | Primitive::Ptr => {
+            unreachable!()
+        }
+    }
 }
 
 ir::visitor! {
@@ -854,6 +893,7 @@ ir::visitor! {
     ir, types, inst, env,
     ctx: IselCtx;
 
+    use builtin: ir::Builtin;
     use arith: ir::dialect::Arith;
     use tuple: ir::dialect::Tuple;
     use mem: ir::dialect::Mem;
@@ -863,14 +903,50 @@ ir::visitor! {
     use mc: ir::mc::Mc;
 
     patterns:
+    (builtin.Undef) => {
+        // don't need to do anything, registers are already allocated
+    };
     (%r = arith.Int (#x)) => {
         let regs = ctx.regs.get(r);
-        match *regs {
-            [reg] => {
-                x86.movri32(reg, x.try_into().unwrap(), ctx.unit)
+        match int_size_of_ref(r, ir, types) {
+            IntSize::I8 => {
+                ir.replace(env, r, x86.movri8(regs[0], x as u8 as u32, ctx.unit));
             }
-            [_a, _b] => todo!("large ints"),
-            _ => unreachable!()
+            IntSize::I16 => {
+                ir.replace(env, r, x86.movri16(regs[0], x as u16 as u32, ctx.unit));
+            }
+            IntSize::I32 => {
+                ir.replace(env, r, x86.movri32(regs[0], x as u32, ctx.unit));
+            }
+            IntSize::I64 => {
+                if x > u32::MAX as u64 {
+                    todo!()
+                }
+                ir.replace(env, r, x86.movri64(regs[0], x.try_into().unwrap(), ctx.unit));
+            }
+            IntSize::I128 => todo!("128 bit ints"),
+        }
+    };
+    (%r = arith.Neg x) => {
+        let x = ctx.regs.get(x);
+        let out = ctx.regs.get(r);
+        match int_size_of_ref(r, ir, types) {
+            IntSize::I8 => {
+                let (&[out], &[x]) = (out, x) else { unreachable!() };
+                ctx.copy(env, r, mc, ir, &[out, x]);
+                ir.replace(env, r, x86.negr8(out, ctx.unit));
+            }
+            IntSize::I16 | IntSize::I32 => {
+                let (&[out], &[x]) = (out, x) else { unreachable!() };
+                ctx.copy(env, r, mc, ir, &[out, x]);
+                ir.replace(env, r, x86.negr32(x, ctx.unit));
+            }
+            IntSize::I64 => {
+                let (&[out], &[x]) = (out, x) else { unreachable!() };
+                ctx.copy(env, r, mc, ir, &[out, x]);
+                ir.replace(env, r, x86.negr64(x, ctx.unit));
+            }
+            IntSize::I128 => todo!(),
         }
     };
     (%r = cf.Ret value) => {

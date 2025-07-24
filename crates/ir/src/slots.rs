@@ -10,12 +10,10 @@ impl<V: Copy> Slots<V> {
         let slot_map = ir
             .insts
             .iter()
-            .enumerate()
-            .map(|(i, inst)| {
+            .map(|inst| {
                 let count = slot_count(types[inst.ty], types);
                 let idx = slots.len() as u32;
                 slots.extend(std::iter::repeat_n(default, count as usize));
-                tracing::debug!(target: "slots", "%{i} = {inst:?} -> @{idx}..+{count}");
                 idx
             })
             .collect();
@@ -30,7 +28,6 @@ impl<V: Copy> Slots<V> {
             .get(r + 1)
             .map(|i| *i as usize)
             .unwrap_or(self.slots.len());
-        tracing::debug!(target: "slots", "getting {r} -> {start}..{end} with {} slots", self.slot_map.len());
         &self.slots[start..end]
     }
 
