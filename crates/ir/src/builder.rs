@@ -198,7 +198,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             blocks: self.blocks,
             insts: self.insts,
             extra: self.extra,
-            mc_reg_count: 0,
+            mc_regs: Vec::new(),
         };
         let entry = &ir.blocks[BlockId::ENTRY.idx()];
         let params = (entry.idx..entry.idx + entry.arg_count)
@@ -223,7 +223,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             blocks: self.blocks,
             insts: self.insts,
             extra: self.extra,
-            mc_reg_count: 0,
+            mc_regs: Vec::new(),
         };
         (ir, self.types)
     }

@@ -3,7 +3,7 @@ use dmap::DHashMap;
 use crate::{
     Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
     Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction,
-    builder::write_args,
+    builder::write_args, mc::RegClass,
 };
 
 pub struct IrModify {
@@ -384,8 +384,8 @@ impl IrModify {
         ir
     }
 
-    pub fn new_reg(&mut self) -> MCReg {
-        self.ir.new_reg()
+    pub fn new_reg(&mut self, class: RegClass) -> MCReg {
+        self.ir.new_reg(class)
     }
 
     pub fn replace_with(&mut self, r: Ref, new: Ref) {

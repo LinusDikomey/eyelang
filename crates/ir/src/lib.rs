@@ -546,7 +546,7 @@ pub struct FunctionIr {
     blocks: Vec<BlockInfo>,
     insts: Vec<Instruction>,
     extra: Vec<u32>,
-    mc_reg_count: u32,
+    mc_regs: Vec<RegClass>,
 }
 impl FunctionIr {
     pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
@@ -559,6 +559,10 @@ impl FunctionIr {
 
     pub fn inst_count(&self) -> u32 {
         self.insts.len() as _
+    }
+
+    pub fn refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
+        (0..self.insts.len() as u32).map(Ref)
     }
 
     pub fn get_refs(
@@ -722,9 +726,9 @@ impl FunctionIr {
         }
     }
 
-    pub fn new_reg(&mut self) -> MCReg {
-        let r = self.mc_reg_count;
-        self.mc_reg_count += 1;
+    pub fn new_reg(&mut self, class: RegClass) -> MCReg {
+        let r = self.mc_regs.len() as u32;
+        self.mc_regs.push(class);
         MCReg::from_virt(r)
     }
 
@@ -755,7 +759,15 @@ impl FunctionIr {
     }
 
     pub fn mc_reg_count(&self) -> u32 {
-        self.mc_reg_count
+        self.mc_regs.len() as u32
+    }
+
+    pub fn virtual_reg_class(&self, r: MCReg) -> RegClass {
+        self.mc_regs[r.virt().unwrap() as usize]
+    }
+
+    pub fn mc_reg_classes(&self) -> &[RegClass] {
+        &self.mc_regs
     }
 }
 impl block_graph::Blocks for FunctionIr {
@@ -1177,6 +1189,8 @@ pub struct InvalidPrimitive;
 use mc::Register;
 #[doc(hidden)]
 pub use strum::FromRepr as __FromRepr;
+
+use crate::mc::RegClass;
 
 #[macro_export]
 macro_rules! lifetime_or_static {

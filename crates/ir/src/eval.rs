@@ -1186,56 +1186,32 @@ impl Values {
             _ => {
                 let ty = types[ir.get_inst(r).ty];
                 let slot_index = self.slot_map[r.0 as usize];
-                self.visit_primitives_inner(&mut { slot_index }, ty, types, &mut { visit })
+                self.visit_primitive_slots_inner(
+                    &mut { slot_index },
+                    ty,
+                    types,
+                    &mut move |slots, p| match p {
+                        Primitive::Unit => Ok(()),
+                        Primitive::I8 | Primitive::U8 | Primitive::I1 => {
+                            visit(PrimitiveVal::I8(slots[0] as u8))
+                        }
+                        Primitive::I16 | Primitive::U16 => {
+                            visit(PrimitiveVal::I16(slots[0] as u16))
+                        }
+                        Primitive::I32 | Primitive::U32 | Primitive::F32 => {
+                            visit(PrimitiveVal::I32(slots[0] as u32))
+                        }
+                        Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Ptr => {
+                            visit(PrimitiveVal::I64(slots[0]))
+                        }
+                        Primitive::I128 | Primitive::U128 => {
+                            let value = ((slots[0] as u128) << 64) | slots[1] as u128;
+                            visit(PrimitiveVal::I128(value))
+                        }
+                    },
+                )
             }
         }
-    }
-
-    fn visit_primitives_inner<F: FnMut(PrimitiveVal) -> Result<(), Error>>(
-        &mut self,
-        i: &mut u32,
-        ty: Type,
-        types: &Types,
-        visit: &mut F,
-    ) -> Result<(), Error> {
-        match ty {
-            Type::Primitive(id) => match Primitive::try_from(id).unwrap() {
-                Primitive::Unit => {}
-                Primitive::I8 | Primitive::U8 | Primitive::I1 => {
-                    visit(PrimitiveVal::I8(self.slots[*i as usize] as u8))?;
-                    *i += 1;
-                }
-                Primitive::I16 | Primitive::U16 => {
-                    visit(PrimitiveVal::I16(self.slots[*i as usize] as u16))?;
-                    *i += 1;
-                }
-                Primitive::I32 | Primitive::U32 | Primitive::F32 => {
-                    visit(PrimitiveVal::I32(self.slots[*i as usize] as u32))?;
-                    *i += 1;
-                }
-                Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Ptr => {
-                    visit(PrimitiveVal::I64(self.slots[*i as usize]))?;
-                    *i += 1;
-                }
-                Primitive::I128 | Primitive::U128 => {
-                    let value = ((self.slots[*i as usize] as u128) << 64)
-                        | self.slots[*i as usize + 1] as u128;
-                    visit(PrimitiveVal::I128(value))?;
-                    *i += 2;
-                }
-            },
-            Type::Array(elem, len) => {
-                for _ in 0..len {
-                    self.visit_primitives_inner(i, types[elem], types, visit)?;
-                }
-            }
-            Type::Tuple(elems) => {
-                for elem in elems.iter() {
-                    self.visit_primitives_inner(i, types[elem], types, visit)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     fn load_primitives(

@@ -1,5 +1,4 @@
-#![allow(unused)] // TODO: remove when x86 backend is worked on again
-use std::{collections::HashSet, ffi::CStr, path::Path};
+use std::path::Path;
 
 use ir::MCReg;
 
@@ -57,11 +56,12 @@ impl Backend {
         let mut isel = arch::x86::InstructionSelector::new(env);
         let mc = env.get_dialect_module::<ir::mc::Mc>();
         let x86 = isel.x86;
+        let abi = arch::x86::get_target_abi();
 
         for func in env[module_id].functions() {
             if let Some(ir) = func.ir() {
                 let (mut mir, types) =
-                    arch::x86::codegen(env, ir, func, func.types(), &mut isel, mc);
+                    arch::x86::codegen(env, ir, func.types(), &mut isel, mc, abi);
                 let offset = text_section.len() as u64;
                 tracing::debug!(
                     target: "backend-ir",

@@ -1,8 +1,10 @@
-use ir::{Primitive, PrimitiveInfo, Type, TypeIds, Types};
+use std::convert::Infallible;
+
+use ir::{BlockId, Environment, MCReg, ModuleOf, Primitive, Ref, Type, TypeId, Types, mc::Mc};
 
 use crate::arch::x86::isa::Reg;
 
-use super::{Abi, ParamStorage, ReturnPlace};
+use super::Abi;
 
 const ABI_PARAM_REGISTERS: [[Reg; 4]; 6] = [
     [Reg::rdi, Reg::edi, Reg::di, Reg::dl],
@@ -12,125 +14,108 @@ const ABI_PARAM_REGISTERS: [[Reg; 4]; 6] = [
     [Reg::r8, Reg::r8d, Reg::r8w, Reg::r8b],
     [Reg::r9, Reg::r9d, Reg::r9w, Reg::r9b],
 ];
+const RETURN_REGS: [[Reg; 4]; 2] = [
+    [Reg::rax, Reg::eax, Reg::ax, Reg::al],
+    [Reg::rdx, Reg::edx, Reg::dx, Reg::dl],
+];
 
-pub struct FunctionAbi {
-    params: Vec<ParamStorage>,
-    registers: Vec<Reg>,
-    return_place: ReturnPlace,
-}
-impl Abi for FunctionAbi {
-    fn from_function(
+pub struct SystemV;
+impl Abi for SystemV {
+    fn implement_params(
+        &self,
+        args: ir::Refs,
+        ir: &mut ir::modify::IrModify,
+        env: &Environment,
+        mc: ModuleOf<Mc>,
         types: &Types,
-        params: TypeIds,
-        return_ty: Type,
-        primitives: &[PrimitiveInfo],
-    ) -> Self {
-        let mut next_gp_reg = 0;
-
-        let mut registers = Vec::new();
-
-        let params = params
-            .iter()
-            .map(|param_ty| match types[param_ty] {
-                Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                    Primitive::Unit => ParamStorage::None,
-                    ty @ (Primitive::I1
-                    | Primitive::I8
-                    | Primitive::U8
-                    | Primitive::I16
-                    | Primitive::U16
-                    | Primitive::I32
-                    | Primitive::U32
-                    | Primitive::I64
-                    | Primitive::U64
-                    | Primitive::Ptr) => {
-                        let size_idx = match ty {
-                            Primitive::I1 | Primitive::I8 | Primitive::U8 => 3,
-                            Primitive::I16 | Primitive::U16 => 2,
-                            Primitive::I32 | Primitive::U32 => 1,
-                            Primitive::I64 | Primitive::U64 | Primitive::Ptr => 0,
-                            _ => unreachable!(),
-                        };
-                        if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
-                            next_gp_reg += 1;
-                            let idx = registers.len() as _;
-                            registers.push(reg[size_idx]);
-                            ParamStorage::Reg(idx)
-                        } else {
-                            todo!("handle stack passed parameters")
+        regs: &ir::slots::Slots<MCReg>,
+        unit: TypeId,
+    ) {
+        let info = ir.get_block(BlockId::ENTRY);
+        let before = Ref::index(info.idx + info.arg_count);
+        let mut abi_regs = ABI_PARAM_REGISTERS.into_iter();
+        for arg in args.iter() {
+            _ = regs.visit_primitive_slots::<Infallible, _>(
+                arg,
+                types[ir.get_ref_ty(arg)],
+                types,
+                |regs, ty| {
+                    let mut copy = |args| {
+                        ir.add_before(env, before, ir::mc::parallel_copy(mc, args, unit));
+                    };
+                    match ty {
+                        Primitive::Unit => {}
+                        Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                            copy(&[regs[0], MCReg::from_phys(abi_regs.next().unwrap()[3])]);
                         }
-                    }
-                    Primitive::I128 | Primitive::U128 => {
-                        if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
-                            let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
-                            let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
-                            next_gp_reg += 2;
-                            let idx = registers.len() as _;
-                            registers.extend([r1, r2]);
-                            ParamStorage::TwoRegs(idx)
-                        } else {
-                            todo!("handle stack passed parameters")
+                        Primitive::I16 | Primitive::U16 => {
+                            copy(&[regs[0], MCReg::from_phys(abi_regs.next().unwrap()[2])]);
                         }
+                        Primitive::I32 | Primitive::U32 => {
+                            copy(&[regs[0], MCReg::from_phys(abi_regs.next().unwrap()[1])]);
+                        }
+                        Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
+                            copy(&[regs[0], MCReg::from_phys(abi_regs.next().unwrap()[0])]);
+                        }
+                        Primitive::I128 | Primitive::U128 => {
+                            copy(&[
+                                regs[0],
+                                MCReg::from_phys(abi_regs.next().unwrap()[0]),
+                                regs[1],
+                                MCReg::from_phys(abi_regs.next().unwrap()[1]),
+                            ]);
+                        }
+                        Primitive::F32 | Primitive::F64 => todo!("SystemV float parameter abi"),
                     }
-                    Primitive::F32 | Primitive::F64 => todo!("handle floating point params"),
+                    Ok(())
                 },
-                aggregate_ty @ (Type::Tuple(_) | Type::Array(_, _)) => {
-                    let layout = ir::type_layout(aggregate_ty, types, primitives);
-                    if layout.size == 0 {
-                        ParamStorage::None
-                    } else if layout.size <= 8 {
-                        if let Some(&reg) = ABI_PARAM_REGISTERS.get(next_gp_reg) {
-                            next_gp_reg += 1;
-                            let idx = registers.len() as _;
-                            registers.push(reg[0]);
-                            ParamStorage::Reg(idx)
-                        } else {
-                            todo!("handle stack passed parameters")
-                        }
-                    } else if layout.size <= 16 {
-                        if next_gp_reg + 1 < ABI_PARAM_REGISTERS.len() {
-                            let r1 = ABI_PARAM_REGISTERS[next_gp_reg][0];
-                            let r2 = ABI_PARAM_REGISTERS[next_gp_reg + 1][0];
-                            next_gp_reg += 2;
-                            let idx = registers.len() as _;
-                            registers.extend([r1, r2]);
-                            ParamStorage::TwoRegs(idx)
-                        } else {
-                            todo!("handle stack passed parameters")
-                        }
-                    } else {
-                        todo!("handle larger aggregates")
-                    }
-                }
-            })
-            .collect();
-
-        let return_layout = ir::type_layout(return_ty, types, primitives);
-        let return_place = match return_layout.size {
-            0 => ReturnPlace::None,
-            1 => ReturnPlace::Reg(Reg::al),
-            2 => ReturnPlace::Reg(Reg::ax),
-            4 => ReturnPlace::Reg(Reg::eax),
-            8 => ReturnPlace::Reg(Reg::rax),
-            16 => ReturnPlace::TwoRegs(Reg::rax, Reg::rdx),
-            _ => todo!("handle stack passed return values"),
-        };
-        Self {
-            params,
-            registers,
-            return_place,
+            );
         }
     }
 
-    fn arg_registers(&self) -> &[Reg] {
-        &self.registers
-    }
-
-    fn get_param(&self, param: u32) -> ParamStorage {
-        self.params[param as usize]
-    }
-
-    fn return_place(&self) -> ReturnPlace {
-        self.return_place
+    fn implement_return(
+        &self,
+        value: ir::Ref,
+        ir: &mut ir::modify::IrModify,
+        env: &Environment,
+        mc: ModuleOf<Mc>,
+        types: &Types,
+        regs: &ir::slots::Slots<MCReg>,
+        before: ir::Ref,
+        unit: TypeId,
+    ) {
+        let ty = types[ir.get_ref_ty(value)];
+        let mut copy = |args| ir.add_before(env, before, ir::mc::parallel_copy(mc, args, unit));
+        match ty {
+            Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+                Primitive::Unit => {}
+                Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                    copy(&[MCReg::from_phys(RETURN_REGS[0][3]), regs.get_one(value)]);
+                }
+                Primitive::I16 | Primitive::U16 => {
+                    copy(&[MCReg::from_phys(RETURN_REGS[0][2]), regs.get_one(value)]);
+                }
+                Primitive::I32 | Primitive::U32 => {
+                    copy(&[MCReg::from_phys(RETURN_REGS[0][1]), regs.get_one(value)]);
+                }
+                Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
+                    copy(&[MCReg::from_phys(RETURN_REGS[0][0]), regs.get_one(value)]);
+                }
+                Primitive::I128 | Primitive::U128 => {
+                    let &[a, b] = regs.get(value) else {
+                        unreachable!()
+                    };
+                    copy(&[
+                        MCReg::from_phys(RETURN_REGS[0][0]),
+                        a,
+                        MCReg::from_phys(RETURN_REGS[1][0]),
+                        b,
+                    ]);
+                }
+                Primitive::F32 | Primitive::F64 => todo!("abi: float return values"),
+            },
+            Type::Array(_, _) => todo!("abi: array return values"),
+            Type::Tuple(_) => todo!("abi: tuple return values"),
+        }
     }
 }

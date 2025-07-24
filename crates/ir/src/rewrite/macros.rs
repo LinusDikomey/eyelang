@@ -163,6 +163,7 @@ macro_rules! visitor {
             ) -> ::core::option::Option<$output> {
                 $(
                     use $module_path as $module;
+                    #[allow(unused)]
                     let $module = self.$module;
                 )*
                 $(

@@ -1,30 +1,23 @@
+use std::convert::Infallible;
+
 use ir::{
     BlockGraph, BlockId, BlockTarget, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
-    Parameter, Primitive, PrimitiveInfo, Ref, Type, TypeIds, Types,
-    mc::{Mc, McInsts, RegClass, parallel_copy},
+    Primitive, Ref, Type, Types,
+    mc::{Mc, parallel_copy},
     modify::IrModify,
-    optimize::FunctionPass,
-    rewrite::{ReverseRewriteOrder, Rewrite, RewriteCtx, Visitor},
+    rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
 };
 
-use crate::{
-    MCValue,
-    arch::x86::{
-        abi::{self, ReturnPlace},
-        isa::Reg,
-    },
-};
-
-use super::X86;
+use crate::arch::x86::{abi::Abi, isa::Reg};
 
 pub fn codegen(
     env: &Environment,
     body: &ir::FunctionIr,
-    function: &ir::Function,
     types: &ir::Types,
     isel: &mut InstructionSelector,
     mc: ModuleOf<Mc>,
+    abi: &'static dyn Abi,
 ) -> (FunctionIr, ir::Types) {
     /*
     let mut mir = MachineIR::new();
@@ -67,8 +60,26 @@ pub fn codegen(
     let mut body = body.clone();
 
     let mut regs = Slots::with_default(&body, types, MCReg::from_virt(0));
-    for slot in &mut regs.slots {
-        *slot = body.new_reg();
+    for r in body.refs() {
+        _ = regs.visit_primitive_slots_mut::<Infallible, _>(
+            r,
+            types[body.get_ref_ty(r)],
+            types,
+            |regs, p| {
+                use Primitive as P;
+                match p {
+                    P::Unit => {}
+                    P::I1 | P::I8 | P::U8 => regs[0] = body.new_reg(ir::mc::RegClass::GP8),
+                    P::I16 | P::U16 => regs[0] = body.new_reg(ir::mc::RegClass::GP16),
+                    P::I32 | P::U32 => regs[0] = body.new_reg(ir::mc::RegClass::GP32),
+                    P::I64 | P::U64 | P::Ptr => regs[0] = body.new_reg(ir::mc::RegClass::GP64),
+                    P::F32 => regs[0] = body.new_reg(ir::mc::RegClass::F32),
+                    P::F64 => regs[0] = body.new_reg(ir::mc::RegClass::F64),
+                    _ => todo!(),
+                };
+                Ok(())
+            },
+        );
     }
     let mut types = types.clone();
     let block_graph = BlockGraph::calculate(&body, env);
@@ -99,15 +110,20 @@ pub fn codegen(
             }
         }
     }
+    let unit = types.add(Type::Tuple(ir::TypeIds::EMPTY));
+
+    let mut body = IrModify::new(body);
+    let args = body.get_block_args(BlockId::ENTRY);
+    abi.implement_params(args, &mut body, env, mc, &types, &regs, unit);
+
     let mut ctx = IselCtx {
         stack_size: 0,
-        unit: types.add(Type::Tuple(ir::TypeIds::EMPTY)),
+        unit,
         regs,
         mc,
         use_counts,
+        abi,
     };
-
-    let mut body = IrModify::new(body);
 
     ir::rewrite::rewrite_in_place(
         &mut body,
@@ -133,15 +149,17 @@ pub struct IselCtx {
     regs: Slots<MCReg>,
     mc: ModuleOf<Mc>,
     use_counts: Box<[u32]>,
+    abi: &'static dyn Abi,
 }
 impl ir::rewrite::RewriteCtx for IselCtx {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
+        if block == BlockId::ENTRY {
+            return;
+        }
         let info = ir.get_block(block);
-        let start = info.idx;
         let args = self
             .regs
             .get_range(Ref::index(info.idx), Ref::index(info.idx + info.arg_count));
-        let start = ir.get_block(block);
         let f = FunctionId {
             module: self.mc.id(),
             function: Mc::IncomingBlockArgs.id(),
@@ -303,22 +321,15 @@ ir::visitor! {
         }
     };
     (%r = cf.Ret value) => {
-        match ctx.regs.get(value) {
-            [] => {}
-            &[reg] => {
-                let eax = MCReg::from_phys(Reg::eax);
-                ir.add_before(env, r, ir::mc::parallel_copy(mc, &[eax, reg], ctx.unit));
-            }
-            _ => todo!("multi-reg return values"),
-        }
-        x86.ret_32(ctx.unit)
+        ctx.abi.implement_return(value, ir, env, mc, types, &ctx.regs, r, ctx.unit);
+        x86.ret(ctx.unit)
     };
     (%r = cf.Goto (@b b_args)) => {
         let b_args = b_args.to_vec();
         ctx.create_args_copy(env, r, mc, ir, b, &b_args);
         x86.jmp(b, ctx.unit)
     };
-    (arith.LT a b) => { panic!(); Rewrite::Rename(Ref::UNIT)}; // FIXME: this is only to temporarily make the Branch below work
+    //(arith.LT a b) => { panic!(); Rewrite::Rename(Ref::UNIT)}; // FIXME: this is only to temporarily make the Branch below work
     (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) => {
         // FIXmE: should be condition on this pattern
         assert_eq!(ctx.use_count(lt), 1);
@@ -345,24 +356,24 @@ ir::visitor! {
             let a = ctx.regs.get_one(a);
             let b = ctx.regs.get_one(b);
             ctx.copy(env, r, mc, ir, &[out, a]);
-            (out, a, b)
+            (out, b)
         };
         match primitive {
             Primitive::I1 => todo!(),
             Primitive::I8 | Primitive::U8 => {
-                let (out, a, b) = single_reg();
+                let (out, b) = single_reg();
                 ir.replace(env, r, x86.add_rr8(out, b, ctx.unit));
             }
             Primitive::I16 | Primitive::U16 => {
-                let (out, a, b) = single_reg();
+                let (out, b) = single_reg();
                 ir.replace(env, r, x86.add_rr16(out, b, ctx.unit));
             }
             Primitive::I32 | Primitive::U32 => {
-                let (out, a, b) = single_reg();
+                let (out, b) = single_reg();
                 ir.replace(env, r, x86.add_rr32(out, b, ctx.unit));
             }
             Primitive::I64 | Primitive::U64 => {
-                let (out, a, b) = single_reg();
+                let (out, b) = single_reg();
                 ir.replace(env, r, x86.add_rr64(out, b, ctx.unit));
             }
             Primitive::I128 | Primitive::U128 => todo!("128-bit add"),
@@ -402,13 +413,13 @@ ir::visitor! {
                 Primitive::I128 => todo!(),
                 Primitive::U128 => todo!(),
             }
-            Type::Array(type_id, _) => todo!(),
-            Type::Tuple(type_ids) => todo!(),
+            Type::Array(_, _) => todo!(),
+            Type::Tuple(_) => todo!(),
         }
     };
     (%r = _) => {
         todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
-        #[allow(clippy::unused_unit)]
+        #[allow(clippy::unused_unit, unreachable_code)]
         ()
     };
 }

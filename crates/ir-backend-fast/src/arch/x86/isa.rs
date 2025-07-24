@@ -114,7 +114,7 @@ ir::instructions! {
     mov_rm32 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
     mov_rm64 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
 
-    ret_32 !terminator;
+    ret !terminator;
 
 
     jmp addr: BlockId !terminator;
