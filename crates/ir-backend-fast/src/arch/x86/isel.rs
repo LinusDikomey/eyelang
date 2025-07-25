@@ -8,7 +8,7 @@ use ir::{
     slots::Slots,
 };
 
-use crate::arch::x86::{X86, isa::Reg};
+use crate::arch::x86::{Reg, X86};
 
 pub fn codegen(
     env: &Environment,
@@ -19,10 +19,6 @@ pub fn codegen(
     abi: &'static dyn Abi<X86>,
 ) -> (FunctionIr, ir::Types) {
     /*
-    let mut mir = MachineIR::new();
-    let mut builder = mir.begin_block(MirBlock::ENTRY);
-    let mut values = vec![MCValue::None; body.inst_count() as usize];
-
     builder.inst(Inst::push64, [Op::Reg(Reg::rbp)]);
     builder.inst(Inst::movrr64, [Op::Reg(Reg::rbp), Op::Reg(Reg::rsp)]);
     // This instruction's immediate operand will be updated at the end with the used stack space.
@@ -60,13 +56,13 @@ pub fn codegen(
     let block_graph = BlockGraph::calculate(&body, env);
     let unit = types.add(Type::Tuple(ir::TypeIds::EMPTY));
 
-    let mut body = IrModify::new(body);
-    let args = body.get_block_args(BlockId::ENTRY);
-    abi.implement_params(args, &mut body, env, mc, &types, &regs, unit);
-    let mut ctx = IselCtx::new(env, &body, regs, mc, unit, abi);
+    let mut ir = IrModify::new(body);
+    let args = ir.get_block_args(BlockId::ENTRY);
+    abi.implement_params(args, &mut ir, env, mc, &types, &regs, unit);
+    let mut ctx = IselCtx::new(env, &ir, regs, mc, unit, abi);
 
     ir::rewrite::rewrite_in_place(
-        &mut body,
+        &mut ir,
         &types,
         env,
         &mut ctx,
@@ -74,13 +70,49 @@ pub fn codegen(
         ReverseRewriteOrder::new(&block_graph),
     );
 
+    let mut size = ctx.stack_size();
+    if size > 0 {
+        let start = ir.get_original_block_start(BlockId::ENTRY);
+        let x86 = isel.x86;
+        ir.add_before(
+            env,
+            start,
+            x86.push_r64(MCReg::from_phys(Reg::rbp), ctx.unit),
+        );
+        ir.add_before(
+            env,
+            start,
+            x86.mov_rr64(
+                MCReg::from_phys(Reg::rbp),
+                MCReg::from_phys(Reg::rsp),
+                ctx.unit,
+            ),
+        );
+        if size % 16 != 0 {
+            size += 16 - (size % 16);
+        }
+        ir.add_before(
+            env,
+            start,
+            x86.sub_ri64(MCReg::from_phys(Reg::rsp), size, ctx.unit),
+        );
+        for ret in ctx.ret_instructions {
+            ir.add_before(
+                env,
+                ret,
+                x86.add_ri64(MCReg::from_phys(Reg::rsp), size, ctx.unit),
+            );
+            ir.add_before(env, ret, x86.pop_r64(MCReg::from_phys(Reg::rbp), ctx.unit));
+        }
+    }
+
     /*
     for idx in stack_setup_indices {
         mir.replace_operand(idx, 1, offset_op(mir.stack_offset() as i32));
     }
     mir
     */
-    (body.finish_and_compress(env), types)
+    (ir.finish_and_compress(env), types)
 }
 
 fn primitive_of_ref(r: Ref, ir: &IrModify, types: &Types) -> Primitive {
@@ -174,6 +206,7 @@ ir::visitor! {
         }
     };
     (%r = cf.Ret value) => {
+        ctx.ret_instructions.push(r);
         ctx.abi.implement_return(value, ir, env, mc, x86, types, &ctx.regs, r, ctx.unit);
     };
     (%r = cf.Goto (@b b_args)) => {
@@ -238,7 +271,7 @@ ir::visitor! {
         let layout = ir::type_layout(types[ty], types, env.primitives());
         let offset = ctx.alloc_stack(layout);
         let out = ctx.regs.get_one(r);
-        x86.lea_rm64(out, MCReg::from_phys(Reg::rsp), (-(offset as i32)) as u32, ctx.unit)
+        x86.lea_rm64(out, MCReg::from_phys(Reg::rbp), (-(offset as i32)) as u32, ctx.unit)
     };
     (%r = mem.Load ptr) => {
         let ptr = ctx.regs.get_one(ptr);
@@ -251,17 +284,39 @@ ir::visitor! {
                 Primitive::I16 | Primitive::U16 => {
                     ir.replace(env, r, x86.mov_rm16(ctx.regs.get_one(r), ptr, 0, ctx.unit));
                 }
-                Primitive::I32 | Primitive::U32 | Primitive::F32 => {
+                Primitive::I32 | Primitive::U32 => {
                     ir.replace(env, r, x86.mov_rm32(ctx.regs.get_one(r), ptr, 0, ctx.unit));
                 }
-                Primitive::I64 | Primitive::U64 | Primitive::F64 | Primitive::Ptr => {
+                Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
                     ir.replace(env, r, x86.mov_rm64(ctx.regs.get_one(r), ptr, 0, ctx.unit));
                 }
-                Primitive::I128 => todo!(),
-                Primitive::U128 => todo!(),
+                Primitive::F32 | Primitive::F64 => todo!("load floats"),
+                Primitive::I128 | Primitive::U128 => todo!("load 128-bit integers"),
             }
-            Type::Array(_, _) => todo!(),
-            Type::Tuple(_) => todo!(),
+            Type::Array(_, _) | Type::Tuple(_) => todo!("load aggregrates"),
+        }
+    };
+    (%r = mem.Store ptr value) => {
+        let ptr = ctx.regs.get_one(ptr);
+        match types[ir.get_ref_ty(value)] {
+            Type::Primitive(primitive_id) => match Primitive::try_from(primitive_id).unwrap() {
+                Primitive::Unit => {}
+                Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                    ir.replace(env, r, x86.mov_mr8(ptr, 0, ctx.regs.get_one(value), ctx.unit));
+                }
+                Primitive::I16 | Primitive::U16 => {
+                    ir.replace(env, r, x86.mov_mr16(ptr, 0, ctx.regs.get_one(value), ctx.unit));
+                }
+                Primitive::I32 | Primitive::U32 => {
+                    ir.replace(env, r, x86.mov_mr32(ptr, 0, ctx.regs.get_one(value), ctx.unit));
+                }
+                Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
+                    ir.replace(env, r, x86.mov_mr64(ptr, 0, ctx.regs.get_one(value), ctx.unit));
+                }
+                Primitive::F32 | Primitive::F64 => todo!("store floats"),
+                Primitive::I128 | Primitive::U128 => todo!("store 128-bit integers"),
+            }
+            Type::Array(_, _) | Type::Tuple(_) => todo!("store aggregrates"),
         }
     };
     (%r = _) => {

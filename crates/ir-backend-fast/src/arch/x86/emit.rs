@@ -89,6 +89,15 @@ pub fn write(
 
             use X86 as I;
             match inst.op() {
+                I::push_r64 | I::pop_r64 => {
+                    let (r, b) = encode_reg(ir.args(i, env));
+                    let rex = encode_rex(false, false, false, b);
+                    if rex != 0 {
+                        text.push(rex);
+                    }
+                    let opcode = if inst.op() == I::push_r64 { 0x50 } else { 0x58 };
+                    text.push(opcode + r);
+                }
                 I::mov_ri8 => {
                     let (a, imm): (Reg, u32) = ir.args(i, env);
                     let imm8: i8 = (imm as i32).try_into().unwrap();
@@ -120,13 +129,7 @@ pub fn write(
                     text.extend([0xB8 + ra]);
                     text.extend(imm.to_le_bytes());
                 }
-                I::mov_ri64 => {
-                    let (a, imm): (Reg, u64) = ir.args(i, env);
-                    let (ra, b) = encode_reg(a);
-                    let rex = encode_rex(true, false, false, b);
-                    text.extend([rex, 0xB8 + ra]);
-                    text.extend(imm.to_le_bytes());
-                }
+                I::mov_ri64 => inst_ri(text, &[0xC7], ir.args(i, env), true, 0),
                 I::mov_rr32 | I::mov_rr64 => {
                     inst_rr(text, &[0x89], ir.args(i, env), inst.op() == I::mov_rr64)
                 }
@@ -134,6 +137,11 @@ pub fn write(
                 I::mov_rm16 => inst_rm(text, &[0x8B], ir.args(i, env), false),
                 I::mov_rm32 | I::mov_rm64 => {
                     inst_rm(text, &[0x8B], ir.args(i, env), inst.op() == I::mov_rm64)
+                }
+                I::mov_mr8 => inst_mr(text, &[0x88], ir.args(i, env), false),
+                I::mov_mr16 => inst_mr(text, &[0x89], ir.args(i, env), false),
+                I::mov_mr32 | I::mov_mr64 => {
+                    inst_mr(text, &[0x89], ir.args(i, env), inst.op() == I::mov_mr64)
                 }
                 I::ret0 | I::ret64 | I::ret128 => {
                     text.push(0xc3);
@@ -172,13 +180,33 @@ pub fn write(
                 }
                 I::add_rr8 => inst_rr(text, &[0x00], ir.args(i, env), false),
                 I::add_rr16 => inst_rr(text, &[0x01], ir.args(i, env), false),
-                I::add_rr32 => inst_rr(text, &[0x01], ir.args(i, env), false),
-                I::add_rr64 => inst_rr(text, &[0x01], ir.args(i, env), true),
+                I::add_rr32 | I::add_rr64 => {
+                    inst_rr(text, &[0x01], ir.args(i, env), inst.op() == I::add_rr64)
+                }
+                I::add_ri64 => inst_ri(text, &[0x81], ir.args(i, env), true, 0),
+
+                I::sub_rr8 | I::sub_rr16 | I::sub_rr32 | I::sub_rr64 => todo!("sub"),
+
+                I::sub_ri64 => inst_ri(text, &[0x81], ir.args(i, env), true, 5),
+
                 I::neg_r8 => inst_r(text, &[0xF6], ir.args(i, env), 3, false),
                 I::neg_r32 => inst_r(text, &[0xF7], ir.args(i, env), 3, false),
                 I::neg_r64 => inst_r(text, &[0xF7], ir.args(i, env), 3, true),
                 I::lea_rm32 | I::lea_rm64 => {
-                    inst_rm(text, &[0x8D], ir.args(i, env), inst.op() == I::lea_rm64)
+                    let opcode: &[u8] = &[0x8D];
+                    let (reg_val, reg_ptr, off) = ir.args(i, env);
+                    let wide = inst.op() == I::lea_rm64;
+                    let off = OffsetClass::from_imm(off);
+                    let (modrm_a, r) = encode_reg(reg_val);
+                    let (modrm_b, b) = encode_reg(reg_ptr);
+                    let rex = encode_rex(wide, r, false, b);
+                    if rex != 0 {
+                        text.push(rex);
+                    }
+                    text.extend(opcode);
+                    text.push(off.modrm_bits() | (modrm_a << 3) | modrm_b);
+                    //text.push(0x24); // wtf
+                    off.write(text);
                 }
             }
         }
@@ -229,20 +257,27 @@ fn inst_rm(
     off.write(text);
 }
 
-/*
-fn inst_ri(text: &mut Vec<u8>, opcode: &[u8], wide: bool, modrm_bits: u8, (r, imm): (Reg, u32)) {
-    let modrm = encode_modrm_ri(r, wide);
+fn inst_mr(
+    text: &mut Vec<u8>,
+    opcode: &[u8],
+    (reg_ptr, off, reg_val): (Reg, Int32, Reg),
+    wide: bool,
+) {
+    // encoded exactly the same way, just swap the arguments around correctly
+    inst_rm(text, opcode, (reg_val, reg_ptr, off), wide);
+}
+
+fn inst_ri(text: &mut Vec<u8>, opcode: &[u8], (r, imm): (Reg, u32), wide: bool, i: u8) {
+    let modrm = encode_modrm_ri(r, wide, i);
     if modrm.rex != 0 {
         text.push(modrm.rex);
     }
-    if let Ok(b8) = imm.try_into() {
-        text.extend(opcode);
-        text.extend([modrm.modrm | modrm_bits, b8]);
-    } else {
-        todo!("handle larger imm values");
-    }
+    text.extend(opcode);
+    text.push(modrm.modrm);
+    text.extend(imm.to_le_bytes());
 }
 
+/*
 fn inst_mi(
     text: &mut Vec<u8>,
     opcode: &[u8],
@@ -305,7 +340,7 @@ enum OffsetClass {
 }
 impl OffsetClass {
     fn from_imm(value: u32) -> Self {
-        let value: i32 = value.try_into().unwrap();
+        let value = value as i32;
         if value == 0 {
             Self::Zero
         } else if let Ok(b) = value.try_into() {
@@ -391,6 +426,15 @@ fn encode_modrm_rr(reg_a: Reg, reg_b: Reg, wide: bool) -> Modrm {
     }
 }
 
+fn encode_modrm_ri(reg: Reg, wide: bool, i: u8) -> Modrm {
+    debug_assert!(i < 8);
+    let (rm, r) = encode_reg(reg);
+    Modrm {
+        rex: encode_rex(wide, r, false, false),
+        modrm: MODRM_RR | i << 3 | rm,
+    }
+}
+
 /*
 fn encode_modrm_mr(reg_ptr: Reg, off: OffsetClass, reg_val: Reg, wide: bool) -> Modrm {
     let (modrm_a, r) = encode_reg(reg_ptr);
@@ -398,14 +442,6 @@ fn encode_modrm_mr(reg_ptr: Reg, off: OffsetClass, reg_val: Reg, wide: bool) -> 
     Modrm {
         rex: encode_rex(wide, r, false, b),
         modrm: modrm_a | (modrm_b << 3) | off.modrm_bits(),
-    }
-}
-
-fn encode_modrm_ri(reg: Reg, wide: bool) -> Modrm {
-    let (modrm_a, r) = encode_reg(reg);
-    Modrm {
-        rex: encode_rex(wide, r, false, false),
-        modrm: modrm_a | if true { 0b1100_0000 } else { 0 },
     }
 }
 */

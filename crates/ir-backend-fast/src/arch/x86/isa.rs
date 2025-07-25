@@ -103,6 +103,9 @@ impl RegisterBits {
 ir::instructions! {
     X86 "x86" X86Insts
 
+    push_r64 reg: MCReg(Usage::Use);
+    pop_r64 reg: MCReg(Usage::Def);
+
     mov_ri8 to: MCReg(Usage::Def) i: Int32;
     mov_ri16 to: MCReg(Usage::Def) i: Int32;
     mov_ri32 to: MCReg(Usage::Def) i: Int32;
@@ -111,10 +114,15 @@ ir::instructions! {
     mov_rr32 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
     mov_rr64 to: MCReg(Usage::Def) from: MCReg(Usage::Use);
 
-    mov_rm8 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+    mov_rm8  to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
     mov_rm16 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
     mov_rm32 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
     mov_rm64 to: MCReg(Usage::Def) from: MCReg(Usage::Use) offset: Int32;
+
+    mov_mr8  to: MCReg(Usage::Use) offset: Int32 from: MCReg(Usage::Use);
+    mov_mr16 to: MCReg(Usage::Use) offset: Int32 from: MCReg(Usage::Use);
+    mov_mr32 to: MCReg(Usage::Use) offset: Int32 from: MCReg(Usage::Use);
+    mov_mr64 to: MCReg(Usage::Use) offset: Int32 from: MCReg(Usage::Use);
 
     ret0 !terminator;
     ret64 !terminator;
@@ -124,12 +132,22 @@ ir::instructions! {
     jmp addr: BlockId !terminator;
     jl addr: BlockId;
 
-    cmp_rr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);        /* !implicit_def eflags */
+    cmp_rr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);
 
-    add_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
-    add_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
-    add_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
-    add_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);  /* !implicit_def eflags; */
+    add_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    add_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    add_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    add_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+
+    add_ri64 reg: MCReg(Usage::DefUse) imm: Int32;
+
+    sub_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    sub_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    sub_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    sub_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+
+    sub_ri64 reg: MCReg(Usage::DefUse) imm: Int32;
+
 
     neg_r8 a: MCReg(Usage::DefUse);
     neg_r32 a: MCReg(Usage::DefUse);
@@ -142,14 +160,18 @@ impl McInst for X86 {
     type Reg = Reg;
     fn implicit_def(&self) -> RegisterBits {
         match self {
+            Self::push_r64 | Self::pop_r64 => Reg::rsp.bit(),
             Self::cmp_rr32 => Reg::eflags.bit(),
-            Self::add_rr8 => Reg::eflags.bit(),
+            Self::add_rr8 | Self::add_rr16 | Self::add_rr32 | Self::add_rr64 => Reg::eflags.bit(),
+            Self::sub_rr8 | Self::sub_rr16 | Self::sub_rr32 | Self::sub_rr64 => Reg::eflags.bit(),
             _ => Reg::NO_BITS,
         }
     }
 
     fn implicit_use(&self) -> RegisterBits {
         match self {
+            Self::push_r64 | Self::pop_r64 => Reg::rsp.bit(),
+            Self::jl => Reg::eflags.bit(),
             // TODO: this depends on the Abi
             Self::ret64 => Reg::eax.bit(),
             Self::ret128 => Reg::eax.bit() | Reg::rdx.bit(),

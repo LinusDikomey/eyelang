@@ -141,6 +141,7 @@ pub struct IselCtx<I: McInst> {
     pub regs: Slots<MCReg>,
     pub abi: &'static dyn Abi<I>,
     pub unit: crate::TypeId,
+    pub ret_instructions: Vec<Ref>,
     mc: ModuleOf<Mc>,
     use_counts: Box<[u32]>,
     stack_size: u32,
@@ -188,6 +189,7 @@ impl<I: McInst> IselCtx<I> {
             mc,
             use_counts,
             abi,
+            ret_instructions: Vec::new(),
         }
     }
 
@@ -200,6 +202,11 @@ impl<I: McInst> IselCtx<I> {
             self.stack_size += align - (self.stack_size % align);
         }
         self.stack_size += layout.size as u32;
+        self.stack_size
+    }
+
+    /// The current size of the stack allocations
+    pub fn stack_size(&self) -> u32 {
         self.stack_size
     }
 }
