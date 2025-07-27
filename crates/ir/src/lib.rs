@@ -1,5 +1,5 @@
 use std::{
-    fmt,
+    fmt, iter,
     marker::PhantomData,
     mem::transmute,
     num::NonZeroU64,
@@ -645,11 +645,7 @@ impl FunctionIr {
         }
     }
 
-    pub fn args_iter<'a>(
-        &'a self,
-        inst: &'a Instruction,
-        env: &'a Environment,
-    ) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
+    pub fn args_iter<'a>(&'a self, inst: &'a Instruction, env: &'a Environment) -> ArgsIter<'a> {
         let func = &env[inst.function];
         decode_args(
             &inst.args,
@@ -869,46 +865,27 @@ pub enum ArgumentMut<'a> {
 /// how many arguments are stored inline with each instruction.
 pub const INLINE_ARGS: usize = 2;
 
-fn decode_args<'a>(
-    args: &'a [u32; INLINE_ARGS],
-    params: &'a [Parameter],
-    varargs: Option<Parameter>,
+#[derive(Clone)]
+pub struct ArgsIter<'a> {
+    inner: iter::Chain<iter::Copied<std::slice::Iter<'a, Parameter>>, iter::RepeatN<Parameter>>,
+    args: iter::Copied<std::slice::Iter<'a, u32>>,
     blocks: &'a [BlockInfo],
     extra: &'a [u32],
-) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
-    let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
-    let mut vararg_count = 0;
-    let mut args = if count <= INLINE_ARGS && varargs.is_none() {
-        &args[..count]
-    } else {
-        let i = args[0] as usize;
-        if let Some(param) = varargs {
-            vararg_count = args[1] as usize;
-            count += vararg_count * param.slot_count();
-        }
-        &extra[i..i + count]
-    }
-    .iter()
-    .copied();
+}
+impl<'a> Iterator for ArgsIter<'a> {
+    type Item = Argument<'a>;
 
-    let mut arg = move || args.next().unwrap();
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut arg = || self.args.next().unwrap();
 
-    params
-        .iter()
-        .copied()
-        .chain(
-            varargs
-                .into_iter()
-                .flat_map(move |p| std::iter::repeat_n(p, vararg_count)),
-        )
-        .map(move |param| match param {
+        self.inner.next().map(|param| match param {
             Parameter::Ref | Parameter::RefOf(_) => Argument::Ref(Ref(arg())),
             Parameter::BlockId => Argument::BlockId(BlockId(arg())),
             Parameter::BlockTarget => {
                 let id = BlockId(arg());
                 let arg_idx = arg();
-                let arg_count = blocks[id.idx()].arg_count;
-                let args: &[u32] = &extra[arg_idx as usize..(arg_idx + arg_count) as usize];
+                let arg_count = self.blocks[id.idx()].arg_count;
+                let args: &[u32] = &self.extra[arg_idx as usize..(arg_idx + arg_count) as usize];
                 // SAFETY: Ref is repr(transparent)
                 let args: &[Ref] = unsafe { std::mem::transmute(args) };
                 Argument::BlockTarget(BlockTarget(id, args))
@@ -929,6 +906,42 @@ fn decode_args<'a>(
             }),
             Parameter::MCReg(_) => Argument::MCReg(MCReg(arg())),
         })
+    }
+}
+
+fn decode_args<'a>(
+    args: &'a [u32; INLINE_ARGS],
+    params: &'a [Parameter],
+    varargs: Option<Parameter>,
+    blocks: &'a [BlockInfo],
+    extra: &'a [u32],
+) -> ArgsIter<'a> {
+    let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
+    let mut vararg_count = 0;
+    let args = if count <= INLINE_ARGS && varargs.is_none() {
+        &args[..count]
+    } else {
+        let i = args[0] as usize;
+        if let Some(param) = varargs {
+            vararg_count = args[1] as usize;
+            count += vararg_count * param.slot_count();
+        }
+        &extra[i..i + count]
+    }
+    .iter()
+    .copied();
+
+    debug_assert_eq!(varargs.is_some(), vararg_count != 0);
+
+    ArgsIter {
+        inner: params.iter().copied().chain(std::iter::repeat_n(
+            varargs.unwrap_or(Parameter::Ref),
+            vararg_count,
+        )),
+        args,
+        blocks,
+        extra,
+    }
 }
 
 pub struct TypedInstruction<I: Inst> {

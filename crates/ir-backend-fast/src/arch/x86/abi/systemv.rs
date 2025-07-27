@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use ir::{BlockId, Environment, MCReg, ModuleOf, Primitive, Ref, Type, TypeId, Types, mc::Mc};
+use ir::{
+    Argument, BlockId, Environment, MCReg, ModuleOf, Primitive, Ref, Type, TypeId, Types, mc::Mc,
+    modify::IrModify, slots::Slots,
+};
 
 use crate::arch::x86::{X86, isa::Reg};
 
@@ -73,6 +76,100 @@ impl Abi<X86> for SystemV {
         }
     }
 
+    fn implement_call<'a>(
+        &self,
+        call_inst: Ref,
+        ir: &mut IrModify,
+        env: &Environment,
+        mc: ModuleOf<Mc>,
+        x86: ModuleOf<X86>,
+        types: &Types,
+        regs: &Slots<MCReg>,
+        unit: TypeId,
+    ) {
+        let inst = ir.get_inst(call_inst);
+        let function_id = ir::FunctionId {
+            module: inst.module(),
+            function: inst.function(),
+        };
+        let args = ir.args_iter(inst, env).map(|arg| {
+            let Argument::Ref(r) = arg else {
+                unreachable!("Call arguments should only be of type Ref");
+            };
+            r
+        });
+        let mut abi_regs = ABI_PARAM_REGISTERS.into_iter();
+        let mut copies = Vec::new();
+        for arg in args {
+            _ = regs.visit_primitive_slots::<Infallible, _>(
+                arg,
+                types[ir.get_ref_ty(arg)],
+                types,
+                |regs, p| {
+                    match p {
+                        Primitive::Unit => {}
+                        Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                            copies.extend([MCReg::from_phys(abi_regs.next().unwrap()[3]), regs[0]]);
+                        }
+                        Primitive::I16 | Primitive::U16 => {
+                            copies.extend([MCReg::from_phys(abi_regs.next().unwrap()[2]), regs[0]]);
+                        }
+                        Primitive::I32 | Primitive::U32 => {
+                            copies.extend([MCReg::from_phys(abi_regs.next().unwrap()[1]), regs[0]]);
+                        }
+                        Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
+                            copies.extend([MCReg::from_phys(abi_regs.next().unwrap()[0]), regs[0]]);
+                        }
+                        Primitive::I128 | Primitive::U128 => {
+                            copies.extend([
+                                MCReg::from_phys(abi_regs.next().unwrap()[0]),
+                                regs[0],
+                                MCReg::from_phys(abi_regs.next().unwrap()[0]),
+                                regs[1],
+                            ]);
+                        }
+                        Primitive::F32 | Primitive::F64 => todo!("float arguments"),
+                    };
+                    Ok(())
+                },
+            );
+        }
+        ir.add_before(env, call_inst, ir::mc::parallel_copy(mc, &copies, unit));
+        let return_ty = types[ir.get_ref_ty(call_inst)];
+        let mut copy = |args| ir.add_after(env, call_inst, ir::mc::parallel_copy(mc, args, unit));
+        match return_ty {
+            Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
+                Primitive::Unit => {}
+                Primitive::I1 | Primitive::I8 | Primitive::U8 => {
+                    copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][3])]);
+                }
+                Primitive::I16 | Primitive::U16 => {
+                    copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][2])]);
+                }
+                Primitive::I32 | Primitive::U32 => {
+                    copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][1])]);
+                }
+                Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
+                    dbg!("i64 return");
+                    copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][0])]);
+                }
+                Primitive::I128 | Primitive::U128 => {
+                    let r = regs.get(call_inst);
+                    copy(&[
+                        r[0],
+                        MCReg::from_phys(RETURN_REGS[0][0]),
+                        r[1],
+                        MCReg::from_phys(RETURN_REGS[1][0]),
+                    ]);
+                }
+                Primitive::F32 | Primitive::F64 => todo!("float return types"),
+            },
+            Type::Tuple(elems) if elems.count() == 0 => {}
+            _ => todo!("abi: aggregate return types"),
+        }
+        ir.replace(env, call_inst, x86.call_function(function_id, unit));
+    }
+
     fn implement_return(
         &self,
         value: ir::Ref,
@@ -85,6 +182,10 @@ impl Abi<X86> for SystemV {
         r: ir::Ref,
         unit: TypeId,
     ) {
+        if value == ir::Ref::UNIT {
+            ir.replace(env, r, x86.ret0(unit));
+            return;
+        };
         let ty = types[ir.get_ref_ty(value)];
         let mut copy = |args| ir.add_before(env, r, ir::mc::parallel_copy(mc, args, unit));
         match ty {

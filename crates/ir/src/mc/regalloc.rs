@@ -210,7 +210,7 @@ fn perform_regalloc<R: Register>(
                 unreachable!()
             };
             let i = r.virt().unwrap() as usize;
-            let avail = free & !intersecting_precolored[i];
+            let avail = free & !intersecting_precolored[i] & !preoccupied_bits;
             let class = classes[i];
             let chosen_reg =
                 R::allocate_reg(avail, class).expect("register allocation failed, TODO: spilling");
@@ -269,7 +269,7 @@ fn perform_regalloc<R: Register>(
                                     chosen_reg = chosen[i as usize];
                                 } else {
                                     let occupied = intersecting_precolored[i as usize];
-                                    let avail = free & !occupied;
+                                    let avail = free & !occupied & !preoccupied_bits;
                                     let class = classes[r.virt().unwrap() as usize];
                                     chosen_reg = R::allocate_reg(avail, class)
                                         .expect("register allocation failed, TODO: spilling");
@@ -317,7 +317,7 @@ fn perform_regalloc<R: Register>(
                         let i = r.virt().unwrap() as usize;
                         // TODO: spilling
                         let occupied = intersecting_precolored[i];
-                        let avail = free & !occupied;
+                        let avail = free & !occupied & !preoccupied_bits;
                         let chosen_reg = R::allocate_reg(avail, classes[i])
                             .expect("register allocation failed, TODO: spilling");
                         chosen_reg.set_bit(&mut free, false);

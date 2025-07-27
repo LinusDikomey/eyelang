@@ -57,11 +57,12 @@ impl Backend {
         let mc = env.get_dialect_module::<ir::mc::Mc>();
         let x86 = isel.x86;
         let abi = arch::x86::get_target_abi();
+        let mut relocations = Vec::new();
 
         for func in env[module_id].functions() {
             if let Some(ir) = func.ir() {
                 let (mut mir, types) =
-                    arch::x86::codegen(env, ir, func.types(), &mut isel, mc, abi);
+                    arch::x86::codegen(env, ir, func.types(), &mut isel, mc, module_id, abi);
                 let offset = text_section.len() as u64;
                 tracing::debug!(
                     target: "backend-ir",
@@ -83,7 +84,7 @@ impl Backend {
                     "mir (post-regalloc):\n{}",
                     mir.display_with_phys_regs::<arch::x86::Reg>(env, &types),
                 );
-                arch::x86::write(env, mc, x86, &mir, &mut text_section);
+                arch::x86::write(env, mc, x86, &mir, &mut text_section, &mut relocations);
                 let size = text_section.len() as u64 - offset;
                 let name_index = writer.add_str(&func.name);
                 symtab.entry(exe::elf::symtab::Entry {

@@ -231,6 +231,18 @@ impl IrModify {
         r
     }
 
+    pub fn add_after<'r>(
+        &mut self,
+        env: &Environment,
+        r: Ref,
+        inst: (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) -> Ref {
+        let i = r
+            .into_ref()
+            .expect("Can't add an instruction after a value Ref");
+        self.add_before(env, Ref::index(i + 1), inst)
+    }
+
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
         let Self {
             mut ir,
@@ -467,7 +479,7 @@ impl IrModify {
         &'a self,
         inst: &'a Instruction,
         env: &'a Environment,
-    ) -> impl Clone + Iterator<Item = Argument<'a>> + use<'a> {
+    ) -> crate::ArgsIter<'a> {
         self.ir.args_iter(inst, env)
     }
 }

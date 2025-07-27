@@ -1,7 +1,8 @@
 use std::convert::Infallible;
 
 use ir::{
-    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleOf, Primitive, Ref, Type, Types,
+    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleId, ModuleOf, Primitive, Ref, Type,
+    Types,
     mc::{Abi, IselCtx, Mc},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
@@ -16,18 +17,9 @@ pub fn codegen(
     types: &ir::Types,
     isel: &mut InstructionSelector,
     mc: ModuleOf<Mc>,
+    main_module: ModuleId,
     abi: &'static dyn Abi<X86>,
 ) -> (FunctionIr, ir::Types) {
-    /*
-    builder.inst(Inst::push64, [Op::Reg(Reg::rbp)]);
-    builder.inst(Inst::movrr64, [Op::Reg(Reg::rbp), Op::Reg(Reg::rsp)]);
-    // This instruction's immediate operand will be updated at the end with the used stack space.
-    // In the future, the stack size might be known a priori when the IR tracks a list of stack
-    // slots.
-    let stack_setup_indices = vec![builder.next_inst_index()];
-    builder.inst(Inst::subri64, [Op::Reg(Reg::rsp), Op::Imm(0)]);
-    */
-
     let mut body = body.clone();
 
     let mut regs = Slots::with_default(&body, types, MCReg::from_virt(0));
@@ -59,7 +51,7 @@ pub fn codegen(
     let mut ir = IrModify::new(body);
     let args = ir.get_block_args(BlockId::ENTRY);
     abi.implement_params(args, &mut ir, env, mc, &types, &regs, unit);
-    let mut ctx = IselCtx::new(env, &ir, regs, mc, unit, abi);
+    let mut ctx = IselCtx::new(main_module, env, &ir, regs, mc, unit, abi);
 
     ir::rewrite::rewrite_in_place(
         &mut ir,
@@ -70,10 +62,10 @@ pub fn codegen(
         ReverseRewriteOrder::new(&block_graph),
     );
 
+    let start = ir.get_original_block_start(BlockId::ENTRY);
     let mut size = ctx.stack_size();
+    let x86 = isel.x86;
     if size > 0 {
-        let start = ir.get_original_block_start(BlockId::ENTRY);
-        let x86 = isel.x86;
         ir.add_before(
             env,
             start,
@@ -96,7 +88,7 @@ pub fn codegen(
             start,
             x86.sub_ri64(MCReg::from_phys(Reg::rsp), size, ctx.unit),
         );
-        for ret in ctx.ret_instructions {
+        for &ret in &ctx.ret_instructions {
             ir.add_before(
                 env,
                 ret,
@@ -104,6 +96,14 @@ pub fn codegen(
             );
             ir.add_before(env, ret, x86.pop_r64(MCReg::from_phys(Reg::rbp), ctx.unit));
         }
+    }
+    ir.add_before(
+        env,
+        start,
+        x86.push_r64(MCReg::from_phys(Reg::rbx), ctx.unit),
+    );
+    for &ret in &ctx.ret_instructions {
+        ir.add_before(env, ret, x86.pop_r64(MCReg::from_phys(Reg::rbx), ctx.unit));
     }
 
     /*
@@ -320,8 +320,11 @@ ir::visitor! {
         }
     };
     (%r = _) => {
-        todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
-        #[allow(clippy::unused_unit, unreachable_code)]
-        ()
+        if inst.module() == ctx.main_module {
+            let abi = ctx.abi;
+            abi.implement_call(r, ir, env, mc, x86, types, &ctx.regs, ctx.unit);
+        } else {
+            todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
+        }
     };
 }

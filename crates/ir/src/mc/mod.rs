@@ -18,6 +18,7 @@ use crate::FunctionId;
 use crate::Inst;
 use crate::Layout;
 use crate::MCReg;
+use crate::ModuleId;
 use crate::ModuleOf;
 use crate::Ref;
 use crate::TypeId;
@@ -138,6 +139,7 @@ pub fn parallel_copy_args(
     (f, ((), args), unit)
 }
 pub struct IselCtx<I: McInst> {
+    pub main_module: ModuleId,
     pub regs: Slots<MCReg>,
     pub abi: &'static dyn Abi<I>,
     pub unit: crate::TypeId,
@@ -148,6 +150,7 @@ pub struct IselCtx<I: McInst> {
 }
 impl<I: McInst> IselCtx<I> {
     pub fn new(
+        main_module: ModuleId,
         env: &Environment,
         ir: &IrModify,
         regs: Slots<MCReg>,
@@ -183,6 +186,7 @@ impl<I: McInst> IselCtx<I> {
             }
         }
         Self {
+            main_module,
             stack_size: 0,
             unit,
             regs,

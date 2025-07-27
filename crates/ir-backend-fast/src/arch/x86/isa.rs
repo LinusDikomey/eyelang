@@ -155,6 +155,8 @@ ir::instructions! {
 
     lea_rm32 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
     lea_rm64 to: MCReg(Usage::Def) addr: MCReg(Usage::Use) offset: Int32;
+
+    call_function function: FunctionId;
 }
 impl McInst for X86 {
     type Reg = Reg;
@@ -164,6 +166,19 @@ impl McInst for X86 {
             Self::cmp_rr32 => Reg::eflags.bit(),
             Self::add_rr8 | Self::add_rr16 | Self::add_rr32 | Self::add_rr64 => Reg::eflags.bit(),
             Self::sub_rr8 | Self::sub_rr16 | Self::sub_rr32 | Self::sub_rr64 => Reg::eflags.bit(),
+            Self::call_function => {
+                // TODO: this depends on the Abi
+                // caller-saved registers
+                Reg::rax.bit()
+                    | Reg::rdi.bit()
+                    | Reg::rsi.bit()
+                    | Reg::rdx.bit()
+                    | Reg::rcx.bit()
+                    | Reg::r8.bit()
+                    | Reg::r9.bit()
+                    | Reg::r10.bit()
+                    | Reg::r11.bit()
+            }
             _ => Reg::NO_BITS,
         }
     }

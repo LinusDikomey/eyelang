@@ -16,6 +16,17 @@ pub trait Abi<I: McInst> {
         regs: &Slots<MCReg>,
         unit: TypeId,
     );
+    fn implement_call(
+        &self,
+        call_inst: Ref,
+        ir: &mut IrModify,
+        env: &Environment,
+        mc: ModuleOf<Mc>,
+        i: ModuleOf<I>,
+        types: &Types,
+        regs: &Slots<MCReg>,
+        unit: TypeId,
+    );
     fn implement_return(
         &self,
         value: Ref,

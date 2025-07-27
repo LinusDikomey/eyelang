@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use ir::{
-    Argument, BlockId, Environment, FunctionIr, MCReg, ModuleOf,
+    Argument, BlockId, Environment, FunctionId, FunctionIr, MCReg, ModuleOf,
     block_graph::Blocks,
     mc::{Mc, ParcopySolver, RegClass},
     parameter_types::Int32,
@@ -15,6 +15,7 @@ pub fn write(
     x86: ModuleOf<X86>,
     ir: &FunctionIr,
     text: &mut Vec<u8>,
+    relocations: &mut Vec<(FunctionId, u32)>,
 ) {
     let mut parcopy = ParcopySolver::new();
     let start = text.len();
@@ -207,6 +208,10 @@ pub fn write(
                     text.push(off.modrm_bits() | (modrm_a << 3) | modrm_b);
                     //text.push(0x24); // wtf
                     off.write(text);
+                }
+                I::call_function => {
+                    relocations.push((ir.args(i, env), text.len() as u32 + 1));
+                    text.extend([0xE8, 0, 0, 0, 0]);
                 }
             }
         }

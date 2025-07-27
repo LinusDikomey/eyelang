@@ -268,7 +268,9 @@ fn encode_arg(
             (i as u32, Some((i >> 32) as u32))
         }
         (Argument::TypeId(id), crate::Parameter::TypeId) => (id.0, None),
-        (Argument::FunctionId(id), crate::Parameter::TypeId) => (id.module.0, Some(id.function.0)),
+        (Argument::FunctionId(id), crate::Parameter::FunctionId) => {
+            (id.module.0, Some(id.function.0))
+        }
         (Argument::GlobalId(id), crate::Parameter::GlobalId) => (id.module.0, Some(id.idx)),
         (Argument::MCReg(r), crate::Parameter::MCReg(_)) => (r.0, None),
         _ => panic!("argument was of unexpected kind, expected {param:?}"),
