@@ -1,6 +1,6 @@
 use crate::{
     Environment, MCReg, ModuleOf, Ref, Refs, TypeId, Types,
-    mc::{Mc, McInst},
+    mc::{Mc, McInst, Register},
     modify::IrModify,
     slots::Slots,
 };
@@ -39,4 +39,7 @@ pub trait Abi<I: McInst> {
         r: Ref,
         unit: TypeId,
     );
+    fn callee_saved(&self) -> <I::Reg as Register>::RegisterBits;
+    fn caller_saved(&self) -> <I::Reg as Register>::RegisterBits;
+    fn return_regs(&self, value_count: u32) -> <I::Reg as Register>::RegisterBits;
 }

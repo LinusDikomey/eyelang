@@ -24,6 +24,10 @@ impl IrModify {
         (self.ir.insts.len() + self.additional.len()) as _
     }
 
+    pub fn refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
+        self.ir.refs()
+    }
+
     pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
         self.ir.block_ids()
     }

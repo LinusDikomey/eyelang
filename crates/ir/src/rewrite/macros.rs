@@ -134,6 +134,7 @@ macro_rules! visitor {
 
         $($pattern: tt $(if $cond: expr)? => $(=)? $result: expr;)*
     ) => {
+        #[derive(Clone, Copy)]
         pub struct $rewriter {
             $(
                 pub $module: $crate::ModuleOf<$module_path>,

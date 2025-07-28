@@ -1,9 +1,8 @@
 use std::convert::Infallible;
 
 use ir::{
-    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleId, ModuleOf, Primitive, Ref, Type,
-    Types,
-    mc::{Abi, IselCtx, Mc},
+    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleId, Primitive, Ref, Type, Types,
+    mc::{Abi, BackendState, IselCtx},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
@@ -16,9 +15,9 @@ pub fn codegen(
     body: &ir::FunctionIr,
     types: &ir::Types,
     isel: &mut InstructionSelector,
-    mc: ModuleOf<Mc>,
     main_module: ModuleId,
     abi: &'static dyn Abi<X86>,
+    state: &mut BackendState,
 ) -> (FunctionIr, ir::Types) {
     let mut body = body.clone();
 
@@ -50,8 +49,8 @@ pub fn codegen(
 
     let mut ir = IrModify::new(body);
     let args = ir.get_block_args(BlockId::ENTRY);
-    abi.implement_params(args, &mut ir, env, mc, &types, &regs, unit);
-    let mut ctx = IselCtx::new(main_module, env, &ir, regs, mc, unit, abi);
+    abi.implement_params(args, &mut ir, env, isel.mc, &types, &regs, unit);
+    let mut ctx = IselCtx::new(main_module, env, &ir, regs, isel.mc, unit, abi, state);
 
     ir::rewrite::rewrite_in_place(
         &mut ir,
@@ -62,56 +61,6 @@ pub fn codegen(
         ReverseRewriteOrder::new(&block_graph),
     );
 
-    let start = ir.get_original_block_start(BlockId::ENTRY);
-    let mut size = ctx.stack_size();
-    let x86 = isel.x86;
-    if size > 0 {
-        ir.add_before(
-            env,
-            start,
-            x86.push_r64(MCReg::from_phys(Reg::rbp), ctx.unit),
-        );
-        ir.add_before(
-            env,
-            start,
-            x86.mov_rr64(
-                MCReg::from_phys(Reg::rbp),
-                MCReg::from_phys(Reg::rsp),
-                ctx.unit,
-            ),
-        );
-        if size % 16 != 0 {
-            size += 16 - (size % 16);
-        }
-        ir.add_before(
-            env,
-            start,
-            x86.sub_ri64(MCReg::from_phys(Reg::rsp), size, ctx.unit),
-        );
-        for &ret in &ctx.ret_instructions {
-            ir.add_before(
-                env,
-                ret,
-                x86.add_ri64(MCReg::from_phys(Reg::rsp), size, ctx.unit),
-            );
-            ir.add_before(env, ret, x86.pop_r64(MCReg::from_phys(Reg::rbp), ctx.unit));
-        }
-    }
-    ir.add_before(
-        env,
-        start,
-        x86.push_r64(MCReg::from_phys(Reg::rbx), ctx.unit),
-    );
-    for &ret in &ctx.ret_instructions {
-        ir.add_before(env, ret, x86.pop_r64(MCReg::from_phys(Reg::rbx), ctx.unit));
-    }
-
-    /*
-    for idx in stack_setup_indices {
-        mir.replace_operand(idx, 1, offset_op(mir.stack_offset() as i32));
-    }
-    mir
-    */
     (ir.finish_and_compress(env), types)
 }
 
@@ -147,7 +96,7 @@ ir::visitor! {
     InstructionSelector,
     Rewrite,
     ir, types, inst, env,
-    ctx: IselCtx<X86>;
+    ctx: IselCtx<'_, X86>;
 
     use builtin: ir::Builtin;
     use arith: ir::dialect::Arith;
@@ -206,7 +155,6 @@ ir::visitor! {
         }
     };
     (%r = cf.Ret value) => {
-        ctx.ret_instructions.push(r);
         ctx.abi.implement_return(value, ir, env, mc, x86, types, &ctx.regs, r, ctx.unit);
     };
     (%r = cf.Goto (@b b_args)) => {

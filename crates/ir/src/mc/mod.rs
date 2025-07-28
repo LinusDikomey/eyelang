@@ -10,8 +10,9 @@ pub use abi::Abi;
 pub use dialect::{Mc, McInsts};
 pub use macros::registers;
 pub use parcopy::ParcopySolver;
-pub use regalloc::regalloc;
+pub use regalloc::{Regalloc, regalloc};
 
+use crate::Argument;
 use crate::BlockId;
 use crate::Environment;
 use crate::FunctionId;
@@ -28,8 +29,8 @@ use std::ops::{BitAnd, BitOr, Not};
 
 pub trait McInst: Inst {
     type Reg: Register;
-    fn implicit_def(&self) -> <Self::Reg as Register>::RegisterBits;
-    fn implicit_use(&self) -> <Self::Reg as Register>::RegisterBits;
+    fn implicit_def(&self, abi: &'static dyn Abi<Self>) -> <Self::Reg as Register>::RegisterBits;
+    fn implicit_use(&self, abi: &'static dyn Abi<Self>) -> <Self::Reg as Register>::RegisterBits;
 }
 
 pub trait Register: 'static + Copy {
@@ -138,17 +139,22 @@ pub fn parallel_copy_args(
     };
     (f, ((), args), unit)
 }
-pub struct IselCtx<I: McInst> {
+
+#[derive(Default)]
+pub struct BackendState {
+    pub stack_size: u32,
+}
+
+pub struct IselCtx<'a, I: McInst> {
     pub main_module: ModuleId,
     pub regs: Slots<MCReg>,
     pub abi: &'static dyn Abi<I>,
     pub unit: crate::TypeId,
-    pub ret_instructions: Vec<Ref>,
     mc: ModuleOf<Mc>,
     use_counts: Box<[u32]>,
-    stack_size: u32,
+    pub state: &'a mut BackendState,
 }
-impl<I: McInst> IselCtx<I> {
+impl<'a, I: McInst> IselCtx<'a, I> {
     pub fn new(
         main_module: ModuleId,
         env: &Environment,
@@ -157,6 +163,7 @@ impl<I: McInst> IselCtx<I> {
         mc: ModuleOf<Mc>,
         unit: TypeId,
         abi: &'static dyn Abi<I>,
+        state: &'a mut BackendState,
     ) -> Self {
         let mut use_counts = vec![0; ir.inst_count() as usize].into_boxed_slice();
         for i in 0..ir.inst_count() {
@@ -187,13 +194,12 @@ impl<I: McInst> IselCtx<I> {
         }
         Self {
             main_module,
-            stack_size: 0,
             unit,
             regs,
             mc,
             use_counts,
             abi,
-            ret_instructions: Vec::new(),
+            state,
         }
     }
 
@@ -202,19 +208,14 @@ impl<I: McInst> IselCtx<I> {
     /// Assumes a stack growing down, subtract layout.size if the stack should grow up.
     pub fn alloc_stack(&mut self, layout: Layout) -> u32 {
         let align = layout.align.get() as u32;
-        if self.stack_size % align != 0 {
-            self.stack_size += align - (self.stack_size % align);
+        if self.state.stack_size % align != 0 {
+            self.state.stack_size += align - (self.state.stack_size % align);
         }
-        self.stack_size += layout.size as u32;
-        self.stack_size
-    }
-
-    /// The current size of the stack allocations
-    pub fn stack_size(&self) -> u32 {
-        self.stack_size
+        self.state.stack_size += layout.size as u32;
+        self.state.stack_size
     }
 }
-impl<I: McInst> crate::rewrite::RewriteCtx for IselCtx<I> {
+impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
         if block == BlockId::ENTRY {
             return;
@@ -232,7 +233,7 @@ impl<I: McInst> crate::rewrite::RewriteCtx for IselCtx<I> {
     }
 }
 
-impl<I: McInst> IselCtx<I> {
+impl<'a, I: McInst> IselCtx<'a, I> {
     pub fn use_count(&self, r: Ref) -> u32 {
         if let Some(r) = r.into_ref() {
             self.use_counts[r as usize]
@@ -288,4 +289,21 @@ impl<I: McInst> IselCtx<I> {
     ) {
         ir.add_before(env, before, parallel_copy(mc, args, self.unit));
     }
+}
+
+pub fn used_physical_registers<R: Register>(ir: &IrModify, env: &Environment) -> R::RegisterBits {
+    let mut bits = R::NO_BITS;
+    for i in 0..ir.inst_count() {
+        let inst = ir.get_inst(Ref::index(i));
+        for arg in ir.args_iter(inst, env) {
+            let Argument::MCReg(r) = arg else {
+                continue;
+            };
+            let Some(phys) = r.phys::<R>() else {
+                continue;
+            };
+            phys.set_bit(&mut bits, true);
+        }
+    }
+    bits
 }

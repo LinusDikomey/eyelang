@@ -2,7 +2,7 @@ use std::{fmt, ops};
 
 use ir::{
     Usage,
-    mc::{McInst, Register},
+    mc::{Abi, McInst, Register},
 };
 
 ir::mc::registers! { Reg RegisterBits
@@ -51,10 +51,30 @@ impl Reg {
         };
         RegisterBits(1 << bit_index)
     }
+
+    pub const UNIQUE_BITS: [Self; 17] = [
+        Self::rax,
+        Self::rbx,
+        Self::rcx,
+        Self::rdx,
+        Self::rbp,
+        Self::rsi,
+        Self::rdi,
+        Self::rsp,
+        Self::r8,
+        Self::r9,
+        Self::r10,
+        Self::r11,
+        Self::r12,
+        Self::r13,
+        Self::r14,
+        Self::r15,
+        Self::eflags,
+    ];
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RegisterBits(u32);
 impl ops::Not for RegisterBits {
     type Output = Self;
@@ -78,7 +98,7 @@ impl ops::BitOr for RegisterBits {
     }
 }
 impl RegisterBits {
-    const fn new() -> Self {
+    pub const fn new() -> Self {
         Self(0)
     }
 
@@ -160,37 +180,29 @@ ir::instructions! {
 }
 impl McInst for X86 {
     type Reg = Reg;
-    fn implicit_def(&self) -> RegisterBits {
+    fn implicit_def(&self, abi: &'static dyn Abi<Self>) -> RegisterBits {
         match self {
             Self::push_r64 | Self::pop_r64 => Reg::rsp.bit(),
             Self::cmp_rr32 => Reg::eflags.bit(),
             Self::add_rr8 | Self::add_rr16 | Self::add_rr32 | Self::add_rr64 => Reg::eflags.bit(),
             Self::sub_rr8 | Self::sub_rr16 | Self::sub_rr32 | Self::sub_rr64 => Reg::eflags.bit(),
-            Self::call_function => {
-                // TODO: this depends on the Abi
-                // caller-saved registers
-                Reg::rax.bit()
-                    | Reg::rdi.bit()
-                    | Reg::rsi.bit()
-                    | Reg::rdx.bit()
-                    | Reg::rcx.bit()
-                    | Reg::r8.bit()
-                    | Reg::r9.bit()
-                    | Reg::r10.bit()
-                    | Reg::r11.bit()
-            }
+            Self::call_function => abi.caller_saved(),
             _ => Reg::NO_BITS,
         }
     }
 
-    fn implicit_use(&self) -> RegisterBits {
+    fn implicit_use(&self, abi: &'static dyn Abi<Self>) -> RegisterBits {
         match self {
             Self::push_r64 | Self::pop_r64 => Reg::rsp.bit(),
             Self::jl => Reg::eflags.bit(),
-            // TODO: this depends on the Abi
-            Self::ret64 => Reg::eax.bit(),
-            Self::ret128 => Reg::eax.bit() | Reg::rdx.bit(),
+            Self::ret64 => abi.return_regs(1),
+            Self::ret128 => abi.return_regs(2),
             _ => Reg::NO_BITS,
         }
+    }
+}
+impl X86 {
+    pub fn is_ret(&self) -> bool {
+        matches!(self, Self::ret0 | Self::ret64 | Self::ret128)
     }
 }

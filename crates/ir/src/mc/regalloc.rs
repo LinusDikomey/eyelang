@@ -1,12 +1,36 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, fmt};
 
 use crate::{
     Argument, ArgumentMut, Bitmap, BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleOf,
-    Ref, Usage,
+    Ref, Types, Usage,
     mc::{McInst, RegClass},
+    pipeline::FunctionPass,
 };
 
 use super::{Mc, Register};
+
+pub struct Regalloc<I: McInst> {
+    pub mc: ModuleOf<crate::mc::Mc>,
+    pub preoccupied: <I::Reg as Register>::RegisterBits,
+}
+impl<I: McInst> fmt::Debug for Regalloc<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Regalloc<{}>", std::any::type_name::<I>())
+    }
+}
+impl<I: McInst, State> FunctionPass<State> for Regalloc<I> {
+    fn run(
+        &self,
+        env: &Environment,
+        types: &Types,
+        mut ir: FunctionIr,
+        name: &str,
+        _: &mut State,
+    ) -> (FunctionIr, Option<Types>) {
+        regalloc::<I>(env, self.mc, &mut ir, types, self.preoccupied, name);
+        (ir, None)
+    }
+}
 
 pub fn regalloc<I: McInst>(
     env: &Environment,

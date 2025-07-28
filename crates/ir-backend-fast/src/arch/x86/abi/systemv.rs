@@ -5,7 +5,10 @@ use ir::{
     modify::IrModify, slots::Slots,
 };
 
-use crate::arch::x86::{X86, isa::Reg};
+use crate::arch::x86::{
+    X86,
+    isa::{Reg, RegisterBits},
+};
 
 use super::Abi;
 
@@ -20,6 +23,28 @@ const ABI_PARAM_REGISTERS: [[Reg; 4]; 6] = [
 const RETURN_REGS: [[Reg; 4]; 2] = [
     [Reg::rax, Reg::eax, Reg::ax, Reg::al],
     [Reg::rdx, Reg::edx, Reg::dx, Reg::dl],
+];
+
+const CALLER_SAVED: [Reg; 9] = [
+    Reg::rax,
+    Reg::rcx,
+    Reg::rdx,
+    Reg::rsi,
+    Reg::rdi,
+    Reg::r8,
+    Reg::r9,
+    Reg::r10,
+    Reg::r11,
+];
+
+const CALLEE_SAVED: [Reg; 7] = [
+    Reg::rbx,
+    Reg::rbp,
+    Reg::rsp,
+    Reg::r12,
+    Reg::r13,
+    Reg::r14,
+    Reg::r15,
 ];
 
 pub struct SystemV;
@@ -150,7 +175,6 @@ impl Abi<X86> for SystemV {
                     copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][1])]);
                 }
                 Primitive::I64 | Primitive::U64 | Primitive::Ptr => {
-                    dbg!("i64 return");
                     copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][0])]);
                 }
                 Primitive::I128 | Primitive::U128 => {
@@ -224,5 +248,26 @@ impl Abi<X86> for SystemV {
             Type::Array(_, _) => todo!("abi: array return values"),
             Type::Tuple(_) => todo!("abi: tuple return values"),
         }
+    }
+
+    fn caller_saved(&self) -> <<X86 as ir::mc::McInst>::Reg as ir::mc::Register>::RegisterBits {
+        CALLER_SAVED
+            .iter()
+            .fold(RegisterBits::new(), |a, b| a | b.bit())
+    }
+
+    fn callee_saved(&self) -> <<X86 as ir::mc::McInst>::Reg as ir::mc::Register>::RegisterBits {
+        CALLEE_SAVED
+            .iter()
+            .fold(RegisterBits::new(), |a, b| a | b.bit())
+    }
+
+    fn return_regs(
+        &self,
+        value_count: u32,
+    ) -> <<X86 as ir::mc::McInst>::Reg as ir::mc::Register>::RegisterBits {
+        RETURN_REGS[0..value_count as usize]
+            .iter()
+            .fold(RegisterBits::new(), |a, b| a | b[0].bit())
     }
 }

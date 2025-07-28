@@ -173,8 +173,8 @@ fn main() -> Result<(), MainError> {
             ir::verify::module(&compiler.ir, compiler.ir_module);
 
             if args.optimize {
-                let pipeline = ir::optimize::Pipeline::optimizing(&mut compiler.ir);
-                pipeline.optimize_module(&mut compiler.ir, compiler.ir_module);
+                let pipeline = ir::optimize::optimizing_pipeline(&mut compiler.ir);
+                pipeline.process_module(&mut compiler.ir, compiler.ir_module);
 
                 #[cfg(debug_assertions)]
                 ir::verify::module(&compiler.ir, compiler.ir_module);

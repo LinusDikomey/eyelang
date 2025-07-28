@@ -4,9 +4,10 @@ use std::collections::VecDeque;
 use dmap::{DHashMap, DHashSet};
 
 use crate::{
-    Argument, BUILTIN, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId,
+    Argument, BUILTIN, Bitmap, BlockGraph, BlockId, FunctionIr, ModuleOf, Ref, Refs, TypeId, Types,
     dialect::{self, Mem},
     modify::IrModify,
+    pipeline::FunctionPass,
 };
 
 pub struct Mem2Reg {
@@ -24,8 +25,15 @@ impl fmt::Debug for Mem2Reg {
         write!(f, "Mem2Reg")
     }
 }
-impl super::FunctionPass for Mem2Reg {
-    fn run(&self, env: &crate::Environment, types: &crate::Types, ir: FunctionIr) -> FunctionIr {
+impl FunctionPass for Mem2Reg {
+    fn run(
+        &self,
+        env: &crate::Environment,
+        types: &crate::Types,
+        ir: FunctionIr,
+        _name: &str,
+        _: &mut (),
+    ) -> (FunctionIr, Option<Types>) {
         let Self { mem } = *self;
         let mut can_alias = Bitmap::new(ir.inst_count() as usize);
         let mut variables = dmap::new();
@@ -248,14 +256,13 @@ impl super::FunctionPass for Mem2Reg {
                 }
             }
         }
-
-        ir.finish_and_compress(env)
+        (ir.finish_and_compress(env), None)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockId, BlockTarget, Environment, Ref, optimize::FunctionPass};
+    use crate::{BlockId, BlockTarget, Environment, Ref, pipeline::FunctionPass};
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,
@@ -346,7 +353,10 @@ mod tests {
         let mut env = crate::Environment::new(crate::Primitive::create_infos());
         let (ir, types) = test_func(&mut env);
         println!("Before:\n{}", ir.display(&env, &types),);
-        let ir = super::Mem2Reg::new(&mut env).run(&env, &types, ir);
+        let (ir, None) = super::Mem2Reg::new(&mut env).run(&env, &types, ir, "test", &mut ())
+        else {
+            unreachable!()
+        };
         println!("After:\n{}", ir.display(&env, &types),);
         let mem = env.get_dialect_module::<crate::dialect::Mem>();
         for block in ir.block_ids() {
