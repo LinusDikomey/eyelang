@@ -47,7 +47,7 @@ impl<State: Default> Pipeline<State> {
                 target: "passes",
                 stage = self.context,
                 function = env[module].functions[i].name,
-                "IR for {} before optimizations:\n{}",
+                "IR for {} before:\n{}",
                 env[module].functions[i].name,
                 ir.display_with_phys_regs::<R>(env, &env[module].functions[i].types),
             );
@@ -91,7 +91,7 @@ impl<State: Default> Pipeline<State> {
         types: &mut Types,
         name: &str,
     ) -> FunctionIr {
-        tracing::debug!(target: "passes", "IR before {}:\n{}", self.context, ir.display_with_phys_regs::<R>(env, types));
+        tracing::debug!(target: "passes", function = name, "IR before {}:\n{}", self.context, ir.display_with_phys_regs::<R>(env, types));
 
         let mut state = State::default();
         for pass in &self.function_passes {
@@ -100,7 +100,7 @@ impl<State: Default> Pipeline<State> {
             if let Some(new_types) = new_types {
                 *types = new_types;
             }
-            tracing::debug!(target: "passes", pass=?pass, "After {pass:?}:\n{}", ir.display_with_phys_regs::<R>(env, types));
+            tracing::debug!(target: "passes", pass=?pass, function = name, "After {pass:?}:\n{}", ir.display_with_phys_regs::<R>(env, types));
         }
         ir
     }

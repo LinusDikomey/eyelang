@@ -29,8 +29,8 @@ impl TSpan {
         Span::new(self.start, self.end, module)
     }
 
-    pub fn range(self) -> std::ops::RangeInclusive<usize> {
-        self.start as usize..=self.end as usize
+    pub fn range(self) -> std::ops::Range<usize> {
+        self.start as usize..self.end as usize
     }
 }
 
@@ -89,7 +89,7 @@ impl IdentPath {
             .map(move |segment| {
                 let trimmed = segment.trim();
                 let idx = (trimmed.as_ptr() as usize - start_addr) as u32;
-                (trimmed, TSpan::new(idx, idx + trimmed.len() as u32 - 1))
+                (trimmed, TSpan::new(idx, idx + trimmed.len() as u32))
             })
             .peekable();
         let first = split.peek().copied();

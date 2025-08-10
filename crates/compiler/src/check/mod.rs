@@ -351,7 +351,7 @@ pub fn verify_main_signature(
 }
 
 fn get_string_literal(src: &str, span: TSpan) -> Box<str> {
-    let inp = &src[span.start as usize + 1..span.end as usize];
+    let inp = &src[span.start as usize + 1..span.end as usize - 1];
     let mut out = String::with_capacity(inp.len());
     let mut saw_backslash = false;
     for c in inp.chars() {

@@ -80,11 +80,13 @@ impl Backend {
         }));
         pipeline.add_function_pass(Box::new(arch::x86::PrologueEpilogueInsertion { x86, abi }));
 
-        for i in 0..env[module_id].functions().len() {
+        for (i, function_offset) in
+            (0..env[module_id].functions().len()).zip(function_offsets.iter_mut())
+        {
             let func = &env[module_id].functions()[i];
             if let Some(ir) = func.ir() {
                 let offset = text_section.len() as u64;
-                function_offsets[i] = offset.try_into().unwrap();
+                *function_offset = offset.try_into().unwrap();
                 // PERF: cloning ir, types, name
                 let ir = ir.clone();
                 let mut types = func.types().clone();

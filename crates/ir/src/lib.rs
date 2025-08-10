@@ -932,7 +932,12 @@ fn decode_args<'a>(
     .iter()
     .copied();
 
-    debug_assert_eq!(varargs.is_some(), vararg_count != 0);
+    if vararg_count != 0 {
+        debug_assert!(
+            varargs.is_some(),
+            "Can't have varargs in function without varargs"
+        );
+    }
 
     ArgsIter {
         inner: params.iter().copied().chain(std::iter::repeat_n(

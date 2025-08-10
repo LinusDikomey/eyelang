@@ -551,6 +551,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     let e = span.end as usize;
 
     // calculate line and position in line
+    dbg!(error.conclusion());
     let until_start = if s >= src.len() { src } else { &src[..s] };
     let mut line = 1;
     let mut col = 1;
@@ -573,7 +574,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
             (&src[s..]).into()
         }
     } else {
-        (&src[s..=e]).into()
+        (&src[s..e]).into()
     };
     assert!(!src_loc.is_empty(), "empty source location in error");
 
@@ -587,7 +588,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         while surrounding_end < src.len() && src.as_bytes()[surrounding_end] != b'\n' {
             surrounding_end += 1;
         }
-        &src[(e + 1)..surrounding_end]
+        &src[e..surrounding_end]
     };
 
     cprint!("{}: ", error.severity());

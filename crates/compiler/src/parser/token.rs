@@ -1,10 +1,14 @@
-use std::{fmt, str::FromStr};
+use std::fmt;
 
 use color_format::cwrite;
-use span::TSpan;
+use id::ModuleId;
+use span::{Span, TSpan};
 use types::{FloatType, IntType, Primitive};
 
-use super::reader::TokenTypes;
+use crate::{
+    error::{CompileError, Error},
+    parser::ExpectedTokens,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
@@ -26,20 +30,28 @@ impl Token {
     }
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
-        &src[self.start as usize..=self.end as usize]
+        &src[self.start as usize..self.end as usize]
     }
 
     pub fn span(&self) -> TSpan {
         TSpan::new(self.start, self.end)
     }
 
-    pub fn is<const N: usize>(&self, types: impl Into<TokenTypes<N>>) -> bool {
-        types.into().0.contains(&self.ty)
+    pub fn unexpected(self, module: ModuleId, expected: ExpectedTokens) -> CompileError {
+        CompileError {
+            err: Error::UnexpectedToken {
+                expected,
+                found: self.ty,
+            },
+            span: Span::new(self.start, self.end, module),
+        }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum TokenType {
+    Eof,
+
     Colon,
     DoubleColon,
     Comma,
@@ -159,6 +171,7 @@ impl TokenType {
                 kw.into()
             }
             TokenType::Ident => "identifier",
+            TokenType::Eof => "<end of file>",
         };
         (s, is_keyword)
     }
@@ -253,13 +266,11 @@ impl From<Keyword> for &'static str {
         }
     }
 }
-impl FromStr for Keyword {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Keyword, ()> {
+impl Keyword {
+    pub fn parse(s: &str) -> Option<Keyword> {
         use Keyword::Primitive as P;
         use Primitive::*;
-        Ok(match s {
+        Some(match s {
             "i8" => P(I8),
             "i16" => P(I16),
             "i32" => P(I32),
@@ -303,7 +314,7 @@ impl FromStr for Keyword {
             "break" => Keyword::Break,
             "continue" => Keyword::Continue,
             "in" => Keyword::In,
-            _ => return Err(()),
+            _ => return None,
         })
     }
 }

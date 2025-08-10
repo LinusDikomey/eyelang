@@ -2,10 +2,7 @@
 mod args;
 mod std_path;
 
-use std::{
-    ffi::CString,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use args::Backend;
 pub use compiler::{Compiler, Span};
@@ -93,16 +90,17 @@ fn main() -> Result<(), MainError> {
 
     println!("Compiling {name} ...");
 
+    if args.reconstruct_src {
+        let ast = compiler.get_module_ast(root_module);
+        compiler::ReprPrinter::new("  ", ast).print_module();
+        return Ok(());
+    }
+
     // add standard library
     let std_path = std_path::find();
     let std = compiler.add_project("std".to_owned(), std_path)?;
     compiler.add_dependency(project, std);
     compiler.resolve_builtins(std);
-
-    if args.reconstruct_src {
-        let ast = compiler.get_module_ast(root_module);
-        compiler::ReprPrinter::new("  ", ast).print_module();
-    }
 
     // always check the complete project
     compiler.check_complete_project(project);
@@ -203,7 +201,7 @@ fn main() -> Result<(), MainError> {
                 Backend::Llvm => {
                     let backend = ir_backend_llvm::Backend::new();
                     let target = args.target.as_ref().map(|target| {
-                        CString::new(target.as_bytes()).expect("invalid target string")
+                        std::ffi::CString::new(target.as_bytes()).expect("invalid target string")
                     });
                     backend
                         .emit_module(
