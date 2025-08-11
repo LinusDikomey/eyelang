@@ -67,30 +67,6 @@ impl Errors {
         &self.warnings
     }
 
-    pub fn _emit_unwrap<T>(&mut self, res: Result<T, CompileError>, otherwise: T) -> T {
-        match res {
-            Ok(t) => t,
-            Err(err) => {
-                self.emit_err(err);
-                otherwise
-            }
-        }
-    }
-
-    pub fn _emit_unwrap_or<T>(
-        &mut self,
-        res: Result<T, CompileError>,
-        otherwise: impl Fn() -> T,
-    ) -> T {
-        match res {
-            Ok(t) => t,
-            Err(err) => {
-                self.emit_err(err);
-                otherwise()
-            }
-        }
-    }
-
     pub fn crash_on_error(&self) -> bool {
         self.crash_on_error
     }
@@ -551,7 +527,6 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     let e = span.end as usize;
 
     // calculate line and position in line
-    dbg!(error.conclusion());
     let until_start = if s >= src.len() { src } else { &src[..s] };
     let mut line = 1;
     let mut col = 1;
