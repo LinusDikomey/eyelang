@@ -217,7 +217,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 let called = &called_module.functions[inst.function.function.0 as usize];
 
                 cwrite!(f, "    ")?;
-                let has_value = !called.terminator
+                let has_value = !called.flags.terminator()
                     && !matches!(types[inst.ty], crate::Type::Tuple(members) if members.count == 0);
                 if has_value {
                     let r_digits = if r.0 == 0 { 1 } else { r.0.ilog10() + 1 };

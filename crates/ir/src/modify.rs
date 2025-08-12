@@ -203,7 +203,7 @@ impl IrModify {
         };
         let def = &env[function];
         debug_assert!(
-            !def.terminator,
+            !def.flags.terminator(),
             "can't add a terminator before another instruction"
         );
         // PERF: iterating blocks every time is bad, somehow avoid this

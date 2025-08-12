@@ -48,57 +48,57 @@ pub fn register_all(env: &mut crate::Environment) {
 instructions! {
     Arith "arith" ArithInsts
 
-    Int value: Int;
-    Float value: Float;
+    Int value: Int !pure;
+    Float value: Float !pure;
 
-    Neg value: Ref;
-    Not value: Ref;
+    Neg value: Ref !pure;
+    Not value: Ref !pure;
 
-    Add l: Ref r: Ref;
-    Sub l: Ref r: Ref;
-    Mul l: Ref r: Ref;
-    Div l: Ref r: Ref;
-    Rem l: Ref r: Ref;
+    Add l: Ref r: Ref !pure;
+    Sub l: Ref r: Ref !pure;
+    Mul l: Ref r: Ref !pure;
+    Div l: Ref r: Ref !pure;
+    Rem l: Ref r: Ref !pure;
 
-    Or  l: Ref r: Ref;
-    And l: Ref r: Ref;
-    Eq  l: Ref r: Ref;
-    NE  l: Ref r: Ref;
-    LT  l: Ref r: Ref;
-    GT  l: Ref r: Ref;
-    LE  l: Ref r: Ref;
-    GE  l: Ref r: Ref;
+    Or  l: Ref r: Ref !pure;
+    And l: Ref r: Ref !pure;
+    Eq  l: Ref r: Ref !pure;
+    NE  l: Ref r: Ref !pure;
+    LT  l: Ref r: Ref !pure;
+    GT  l: Ref r: Ref !pure;
+    LE  l: Ref r: Ref !pure;
+    GE  l: Ref r: Ref !pure;
 
-    Xor l: Ref r: Ref;
-    Rol l: Ref r: Ref;
-    Ror l: Ref r: Ref;
+    Xor l: Ref r: Ref !pure;
+    Rol l: Ref r: Ref !pure;
+    Ror l: Ref r: Ref !pure;
 
-    CastInt value: Ref;
-    CastFloat value: Ref;
-    CastIntToFloat value: Ref;
-    CastFloatToInt value: Ref;
+    CastInt value: Ref !pure;
+    CastFloat value: Ref !pure;
+    CastIntToFloat value: Ref !pure;
+    CastFloatToInt value: Ref !pure;
 }
 
 instructions! {
     Tuple "tuple" TupleInsts
 
-    MemberValue tuple: Ref element: Int;
-    InsertMember tuple: Ref element: Int value: Ref;
+    MemberValue tuple: Ref element: Int !pure;
+    InsertMember tuple: Ref element: Int value: Ref !pure;
 }
 
 instructions! {
     Mem "mem" MemInsts
 
-    Decl ty: TypeId;
-    Load ptr: Ref;
+    Decl ty: TypeId !pure;
+    Load ptr: Ref !pure;
     Store ptr: Ref value: Ref;
-    MemberPtr ptr: Ref ty: TypeId idx: Int32;
-    IntToPtr value: Ref;
-    PtrToInt value: Ref;
-    FunctionPtr function: FunctionId;
-    Global global: GlobalId;
+    MemberPtr ptr: Ref ty: TypeId idx: Int32 !pure;
+    IntToPtr value: Ref !pure;
+    PtrToInt value: Ref !pure;
+    FunctionPtr function: FunctionId !pure;
+    Global global: GlobalId !pure;
     // CallPtr  (TODO: dynamic argument list)
-    ArrayIndex array_ptr: Ref elem_ty: TypeId a: Ref;
+    ArrayIndex array_ptr: Ref elem_ty: TypeId a: Ref !pure;
 }
 
 instructions! {

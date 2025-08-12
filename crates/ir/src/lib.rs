@@ -26,6 +26,7 @@ mod bitmap;
 mod builtins;
 mod display;
 mod environment;
+mod flags;
 mod layout;
 
 pub use argument::{ArgError, Argument, IntoArgs};
@@ -292,7 +293,7 @@ pub struct Function {
     types: Types,
     params: Vec<Parameter>,
     varargs: Option<Parameter>,
-    terminator: bool,
+    flags: InstFlags,
     return_type: Option<TypeId>,
     pub(crate) ir: Option<FunctionIr>,
 }
@@ -310,7 +311,7 @@ impl Function {
             types: Types::new(),
             params: Vec::new(),
             varargs: None,
-            terminator: false,
+            flags: InstFlags::default(),
             return_type: None,
             ir: None,
         }
@@ -328,7 +329,7 @@ impl Function {
             types,
             params: params.into_iter().map(Parameter::RefOf).collect(),
             varargs: None,
-            terminator: false,
+            flags: InstFlags::default(),
             return_type: Some(return_type),
             ir: Some(ir),
         }
@@ -346,7 +347,7 @@ impl Function {
             types,
             params: params.into_iter().map(Parameter::RefOf).collect(),
             varargs: varargs.then_some(Parameter::Ref),
-            terminator: false,
+            flags: InstFlags::default(),
             return_type: Some(return_type),
             ir: None,
         }
@@ -363,7 +364,7 @@ impl Function {
             types,
             params,
             varargs: attrs.varargs,
-            terminator: attrs.terminator,
+            flags: attrs.flags,
             return_type: None,
             ir: None,
         }
@@ -798,6 +799,16 @@ pub struct BlockInfo {
     pub preds: DHashSet<BlockId>,
     pub succs: DHashSet<BlockId>,
 }
+impl BlockInfo {
+    pub fn all_refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
+        (self.idx..self.idx + self.arg_count + self.len).map(Ref)
+    }
+
+    pub fn body(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
+        let s = self.idx + self.arg_count;
+        (s..s + self.len).map(Ref)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
@@ -1209,7 +1220,7 @@ use mc::Register;
 #[doc(hidden)]
 pub use strum::FromRepr as __FromRepr;
 
-use crate::mc::RegClass;
+use crate::{flags::InstFlags, mc::RegClass};
 
 #[macro_export]
 macro_rules! lifetime_or_static {
@@ -1223,19 +1234,32 @@ macro_rules! lifetime_or_static {
 
 #[derive(Default)]
 pub struct InstAttrs {
-    pub terminator: bool,
+    pub flags: InstFlags,
     pub varargs: Option<Parameter>,
+}
+impl InstAttrs {
+    pub fn varargs(&mut self, varargs: Option<Parameter>) {
+        self.varargs = varargs;
+    }
+
+    pub fn terminator(&mut self, value: bool) {
+        self.flags.set(InstFlags::TERMINATOR, value);
+    }
+
+    pub fn pure(&mut self, value: bool) {
+        self.flags.set(InstFlags::PURE, value);
+    }
 }
 
 #[macro_export]
 macro_rules! instruction_attrs {
     ($attrs: ident) => {};
     ($attrs: ident !$attr: ident = $value: expr; $($rest: tt)*) => {
-        $attrs.$attr = $value;
+        $attrs.$attr($value);
         $crate::instruction_attrs!($attrs $($rest)*);
     };
     ($attrs: ident !$attr: ident $($rest: tt)*) => {
-        $attrs.$attr = true;
+        $attrs.$attr(true);
         $crate::instruction_attrs!($attrs $($rest)*);
     };
 }

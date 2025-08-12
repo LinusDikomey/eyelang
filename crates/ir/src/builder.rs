@@ -3,6 +3,7 @@ use crate::{
     ModuleId, Parameter, Ref, Refs, TypeId, Types,
     argument::IntoArgs,
     builtins::{self, Builtin},
+    flags::InstFlags,
 };
 
 pub trait HasEnvironment {
@@ -99,7 +100,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             panic!("tried to append to block while no block was active");
         };
         let def = &self.env.env()[function];
-        let terminator = def.terminator;
+        let terminator = def.flags.terminator();
         let args = write_args(
             &mut self.extra,
             current_block,
@@ -212,7 +213,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             types: self.types,
             params,
             varargs: None,
-            terminator: false,
+            flags: InstFlags::default(),
             return_type: Some(return_type),
             ir: Some(ir),
         }
