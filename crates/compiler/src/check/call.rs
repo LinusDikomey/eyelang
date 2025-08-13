@@ -6,11 +6,11 @@ use types::Type;
 
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent},
-    error::Error,
     hir::{Node, NodeIds},
-    parser::ast::{Call, ExprId, ExprIds},
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
+use error::Error;
+use parser::ast::{Call, ExprId, ExprIds};
 
 use super::{Ctx, expr};
 
@@ -449,7 +449,7 @@ fn check_call_args(
     named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     varargs: bool,
     extra_arg_slot: bool,
-) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
+) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {
     let arg_types = call_arg_types(
         args.count,
         ctx,
@@ -487,7 +487,7 @@ fn check_call_args_inner(
     named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     arg_types: LocalTypeIds,
     extra_arg_slot: bool,
-) -> Result<(NodeIds, LocalTypeIds), crate::error::CompileError> {
+) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {
     let all_arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
     let arg_nodes = if extra_arg_slot {
         all_arg_nodes.skip(1)

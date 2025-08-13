@@ -1,13 +1,8 @@
 use id::ModuleId;
 use span::Span;
 
-use crate::{
-    error::{CompileError, Error, Errors},
-    parser::{
-        ExpectedTokens, TokenTypes,
-        token::{Keyword, Token, TokenType},
-    },
-};
+use error::{CompileError, Error, Errors};
+use token::{ExpectedTokens, Keyword, Token, TokenType, TokenTypes};
 
 pub struct Tokenizer<'a> {
     pub src: &'a str,
@@ -304,7 +299,7 @@ impl<'a> Tokenizer<'a> {
             let Some(c) = self.next_byte() else {
                 self.errors.emit_err(
                     Error::UnexpectedEndOfFile {
-                        expected: crate::parser::ExpectedTokens::EndOfMultilineComment,
+                        expected: ExpectedTokens::EndOfMultilineComment,
                     }
                     .at_span(Span::new(start, self.pos - 1, self.module)),
                 );

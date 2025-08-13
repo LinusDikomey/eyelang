@@ -3,15 +3,12 @@ mod display;
 use std::ops::{Index, IndexMut};
 
 use id::{ConstValueId, ModuleId, id};
+use parser::ast::{AssignType, FunctionId, GlobalId, TraitId};
 use types::{FloatType, IntType};
 
 use crate::{
     Compiler,
     compiler::{CaptureId, Generics, VarId},
-    parser::{
-        ast::{FunctionId, GlobalId, TraitId},
-        token::AssignType,
-    },
     types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
 };
 

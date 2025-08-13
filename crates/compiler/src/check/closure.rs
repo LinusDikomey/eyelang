@@ -1,5 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
+use error::Error;
 use id::ConstValueId;
 use indexmap::IndexMap;
 use span::TSpan;
@@ -7,11 +8,10 @@ use types::Type;
 
 use crate::{
     compiler::{CheckedFunction, LocalScope, LocalScopeParent, Signature},
-    error::Error,
     hir::{HIRBuilder, Node},
-    parser::ast::FunctionId,
     types::{TypeInfo, TypeInfoOrIdx, TypeTable},
 };
+use parser::ast::FunctionId;
 
 use super::Ctx;
 

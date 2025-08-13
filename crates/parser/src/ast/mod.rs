@@ -4,7 +4,7 @@ use span::{IdentPath, Span, TSpan};
 use std::ops::Index;
 use types::{Primitive, UnresolvedType};
 
-use crate::parser::token::Operator;
+pub use token::{AssignType, FloatLiteral, IntLiteral, Operator};
 
 pub mod repr;
 
@@ -158,6 +158,7 @@ impl Index<GlobalId> for Ast {
     }
 }
 
+#[derive(Default)]
 pub struct AstBuilder {
     scopes: Vec<Scope>,
     exprs: Vec<Expr>,
@@ -170,16 +171,7 @@ pub struct AstBuilder {
 }
 impl AstBuilder {
     pub fn new() -> Self {
-        Self {
-            scopes: Vec::new(),
-            exprs: Vec::new(),
-            def_exprs: Vec::new(),
-            calls: Vec::new(),
-            functions: Vec::new(),
-            types: Vec::new(),
-            traits: Vec::new(),
-            globals: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn scope(&mut self, scope: Scope) -> ScopeId {

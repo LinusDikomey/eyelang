@@ -151,9 +151,11 @@ version = "0.1.0"
 dependencies = [
  "color-format",
  "dmap",
+ "error",
  "id",
  "indexmap",
  "ir",
+ "parser",
  "pathdiff",
  "span",
  "tracing",
@@ -171,12 +173,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "error"
+version = "0.1.0"
+dependencies = [
+ "color-format",
+ "id",
+ "ir",
+ "span",
+ "token",
+]
+
+[[package]]
 name = "eye"
 version = "0.1.0"
 dependencies = [
  "clap",
  "color-format",
  "compiler",
+ "error",
  "eye-lsp",
  "ir",
  "ir-backend-fast",
@@ -344,6 +358,18 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
+
+[[package]]
+name = "parser"
+version = "0.1.0"
+dependencies = [
+ "dmap",
+ "error",
+ "id",
+ "span",
+ "token",
+ "types",
+]
 
 [[package]]
 name = "pathdiff"
@@ -563,25 +589,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "token"
+version = "0.1.0"
+dependencies = [
+ "color-format",
+ "id",
+ "span",
+ "types",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0"
 dependencies = [
  "pin-project-lite",
- "tracing-attributes",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-attributes"
-version = "0.1.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81383ab64e72a7a8b8e13130c49e3dab29def6d0c7d76a03087b3cf71c5c6903"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
 ]
 
 [[package]]

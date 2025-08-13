@@ -1,19 +1,16 @@
 use std::{num::NonZeroU64, rc::Rc};
 
+use error::Error;
 use id::ModuleId;
 use ir::eval::Val;
+use parser::ast::{Ast, Expr, ExprId, FloatLiteral, IntLiteral, ScopeId};
 use types::{Primitive, Type, UnresolvedType};
 
 use crate::{
     Compiler, Def,
     compiler::{Generics, ResolvedPrimitive},
-    error::Error,
     hir::HIRBuilder,
     irgen,
-    parser::{
-        ast::{Ast, Expr, ExprId, ScopeId},
-        token::{FloatLiteral, IntLiteral},
-    },
     types::TypeTable,
 };
 

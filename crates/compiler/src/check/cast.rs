@@ -1,6 +1,7 @@
+use error::Error;
+
 use crate::{
     Compiler,
-    error::Error,
     hir::CastType,
     types::{LocalTypeId, TypeInfo, TypeTable},
 };

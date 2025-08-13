@@ -3,7 +3,9 @@ use std::{
     rc::Rc,
 };
 
+use error::Error;
 use id::{ModuleId, TypeId};
+use parser::ast::{self, TraitId};
 use span::{Span, TSpan};
 use types::{InvalidTypeError, Layout, Primitive, Type};
 
@@ -19,8 +21,6 @@ use crate::{
         traits,
     },
     compiler::{Def, Generics, ResolvedTypeContent},
-    error::Error,
-    parser::ast::{self, TraitId},
 };
 
 id::id!(LocalTypeId);

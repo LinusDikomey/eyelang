@@ -1,15 +1,19 @@
 use std::rc::Rc;
 
 use dmap::DHashMap;
+use error::Error;
 use id::{ModuleId, TypeId};
+use parser::ast::FunctionId;
+use parser::ast::{self, Ast, TraitId};
 use span::TSpan;
 use types::{InvalidTypeError, Primitive, Type};
+
+use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
 use crate::{
     Compiler,
     compiler::Signature,
-    error::Error,
-    parser::ast::{self, Ast, TraitId},
+    compiler::{CheckedTrait, Generics},
     types::Bound,
 };
 
@@ -157,13 +161,6 @@ pub fn check_impl(
         functions: function_ids,
     })
 }
-
-use crate::{
-    compiler::{CheckedTrait, Generics},
-    parser::ast::FunctionId,
-};
-
-use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
 #[derive(Debug)]
 pub enum Candidates {

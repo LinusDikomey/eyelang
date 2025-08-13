@@ -19,8 +19,6 @@ mod hir;
 mod irgen;
 /// call the system linker
 mod link;
-/// parse source code into an ast
-mod parser;
 /// TypeTable data structure and logic for type inference/checking
 mod types;
 

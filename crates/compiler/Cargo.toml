@@ -6,12 +6,15 @@ edition = "2024"
 [features]
 
 [dependencies]
-dmap = { path = "../dmap" }
-span = { path = "../span" }
-types = { path = "../types" }
-id = { path = "../id" }
-color-format = { git = "https://github.com/LinusDikomey/color-format" }
-ir = { path = "../ir" }
+parser.workspace = true
+dmap.workspace = true
+span.workspace = true
+types.workspace = true
+error.workspace = true
+id.workspace = true
+color-format.workspace = true
+ir.workspace = true
+tracing.workspace = true
+
 pathdiff = "0.2.1"
 indexmap = "2.7.0"
-tracing.workspace = true

@@ -1,10 +1,10 @@
 use id::{ModuleId, TypeId};
+use parser::ast::{FunctionId, TraitId};
 use span::Span;
 use types::Type;
 
 use crate::{
     Compiler, ProjectId,
-    parser::ast::{FunctionId, TraitId},
     types::{LocalTypeIds, TypeInfo},
 };
 

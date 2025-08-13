@@ -9,7 +9,7 @@ pub use compiler::{Compiler, Span};
 
 use compiler::Def;
 
-use compiler::error::Error;
+use error::Error;
 
 #[derive(Debug)]
 pub enum MainError {

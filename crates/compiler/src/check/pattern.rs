@@ -1,16 +1,14 @@
 use dmap::DHashMap;
+use error::Error;
 
 use crate::{
     check::exhaust,
     compiler::{VarId, builtins},
-    error::Error,
     hir::Pattern,
-    parser::{
-        ast::{Expr, ExprId, UnOp},
-        token::{IntLiteral, Operator},
-    },
     types::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
+
+use parser::ast::{Expr, ExprId, IntLiteral, Operator, UnOp};
 
 use super::{Ctx, exhaust::Exhaustion};
 

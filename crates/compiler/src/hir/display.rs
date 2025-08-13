@@ -1,6 +1,7 @@
 use std::fmt;
 
 use color_format::{cwrite, cwriteln};
+use parser::ast::AssignType;
 use types::Primitive;
 
 use crate::{
@@ -9,7 +10,6 @@ use crate::{
         Arithmetic, CastType, Comparison, Hir, LValue, LValueId, Logic, Node, NodeId, Pattern,
         PatternId, PatternIds, TypeProperty,
     },
-    parser::token::AssignType,
     types::{LocalTypeId, LocalTypeIds, TypeTable},
 };
 

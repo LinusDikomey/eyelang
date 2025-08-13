@@ -2,21 +2,20 @@ use dmap::DHashMap;
 
 use std::collections::hash_map::Entry;
 
-use crate::parser::ast::{
+use crate::ast::{
     self, Attribute, EnumVariantDefinition, Expr, ExprId, ExprIds, Function, GenericDef, Global,
     InherentImpl, Item, ItemValue, StructMember, TraitDefinition, TraitFunctions, UnOp,
 };
 
-use crate::parser::token::{self, Keyword, Operator};
+use crate::unexpected;
 use crate::{
-    error::{CompileError, Error},
-    parser::{
-        Delimit, ExpectedTokens, ParseResult, Parser,
-        ast::{Definition, ScopeId},
-        token::{Token, TokenType},
-    },
+    Delimit, ParseResult, Parser,
+    ast::{Definition, ScopeId},
 };
+
+use error::{CompileError, Error};
 use span::{IdentPath, Span, TSpan};
+use token::{self, ExpectedTokens, Keyword, Operator, Token, TokenType};
 use types::UnresolvedType;
 
 macro_rules! step_or_unexpected {
@@ -30,7 +29,8 @@ macro_rules! step_or_unexpected {
             $(
                 TokenType::$tok_ty $((Keyword::$kw $(($kw_val))* ))* => $res,
             )*
-            _ => return Err($tok.unexpected(
+            _ => return Err(unexpected(
+                $tok,
                 $parser.toks.module,
                 ExpectedTokens::AnyOf(Box::new([ $(TokenType::$tok_ty $((Keyword::$kw))*),* ])),
             ))
@@ -67,7 +67,8 @@ impl Parser<'_> {
                     tok if tok.ty == delim => continue,
                     tok if tok.ty == close => return Ok(tok),
                     tok => {
-                        return Err(tok.unexpected(
+                        return Err(unexpected(
+                            tok,
                             self.toks.module,
                             ExpectedTokens::AnyOf(Box::new([delim, close])),
                         ));
@@ -1073,7 +1074,9 @@ impl Parser<'_> {
             }
             TokenType::Keyword(Keyword::Break) => Expr::Break { start: first.start },
             TokenType::Keyword(Keyword::Continue) => Expr::Continue { start: first.start },
-            _ => return Err(first.unexpected(self.toks.module, ExpectedTokens::Expr)),
+            _ => {
+                return Err(unexpected(first, self.toks.module, ExpectedTokens::Expr));
+            }
         };
         self.parse_factor_postfix(expr, include_as, scope)
     }
@@ -1317,7 +1320,7 @@ impl Parser<'_> {
                 })
             }
             TokenType::Underscore => Ok(UnresolvedType::Infer(tok.span())),
-            _ => Err(tok.unexpected(self.toks.module, ExpectedTokens::Type)),
+            _ => Err(unexpected(tok, self.toks.module, ExpectedTokens::Type)),
         }
     }
 

@@ -11,12 +11,12 @@ use ::types::Type;
 use id::ModuleId;
 use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
+use parser::ast;
 
 use crate::Compiler;
 use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
-use crate::parser::ast;
 use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
 use crate::{
     compiler::CheckedFunction,
@@ -504,7 +504,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let lval = lower_lval(ctx, lval)?;
             let val = lower(ctx, val)?;
             use crate::hir::Arithmetic;
-            use crate::parser::token::AssignType;
+            use parser::ast::AssignType;
 
             let arithmetic = match assign_ty {
                 AssignType::Assign => {

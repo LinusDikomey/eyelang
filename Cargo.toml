@@ -11,10 +11,24 @@ members = [
     "crates/eye-lsp",
     "crates/ir-backend-llvm",
     "crates/ir-backend-fast",
+    "crates/parser",
+    "crates/error",
+    "crates/token",
 ]
 default-members = ["crates/eye"]
 
 resolver = "2"
 
 [workspace.dependencies]
-tracing = { version = "0.1.41", features = ["release_max_level_off"] }
+compiler.path = "crates/compiler"
+span.path = "crates/span"
+types.path = "crates/types"
+id.path = "crates/id"
+dmap.path = "crates/dmap"
+ir.path = "crates/ir"
+error.path = "crates/error"
+parser.path = "crates/parser"
+token.path = "crates/token"
+
+tracing = { version = "0.1.41", default-features = false, features = ["release_max_level_off"] }
+color-format = { git = "https://github.com/LinusDikomey/color-format" }

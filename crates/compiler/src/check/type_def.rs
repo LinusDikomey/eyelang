@@ -1,14 +1,14 @@
 use std::rc::Rc;
 
 use dmap::DHashMap;
+use error::Error;
 use id::{ModuleId, TypeId};
+use parser::ast::{self, TraitId};
 use types::Type;
 
 use crate::{
     Compiler, Def,
     compiler::{ResolvedEnumDef, ResolvedStructDef, ResolvedTypeContent, ResolvedTypeDef},
-    error::Error,
-    parser::ast::{self, TraitId},
 };
 
 use super::traits;

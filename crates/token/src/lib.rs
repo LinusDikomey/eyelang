@@ -1,14 +1,7 @@
-use std::fmt;
-
 use color_format::cwrite;
-use id::ModuleId;
-use span::{Span, TSpan};
+use span::TSpan;
+use std::fmt;
 use types::{FloatType, IntType, Primitive};
-
-use crate::{
-    error::{CompileError, Error},
-    parser::ExpectedTokens,
-};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
@@ -35,16 +28,6 @@ impl Token {
 
     pub fn span(&self) -> TSpan {
         TSpan::new(self.start, self.end)
-    }
-
-    pub fn unexpected(self, module: ModuleId, expected: ExpectedTokens) -> CompileError {
-        CompileError {
-            err: Error::UnexpectedToken {
-                expected,
-                found: self.ty,
-            },
-            span: Span::new(self.start, self.end, module),
-        }
     }
 }
 
@@ -174,6 +157,71 @@ impl TokenType {
             TokenType::Eof => "<end of file>",
         };
         (s, is_keyword)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ExpectedTokens {
+    Specific(TokenType),
+    AnyOf(Box<[TokenType]>),
+    Expr,
+    Type,
+    Item,
+    EndOfMultilineComment,
+    EndOfStringLiteral,
+}
+impl std::fmt::Display for ExpectedTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            &Self::Specific(tok) => {
+                write!(f, "{tok}")
+            }
+            Self::AnyOf(toks) => {
+                for (i, tok) in toks.iter().enumerate() {
+                    match i {
+                        0 => {}
+                        i if i != 0 || i == toks.len() - 1 => {
+                            write!(f, " or ")?;
+                        }
+                        _ => write!(f, ", ")?,
+                    }
+                    write!(f, "{tok}")?;
+                }
+                Ok(())
+            }
+            Self::Expr => write!(f, "an expression"),
+            Self::Type => write!(f, "a type"),
+            Self::Item => write!(f, "an item"),
+            Self::EndOfMultilineComment => write!(f, "end of comment"),
+            Self::EndOfStringLiteral => write!(f, "end of string literal"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TokenTypes<const N: usize>(pub [TokenType; N]);
+impl From<TokenType> for TokenTypes<1> {
+    fn from(x: TokenType) -> Self {
+        Self([x])
+    }
+}
+impl<const N: usize> From<[TokenType; N]> for TokenTypes<N> {
+    fn from(x: [TokenType; N]) -> Self {
+        Self(x)
+    }
+}
+
+impl<const N: usize> From<TokenTypes<N>> for ExpectedTokens {
+    fn from(t: TokenTypes<N>) -> Self {
+        match t.0.as_slice() {
+            [t] => Self::Specific(*t),
+            other => Self::AnyOf(other.into()),
+        }
+    }
+}
+impl From<TokenType> for ExpectedTokens {
+    fn from(value: TokenType) -> Self {
+        Self::Specific(value)
     }
 }
 

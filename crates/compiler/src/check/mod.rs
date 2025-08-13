@@ -10,6 +10,8 @@ mod type_def;
 
 use std::rc::Rc;
 
+use error::{CompileError, Error};
+use parser::ast::{Ast, ExprId, ScopeId};
 pub use traits::trait_def;
 pub use type_def::type_def;
 
@@ -22,9 +24,7 @@ use crate::{
     compiler::{
         CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId, builtins,
     },
-    error::{CompileError, Error},
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
-    parser::ast::{Ast, ExprId, ScopeId},
     types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
@@ -33,7 +33,7 @@ use self::exhaust::Exhaustion;
 pub(crate) fn function(
     compiler: &mut Compiler,
     module: ModuleId,
-    id: crate::parser::ast::FunctionId,
+    id: parser::ast::FunctionId,
 ) -> crate::compiler::CheckedFunction {
     let resolving = &mut compiler.modules[module.idx()]
         .ast

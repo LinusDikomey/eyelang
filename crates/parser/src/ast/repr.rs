@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use types::{FloatType, IntType};
 
-use crate::parser::token::AssignType;
+use token::AssignType;
 
 use super::*;
 

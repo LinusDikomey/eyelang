@@ -1,18 +1,17 @@
 use std::rc::Rc;
 
+use error::Error;
 use id::{ConstValueId, ModuleId, TypeId};
 use span::TSpan;
 use types::{Primitive, Type};
 
 use crate::{
     compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeContent, builtins},
-    error::Error,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    parser::{
-        ast::{Ast, Expr, ExprId, ExprIds, FunctionId, UnOp},
-        token::{FloatLiteral, IntLiteral, Operator},
-    },
     types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+};
+use parser::ast::{
+    Ast, Expr, ExprId, ExprIds, FloatLiteral, FunctionId, IntLiteral, Operator, UnOp,
 };
 
 use super::{Ctx, call, closure::closure, exhaust::Exhaustion, lval, pattern};
@@ -1095,8 +1094,8 @@ fn check_member_access(
                 return Node::Invalid;
             }
             other => {
-                let hint = matches!(other, TypeInfo::Enum(_))
-                    .then_some(crate::error::MemberHint::InferredEnum);
+                let hint =
+                    matches!(other, TypeInfo::Enum(_)).then_some(error::MemberHint::InferredEnum);
                 ctx.compiler
                     .errors
                     .emit_err(Error::NonexistantMember(hint).at_span(name_span.in_mod(ctx.module)));

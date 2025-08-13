@@ -9,23 +9,23 @@ use std::{
 };
 
 use dmap::DHashMap;
+use error::{CompileError, Error, Errors, ImplIncompatibility};
 use id::{ConstValueId, ModuleId, TypeId};
 use indexmap::IndexMap;
 use ir::ModuleOf;
+use parser::{
+    self,
+    ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
+};
 use span::{IdentPath, Span, TSpan};
 use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
 use crate::{
     ProjectId,
     check::{self, traits},
-    error::{CompileError, Error, Errors, ImplIncompatibility},
     eval::{self, ConstValue},
     hir::Hir,
     irgen,
-    parser::{
-        self,
-        ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
-    },
     types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
@@ -1217,7 +1217,7 @@ impl Compiler {
                 if let Some(relative) = &relative {
                     path = relative;
                 }
-                crate::error::print(
+                error::print(
                     &error.err,
                     TSpan::new(error.span.start, error.span.end),
                     ast.src(),
