@@ -147,11 +147,11 @@ fn analyze_inst_liveness<I: McInst>(
                     let ArgumentMut::MCReg(_, r) = arg else {
                         unreachable!();
                     };
-                    if let Some(i) = r.virt() {
-                        if !live.get(i as usize) {
-                            live.set(i as usize, true);
-                            r.set_dead();
-                        }
+                    if let Some(i) = r.virt()
+                        && !live.get(i as usize)
+                    {
+                        live.set(i as usize, true);
+                        r.set_dead();
                     }
                 }
                 return;

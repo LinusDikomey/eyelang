@@ -171,7 +171,7 @@ impl Environment {
         self.modules[id.module.idx()].functions[id.function.idx()].ir = Some(ir);
     }
 
-    pub fn get_inst_name(&self, inst: &Instruction) -> InstName {
+    pub fn get_inst_name(&self, inst: &Instruction) -> InstName<'_> {
         let module = self.get_module(inst.module());
         InstName {
             module: &module.name,

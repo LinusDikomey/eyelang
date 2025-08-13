@@ -263,16 +263,16 @@ impl Ctx<'_> {
     ) -> Node {
         let mut current_ty = TypeInfoOrIdx::Idx(ty);
         // try promoting the value to an lvalue first to potentially add one level of pointer
-        if pointer_count < required_pointer_count {
-            if let Some(lval) = LValue::try_from_node(&value, &mut self.hir) {
-                let value_ty = self.hir.types.add_info_or_idx(current_ty);
-                value = Node::AddressOf {
-                    value: self.hir.add_lvalue(lval),
-                    value_ty,
-                };
-                current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
-                pointer_count += 1
-            }
+        if pointer_count < required_pointer_count
+            && let Some(lval) = LValue::try_from_node(&value, &mut self.hir)
+        {
+            let value_ty = self.hir.types.add_info_or_idx(current_ty);
+            value = Node::AddressOf {
+                value: self.hir.add_lvalue(lval),
+                value_ty,
+            };
+            current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
+            pointer_count += 1
         }
         while pointer_count < required_pointer_count {
             let value_ty = self.hir.types.add_info_or_idx(current_ty);

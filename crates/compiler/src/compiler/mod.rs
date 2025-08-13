@@ -577,14 +577,13 @@ impl Compiler {
                 match self.resolve_path(ty_module, scope, *path) {
                     Def::Invalid => Err(SignatureError),
                     Def::Type(ty) => {
-                        if let Some((generics, generics_span)) = generics {
-                            if !generics.is_empty() {
-                                self.errors.emit_err(
-                                    Error::UnexpectedGenerics
-                                        .at_span(generics_span.in_mod(ty_module)),
-                                );
-                                return Err(SignatureError);
-                            }
+                        if let Some((generics, generics_span)) = generics
+                            && !generics.is_empty()
+                        {
+                            self.errors.emit_err(
+                                Error::UnexpectedGenerics.at_span(generics_span.in_mod(ty_module)),
+                            );
+                            return Err(SignatureError);
                         }
                         let Type::Function(function_ty) = &ty else {
                             self.errors.emit_err(

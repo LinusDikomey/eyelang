@@ -66,10 +66,10 @@ impl FunctionPass for Mem2Reg {
                         }
                     }
                     for arg in ir.args_iter(inst, env) {
-                        if let Argument::Ref(r) = arg {
-                            if r.is_ref() {
-                                can_alias.set(r.idx(), true);
-                            }
+                        if let Argument::Ref(r) = arg
+                            && r.is_ref()
+                        {
+                            can_alias.set(r.idx(), true);
                         }
                     }
                 }
@@ -83,14 +83,14 @@ impl FunctionPass for Mem2Reg {
         // track all blocks containing stores to each variable
         for block in ir.block_ids() {
             for (_, inst) in ir.get_block(block) {
-                if let Some(inst) = inst.as_module(mem) {
-                    if inst.op() == Mem::Store {
-                        let [Argument::Ref(ptr), Argument::Ref(_value)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
-                        if let Some((blocks, _)) = variables.get_mut(&ptr) {
-                            blocks.insert(block);
-                        }
+                if let Some(inst) = inst.as_module(mem)
+                    && inst.op() == Mem::Store
+                {
+                    let [Argument::Ref(ptr), Argument::Ref(_value)] = ir.args_n(&inst) else {
+                        unreachable!()
+                    };
+                    if let Some((blocks, _)) = variables.get_mut(&ptr) {
+                        blocks.insert(block);
                     }
                 }
             }

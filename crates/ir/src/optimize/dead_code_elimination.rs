@@ -32,13 +32,12 @@ impl FunctionPass for DeadCodeElimination {
                     if alive_insts.get(r.idx()) {
                         let args = ir.args_iter(inst, env);
                         for arg in args {
-                            if let Argument::Ref(arg) = arg {
-                                if let Some(i) = arg.into_ref() {
-                                    if !alive_insts.get(i as usize) {
-                                        changed = true;
-                                        alive_insts.set(i as usize, true);
-                                    }
-                                }
+                            if let Argument::Ref(arg) = arg
+                                && let Some(i) = arg.into_ref()
+                                && !alive_insts.get(i as usize)
+                            {
+                                changed = true;
+                                alive_insts.set(i as usize, true);
                             }
                         }
                     }

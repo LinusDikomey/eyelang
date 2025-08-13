@@ -1211,43 +1211,42 @@ fn check_type_item_member_access(
                 );
                 return Node::FunctionItem(module, method, call_generics);
             }
-            if let ResolvedTypeContent::Enum(def) = &ty.def {
-                if let Some((ordinal, args)) = def.get_by_name(name) {
-                    let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
-                    let node = if args.is_empty() {
-                        ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
-                        let ordinal_ty = ctx.hir.types.add(ordinal_ty);
-                        let elem_types =
-                            ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
-                        let elems = ctx.hir.add_nodes([Node::IntLiteral {
-                            val: ordinal as u128,
-                            ty: ordinal_ty,
-                        }]);
-                        Node::TupleLiteral { elems, elem_types }
-                    } else {
-                        let arg_types = ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
-                        let mut arg_type_iter = arg_types.iter();
-                        ctx.hir
-                            .types
-                            .replace(arg_type_iter.next().unwrap(), ordinal_ty);
-                        for (r, ty) in arg_type_iter.zip(args.iter()) {
-                            let ty = ctx.type_from_resolved(ty, generics);
-                            ctx.hir.types.replace(r, ty);
-                        }
-                        ctx.specify(
-                            expected,
-                            TypeInfo::EnumVariantItem {
-                                enum_type: id,
-                                generics,
-                                ordinal,
-                                arg_types,
-                            },
-                            span,
-                        );
-                        Node::Invalid
-                    };
-                    return node;
-                }
+            if let ResolvedTypeContent::Enum(def) = &ty.def
+                && let Some((ordinal, args)) = def.get_by_name(name)
+            {
+                let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
+                let node = if args.is_empty() {
+                    ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
+                    let ordinal_ty = ctx.hir.types.add(ordinal_ty);
+                    let elem_types = ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
+                    let elems = ctx.hir.add_nodes([Node::IntLiteral {
+                        val: ordinal as u128,
+                        ty: ordinal_ty,
+                    }]);
+                    Node::TupleLiteral { elems, elem_types }
+                } else {
+                    let arg_types = ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
+                    let mut arg_type_iter = arg_types.iter();
+                    ctx.hir
+                        .types
+                        .replace(arg_type_iter.next().unwrap(), ordinal_ty);
+                    for (r, ty) in arg_type_iter.zip(args.iter()) {
+                        let ty = ctx.type_from_resolved(ty, generics);
+                        ctx.hir.types.replace(r, ty);
+                    }
+                    ctx.specify(
+                        expected,
+                        TypeInfo::EnumVariantItem {
+                            enum_type: id,
+                            generics,
+                            ordinal,
+                            arg_types,
+                        },
+                        span,
+                    );
+                    Node::Invalid
+                };
+                return node;
             }
         }
         TypeInfo::Enum { .. } => todo!("local enum variant from type item"),

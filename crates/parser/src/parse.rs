@@ -684,11 +684,10 @@ impl Parser<'_> {
                         name_span,
                         generics.to_vec(),
                     )?;
-                    if matches!(self.toks.peek().ty, TokenType::Colon | TokenType::LBrace) {
-                        if let Some(body) = self.parse_function_body(func.scope)? {
+                    if matches!(self.toks.peek().ty, TokenType::Colon | TokenType::LBrace)
+                        && let Some(body) = self.parse_function_body(func.scope)? {
                             self.attach_func_body(&mut func, body);
                         }
-                    }
                     functions.push((name_span, func));
                 }
             }
@@ -1186,10 +1185,10 @@ impl Parser<'_> {
 
             // If BinOp binds less tightly with RHS than the operator after RHS, let
             // the pending operator take RHS as its LHS.
-            if let Some(next_op) = Option::<Operator>::from(self.toks.peek().ty) {
-                if op_prec < next_op.precedence() {
-                    rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs, scope)?;
-                }
+            if let Some(next_op) = Option::<Operator>::from(self.toks.peek().ty)
+                && op_prec < next_op.precedence()
+            {
+                rhs = self.parse_bin_op_rhs(op.precedence() + 1, rhs, scope)?;
             }
             lhs = Expr::BinOp(op, self.ast.expr(lhs), self.ast.expr(rhs));
         }
