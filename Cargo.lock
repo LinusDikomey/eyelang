@@ -211,6 +211,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "format"
+version = "0.1.0"
+dependencies = [
+ "dmap",
+ "error",
+ "id",
+ "parser",
+ "tracing",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -14,6 +14,7 @@ members = [
     "crates/parser",
     "crates/error",
     "crates/token",
+    "crates/format",
 ]
 default-members = ["crates/eye"]
 
@@ -29,6 +30,7 @@ ir.path = "crates/ir"
 error.path = "crates/error"
 parser.path = "crates/parser"
 token.path = "crates/token"
+format.path = "crates/format"
 
 tracing = { version = "0.1.41", default-features = false, features = ["release_max_level_off"] }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
