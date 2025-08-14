@@ -1,10 +1,11 @@
 use dmap::{self, DHashMap};
 use id::ModuleId;
-use span::{IdentPath, Span, TSpan};
-use std::ops::Index;
-use types::{Primitive, UnresolvedType};
+use span::{Span, TSpan};
+use std::{fmt::Debug, ops::Index};
 
-pub use token::{AssignType, FloatLiteral, IntLiteral, Operator};
+pub use span::IdentPath;
+pub use token::{AssignType, FloatLiteral, IntLiteral, Operator, Token, TokenType};
+pub use types::{Primitive, UnresolvedType};
 
 pub mod repr;
 
@@ -23,19 +24,19 @@ id::id!(DefExprId);
 
 /// Ast for a single file
 #[derive(Debug)]
-pub struct Ast {
+pub struct Ast<T: TreeToken = ()> {
     src: Box<str>,
     top_level_scope: ScopeId,
-    scopes: Box<[Scope]>,
-    pub exprs: Box<[Expr]>,
+    scopes: Box<[Scope<T>]>,
+    pub exprs: Box<[Expr<T>]>,
     def_exprs: Box<[(ExprId, UnresolvedType)]>,
-    calls: Box<[Call]>,
-    functions: Box<[Function]>,
-    types: Box<[TypeDef]>,
-    traits: Box<[TraitDefinition]>,
-    globals: Box<[Global]>,
+    calls: Box<[Call<T>]>,
+    functions: Box<[Function<T>]>,
+    types: Box<[TypeDef<T>]>,
+    traits: Box<[TraitDefinition<T>]>,
+    globals: Box<[Global<T>]>,
 }
-impl Ast {
+impl<T: TreeToken> Ast<T> {
     pub fn src(&self) -> &str {
         &self.src
     }
@@ -44,11 +45,11 @@ impl Ast {
         (0..self.scopes.len() as _).map(ScopeId)
     }
 
-    pub fn scopes(&self) -> &[Scope] {
+    pub fn scopes(&self) -> &[Scope<T>] {
         &self.scopes
     }
 
-    pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> + use<> {
+    pub fn function_ids(&self) -> impl Iterator<Item = FunctionId> + use<T> {
         (0..self.functions.len() as _).map(FunctionId)
     }
 
@@ -68,7 +69,7 @@ impl Ast {
         self.top_level_scope
     }
 
-    pub fn top_level_scope(&self) -> &Scope {
+    pub fn top_level_scope(&self) -> &Scope<T> {
         // the last scope is guaranteed to exist and to represent the top level scope of this Ast
         &self[self.top_level_scope]
     }
@@ -93,98 +94,111 @@ impl Ast {
         self.traits.len()
     }
 }
-impl Index<TSpan> for Ast {
+impl<T: TreeToken> Index<TSpan> for Ast<T> {
     type Output = str;
     fn index(&self, index: TSpan) -> &Self::Output {
         &self.src[index.range()]
     }
 }
-impl Index<ScopeId> for Ast {
-    type Output = Scope;
+impl<T: TreeToken> Index<ScopeId> for Ast<T> {
+    type Output = Scope<T>;
     fn index(&self, index: ScopeId) -> &Self::Output {
         &self.scopes[index.idx()]
     }
 }
-impl Index<ExprId> for Ast {
-    type Output = Expr;
+impl<T: TreeToken> Index<ExprId> for Ast<T> {
+    type Output = Expr<T>;
     fn index(&self, index: ExprId) -> &Self::Output {
         &self.exprs[index.idx()]
     }
 }
-impl Index<DefExprId> for Ast {
+impl<T: TreeToken> Index<DefExprId> for Ast<T> {
     type Output = (ExprId, UnresolvedType);
     fn index(&self, index: DefExprId) -> &Self::Output {
         &self.def_exprs[index.0 as usize]
     }
 }
-impl Index<ExprIds> for Ast {
-    type Output = [Expr];
+impl<T: TreeToken> Index<ExprIds> for Ast<T> {
+    type Output = [Expr<T>];
 
     fn index(&self, index: ExprIds) -> &Self::Output {
         &self.exprs[index.idx as usize..index.idx as usize + index.count as usize]
     }
 }
-impl Index<CallId> for Ast {
-    type Output = Call;
+impl<T: TreeToken> Index<CallId> for Ast<T> {
+    type Output = Call<T>;
     fn index(&self, index: CallId) -> &Self::Output {
         &self.calls[index.idx()]
     }
 }
-impl Index<FunctionId> for Ast {
-    type Output = Function;
+impl<T: TreeToken> Index<FunctionId> for Ast<T> {
+    type Output = Function<T>;
 
     fn index(&self, index: FunctionId) -> &Self::Output {
         &self.functions[index.idx()]
     }
 }
-impl Index<TypeId> for Ast {
-    type Output = TypeDef;
+impl<T: TreeToken> Index<TypeId> for Ast<T> {
+    type Output = TypeDef<T>;
 
     fn index(&self, index: TypeId) -> &Self::Output {
         &self.types[index.idx()]
     }
 }
-impl Index<TraitId> for Ast {
-    type Output = TraitDefinition;
+impl<T: TreeToken> Index<TraitId> for Ast<T> {
+    type Output = TraitDefinition<T>;
 
     fn index(&self, index: TraitId) -> &Self::Output {
         &self.traits[index.idx()]
     }
 }
-impl Index<GlobalId> for Ast {
-    type Output = Global;
+impl<T: TreeToken> Index<GlobalId> for Ast<T> {
+    type Output = Global<T>;
     fn index(&self, index: GlobalId) -> &Self::Output {
         &self.globals[index.idx()]
     }
 }
 
-#[derive(Default)]
-pub struct AstBuilder {
-    scopes: Vec<Scope>,
-    exprs: Vec<Expr>,
+pub struct AstBuilder<T: TreeToken> {
+    scopes: Vec<Scope<T>>,
+    exprs: Vec<Expr<T>>,
     def_exprs: Vec<(ExprId, UnresolvedType)>,
-    calls: Vec<Call>,
-    functions: Vec<Function>,
-    types: Vec<TypeDef>,
-    traits: Vec<TraitDefinition>,
-    globals: Vec<Global>,
+    calls: Vec<Call<T>>,
+    functions: Vec<Function<T>>,
+    types: Vec<TypeDef<T>>,
+    traits: Vec<TraitDefinition<T>>,
+    globals: Vec<Global<T>>,
 }
-impl AstBuilder {
+impl<T: TreeToken> Default for AstBuilder<T> {
+    fn default() -> Self {
+        Self {
+            scopes: Vec::new(),
+            exprs: Vec::new(),
+            def_exprs: Vec::new(),
+            calls: Vec::new(),
+            functions: Vec::new(),
+            types: Vec::new(),
+            traits: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+}
+impl<T: TreeToken> AstBuilder<T> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn scope(&mut self, scope: Scope) -> ScopeId {
+    pub fn scope(&mut self, scope: Scope<T>) -> ScopeId {
         let id = ScopeId(self.scopes.len() as _);
         self.scopes.push(scope);
         id
     }
 
-    pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
+    pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope<T> {
         &mut self.scopes[id.idx()]
     }
 
-    pub fn expr(&mut self, expr: Expr) -> ExprId {
+    pub fn expr(&mut self, expr: Expr<T>) -> ExprId {
         let id = ExprId(self.exprs.len() as _);
         self.exprs.push(expr);
         id
@@ -196,7 +210,7 @@ impl AstBuilder {
         id
     }
 
-    pub fn exprs(&mut self, exprs: impl IntoIterator<Item = Expr>) -> ExprIds {
+    pub fn exprs(&mut self, exprs: impl IntoIterator<Item = Expr<T>>) -> ExprIds {
         let idx = self.exprs.len();
         self.exprs.extend(exprs);
         let count = self.exprs.len() - idx;
@@ -206,41 +220,41 @@ impl AstBuilder {
         }
     }
 
-    pub fn call(&mut self, call: Call) -> CallId {
+    pub fn call(&mut self, call: Call<T>) -> CallId {
         let id = CallId(self.calls.len() as _);
         self.calls.push(call);
         id
     }
 
-    pub fn function(&mut self, function: Function) -> FunctionId {
+    pub fn function(&mut self, function: Function<T>) -> FunctionId {
         let id = FunctionId(self.functions.len() as _);
         self.functions.push(function);
         id
     }
 
-    pub fn type_def(&mut self, type_def: TypeDef) -> TypeId {
+    pub fn type_def(&mut self, type_def: TypeDef<T>) -> TypeId {
         let id = TypeId(self.types.len() as _);
         self.types.push(type_def);
         id
     }
 
-    pub fn trait_def(&mut self, trait_def: TraitDefinition) -> TraitId {
+    pub fn trait_def(&mut self, trait_def: TraitDefinition<T>) -> TraitId {
         let id = TraitId(self.traits.len() as _);
         self.traits.push(trait_def);
         id
     }
 
-    pub fn global(&mut self, global: Global) -> GlobalId {
+    pub fn global(&mut self, global: Global<T>) -> GlobalId {
         let id = GlobalId(self.globals.len() as _);
         self.globals.push(global);
         id
     }
 
-    pub fn get_expr(&self, expr: ExprId) -> &Expr {
+    pub fn get_expr(&self, expr: ExprId) -> &Expr<T> {
         &self.exprs[expr.idx()]
     }
 
-    pub fn finish_with_top_level_scope(self, src: Box<str>, top_level_scope: ScopeId) -> Ast {
+    pub fn finish_with_top_level_scope(self, src: Box<str>, top_level_scope: ScopeId) -> Ast<T> {
         Ast {
             src,
             top_level_scope,
@@ -264,19 +278,68 @@ impl AstBuilder {
     }
 }
 
+pub trait TreeToken: Debug + Clone {
+    type Opt<T: Debug + Clone>: Debug + Clone;
+    type Either<A: Debug + Clone, B: Debug + Clone>: Debug + Clone;
+    fn t(token: Token) -> Self;
+    fn opt<T: Debug + Clone>(t: T) -> Self::Opt<T>;
+    fn opt_none<T: Debug + Clone>() -> Self::Opt<T>;
+    fn either_a<A: Debug + Clone, B: Debug + Clone>(a: A) -> Self::Either<A, B>;
+    fn either_b<A: Debug + Clone, B: Debug + Clone>(b: B) -> Self::Either<A, B>;
+}
+impl TreeToken for () {
+    type Opt<T: Debug + Clone> = ();
+    type Either<A: Debug + Clone, B: Debug + Clone> = ();
+    fn t(_token: Token) -> Self {}
+    fn opt<T: Debug + Clone>(_t: T) -> Self::Opt<T> {}
+    fn opt_none<T: Debug + Clone>() -> Self::Opt<T> {}
+    fn either_a<A: Debug + Clone, B: Debug + Clone>(_a: A) -> Self::Either<A, B> {}
+    fn either_b<A: Debug + Clone, B: Debug + Clone>(_b: B) -> Self::Either<A, B> {}
+}
+impl TreeToken for Token {
+    type Opt<T: Debug + Clone> = Option<T>;
+    type Either<A: Debug + Clone, B: Debug + Clone> = Either<A, B>;
+    fn t(token: Token) -> Self {
+        token
+    }
+
+    fn opt<T: Debug + Clone>(t: T) -> Self::Opt<T> {
+        Some(t)
+    }
+
+    fn opt_none<T: Debug + Clone>() -> Self::Opt<T> {
+        None
+    }
+
+    fn either_a<A: Debug + Clone, B: Debug + Clone>(a: A) -> Self::Either<A, B> {
+        Either::A(a)
+    }
+
+    fn either_b<A: Debug + Clone, B: Debug + Clone>(b: B) -> Self::Either<A, B> {
+        Either::B(b)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Either<A, B> {
+    A(A),
+    B(B),
+}
+
 #[derive(Debug)]
-pub struct TypeDef {
-    pub generics: Box<[GenericDef]>,
+pub struct TypeDef<T: TreeToken = ()> {
+    pub t_introducer: T,
+    pub generics: Box<[GenericDef<T>]>,
     pub scope: ScopeId,
     pub methods: DHashMap<String, FunctionId>,
-    pub impls: Box<[InherentImpl]>,
+    pub impls: Box<[InherentImpl<T>]>,
     pub content: TypeContent,
 }
-impl TypeDef {
+impl<T: TreeToken> TypeDef<T> {
     pub fn generic_count(&self) -> u8 {
         self.generics.len() as u8
     }
-    pub fn span(&self, scopes: &[Scope]) -> TSpan {
+    pub fn span(&self, scopes: &[Scope<T>]) -> TSpan {
         scopes[self.scope.idx()].span
     }
 }
@@ -299,25 +362,34 @@ pub struct StructMember {
 }
 
 #[derive(Debug)]
-pub struct Scope {
+pub struct Scope<T: TreeToken = ()> {
     pub parent: Option<ScopeId>,
-    pub definitions: DHashMap<String, Definition>,
+    pub braces: T::Opt<(T, T)>,
+    pub definitions: DHashMap<String, Definition<T>>,
     pub span: TSpan,
     pub has_errors: bool,
 }
-impl Scope {
+impl<T: TreeToken> Scope<T> {
     pub fn missing() -> Self {
         Self {
             parent: None,
+            braces: T::opt_none(),
             definitions: dmap::new(),
             span: TSpan::MISSING,
             has_errors: true,
         }
     }
 
-    pub fn from_generics(parent: ScopeId, src: &str, generics: &[GenericDef], span: TSpan) -> Self {
+    pub fn from_generics(
+        parent: ScopeId,
+        src: &str,
+        generics: &[GenericDef<T>],
+        span: TSpan,
+        parens: Option<(Token, Token)>,
+    ) -> Self {
         Self {
             parent: Some(parent),
+            braces: parens.map_or_else(T::opt_none, |(l, r)| T::opt((T::t(l), T::t(r)))),
             definitions: generics
                 .iter()
                 .enumerate()
@@ -330,9 +402,16 @@ impl Scope {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Definition {
-    Expr(DefExprId),
-    Path(IdentPath),
+pub enum Definition<T: TreeToken = ()> {
+    Expr {
+        t_name: T,
+        t_colon_colon: T::Either<T, (T, T)>,
+        id: DefExprId,
+    },
+    Use {
+        t_use: T,
+        path: IdentPath,
+    },
     Global(GlobalId),
     Module(ModuleId),
     Generic(u8),
@@ -364,23 +443,26 @@ impl ExactSizeIterator for ExprIds {
     }
 }
 
-#[derive(Debug)]
-pub struct Item {
+pub struct Item<T: TreeToken> {
     #[allow(unused)] // TODO: remove when using attributes
     pub attributes: Box<[Attribute]>,
-    pub value: ItemValue,
+    pub value: ItemValue<T>,
 }
 
-#[derive(Debug)]
-pub enum ItemValue {
+pub enum ItemValue<T: TreeToken> {
     Definition {
+        t_name: T,
         name: String,
         name_span: TSpan,
+        t_colon_colon: T::Either<T, (T, T)>,
         annotated_ty: UnresolvedType,
         value: ExprId,
     },
-    Use(IdentPath),
-    Expr(Expr),
+    Use {
+        t_use: T,
+        path: IdentPath,
+    },
+    Expr(Expr<T>),
 }
 
 #[derive(Debug)]
@@ -403,15 +485,15 @@ impl EnumVariantDefinition {
 }
 
 #[derive(Debug)]
-pub struct TraitDefinition {
-    pub generics: Box<[GenericDef]>,
+pub struct TraitDefinition<T: TreeToken = ()> {
+    pub generics: Box<[GenericDef<T>]>,
     pub scope: ScopeId,
-    pub functions: Vec<(TSpan, Function)>,
-    pub impls: Box<[Impl]>,
+    pub functions: Vec<(TSpan, Function<T>)>,
+    pub impls: Box<[Impl<T>]>,
     pub associated_name: TSpan,
 }
-impl TraitDefinition {
-    pub fn span(&self, scopes: &[Scope]) -> TSpan {
+impl<T: TreeToken> TraitDefinition<T> {
+    pub fn span(&self, scopes: &[Scope<T>]) -> TSpan {
         scopes[self.scope.idx()].span
     }
 }
@@ -419,41 +501,51 @@ impl TraitDefinition {
 pub type TraitFunctions = Box<[(TSpan, FunctionId)]>;
 
 #[derive(Debug)]
-pub struct Impl {
+pub struct Impl<T: TreeToken = ()> {
+    pub t_impl: T,
     pub implemented_type: UnresolvedType,
-    pub base: BaseImpl,
+    pub t_for: T,
+    pub base: BaseImpl<T>,
 }
 
 #[derive(Debug)]
-pub struct InherentImpl {
+pub struct InherentImpl<T: TreeToken = ()> {
     pub implemented_trait: IdentPath,
-    pub base: BaseImpl,
+    pub base: BaseImpl<T>,
 }
 
 #[derive(Debug)]
-pub struct BaseImpl {
+pub struct BaseImpl<T: TreeToken = ()> {
     pub scope: ScopeId,
-    pub generics: Box<[GenericDef]>,
+    pub generics: Box<[GenericDef<T>]>,
     pub trait_generics: (Box<[UnresolvedType]>, TSpan),
     pub functions: TraitFunctions,
 }
 
 #[derive(Debug)]
-pub struct Global {
+pub struct Global<T: TreeToken = ()> {
     pub name: Box<str>,
+    pub t_name: T,
     pub scope: ScopeId,
+    pub t_colon_and_equals_or_colon_equals: T::Either<(T, T), T>,
     pub ty: UnresolvedType,
     pub val: ExprId,
     pub span: TSpan,
 }
 
 #[derive(Debug)]
-pub struct Function {
-    pub generics: Box<[GenericDef]>,
+pub struct Function<T: TreeToken = ()> {
+    pub t_fn: T,
+    pub generics: Box<[GenericDef<T>]>,
+    pub t_parens: T::Opt<(T, T)>,
     pub params: Box<[(TSpan, UnresolvedType)]>,
     pub named_params: Box<[(TSpan, UnresolvedType, Option<ExprId>)]>,
     pub varargs: bool,
+    pub t_varargs: T::Opt<T>,
+    pub t_arrow: T::Opt<T>,
     pub return_type: UnresolvedType,
+    pub t_colon: T::Opt<T>,
+    pub t_extern: T::Opt<T>,
     pub body: Option<ExprId>,
     pub scope: ScopeId,
     pub signature_span: TSpan,
@@ -461,12 +553,13 @@ pub struct Function {
 }
 
 #[derive(Clone, Debug)]
-pub struct GenericDef {
+pub struct GenericDef<T: TreeToken = ()> {
     /// missing span indicates that this is a `Self` type in a trait definition
     pub(super) name: TSpan,
+    pub t_name: T::Opt<T>,
     pub bounds: Box<[TraitBound]>,
 }
-impl GenericDef {
+impl<T: TreeToken> GenericDef<T> {
     pub fn span(&self) -> TSpan {
         TSpan::new(
             self.name.start,
@@ -493,23 +586,52 @@ pub struct TraitBound {
 }
 
 #[derive(Debug)]
-pub enum Expr {
+pub enum Expr<T: TreeToken = ()> {
     Error(TSpan),
     Block {
+        t_open: T,
         scope: ScopeId,
         items: ExprIds,
+        t_close: T,
     },
-    Nested(TSpan, ExprId),
+    Nested {
+        span: TSpan,
+        t_lparen: T,
+        inner: ExprId,
+        t_rparen: T,
+    },
 
     // ---------- value literals ----------
-    IntLiteral(TSpan),
-    FloatLiteral(TSpan),
-    StringLiteral(TSpan),
-    Array(TSpan, ExprIds),
-    Tuple(TSpan, ExprIds),
+    IntLiteral {
+        span: TSpan,
+        t: T,
+    },
+    FloatLiteral {
+        span: TSpan,
+        t: T,
+    },
+    StringLiteral {
+        span: TSpan,
+        t: T,
+    },
+    Array {
+        span: TSpan,
+        t_lbracket: T,
+        elements: ExprIds,
+        t_rbracket: T,
+    },
+    Tuple {
+        span: TSpan,
+        t_lparen: T,
+        elements: ExprIds,
+        t_rparen: T,
+    },
     EnumLiteral {
         span: TSpan,
+        t_dot: T,
         ident: TSpan,
+        t_ident: T,
+        t_parens: T::Opt<(T, T)>,
         args: ExprIds,
     },
 
@@ -520,6 +642,7 @@ pub enum Expr {
     Primitive {
         primitive: Primitive,
         start: u32,
+        t: T,
     },
     Type {
         id: TypeId,
@@ -531,22 +654,33 @@ pub enum Expr {
     // ---------- variables and names ----------
     Ident {
         span: TSpan,
+        t: T,
     },
     Declare {
         pat: ExprId,
+        t_colon: T,
         annotated_ty: UnresolvedType,
     },
     DeclareWithVal {
         pat: ExprId,
+        t_colon_and_equals_or_colon_equals: T::Either<(T, T), T>,
         annotated_ty: UnresolvedType,
         val: ExprId,
     },
     /// underscore: _ for ignoring values
-    Hole(u32),
+    Hole {
+        loc: u32,
+        t: T,
+    },
 
     // ---------- operations ----------
     UnOp(u32, UnOp, ExprId),
-    BinOp(Operator, ExprId, ExprId),
+    BinOp {
+        t_op: T,
+        op: Operator,
+        l: ExprId,
+        r: ExprId,
+    },
     As(ExprId, UnresolvedType),
     Root(u32),
 
@@ -639,12 +773,12 @@ pub enum Expr {
         start: u32,
     },
 }
-impl Expr {
+impl<T: TreeToken> Expr<T> {
     pub fn is_block(&self) -> bool {
         matches!(self, Self::Block { .. })
     }
 
-    pub fn span(&self, ast: &Ast) -> TSpan {
+    pub fn span(&self, ast: &Ast<T>) -> TSpan {
         self.span_inner(
             &ast.exprs,
             &ast.functions,
@@ -655,7 +789,7 @@ impl Expr {
         )
     }
 
-    pub fn span_builder(&self, ast: &AstBuilder) -> TSpan {
+    pub fn span_builder(&self, ast: &AstBuilder<T>) -> TSpan {
         self.span_inner(
             &ast.exprs,
             &ast.functions,
@@ -668,12 +802,12 @@ impl Expr {
 
     fn span_inner(
         &self,
-        exprs: &[Expr],
-        functions: &[Function],
-        types: &[TypeDef],
-        traits: &[TraitDefinition],
-        calls: &[Call],
-        scopes: &[Scope],
+        exprs: &[Self],
+        functions: &[Function<T>],
+        types: &[TypeDef<T>],
+        traits: &[TraitDefinition<T>],
+        calls: &[Call<T>],
+        scopes: &[Scope<T>],
     ) -> TSpan {
         // shorthands for getting start and end position of an ExprId
         let s =
@@ -683,13 +817,13 @@ impl Expr {
 
         match self {
             Expr::Error(span)
-            | Expr::StringLiteral(span)
-            | Expr::IntLiteral(span)
-            | Expr::FloatLiteral(span)
-            | Expr::Nested(span, _)
+            | Expr::StringLiteral { span, .. }
+            | Expr::IntLiteral { span, .. }
+            | Expr::FloatLiteral { span, .. }
+            | Expr::Nested { span, .. }
             | Expr::Ident { span, .. }
-            | Expr::Array(span, _)
-            | Expr::Tuple(span, _)
+            | Expr::Array { span, .. }
+            | Expr::Tuple { span, .. }
             | Expr::Match { span, .. }
             | Expr::EnumLiteral { span, .. } => *span,
             Expr::Block { scope, .. } => scopes[scope.idx()].span,
@@ -701,8 +835,8 @@ impl Expr {
             } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val } => TSpan::new(*start, e(val)),
-            Expr::ReturnUnit { start } => TSpan::new(*start, start + 2),
-            &Expr::Hole(start) => TSpan::new(start, start),
+            Expr::ReturnUnit { start } => TSpan::new(*start, start + 3),
+            &Expr::Hole { loc, .. } => TSpan::new(loc, loc + 1),
             Expr::If { start, then, .. } | Expr::IfPat { start, then, .. } => {
                 TSpan::new(*start, e(then))
             }
@@ -725,7 +859,7 @@ impl Expr {
                     TSpan::new(*start_or_end, e(expr))
                 }
             }
-            Expr::BinOp(_, l, r) => TSpan::new(s(l), e(r)),
+            Expr::BinOp { l, r, .. } => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
             Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
             Expr::TupleIdx {
@@ -736,19 +870,19 @@ impl Expr {
             Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
             Expr::Root(start) => TSpan::new(*start, *start + 3),
             Expr::Asm { span, .. } => *span,
-            &Expr::Primitive { primitive, start } => {
-                TSpan::new(start, start + <&str>::from(primitive).len() as u32 - 1)
-            }
+            &Expr::Primitive {
+                primitive, start, ..
+            } => TSpan::new(start, start + <&str>::from(primitive).len() as u32 - 1),
             &Expr::Break { start } => TSpan::new(start, start + 4),
             &Expr::Continue { start } => TSpan::new(start, start + 7),
         }
     }
 
-    pub fn span_in(&self, ast: &Ast, module: ModuleId) -> Span {
+    pub fn span_in(&self, ast: &Ast<T>, module: ModuleId) -> Span {
         self.span(ast).in_mod(module)
     }
 
-    pub fn start(&self, ast: &Ast) -> u32 {
+    pub fn start(&self, ast: &Ast<T>) -> u32 {
         self.start_inner(
             &ast.exprs,
             &ast.functions,
@@ -759,7 +893,7 @@ impl Expr {
         )
     }
 
-    pub fn end(&self, ast: &Ast) -> u32 {
+    pub fn end(&self, ast: &Ast<T>) -> u32 {
         self.end_inner(
             &ast.exprs,
             &ast.functions,
@@ -772,12 +906,12 @@ impl Expr {
 
     pub fn start_inner(
         &self,
-        exprs: &[Expr],
-        functions: &[Function],
-        types: &[TypeDef],
-        traits: &[TraitDefinition],
-        calls: &[Call],
-        scopes: &[Scope],
+        exprs: &[Self],
+        functions: &[Function<T>],
+        types: &[TypeDef<T>],
+        traits: &[TraitDefinition<T>],
+        calls: &[Call<T>],
+        scopes: &[Scope<T>],
     ) -> u32 {
         //TODO: more efficient implementation
         self.span_inner(exprs, functions, types, traits, calls, scopes)
@@ -786,12 +920,12 @@ impl Expr {
 
     pub fn end_inner(
         &self,
-        exprs: &[Expr],
-        functions: &[Function],
-        types: &[TypeDef],
-        traits: &[TraitDefinition],
-        calls: &[Call],
-        scopes: &[Scope],
+        exprs: &[Self],
+        functions: &[Function<T>],
+        types: &[TypeDef<T>],
+        traits: &[TraitDefinition<T>],
+        calls: &[Call<T>],
+        scopes: &[Scope<T>],
     ) -> u32 {
         //TODO: more efficient implementation
         self.span_inner(exprs, functions, types, traits, calls, scopes)
@@ -800,11 +934,13 @@ impl Expr {
 }
 
 #[derive(Debug)]
-pub struct Call {
+pub struct Call<T: TreeToken = ()> {
     pub called_expr: ExprId,
+    pub t_lparen: T,
     pub open_paren_start: u32,
     pub args: ExprIds,
     pub named_args: Vec<(TSpan, ExprId)>,
+    pub t_rparen: T,
     pub end: u32,
 }
 impl Call {

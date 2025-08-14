@@ -33,6 +33,7 @@ pub fn check(
         &Expr::Block {
             scope: static_scope,
             items,
+            ..
         } => {
             let mut scope = LocalScope {
                 parent: LocalScopeParent::Some(scope),
@@ -63,8 +64,8 @@ pub fn check(
             }
             Node::Block(item_nodes)
         }
-        &Expr::Nested(_, inner) => check(ctx, inner, scope, expected, return_ty, noreturn),
-        &Expr::IntLiteral(span) => {
+        &Expr::Nested { inner, .. } => check(ctx, inner, scope, expected, return_ty, noreturn),
+        &Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ast.src()[span.range()]);
             let info = lit
                 .ty
@@ -75,7 +76,7 @@ pub fn check(
                 ty: expected,
             }
         }
-        &Expr::FloatLiteral(span) => {
+        &Expr::FloatLiteral { span, .. } => {
             let lit = FloatLiteral::parse(&ast.src()[span.range()]);
             let info = lit
                 .ty
@@ -86,7 +87,7 @@ pub fn check(
                 ty: expected,
             }
         }
-        &Expr::StringLiteral(span) => {
+        &Expr::StringLiteral { span, .. } => {
             let str = super::get_string_literal(ctx.ast.src(), span);
             let str_ty = builtins::get_str(ctx.compiler);
             ctx.specify(
@@ -96,19 +97,19 @@ pub fn check(
             );
             Node::StringLiteral(str)
         }
-        &Expr::Array(span, elems) => {
+        &Expr::Array { span, elements, .. } => {
             // PERF: reuse existing Array TypeInfo @TypeInfoReuse
             let elem_ty = ctx.hir.types.add_unknown();
             ctx.specify(
                 expected,
                 TypeInfo::Array {
                     element: elem_ty,
-                    count: Some(elems.count),
+                    count: Some(elements.count),
                 },
                 |_| span,
             );
-            let nodes = ctx.hir.add_invalid_nodes(elems.count);
-            for (node, elem) in nodes.iter().zip(elems) {
+            let nodes = ctx.hir.add_invalid_nodes(elements.count);
+            for (node, elem) in nodes.iter().zip(elements) {
                 let elem_node = check(ctx, elem, scope, elem_ty, return_ty, noreturn);
                 // TODO: can we return early here in case of noreturn?
                 ctx.hir.modify_node(node, elem_node);
@@ -118,14 +119,16 @@ pub fn check(
                 array_ty: expected,
             }
         }
-        Expr::Tuple(span, values) => {
+        Expr::Tuple { span, elements, .. } => {
             // PERF: special case the specify for tuples, reusing elem types could be worth it if
             // a tuple type info was already present. @TypeInfoReuse
-            let elem_types = ctx.hir.types.add_multiple_unknown(values.count);
+            let elem_types = ctx.hir.types.add_multiple_unknown(elements.count);
             ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
-            let elems = ctx.hir.add_invalid_nodes(values.count);
-            for ((value, ty), node_id) in
-                values.into_iter().zip(elem_types.iter()).zip(elems.iter())
+            let elems = ctx.hir.add_invalid_nodes(elements.count);
+            for ((value, ty), node_id) in elements
+                .into_iter()
+                .zip(elem_types.iter())
+                .zip(elems.iter())
             {
                 let node = check(ctx, value, scope, ty, return_ty, noreturn);
                 // TODO: can we return early here in case of noreturn?
@@ -133,9 +136,9 @@ pub fn check(
             }
             Node::TupleLiteral { elems, elem_types }
         }
-        &Expr::EnumLiteral { span, ident, args } => {
-            check_enum_literal(ctx, scope, expected, return_ty, span, ident, args, noreturn)
-        }
+        &Expr::EnumLiteral {
+            span, ident, args, ..
+        } => check_enum_literal(ctx, scope, expected, return_ty, span, ident, args, noreturn),
         &Expr::Function { id } => {
             let function_span = ctx.ast[expr].span(ctx.ast);
             let (node, info) = closure(ctx, id, scope, function_span);
@@ -175,12 +178,13 @@ pub fn check(
             Node::Invalid
         }
 
-        &Expr::Ident { span } => check_ident(ctx, scope, expected, span),
+        &Expr::Ident { span, .. } => check_ident(ctx, scope, expected, span),
         Expr::Declare { .. } => todo!("check variable declarations without values"),
         Expr::DeclareWithVal {
             pat,
             annotated_ty,
             val,
+            ..
         } => {
             ctx.specify(expected, TypeInfo::Tuple(LocalTypeIds::EMPTY), |ast| {
                 ast[expr].span(ast)
@@ -203,7 +207,7 @@ pub fn check(
                 val: ctx.hir.add(val),
             }
         }
-        Expr::Hole(_) => {
+        Expr::Hole { .. } => {
             ctx.invalidate(expected);
             ctx.compiler
                 .errors
@@ -257,7 +261,7 @@ pub fn check(
                 }
             }
         }
-        &Expr::BinOp(op, l, r) => {
+        &Expr::BinOp { op, l, r, .. } => {
             match op {
                 Operator::Add | Operator::Sub | Operator::Mul | Operator::Div | Operator::Mod => {
                     // TODO: this will be have to bound/handled by traits

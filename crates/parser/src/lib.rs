@@ -11,7 +11,7 @@ use span::Span;
 use token::{ExpectedTokens, Token};
 use tokenize::Tokenizer;
 
-use self::ast::Definition;
+use crate::ast::{Definition, TreeToken};
 
 fn unexpected(token: Token, module: ModuleId, expected: ExpectedTokens) -> CompileError {
     CompileError {
@@ -23,12 +23,12 @@ fn unexpected(token: Token, module: ModuleId, expected: ExpectedTokens) -> Compi
     }
 }
 
-pub fn parse(
+pub fn parse<T: TreeToken>(
     source: Box<str>,
     errors: &mut Errors,
     module: ModuleId,
-    definitions: DHashMap<String, Definition>,
-) -> ast::Ast {
+    definitions: DHashMap<String, Definition<T>>,
+) -> ast::Ast<T> {
     let mut ast_builder = ast::AstBuilder::new();
     let mut parser = Parser {
         ast: &mut ast_builder,
@@ -41,8 +41,8 @@ pub fn parse(
 
 type ParseResult<T> = Result<T, CompileError>;
 
-struct Parser<'a> {
-    ast: &'a mut ast::AstBuilder,
+struct Parser<'a, T: TreeToken> {
+    ast: &'a mut ast::AstBuilder<T>,
     toks: tokenize::Tokenizer<'a>,
 }
 
@@ -80,14 +80,14 @@ mod tests {
         let ast = test_parse("f :: fn { x := 3 }");
         let scope = &ast[ast.top_level_scope_id()];
         assert_eq!(scope.definitions.len(), 1);
-        let Definition::Expr(f_def) = scope.definitions["f"] else {
+        let Definition::Expr { id: f_def, .. } = scope.definitions["f"] else {
             panic!("expected definition f");
         };
         let Expr::Function { id } = ast[ast[f_def].0] else {
             panic!("expected function definition");
         };
         let body = ast[id].body.unwrap();
-        let Expr::Block { scope, items } = ast[body] else {
+        let Expr::Block { scope, items, .. } = ast[body] else {
             panic!("expected body");
         };
         assert_eq!(items.count, 1);

@@ -333,8 +333,8 @@ impl Compiler {
         let &def = ast[scope].definitions.get(name)?;
         let def = match def {
             // PERF: return reference here instead of cloning if possible
-            ast::Definition::Expr(id) => self.get_def_expr(module, scope, name, id).clone(),
-            ast::Definition::Path(path) => self.resolve_path(module, scope, path),
+            ast::Definition::Expr { id, .. } => self.get_def_expr(module, scope, name, id).clone(),
+            ast::Definition::Use { path, .. } => self.resolve_path(module, scope, path),
             ast::Definition::Global(id) => Def::Global(module, id),
             ast::Definition::Module(id) => Def::Module(id),
             ast::Definition::Generic(i) => Def::Type(Type::Generic(i)),
@@ -984,11 +984,11 @@ impl Compiler {
             for scope in ast.scope_ids() {
                 for (name, def) in &ast[scope].definitions {
                     match *def {
-                        ast::Definition::Path(path) => {
+                        ast::Definition::Use { path, .. } => {
                             // TODO: cache results to prevent duplicate errors/avoid duplicate resolval
                             self.resolve_path(module, scope, path);
                         }
-                        ast::Definition::Expr(id) => {
+                        ast::Definition::Expr { id, .. } => {
                             let def = self.get_def_expr(module, scope, name, id);
                             if let &Def::Function(module, id) = def {
                                 self.get_hir(module, id);

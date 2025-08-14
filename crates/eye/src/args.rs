@@ -108,10 +108,6 @@ pub struct Args {
     #[clap(long)]
     pub tokens: bool,
 
-    /// Reconstructs the src using the abstract syntax tree information. Can be used to test parser correctness.
-    #[clap(short, long)]
-    pub reconstruct_src: bool,
-
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
     #[clap(long)]
     pub crash_on_error: bool,

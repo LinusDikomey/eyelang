@@ -20,7 +20,7 @@ pub fn check(
     noreturn: &mut bool,
 ) -> (LValue, LocalTypeId) {
     match ctx.ast[expr] {
-        Expr::Ident { span } => {
+        Expr::Ident { span, .. } => {
             match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
                 LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
                     (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))

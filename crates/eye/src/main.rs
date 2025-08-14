@@ -90,12 +90,6 @@ fn main() -> Result<(), MainError> {
 
     println!("Compiling {name} ...");
 
-    if args.reconstruct_src {
-        let ast = compiler.get_module_ast(root_module);
-        compiler::ReprPrinter::new("  ", ast).print_module();
-        return Ok(());
-    }
-
     // add standard library
     let std_path = std_path::find();
     let std = compiler.add_project("std".to_owned(), std_path)?;

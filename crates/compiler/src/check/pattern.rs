@@ -20,8 +20,8 @@ pub fn check(
     expected: LocalTypeId,
 ) -> Pattern {
     match &ctx.ast[pat] {
-        &Expr::Nested(_, inner) => check(ctx, variables, exhaustion, inner, expected),
-        Expr::IntLiteral(span) => {
+        &Expr::Nested { inner, .. } => check(ctx, variables, exhaustion, inner, expected),
+        Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
             let ty = lit
                 .ty
@@ -30,7 +30,7 @@ pub fn check(
             exhaustion.exhaust_int(exhaust::SignedInt(lit.val, false));
             Pattern::Int(false, lit.val, expected)
         }
-        &Expr::StringLiteral(span) => {
+        &Expr::StringLiteral { span, .. } => {
             let str = super::get_string_literal(ctx.ast.src(), span);
             let str_type = builtins::get_str(ctx.compiler);
             ctx.specify(
@@ -42,7 +42,7 @@ pub fn check(
         }
         &Expr::UnOp(_, UnOp::Neg, inner) => {
             match ctx.ast[inner] {
-                Expr::IntLiteral(span) => {
+                Expr::IntLiteral { span, .. } => {
                     let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
                     let ty = lit
                         .ty
@@ -52,7 +52,7 @@ pub fn check(
                     exhaustion.exhaust_int(exhaust::SignedInt(lit.val, true));
                     Pattern::Int(true, lit.val, expected)
                 }
-                Expr::FloatLiteral(_) => todo!("negative float patterns"),
+                Expr::FloatLiteral { .. } => todo!("negative float patterns"),
                 _ => {
                     ctx.compiler
                         .errors
@@ -68,11 +68,16 @@ pub fn check(
             exhaustion.exhaust_full();
             Pattern::Variable(var)
         }
-        Expr::Hole(_) => {
+        Expr::Hole { .. } => {
             exhaustion.exhaust_full();
             Pattern::Ignore
         }
-        &Expr::BinOp(op @ (Operator::Range | Operator::RangeExclusive), l, r) => {
+        &Expr::BinOp {
+            op: op @ (Operator::Range | Operator::RangeExclusive),
+            l,
+            r,
+            ..
+        } => {
             enum Kind {
                 Int(exhaust::SignedInt),
                 Float,
@@ -81,22 +86,22 @@ pub fn check(
             let mut range_side = |expr_ref: ExprId| {
                 let expr = &ctx.ast[expr_ref];
                 match *expr {
-                    Expr::IntLiteral(l) => {
+                    Expr::IntLiteral { span: l, .. } => {
                         let lit = IntLiteral::parse(&ctx.ast.src()[l.range()]);
                         ctx.specify(expected, TypeInfo::Integer, |ast| ast[expr_ref].span(ast));
                         Kind::Int(exhaust::SignedInt(lit.val, false))
                     }
-                    Expr::FloatLiteral(_) => {
+                    Expr::FloatLiteral { .. } => {
                         ctx.specify(expected, TypeInfo::Float, |ast| ast[expr_ref].span(ast));
                         Kind::Float
                     }
                     Expr::UnOp(_, UnOp::Neg, inner) => match ctx.ast[inner] {
-                        Expr::IntLiteral(l) => {
+                        Expr::IntLiteral { span: l, .. } => {
                             let lit = IntLiteral::parse(&ctx.ast.src()[l.range()]);
                             ctx.specify(expected, TypeInfo::Integer, |ast| ast[expr_ref].span(ast));
                             Kind::Int(exhaust::SignedInt(lit.val, true))
                         }
-                        Expr::FloatLiteral(_) => {
+                        Expr::FloatLiteral { .. } => {
                             ctx.specify(expected, TypeInfo::Float, |ast| ast[expr_ref].span(ast));
                             Kind::Float
                         }
@@ -133,7 +138,9 @@ pub fn check(
                 Pattern::Invalid
             }
         }
-        &Expr::EnumLiteral { span, ident, args } => {
+        &Expr::EnumLiteral {
+            span, ident, args, ..
+        } => {
             let name = &ctx.ast[ident];
             let res = ctx
                 .hir
@@ -173,14 +180,15 @@ pub fn check(
                 }
             }
         }
-        &Expr::Tuple(span, members) => {
-            let member_types = ctx.hir.types.add_multiple_unknown(members.count);
+        &Expr::Tuple { span, elements, .. } => {
+            let member_types = ctx.hir.types.add_multiple_unknown(elements.count);
             // PERF: could add .specify_tuple to avoid adding more types than necessary
             ctx.specify(expected, TypeInfo::Tuple(member_types), |_| span);
             let do_exhaust_checks = match exhaustion {
                 Exhaustion::Full | Exhaustion::Invalid => false,
                 Exhaustion::None => {
-                    *exhaustion = Exhaustion::Tuple(vec![Exhaustion::None; members.count as usize]);
+                    *exhaustion =
+                        Exhaustion::Tuple(vec![Exhaustion::None; elements.count as usize]);
                     true
                 }
                 Exhaustion::Tuple(_) => true,
@@ -189,8 +197,8 @@ pub fn check(
                     false
                 }
             };
-            let member_patterns = ctx.hir.add_invalid_patterns(members.count);
-            for (i, ((item_pat, ty), pat_id)) in members
+            let member_patterns = ctx.hir.add_invalid_patterns(elements.count);
+            for (i, ((item_pat, ty), pat_id)) in elements
                 .into_iter()
                 .zip(member_types.iter())
                 .zip(member_patterns.iter())
@@ -206,10 +214,10 @@ pub fn check(
                 };
                 ctx.hir.modify_pattern(pat_id, pat);
             }
-            debug_assert_eq!(members.count, member_patterns.count);
-            debug_assert_eq!(members.count, member_types.count);
+            debug_assert_eq!(elements.count, member_patterns.count);
+            debug_assert_eq!(elements.count, member_types.count);
             Pattern::Tuple {
-                member_count: members.count,
+                member_count: elements.count,
                 patterns: member_patterns.index,
                 types: member_types.idx,
             }

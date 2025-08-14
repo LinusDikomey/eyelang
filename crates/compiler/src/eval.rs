@@ -65,7 +65,7 @@ pub fn def_expr(
     };
     // TODO: support untyped number constants again
     match &ast[expr] {
-        &Expr::IntLiteral(span) => {
+        &Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ast[span]);
             let Ok(val) = lit.val.try_into() else {
                 todo!("handle large constants")
@@ -86,7 +86,7 @@ pub fn def_expr(
                 }
             }
         }
-        &Expr::FloatLiteral(span) => {
+        &Expr::FloatLiteral { span, .. } => {
             let lit = FloatLiteral::parse(&ast[span]);
             let val = ConstValue::Float(lit.val);
             match compiler.unresolved_primitive(ty, module, scope) {
@@ -103,7 +103,7 @@ pub fn def_expr(
                 }
             }
         }
-        Expr::Ident { span } => {
+        Expr::Ident { span, .. } => {
             let name = &ast[*span];
             let def = compiler.resolve_in_scope(module, scope, name, span.in_mod(module));
             match def.check_with_type(module, scope, compiler, ty) {
