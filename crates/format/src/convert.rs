@@ -225,7 +225,10 @@ impl<'a> Converter<'a> {
             Expr::Index { expr, idx, end } => todo!(),
             Expr::TupleIdx { left, idx, end } => todo!(),
             Expr::ReturnUnit { start } => todo!(),
-            Expr::Return { start, val } => todo!(),
+            &Expr::Return { start, t_ret, val } => {
+                self.tok_s(nodes, t_ret);
+                self.expr(nodes, val);
+            }
             Expr::If { start, cond, then } => todo!(),
             Expr::IfElse {
                 start,

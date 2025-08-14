@@ -1034,6 +1034,7 @@ impl<T: TreeToken> Parser<'_, T> {
                     let val = self.ast.expr(val);
                     Expr::Return {
                         start: first.start,
+                        t_ret: t(first),
                         val,
                     }
                 } else {

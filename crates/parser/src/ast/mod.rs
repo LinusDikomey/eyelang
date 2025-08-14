@@ -706,6 +706,7 @@ pub enum Expr<T: TreeToken = ()> {
     },
     Return {
         start: u32,
+        t_ret: T,
         val: ExprId,
     },
 
@@ -834,7 +835,7 @@ impl<T: TreeToken> Expr<T> {
                 pat, annotated_ty, ..
             } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
-            Expr::Return { start, val } => TSpan::new(*start, e(val)),
+            Expr::Return { start, val, .. } => TSpan::new(*start, e(val)),
             Expr::ReturnUnit { start } => TSpan::new(*start, start + 3),
             &Expr::Hole { loc, .. } => TSpan::new(loc, loc + 1),
             Expr::If { start, then, .. } | Expr::IfPat { start, then, .. } => {
