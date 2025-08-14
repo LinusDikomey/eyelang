@@ -168,6 +168,9 @@ impl Compiler {
             parsed
         } else {
             let module = &mut self.modules[module_id.idx()];
+            let project = module.project;
+            let root = module.root;
+
             // add dependencies to each module first
             let mut definitions: DHashMap<String, ast::Definition> = self.projects
                 [module.project.idx()]
@@ -181,80 +184,19 @@ impl Compiler {
                 )
             })
             .collect();
+
             let mut child_modules = Vec::new();
             let contents = if module.path.is_file() {
                 std::fs::read_to_string(&module.path)
             } else {
-                if !module.path.is_dir() {
-                    // We canonicalized the path, this shouldn't really happen. Maybe still add an
-                    // error for it.
-                    panic!(
-                        "project at {} is not a directory or file",
-                        module.path.display()
-                    );
-                }
-                let is_root = module_id == module.root;
-                let file = if is_root {
-                    module.path.join("main.eye")
-                } else {
-                    module.path.join("mod.eye")
-                };
-                if !(file.exists() && file.is_file()) {
-                    panic!("File {} doesn't exist", file.display());
-                    // return Err(MainError::NoMainFileInProjectDirectory);
-                };
-                let root = module.root;
-                let project = module.project;
-                // gather child modules, insert them into the definitions and create Modules for them
-                let dir_read = self.modules[module_id.idx()]
-                    .path
-                    .read_dir()
-                    .expect("couldn't read module directory");
-                for entry in dir_read {
-                    let entry = entry.expect("failed to read module directory entry");
-                    let ty = entry
-                        .file_type()
-                        .expect("failed to access file type of module directory entry");
-                    let path = entry.path();
-                    if ty.is_file() {
-                        if path.extension().is_some_and(|ext| ext == "eye") {
-                            let name = path
-                                .with_extension("")
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .expect("file doesn't have a valid name")
-                                .to_owned();
-                            if !matches!(name.as_str(), "main" | "mod") {
-                                let id = ModuleId(self.modules.len() as _);
-                                self.modules.push(Module::at_path(
-                                    path,
-                                    project,
-                                    root,
-                                    Some(module_id),
-                                ));
-                                definitions.insert(name, ast::Definition::Module(id));
-                                child_modules.push(id);
-                            }
-                        }
-                    } else if ty.is_dir() {
-                        let path = entry.path();
-                        if path.join("mod.eye").exists() {
-                            let name = path
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .expect("directory doesn't have a valid name")
-                                .to_owned();
-                            let id = ModuleId(self.modules.len() as _);
-                            self.modules.push(Module::at_path(
-                                path,
-                                project,
-                                root,
-                                Some(module_id),
-                            ));
-                            definitions.insert(name, ast::Definition::Module(id));
-                            child_modules.push(id);
-                        }
-                    }
+                let (file, child_module_paths) =
+                    crate::modules::module_and_children(&module.path, module_id == module.root);
+                for (name, path) in child_module_paths {
+                    let id = ModuleId(self.modules.len() as _);
+                    self.modules
+                        .push(Module::at_path(path, project, root, Some(module_id)));
+                    definitions.insert(name, ast::Definition::Module(id));
+                    child_modules.push(id);
                 }
                 let s = std::fs::read_to_string(&file);
                 self.modules[module_id.idx()].path = file;

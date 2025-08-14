@@ -18,6 +18,7 @@ color-format.workspace = true
 ir.workspace = true
 tracing.workspace = true
 error.workspace = true
+format.workspace = true
 
 clap = { version = "4.4.13", features = ["derive"] }
 eye-lsp = { path = "../eye-lsp", optional = true }

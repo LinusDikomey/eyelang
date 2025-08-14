@@ -19,11 +19,14 @@ mod hir;
 mod irgen;
 /// call the system linker
 mod link;
+/// module file path discovery
+mod modules;
 /// TypeTable data structure and logic for type inference/checking
 mod types;
 
 pub use compiler::{Compiler, Def, ProjectError};
 pub use link::link;
+pub use modules::all_project_files_from_root;
 pub use span::{IdentPath, Span, TSpan};
 
 id::id!(ProjectId);

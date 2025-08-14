@@ -46,11 +46,20 @@ fn main() -> Result<(), MainError> {
         args::Cmd::Lsp => {
             return eye_lsp::run().map_err(|err| MainError::LspFailed(format!("{err:?}")));
         }
+        args::Cmd::Fmt => {
+            let (name, path) = path_arg(args.path)?;
+            println!("Formatting project {name}");
+            for file in compiler::all_project_files_from_root(&path) {
+                eprintln!("Project file {}", file.display());
+                let src = std::fs::read_to_string(&file).unwrap_or_else(|err| {
+                    panic!("Failed to read project file {}: {err:?}", file.display())
+                });
+                let (formatted, _errors) = format::format(src.into());
+                println!("\nFormatted {}:\n{}\n\n", file.display(), formatted);
+            }
+            return Ok(());
+        }
         _ => {}
-    }
-    if let args::Cmd::ListTargets = args.cmd {
-        list_targets(args.backend);
-        return Ok(());
     }
     let start_time = std::time::Instant::now();
     let mut compiler = compiler::Compiler::new();
@@ -59,36 +68,13 @@ fn main() -> Result<(), MainError> {
         compiler.errors.enable_crash_on_error();
     }
 
-    let (name, path) = match &args.path {
-        Some(path_str) => {
-            let path = Path::new(path_str);
-            if !path
-                .try_exists()
-                .map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))?
-            {
-                return Err(MainError::NonexistentPath(path.to_owned()));
-            }
-            let name = if path.is_file() {
-                path.file_stem()
-                    .ok_or_else(|| MainError::MissingProjectFileName(path.to_path_buf()))?
-                    .to_str()
-                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
-            } else {
-                path.file_name()
-                    .ok_or_else(|| MainError::MissingProjectDirectoryName(path.to_path_buf()))?
-                    .to_str()
-                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
-            };
-            (name, path)
-        }
-        None => ("main", Path::new("./")),
-    };
-
-    // create project
-    let project = compiler.add_project(name.to_owned(), path.to_path_buf())?;
-    let root_module = compiler.get_project(project).root_module;
+    let (name, path) = path_arg(args.path)?;
 
     println!("Compiling {name} ...");
+
+    // create project
+    let project = compiler.add_project(name.clone(), path)?;
+    let root_module = compiler.get_project(project).root_module;
 
     // add standard library
     let std_path = std_path::find();
@@ -248,9 +234,37 @@ fn main() -> Result<(), MainError> {
         args::Cmd::ListTargets => unreachable!(),
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => unreachable!(),
+        args::Cmd::Fmt => unreachable!(),
     }
 
     Ok(())
+}
+
+fn path_arg(path: Option<String>) -> Result<(String, PathBuf), MainError> {
+    Ok(match path {
+        Some(path_str) => {
+            let path = PathBuf::from(path_str);
+            if !path
+                .try_exists()
+                .map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))?
+            {
+                return Err(MainError::NonexistentPath(path.to_owned()));
+            }
+            let name = if path.is_file() {
+                path.file_stem()
+                    .ok_or_else(|| MainError::MissingProjectFileName(path.to_path_buf()))?
+                    .to_str()
+                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
+            } else {
+                path.file_name()
+                    .ok_or_else(|| MainError::MissingProjectDirectoryName(path.to_path_buf()))?
+                    .to_str()
+                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
+            };
+            (name.to_owned(), path)
+        }
+        None => ("main".to_owned(), PathBuf::from("./")),
+    })
 }
 
 fn enable_tracing(args: &args::Args) {

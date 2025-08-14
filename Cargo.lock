@@ -192,6 +192,7 @@ dependencies = [
  "compiler",
  "error",
  "eye-lsp",
+ "format",
  "ir",
  "ir-backend-fast",
  "ir-backend-llvm",

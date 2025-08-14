@@ -14,6 +14,8 @@ pub enum Cmd {
     Lsp,
     /// lists all available targets for the selected backend
     ListTargets,
+    /// format a project
+    Fmt,
 }
 impl Default for Cmd {
     fn default() -> Self {

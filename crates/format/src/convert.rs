@@ -164,33 +164,7 @@ impl<'a> Converter<'a> {
                 self.tok(&mut group, t_rbracket);
                 nodes.push(Node::Group(group, R::Width(0)));
             }
-            Expr::Tuple {
-                span,
-                t_lparen,
-                elements,
-                t_rparen,
-            } => todo!(),
-            Expr::EnumLiteral {
-                span,
-                t_dot,
-                ident,
-                t_ident,
-                t_parens,
-                args,
-            } => todo!(),
             &Expr::Function { id } => self.function(nodes, id),
-            Expr::Primitive {
-                primitive,
-                start,
-                t,
-            } => todo!(),
-            Expr::Type { id } => todo!(),
-            Expr::Trait { id } => todo!(),
-            Expr::Declare {
-                pat,
-                t_colon,
-                annotated_ty,
-            } => todo!(),
             Expr::DeclareWithVal {
                 pat,
                 t_colon_and_equals_or_colon_equals,
@@ -211,71 +185,17 @@ impl<'a> Converter<'a> {
                 }
                 self.expr(nodes, *val);
             }
-            Expr::Hole { loc, t } => todo!(),
-            Expr::UnOp(_, un_op, expr_id) => todo!(),
             &Expr::BinOp { t_op, op: _, l, r } => {
                 self.expr(nodes, l);
                 nodes.push(Node::Text(" ".into()));
                 self.tok_s(nodes, t_op);
                 self.expr(nodes, r);
             }
-            Expr::As(expr_id, unresolved_type) => todo!(),
-            Expr::Root(_) => todo!(),
-            Expr::MemberAccess { left, name } => todo!(),
-            Expr::Index { expr, idx, end } => todo!(),
-            Expr::TupleIdx { left, idx, end } => todo!(),
-            Expr::ReturnUnit { start } => todo!(),
             &Expr::Return { start, t_ret, val } => {
                 self.tok_s(nodes, t_ret);
                 self.expr(nodes, val);
             }
-            Expr::If { start, cond, then } => todo!(),
-            Expr::IfElse {
-                start,
-                cond,
-                then,
-                else_,
-            } => todo!(),
-            Expr::IfPat {
-                start,
-                pat,
-                value,
-                then,
-            } => todo!(),
-            Expr::IfPatElse {
-                start,
-                pat,
-                value,
-                then,
-                else_,
-            } => todo!(),
-            Expr::Match {
-                span,
-                val,
-                extra_branches,
-                branch_count,
-            } => todo!(),
-            Expr::While { start, cond, body } => todo!(),
-            Expr::WhilePat {
-                start,
-                pat,
-                val,
-                body,
-            } => todo!(),
-            Expr::For {
-                start,
-                pat,
-                iter,
-                body,
-            } => todo!(),
-            Expr::FunctionCall(call_id) => todo!(),
-            Expr::Asm {
-                span,
-                asm_str_span,
-                args,
-            } => todo!(),
-            Expr::Break { start } => todo!(),
-            Expr::Continue { start } => todo!(),
+            _ => nodes.push(Node::Text("[TODO]".into())),
         }
     }
 
