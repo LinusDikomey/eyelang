@@ -13,5 +13,6 @@ pub fn format(src: Box<str>) -> (String, Errors) {
     let mut errors = Errors::new();
     let cst = parse::<parser::ast::Token>(src, &mut errors, ModuleId(0), dmap::new());
     let dom = convert::module(&cst);
+    tracing::debug!(target: "fmt::dom", "Format dom:\n{dom:?}\n");
     (render::render(dom), errors)
 }

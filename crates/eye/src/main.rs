@@ -55,7 +55,11 @@ fn main() -> Result<(), MainError> {
                     panic!("Failed to read project file {}: {err:?}", file.display())
                 });
                 let (formatted, _errors) = format::format(src.into());
-                println!("\nFormatted {}:\n{}\n\n", file.display(), formatted);
+                println!(
+                    "\nFormatted {}:\n==========\n{}\n==========",
+                    file.display(),
+                    formatted
+                );
             }
             return Ok(());
         }

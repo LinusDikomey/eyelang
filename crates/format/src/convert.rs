@@ -21,20 +21,22 @@ struct Converter<'a> {
 
 impl<'a> Converter<'a> {
     fn tok(&mut self, nodes: &mut Vec<Node>, token: Token) {
-        self.tok_with_space(nodes, token, false);
+        self.tok_with_char(nodes, token, None);
     }
 
     fn tok_s(&mut self, nodes: &mut Vec<Node>, token: Token) {
-        self.tok_with_space(nodes, token, true);
+        self.tok_with_char(nodes, token, Some(' '));
     }
 
-    fn tok_with_space(&mut self, nodes: &mut Vec<Node>, token: Token, space: bool) {
+    fn tok_with_char(&mut self, nodes: &mut Vec<Node>, token: Token, c: Option<char>) {
         let ws = &self.cst.src()[self.pos as usize..token.start as usize];
+        debug_assert!(self.pos <= token.start);
+        debug_assert!(token.start <= token.end);
         self.pos = token.end;
         self.emit_whitespace(nodes, ws);
         let mut text = self.cst.src()[token.start as usize..token.end as usize].to_owned();
-        if space {
-            text.push(' ');
+        if let Some(c) = c {
+            text.push(c);
         }
         nodes.push(Node::Text(text.into()));
     }
@@ -50,7 +52,15 @@ impl<'a> Converter<'a> {
 
     fn scope_contents(&mut self, nodes: &mut Vec<Node>, scope: ScopeId) {
         let scope = &self.cst[scope];
-        for item in scope.definitions.values() {
+        let mut defs: Vec<_> = scope.definitions.values().collect();
+        // sort the items by their order of appearence so it is preserved
+        defs.sort_by_key(|&def| match def {
+            Definition::Expr { t_name, .. } => t_name.start,
+            Definition::Use { t_use, .. } => t_use.start,
+            &Definition::Global(global_id) => self.cst[global_id].t_name.start,
+            Definition::Module(_) | Definition::Generic(_) => 0,
+        });
+        for item in defs {
             match item {
                 &Definition::Expr {
                     t_name,
@@ -74,8 +84,7 @@ impl<'a> Converter<'a> {
                     self.path(nodes, path);
                 }
                 Definition::Global(_global_id) => todo!(),
-                Definition::Module(_module_id) => todo!(),
-                Definition::Generic(_) => todo!(),
+                Definition::Module(_) | Definition::Generic(_) => {}
             }
         }
     }
@@ -195,7 +204,19 @@ impl<'a> Converter<'a> {
                 self.tok_s(nodes, t_ret);
                 self.expr(nodes, val);
             }
-            _ => nodes.push(Node::Text("[TODO]".into())),
+            expr => {
+                // emit a fake token for now so that formatting can be tested before all Exprs
+                // are implemented
+                self.tok_s(
+                    nodes,
+                    Token {
+                        start: expr.start(self.cst),
+                        end: expr.end(self.cst),
+                        new_line: false,
+                        ty: TokenType::Eof,
+                    },
+                );
+            }
         }
     }
 
@@ -208,6 +229,7 @@ impl<'a> Converter<'a> {
         }
         let mut state = State::WS;
         let mut comment_start = 0;
+        let mut newline_count = 0;
         loop {
             let Some((pos, c)) = chars.next() else {
                 break;
@@ -215,6 +237,10 @@ impl<'a> Converter<'a> {
             match c {
                 '#' if chars.next_if(|(_, c)| *c == '-').is_some() => match &mut state {
                     State::WS => {
+                        if newline_count != 0 {
+                            nodes.push(Node::Text("\n".repeat(newline_count).into_boxed_str()));
+                            newline_count = 0;
+                        }
                         state = State::Multi(1);
                         comment_start = pos;
                     }
@@ -222,6 +248,10 @@ impl<'a> Converter<'a> {
                     State::Multi(n) => *n += 1,
                 },
                 '#' if matches!(state, State::WS) => {
+                    if newline_count != 0 {
+                        nodes.push(Node::Text("\n".repeat(newline_count).into_boxed_str()));
+                        newline_count = 0;
+                    }
                     state = State::Single;
                     comment_start = pos;
                 }
@@ -232,18 +262,23 @@ impl<'a> Converter<'a> {
                         *n -= 1;
                         if *n == 0 {
                             nodes.push(Node::Text(ws[comment_start..pos + 2].into()));
+                            state = State::WS;
                         }
                     }
                 },
                 '\n' => match state {
-                    State::WS => nodes.push(Node::Text("\n".into())),
+                    State::WS => newline_count += 1,
                     State::Single => {
                         nodes.push(Node::Text(ws[comment_start..pos + 1].into()));
+                        state = State::WS;
                     }
                     State::Multi(_) => {}
                 },
                 _ => {}
             }
+        }
+        if newline_count != 0 {
+            nodes.push(Node::Text("\n".repeat(newline_count).into_boxed_str()));
         }
     }
 
@@ -282,14 +317,14 @@ impl<'a> Converter<'a> {
                 self.tok(nodes, t);
             }
             group.push(Node::Indent(Box::new(Node::Group(args, R::Width(0)))));
-            self.tok(&mut group, r);
+            self.tok_s(&mut group, r);
         } else {
             self.tok_s(&mut group, function.t_fn);
         }
         if let Some(arrow) = function.t_arrow {
-            group.push(Node::Text(" ".into()));
             self.tok_s(&mut group, arrow);
             group.push(self.ty(&function.return_type));
+            group.push(Node::Text(" ".into()));
         }
 
         if let Some(t_extern) = function.t_extern {
@@ -306,5 +341,6 @@ impl<'a> Converter<'a> {
         }
 
         nodes.push(Node::Group(group, R::Width(0)));
+        nodes.push(Node::Text("\n".into()));
     }
 }

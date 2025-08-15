@@ -7,6 +7,7 @@ pub fn render(mut dom: Node) -> String {
     let mut s = String::new();
     let mut f = Formatter {
         s: &mut s,
+        mandatory_newline: false,
         pending_newlines: 0,
         indent: 0,
         column_position: 0,
@@ -40,6 +41,7 @@ fn compute(node: &mut Node, line_width: u32) -> R {
 
 struct Formatter<'a> {
     s: &'a mut String,
+    mandatory_newline: bool,
     pending_newlines: u32,
     column_position: u32,
     indent: usize,
@@ -49,7 +51,15 @@ impl<'a> Formatter<'a> {
     fn text(&mut self, mut text: &str) {
         let newlines_only = text.chars().all(|c| c == '\n');
         if newlines_only {
-            self.pending_newlines = self.pending_newlines.max(text.len() as u32);
+            let newline_count = text.len() as u32;
+            self.pending_newlines = if self.mandatory_newline && self.pending_newlines == 1 {
+                // if there is exactly one newline, it just terminated a line and we want to print
+                // additional newlines
+                newline_count + 1
+            } else {
+                // if there are already multiple newlines, take the max
+                self.pending_newlines.max(newline_count)
+            };
             return;
         }
         self.write_pending_newlines();
@@ -57,6 +67,9 @@ impl<'a> Formatter<'a> {
         while text.ends_with('\n') {
             self.pending_newlines += 1;
             text = &text[..text.len() - 1];
+        }
+        if text.is_empty() && self.pending_newlines > 0 {
+            self.mandatory_newline = true;
         }
         self.s.push_str(text);
         self.column_position += text_width(text);
@@ -75,6 +88,7 @@ impl<'a> Formatter<'a> {
             }
         }
         self.pending_newlines = 0;
+        self.mandatory_newline = false;
     }
 
     fn fmt(&mut self, node: &Node, cond: Cond) {
