@@ -37,6 +37,7 @@
               "color-format-0.1.0" = "sha256-ErorDyhDtycDgDb8tyQe6TQ+lz552azJ4G1V5bhOb/E=";
             };
           };
+          buildFeatures = ["lsp"];
           src = pkgs.lib.cleanSource ./.;
           nativeBuildInputs = with pkgs; [
             llvmPackages_19.llvm
