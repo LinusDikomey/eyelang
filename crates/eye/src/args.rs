@@ -16,6 +16,8 @@ pub enum Cmd {
     ListTargets,
     /// format a project
     Fmt,
+    // format stdin and print the formatted output to stdout
+    FmtStdin,
 }
 impl Default for Cmd {
     fn default() -> Self {

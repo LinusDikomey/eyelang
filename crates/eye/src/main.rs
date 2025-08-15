@@ -2,7 +2,10 @@
 mod args;
 mod std_path;
 
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use args::Backend;
 pub use compiler::Compiler;
@@ -61,6 +64,19 @@ fn main() -> Result<(), MainError> {
                     formatted
                 );
             }
+            return Ok(());
+        }
+        args::Cmd::FmtStdin => {
+            let mut s = String::new();
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .expect("Failed to read stdin");
+            let (formatted, errors) = format::format(s.into_boxed_str());
+            if errors.error_count() > 0 {
+                // TODO: print errors
+                return Err(MainError::ErrorsFound);
+            }
+            print!("{formatted}");
             return Ok(());
         }
         _ => {}
@@ -241,10 +257,9 @@ fn main() -> Result<(), MainError> {
                 }
             }
         }
-        args::Cmd::ListTargets => unreachable!(),
+        args::Cmd::ListTargets | args::Cmd::Fmt | args::Cmd::FmtStdin => unreachable!(),
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => unreachable!(),
-        args::Cmd::Fmt => unreachable!(),
     }
 
     Ok(())
