@@ -1,15 +1,13 @@
 use std::{cell::RefCell, rc::Rc};
 
-use error::Error;
-use id::ConstValueId;
+use crate::{eval::ConstValueId, types::Type};
+use error::{Error, span::TSpan};
 use indexmap::IndexMap;
-use span::TSpan;
-use types::Type;
 
 use crate::{
     compiler::{CheckedFunction, LocalScope, LocalScopeParent, Signature},
     hir::{HIRBuilder, Node},
-    types::{TypeInfo, TypeInfoOrIdx, TypeTable},
+    typing::{TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 use parser::ast::FunctionId;
 
@@ -114,9 +112,8 @@ pub fn closure(
                 .unwrap_or_else(|()| {
                     // TODO: span of the variable accesss (could put into captures)
                     // only if we really need to fully know the captured type here
-                    ctx.compiler.errors.emit_err(
-                        Error::TypeMustBeKnownHere { needed_bound: None }
-                            .at_span(TSpan::EMPTY.in_mod(ctx.module)),
+                    ctx.emit(
+                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(TSpan::EMPTY),
                     );
                     Type::Invalid
                 })
@@ -132,14 +129,12 @@ pub fn closure(
         .skip(1)
         .take(function.params.len())
         .zip(&function.params)
-        .map(|(id, (span, _))| {
+        .map(|(id, &(span, _))| {
             let name = ctx.ast.src()[span.range()].to_owned().into_boxed_str();
             let ty = types.to_generic_resolved(types[id]).unwrap_or_else(|()| {
                 let mut ty = String::new();
                 types.type_to_string(ctx.compiler, types[id], &mut ty);
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::CantInferFromBody { ty }.at_span(span.in_mod(ctx.module)));
+                ctx.emit(Error::CantInferFromBody { ty }.at_span(span));
                 Type::Invalid
             });
             (name, ty)
@@ -161,14 +156,12 @@ pub fn closure(
         .iter()
         .skip(1 + function.params.len())
         .zip(&function.named_params)
-        .map(|(id, (name_span, _, default_val))| {
+        .map(|(id, &(name_span, _, default_val))| {
             let name = ctx.ast.src()[name_span.range()].to_owned().into_boxed_str();
             let ty = types.to_generic_resolved(types[id]).unwrap_or_else(|()| {
                 let mut ty = String::new();
                 types.type_to_string(ctx.compiler, types[id], &mut ty);
-                ctx.compiler.errors.emit_err(
-                    Error::CantInferFromBody { ty }.at_span(name_span.in_mod(ctx.module)),
-                );
+                ctx.emit(Error::CantInferFromBody { ty }.at_span(name_span));
                 Type::Invalid
             });
             // TODO: const value
@@ -184,15 +177,12 @@ pub fn closure(
         .unwrap_or_else(|()| {
             let mut ty = String::new();
             types.type_to_string(ctx.compiler, types[return_type], &mut ty);
-            ctx.compiler.errors.emit_err(
-                Error::CantInferFromBody { ty }
-                    .at_span(function.return_type.span().in_mod(ctx.module)),
-            );
+            ctx.emit(Error::CantInferFromBody { ty }.at_span(function.return_type.span()));
             Type::Invalid
         });
     let generic_instance = generics.instantiate(&mut ctx.hir.types, closure_span);
     let symbols = &mut ctx.compiler.get_parsed_module(ctx.module).symbols;
-    symbols.functions[id.0 as usize].put(Rc::new(CheckedFunction {
+    symbols.functions[id.idx()].put(Rc::new(CheckedFunction {
         name,
         types,
         params: param_types,
@@ -201,7 +191,7 @@ pub fn closure(
         generic_count: generics.count(),
         body: Some(hir),
     }));
-    symbols.function_signatures[id.0 as usize].put(Rc::new(Signature {
+    symbols.function_signatures[id.idx()].put(Rc::new(Signature {
         params,
         named_params,
         varargs,

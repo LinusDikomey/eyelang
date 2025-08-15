@@ -9,24 +9,28 @@ use std::{
 };
 
 use dmap::DHashMap;
-use error::{CompileError, Error, Errors, ImplIncompatibility};
-use id::{ConstValueId, ModuleId, TypeId};
+use error::{
+    CompileError, Error, Errors, ImplIncompatibility,
+    span::{IdentPath, TSpan},
+};
 use indexmap::IndexMap;
 use ir::ModuleOf;
 use parser::{
     self,
-    ast::{self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ScopeId, TraitId},
+    ast::{
+        self, Ast, DefExprId, FunctionId, GenericDef, GlobalId, ModuleId, Primitive, ScopeId,
+        TraitId, UnresolvedType,
+    },
 };
-use span::{IdentPath, Span, TSpan};
-use types::{FunctionType, InvalidTypeError, Primitive, Type, UnresolvedType};
 
 use crate::{
-    ProjectId,
-    check::{self, traits},
-    eval::{self, ConstValue},
+    InvalidTypeError, ProjectId, TypeId,
+    check::{self, ProjectErrors, traits},
+    eval::{self, ConstValue, ConstValueId},
     hir::Hir,
     irgen,
-    types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
+    types::{FunctionType, Type},
+    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
 use builtins::Builtins;
@@ -39,13 +43,24 @@ pub struct Compiler {
     pub ir: ir::Environment,
     pub ir_module: ir::ModuleId,
     pub dialects: Dialects,
-    pub errors: Errors,
+    pub errors: ProjectErrors,
     pub builtins: Builtins,
 }
 impl ir::builder::HasEnvironment for &mut Compiler {
     fn env(&self) -> &ir::Environment {
         &self.ir
     }
+}
+
+pub struct ModuleSpan {
+    pub module: ModuleId,
+    pub span: TSpan,
+}
+impl ModuleSpan {
+    pub const MISSING: Self = Self {
+        module: ModuleId::MISSING,
+        span: TSpan::MISSING,
+    };
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +88,7 @@ impl Compiler {
             ir,
             ir_module,
             dialects,
-            errors: Errors::new(),
+            errors: ProjectErrors::new(),
             builtins: Builtins::default(),
         }
     }
@@ -92,7 +107,7 @@ impl Compiler {
             }
         }
         let project_id = ProjectId(self.projects.len() as _);
-        let root_module_id = ModuleId(self.modules.len() as _);
+        let root_module_id = ModuleId::from_inner(self.modules.len() as _);
         self.modules.push(Module::at_path(
             root.clone(),
             project_id,
@@ -192,7 +207,7 @@ impl Compiler {
                 let (file, child_module_paths) =
                     crate::modules::module_and_children(&module.path, module_id == module.root);
                 for (name, path) in child_module_paths {
-                    let id = ModuleId(self.modules.len() as _);
+                    let id = ModuleId::from_inner(self.modules.len() as _);
                     self.modules
                         .push(Module::at_path(path, project, root, Some(module_id)));
                     definitions.insert(name, ast::Definition::Module(id));
@@ -212,11 +227,8 @@ impl Compiler {
             };
 
             let mut errors = Errors::new();
-            if self.errors.crash_on_error() {
-                errors.enable_crash_on_error();
-            }
-            let ast = parser::parse(source, &mut errors, module_id, definitions);
-            self.errors.append(errors);
+            let ast = parser::parse(source, &mut errors, definitions);
+            self.errors.add_module(module_id, errors);
             let checked = ModuleSymbols::empty(&ast);
             let module = &mut self.modules[module_id.idx()];
             let instances = IrInstances::new(ast.function_count(), ast.global_count());
@@ -233,7 +245,12 @@ impl Compiler {
         }
     }
 
-    pub fn resolve_in_module(&mut self, module: ModuleId, name: &str, name_span: Span) -> Def {
+    pub fn resolve_in_module(
+        &mut self,
+        module: ModuleId,
+        name: &str,
+        name_span: ModuleSpan,
+    ) -> Def {
         let scope = self.get_module_ast(module).top_level_scope_id();
         self.resolve_in_scope(module, scope, name, name_span)
     }
@@ -243,7 +260,7 @@ impl Compiler {
         module: ModuleId,
         mut scope: ScopeId,
         name: &str,
-        name_span: Span,
+        name_span: ModuleSpan,
     ) -> Def {
         let def = loop {
             match self.get_scope_def(module, scope, name) {
@@ -264,8 +281,10 @@ impl Compiler {
                     return def;
                 }
             }
-            self.errors
-                .emit_err(Error::UnknownIdent(name.into()).at_span(name_span));
+            self.errors.emit(
+                name_span.module,
+                Error::UnknownIdent(name.into()).at_span(name_span.span),
+            );
             Def::Invalid
         })
     }
@@ -292,12 +311,12 @@ impl Compiler {
         id: DefExprId,
     ) -> &Def {
         let parsed = self.get_parsed_module(module);
-        let def_expr = &mut parsed.symbols.def_exprs[id.0 as usize];
+        let def_expr = &mut parsed.symbols.def_exprs[id.idx()];
         match def_expr {
             Resolvable::Resolved(_) => {
                 // borrowing bullshit
                 let Resolvable::Resolved(def) =
-                    &self.get_parsed_module(module).symbols.def_exprs[id.0 as usize]
+                    &self.get_parsed_module(module).symbols.def_exprs[id.idx()]
                 else {
                     unreachable!()
                 };
@@ -306,9 +325,9 @@ impl Compiler {
             Resolvable::Resolving => {
                 let ast = self.get_module_ast(module);
                 let (value, _) = ast[id];
-                let span = ast[value].span(ast).in_mod(module);
+                let span = ast[value].span(ast);
                 self.errors
-                    .emit_err(Error::RecursiveDefinition.at_span(span));
+                    .emit(module, Error::RecursiveDefinition.at_span(span));
                 return &Def::Invalid;
             }
             Resolvable::Unresolved => {
@@ -319,7 +338,7 @@ impl Compiler {
         let (value, ty) = &ast[id];
         let value = *value;
         let def = eval::def_expr(self, module, scope, &ast, value, name, ty);
-        self.get_parsed_module(module).symbols.def_exprs[id.0 as usize].put(def)
+        self.get_parsed_module(module).symbols.def_exprs[id.idx()].put(def)
     }
 
     pub fn resolve_path(&mut self, module: ModuleId, mut scope: ScopeId, path: IdentPath) -> Def {
@@ -332,7 +351,15 @@ impl Compiler {
             scope = self.get_module_ast(current_module).top_level_scope_id();
         }
         for (name, name_span) in segments {
-            match self.resolve_in_scope(current_module, scope, name, name_span.in_mod(module)) {
+            match self.resolve_in_scope(
+                current_module,
+                scope,
+                name,
+                ModuleSpan {
+                    module,
+                    span: name_span,
+                },
+            ) {
                 Def::Module(new_mod) => {
                     current_module = new_mod;
                     scope = self.get_module_ast(current_module).top_level_scope_id();
@@ -340,7 +367,7 @@ impl Compiler {
                 Def::Invalid => return Def::Invalid,
                 _ => {
                     self.errors
-                        .emit_err(Error::ModuleExpected.at_span(name_span.in_mod(module)));
+                        .emit(module, Error::ModuleExpected.at_span(name_span));
                     return Def::Invalid;
                 }
             }
@@ -348,7 +375,15 @@ impl Compiler {
         let Some((name, name_span)) = last else {
             return Def::Module(current_module);
         };
-        self.resolve_in_scope(current_module, scope, name, name_span.in_mod(module))
+        self.resolve_in_scope(
+            current_module,
+            scope,
+            name,
+            ModuleSpan {
+                module,
+                span: name_span,
+            },
+        )
     }
 
     pub fn resolve_type(&mut self, ty: &UnresolvedType, module: ModuleId, scope: ScopeId) -> Type {
@@ -361,9 +396,9 @@ impl Compiler {
                         let found = generics.as_ref().map_or(0, |g| g.0.len() as u8);
                         if expected != found {
                             let span = generics.as_ref().map_or_else(|| path.span(), |g| g.1);
-                            self.errors.emit_err(
-                                Error::InvalidGenericCount { expected, found }
-                                    .at_span(span.in_mod(module)),
+                            self.errors.emit(
+                                module,
+                                Error::InvalidGenericCount { expected, found }.at_span(span),
                             );
                             return Type::Invalid;
                         }
@@ -378,16 +413,16 @@ impl Compiler {
                         }
                     }
                     Def::Type(ty) => {
-                        if let Some((_, span)) = generics {
+                        if let &Some((_, span)) = generics {
                             self.errors
-                                .emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                                .emit(module, Error::UnexpectedGenerics.at_span(span));
                         }
                         ty
                     }
                     Def::Invalid => Type::Invalid,
                     _ => {
                         self.errors
-                            .emit_err(Error::TypeExpected.at_span(ty.span().in_mod(module)));
+                            .emit(module, Error::TypeExpected.at_span(ty.span()));
                         Type::Invalid
                     }
                 }
@@ -414,16 +449,16 @@ impl Compiler {
             UnresolvedType::Function {
                 span_and_return_type,
                 params,
-            } => Type::Function(types::FunctionType {
+            } => Type::Function(FunctionType {
                 params: params
                     .iter()
                     .map(|param| self.resolve_type(param, module, scope))
                     .collect(),
                 return_type: Box::new(self.resolve_type(&span_and_return_type.1, module, scope)),
             }),
-            UnresolvedType::Infer(span) => {
+            &UnresolvedType::Infer(span) => {
                 self.errors
-                    .emit_err(Error::InferredTypeNotAllowedHere.at_span(span.in_mod(module)));
+                    .emit(module, Error::InferredTypeNotAllowedHere.at_span(span));
                 Type::Invalid
             }
         }
@@ -505,9 +540,10 @@ impl Compiler {
         ty: &UnresolvedType,
         scope: ScopeId,
         ty_module: ModuleId,
-        func_span: Span,
     ) -> Result<(), SignatureError> {
         let signature = self.get_signature(func_id.0, func_id.1);
+        let func_signature_span =
+            |compiler: &mut Self| compiler.get_module_ast(func_id.0)[func_id.1].signature_span;
         match ty {
             UnresolvedType::Infer(_) => Ok(()),
             UnresolvedType::Function {
@@ -522,30 +558,33 @@ impl Compiler {
                         if let Some((generics, generics_span)) = generics
                             && !generics.is_empty()
                         {
-                            self.errors.emit_err(
-                                Error::UnexpectedGenerics.at_span(generics_span.in_mod(ty_module)),
-                            );
+                            self.errors
+                                .emit(ty_module, Error::UnexpectedGenerics.at_span(*generics_span));
                             return Err(SignatureError);
                         }
                         let Type::Function(function_ty) = &ty else {
-                            self.errors.emit_err(
+                            let span = func_signature_span(self);
+                            self.errors.emit(
+                                func_id.0,
                                 Error::MismatchedType {
                                     expected: ty.to_string(),
                                     found: "a function".to_owned(),
                                 }
-                                .at_span(func_span),
+                                .at_span(span),
                             );
                             return Err(SignatureError);
                         };
                         match signature.fits_function_type(function_ty) {
                             Ok(true) => Ok(()),
                             Ok(false) => {
-                                self.errors.emit_err(
+                                let span = func_signature_span(self);
+                                self.errors.emit(
+                                    func_id.0,
                                     Error::MismatchedType {
                                         expected: ty.to_string(),
                                         found: "TODO: display function type".to_owned(),
                                     }
-                                    .at_span(func_span),
+                                    .at_span(span),
                                 );
                                 Err(SignatureError)
                             }
@@ -554,7 +593,7 @@ impl Compiler {
                     }
                     _ => {
                         self.errors
-                            .emit_err(Error::TypeExpected.at_span(path.span().in_mod(ty_module)));
+                            .emit(ty_module, Error::TypeExpected.at_span(path.span()));
                         Err(SignatureError)
                     }
                 }
@@ -562,12 +601,14 @@ impl Compiler {
             _ => {
                 let mut expected = String::new();
                 ty.to_string(&mut expected, self.get_module_ast(ty_module).src());
-                self.errors.emit_err(
+                let span = func_signature_span(self);
+                self.errors.emit(
+                    func_id.0,
                     Error::MismatchedType {
                         expected,
                         found: "a function".to_owned(),
                     }
-                    .at_span(func_span),
+                    .at_span(span),
                 );
                 Err(SignatureError)
             }
@@ -592,12 +633,13 @@ impl Compiler {
                             let trait_id = (trait_module, trait_id);
                             let generic_count = self.get_trait_generic_count(trait_id);
                             if generic_count as usize != bound.generics.len() {
-                                self.errors.emit_err(
+                                self.errors.emit(
+                                    module,
                                     Error::InvalidGenericCount {
                                         expected: generic_count,
                                         found: bound.generics.len() as _,
                                     }
-                                    .at_span(bound.generics_span.in_mod(module)),
+                                    .at_span(bound.generics_span),
                                 );
                                 todo!("handle invalid bounds")
                             }
@@ -610,9 +652,8 @@ impl Compiler {
                         }
                         Def::Invalid => todo!("handle invalid bounds"),
                         _ => {
-                            self.errors.emit_err(
-                                Error::TraitExpected.at_span(bound.path.span().in_mod(module)),
-                            );
+                            self.errors
+                                .emit(module, Error::TraitExpected.at_span(bound.path.span()));
                             todo!("handle invalid bounds")
                         }
                     })
@@ -651,9 +692,9 @@ impl Compiler {
                     match eval::value_expr(self, module, scope, ast, default_value, ty) {
                         Ok(val) => val,
                         Err(err) => {
-                            self.errors.emit_err(
-                                Error::EvalFailed(err)
-                                    .at_span(ast[default_value].span(ast).in_mod(module)),
+                            self.errors.emit(
+                                module,
+                                Error::EvalFailed(err).at_span(ast[default_value].span(ast)),
                             );
                             (ConstValue::Undefined, Type::Invalid)
                         }
@@ -710,9 +751,9 @@ impl Compiler {
                 Some(checked)
             }
             Resolvable::Resolving => {
-                let span = parsed.ast[id].span(parsed.ast.scopes()).in_mod(module);
+                let span = parsed.ast[id].span(parsed.ast.scopes());
                 self.errors
-                    .emit_err(Error::RecursiveDefinition.at_span(span));
+                    .emit(module, Error::RecursiveDefinition.at_span(span));
                 None
             }
             Resolvable::Unresolved => {
@@ -873,9 +914,9 @@ impl Compiler {
                 global
             }
             Resolvable::Resolving => {
-                let span = ast[id].span.in_mod(module);
+                let span = ast[id].span;
                 self.errors
-                    .emit_err(Error::RecursiveDefinition.at_span(span));
+                    .emit(module, Error::RecursiveDefinition.at_span(span));
                 self.get_parsed_module(module).symbols.globals[id.idx()]
                     .put((ConstValue::Undefined, Type::Invalid))
             }
@@ -895,9 +936,8 @@ impl Compiler {
                     Def::Invalid => (ConstValue::Undefined, Type::Invalid),
                     def => {
                         if !matches!(def, Def::Invalid) {
-                            let error =
-                                Error::ExpectedValue.at_span(ast[global.val].span_in(&ast, module));
-                            self.errors.emit_err(error);
+                            let error = Error::ExpectedValue.at_span(ast[global.val].span(&ast));
+                            self.errors.emit(module, error);
                         }
                         (ConstValue::Undefined, Type::Invalid)
                     }
@@ -1121,7 +1161,7 @@ impl Compiler {
     ) -> Result<ir::FunctionId, Option<CompileError>> {
         let main_ir_id = self.get_ir_function_id(main.0, main.1, vec![]);
         let main_signature = self.get_signature(main.0, main.1);
-        check::verify_main_signature(main_signature, main.0).map(|()| {
+        check::verify_main_signature(main_signature).map(|()| {
             let main_signature = Rc::clone(self.get_signature(main.0, main.1));
             let entry_point = irgen::entry_point(
                 main_ir_id,
@@ -1141,23 +1181,15 @@ impl Compiler {
     pub fn print_errors(&mut self) -> bool {
         let working_directory = std::env::current_dir().ok();
         use color_format::cprintln;
-        let errors = std::mem::replace(&mut self.errors, Errors::new());
-        let mut print = |error: &CompileError| {
-            if error.span.is_missing() {
+        let errors = std::mem::replace(&mut self.errors, ProjectErrors::new());
+        let print = |ast: &Ast, path: &Path, error: &CompileError| {
+            if error.span == TSpan::MISSING {
                 println!(
                     "[missing location]: {} {}",
                     error.err.conclusion(),
                     error.err.details().unwrap_or_default(),
                 );
             } else {
-                let ast = self.get_module_ast(error.span.module).clone();
-                let mut path: &Path = &self.modules[error.span.module.idx()].path;
-                let relative = working_directory
-                    .as_ref()
-                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
-                if let Some(relative) = &relative {
-                    path = relative;
-                }
                 error::print(
                     &error.err,
                     TSpan::new(error.span.start, error.span.end),
@@ -1166,27 +1198,60 @@ impl Compiler {
                 );
             }
         };
-        let err_count = errors.error_count();
+        let err_count: usize = errors
+            .by_file
+            .values()
+            .map(|errors| errors.error_count())
+            .sum();
         if err_count != 0 {
             cprintln!(
                 "#r<Finished with #u;r!<{}> error{}>",
                 err_count,
                 if err_count == 1 { "" } else { "s" }
             );
-            for error in &errors.errors {
-                print(error);
+            for (module, errors) in errors.by_file {
+                if errors.error_count() == 0 {
+                    continue;
+                }
+                let ast = Rc::clone(self.get_module_ast(module));
+                let mut path: &Path = &self.modules[module.idx()].path;
+                let relative = working_directory
+                    .as_ref()
+                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
+                if let Some(relative) = &relative {
+                    path = relative;
+                }
+                for error in &errors.errors {
+                    print(&ast, path, error);
+                }
             }
             return true;
         }
-        if errors.warning_count() != 0 {
-            let c = errors.warning_count();
+        let warning_count: usize = errors
+            .by_file
+            .values()
+            .map(|errors| errors.warning_count())
+            .sum();
+        if warning_count != 0 {
             cprintln!(
-                "#r<Finished with #u;r!<{}> warning{}>",
-                c,
-                if c == 1 { "" } else { "s" }
+                "#r<Finished with #u;r!<{warning_count}> warning{}>",
+                if warning_count == 1 { "" } else { "s" }
             );
-            for warn in &errors.warnings {
-                print(warn);
+            for (module, errors) in errors.by_file {
+                if errors.warning_count() == 0 {
+                    continue;
+                }
+                let ast = Rc::clone(self.get_module_ast(module));
+                let mut path: &Path = &self.modules[module.idx()].path;
+                let relative = working_directory
+                    .as_ref()
+                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
+                if let Some(relative) = &relative {
+                    path = relative;
+                }
+                for warning in &errors.warnings {
+                    print(&ast, path, warning);
+                }
             }
         }
         false
@@ -1280,11 +1345,15 @@ impl LocalScope<'_> {
                             self.module,
                             static_parent,
                             name,
-                            name_span.in_mod(self.module),
+                            ModuleSpan {
+                                module: self.module,
+                                span: name_span,
+                            },
                         ))
                     } else {
-                        compiler.errors.emit_err(
-                            Error::UnknownIdent(name.into()).at_span(name_span.in_mod(self.module)),
+                        compiler.errors.emit(
+                            self.module,
+                            Error::UnknownIdent(name.into()).at_span(name_span),
                         );
                         LocalItem::Invalid
                     }
@@ -1315,7 +1384,7 @@ pub enum Def {
     Invalid,
     Function(ModuleId, ast::FunctionId),
     // a base type with generics not yet applied to it
-    GenericType(id::TypeId),
+    GenericType(TypeId),
     Type(Type),
     Trait(ModuleId, ast::TraitId),
     ConstValue(ConstValueId),
@@ -1380,24 +1449,33 @@ impl Def {
         }
     }
 
-    pub fn get_span(&self, compiler: &mut Compiler) -> Option<Span> {
+    pub fn get_span(&self, compiler: &mut Compiler) -> Option<ModuleSpan> {
         match self {
             Self::Invalid => None,
             &Self::Function(module, id) => {
                 let ast = compiler.get_module_ast(module);
-                Some(ast[ast[id].scope].span.in_mod(module))
+                Some(ModuleSpan {
+                    module,
+                    span: ast[ast[id].scope].span,
+                })
             }
             Self::GenericType(_) | Self::Type(_) => todo!("spans of types"),
             &Self::Trait(module, id) => {
                 let ast = compiler.get_module_ast(module);
-                Some(ast[ast[id].scope].span.in_mod(module))
+                Some(ModuleSpan {
+                    module,
+                    span: ast[ast[id].scope].span,
+                })
             }
             Self::ConstValue(_id) => todo!("spans of const values"),
-            // maybe better to show reference to module
-            &Self::Module(id) => Some(TSpan::MISSING.in_mod(id)),
+            // TODO: somehow show reference to module
+            &Self::Module(_) => Some(ModuleSpan::MISSING),
             &Self::Global(module, id) => {
                 let ast = compiler.get_module_ast(module);
-                Some(ast[id].span.in_mod(module))
+                Some(ModuleSpan {
+                    module,
+                    span: ast[id].span,
+                })
             }
         }
     }
@@ -1406,7 +1484,7 @@ impl Def {
 pub struct Project {
     pub name: String,
     pub root: PathBuf,
-    pub root_module: id::ModuleId,
+    pub root_module: ModuleId,
     pub dependencies: Vec<ProjectId>,
 }
 pub struct Module {
@@ -1586,7 +1664,7 @@ impl Generics {
                         let ty = types.from_generic_resolved(ty, generics);
                         types.replace(r, ty);
                     }
-                    let bound = crate::types::Bound {
+                    let bound = crate::typing::Bound {
                         trait_id: bound.trait_id,
                         generics: trait_generics,
                         span,

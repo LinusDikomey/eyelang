@@ -2,8 +2,7 @@
 //use crate::parser::{ExpectedTokens, token::TokenType};
 use color_format::*;
 use core::fmt;
-use id::ModuleId;
-use span::{Span, TSpan};
+use span::TSpan;
 use std::fmt::Write;
 use std::{
     iter::{Enumerate, Peekable},
@@ -12,19 +11,16 @@ use std::{
 };
 use token::{ExpectedTokens, TokenType};
 
+pub mod span;
+
 #[derive(Debug, Default)]
 pub struct Errors {
     pub errors: Vec<CompileError>,
     pub warnings: Vec<CompileError>,
-    crash_on_error: bool,
 }
 impl Errors {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn emit(&mut self, err: Error, start: u32, end: u32, module: ModuleId) {
-        self.emit_span(err, Span { start, end, module });
     }
 
     pub fn append(&mut self, errors: Self) {
@@ -32,16 +28,11 @@ impl Errors {
         self.warnings.extend(errors.warnings);
     }
 
-    #[track_caller]
-    pub fn emit_span(&mut self, err: Error, span: Span) {
+    pub fn emit_span(&mut self, err: Error, span: TSpan) {
         self.emit_err(CompileError { err, span });
     }
 
-    #[track_caller]
     pub fn emit_err(&mut self, err: CompileError) {
-        if self.crash_on_error {
-            panic!("Error encountered and --crash-on-error is enabled. The error is: {err:?}");
-        }
         let list = match err.err.severity() {
             Severity::Error => &mut self.errors,
             Severity::Warn => &mut self.warnings,
@@ -64,23 +55,15 @@ impl Errors {
     pub fn get_warnings(&self) -> &[CompileError] {
         &self.warnings
     }
-
-    pub fn crash_on_error(&self) -> bool {
-        self.crash_on_error
-    }
-
-    pub fn enable_crash_on_error(&mut self) {
-        self.crash_on_error = true;
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CompileError {
     pub err: Error,
-    pub span: Span,
+    pub span: TSpan,
 }
 impl CompileError {
-    pub fn new(err: Error, span: Span) -> Self {
+    pub fn new(err: Error, span: TSpan) -> Self {
         Self { err, span }
     }
 }
@@ -483,13 +466,13 @@ impl Error {
     }
 }
 impl Error {
-    pub fn at(self, start: u32, end: u32, module: ModuleId) -> CompileError {
+    pub fn at(self, start: u32, end: u32) -> CompileError {
         CompileError {
             err: self,
-            span: Span::new(start, end, module),
+            span: TSpan::new(start, end),
         }
     }
-    pub fn at_span(self, span: Span) -> CompileError {
+    pub fn at_span(self, span: TSpan) -> CompileError {
         CompileError { err: self, span }
     }
 }

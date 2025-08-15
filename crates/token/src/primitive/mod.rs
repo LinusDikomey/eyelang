@@ -1,6 +1,10 @@
 use std::{fmt, num::NonZeroU32};
 
-use crate::{FloatType, IntType, Layout};
+mod float;
+mod int;
+
+pub use float::FloatType;
+pub use int::IntType;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Primitive {
@@ -49,21 +53,6 @@ impl Primitive {
     }
     pub fn is_float(self) -> bool {
         self.as_float().is_some()
-    }
-
-    pub fn layout(self) -> Layout {
-        let size_and_align = match self {
-            Self::Type => 0,
-            Self::I8 | Self::U8 => 1,
-            Self::I16 | Self::U16 => 2,
-            Self::I32 | Self::U32 | Self::F32 => 4,
-            Self::I64 | Self::U64 | Self::F64 => 8,
-            Self::I128 | Self::U128 => 16,
-        };
-        Layout {
-            size: size_and_align,
-            alignment: size_and_align.max(1),
-        }
     }
 
     pub fn token_len(self) -> NonZeroU32 {

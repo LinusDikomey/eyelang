@@ -6,6 +6,5 @@ edition = "2024"
 [dependencies]
 color-format.workspace = true
 id.workspace = true
-span.workspace = true
 ir.workspace = true
 token.workspace = true

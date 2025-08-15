@@ -5,16 +5,17 @@ use std::collections::hash_map::Entry;
 use crate::ast::{
     self, Attribute, Definition, EnumVariantDefinition, Expr, ExprIds, Function, GenericDef,
     Global, InherentImpl, Item, ItemValue, StructMember, TraitDefinition, TraitFunctions,
-    TreeToken, UnOp,
+    TreeToken, UnOp, UnresolvedType,
 };
 
 use crate::unexpected;
 use crate::{Delimit, ParseResult, Parser, ast::ScopeId};
 
-use error::{CompileError, Error};
-use span::{IdentPath, Span, TSpan};
+use error::{
+    CompileError, Error,
+    span::{IdentPath, TSpan},
+};
 use token::{self, ExpectedTokens, Keyword, Operator, Token, TokenType};
-use types::UnresolvedType;
 
 macro_rules! step_or_unexpected {
     (
@@ -29,7 +30,6 @@ macro_rules! step_or_unexpected {
             )*
             _ => return Err(unexpected(
                 $tok,
-                $parser.toks.module,
                 ExpectedTokens::AnyOf(Box::new([ $(TokenType::$tok_ty $((Keyword::$kw))*),* ])),
             ))
         }
@@ -38,6 +38,15 @@ macro_rules! step_or_unexpected {
 
 fn t<T: TreeToken>(t: Token) -> T {
     T::t(t)
+}
+
+trait TokenExt {
+    fn span(&self) -> TSpan;
+}
+impl TokenExt for Token {
+    fn span(&self) -> TSpan {
+        TSpan::new(self.start, self.end)
+    }
 }
 
 impl<T: TreeToken> Parser<'_, T> {
@@ -72,7 +81,6 @@ impl<T: TreeToken> Parser<'_, T> {
                     tok => {
                         return Err(unexpected(
                             tok,
-                            self.toks.module,
                             ExpectedTokens::AnyOf(Box::new([delim, close])),
                         ));
                     }
@@ -90,7 +98,7 @@ impl<T: TreeToken> Parser<'_, T> {
                                 expected: ExpectedTokens::AnyOf(Box::new([delim, close])),
                                 found: after.ty,
                             }
-                            .at_span(after.span().in_mod(self.toks.module)));
+                            .at_span(after.span()));
                         }
                     }
                 }
@@ -129,7 +137,7 @@ impl<T: TreeToken> Parser<'_, T> {
         parent: Option<ScopeId>,
         definitions: DHashMap<String, Definition<T>>,
         start_end: Option<(Token, TokenType)>,
-        mut on_expr: impl FnMut(&mut Self, &mut ast::Scope<T>, ScopeId, Expr<T>, Span),
+        mut on_expr: impl FnMut(&mut Self, &mut ast::Scope<T>, ScopeId, Expr<T>, TSpan),
     ) -> (ScopeId, Token) {
         let scope_id = self.ast.scope(ast::Scope::missing());
         let mut scope = ast::Scope {
@@ -176,11 +184,9 @@ impl<T: TreeToken> Parser<'_, T> {
                     match scope.definitions.entry(name) {
                         Entry::Occupied(_) => {
                             scope.has_errors = true;
-                            self.toks.errors.emit_err(Error::DuplicateDefinition.at(
-                                name_span.start,
-                                name_span.end,
-                                self.toks.module,
-                            ));
+                            self.toks.errors.emit_err(
+                                Error::DuplicateDefinition.at(name_span.start, name_span.end),
+                            );
                         }
                         Entry::Vacant(vacant_entry) => {
                             vacant_entry.insert(Definition::Expr {
@@ -198,10 +204,9 @@ impl<T: TreeToken> Parser<'_, T> {
                     match scope.definitions.entry(name) {
                         Entry::Occupied(_) => {
                             scope.has_errors = true;
-                            self.toks.errors.emit_err(
-                                Error::DuplicateDefinition
-                                    .at_span(name_span.in_mod(self.toks.module)),
-                            )
+                            self.toks
+                                .errors
+                                .emit_err(Error::DuplicateDefinition.at_span(name_span))
                         }
                         Entry::Vacant(entry) => {
                             entry.insert(Definition::Use { t_use, path });
@@ -209,10 +214,9 @@ impl<T: TreeToken> Parser<'_, T> {
                     }
                 }
                 ItemValue::Expr(r) => {
-                    let span = Span {
+                    let span = TSpan {
                         start,
                         end: self.toks.pos(),
-                        module: self.toks.module,
                     };
                     on_expr(self, &mut scope, scope_id, r, span);
                 }
@@ -231,7 +235,7 @@ impl<T: TreeToken> Parser<'_, T> {
         scope: &mut ast::Scope<T>,
         scope_id: ScopeId,
         expr: Expr<T>,
-        _: Span,
+        _: TSpan,
     ) {
         let expr = self.ast.expr(expr);
         match self.ast.get_expr(expr) {
@@ -259,7 +263,7 @@ impl<T: TreeToken> Parser<'_, T> {
                         scope.definitions.insert(name, Definition::Global(id));
                     }
                     expr => {
-                        let span = expr.span_builder(self.ast).in_mod(self.toks.module);
+                        let span = expr.span_builder(self.ast);
                         self.ast.get_scope_mut(scope_id).has_errors = true;
                         self.toks
                             .errors
@@ -269,11 +273,7 @@ impl<T: TreeToken> Parser<'_, T> {
             }
             _ => self.toks.errors.emit_err(CompileError {
                 err: Error::InvalidTopLevelBlockItem,
-                span: self
-                    .ast
-                    .get_expr(expr)
-                    .span_builder(self.ast)
-                    .in_mod(self.toks.module),
+                span: self.ast.get_expr(expr).span_builder(self.ast),
             }),
         };
     }
@@ -332,7 +332,7 @@ impl<T: TreeToken> Parser<'_, T> {
                         let value = self.parse_expr(scope).unwrap_or_else(|err| {
                             let span = err.span;
                             self.toks.errors.emit_err(err);
-                            Expr::Error(span.tspan())
+                            Expr::Error(span)
                         });
                         let value = self.ast.expr(value);
                         ItemValue::Definition {
@@ -496,10 +496,7 @@ impl<T: TreeToken> Parser<'_, T> {
                 let func_id = p.ast.function(method);
                 let name = ident.get_val(p.toks.src).to_owned();
                 if let Some(_existing) = methods.insert(name, func_id) {
-                    return Err(CompileError::new(
-                        Error::DuplicateDefinition,
-                        ident.span().in_mod(p.toks.module),
-                    ));
+                    return Err(CompileError::new(Error::DuplicateDefinition, ident.span()));
                 }
                 Ok(Delimit::No)
             } else {
@@ -574,10 +571,7 @@ impl<T: TreeToken> Parser<'_, T> {
                     let func_id = p.ast.function(method);
                     let name = ident.get_val(p.toks.src).to_owned();
                     if let Some(_existing) = methods.insert(name, func_id) {
-                        return Err(CompileError::new(
-                            Error::DuplicateDefinition,
-                            ident.span().in_mod(p.toks.module),
-                        ));
+                        return Err(CompileError::new(Error::DuplicateDefinition, ident.span()));
                     }
                     Ok(Delimit::No)
                 }
@@ -1203,7 +1197,7 @@ impl<T: TreeToken> Parser<'_, T> {
             TokenType::Keyword(Keyword::Break) => Expr::Break { start: first.start },
             TokenType::Keyword(Keyword::Continue) => Expr::Continue { start: first.start },
             _ => {
-                return Err(unexpected(first, self.toks.module, ExpectedTokens::Expr));
+                return Err(unexpected(first, ExpectedTokens::Expr));
             }
         };
         self.parse_factor_postfix(expr, include_as, scope)
@@ -1234,9 +1228,7 @@ impl<T: TreeToken> Parser<'_, T> {
                                 } = expr
                                 else {
                                     p.toks.errors.emit_err(
-                                        Error::NameExpected.at_span(
-                                            expr.span_builder(p.ast).in_mod(p.toks.module),
-                                        ),
+                                        Error::NameExpected.at_span(expr.span_builder(p.ast)),
                                     );
                                     return Ok(Delimit::OptionalIfNewLine);
                                 };
@@ -1417,10 +1409,7 @@ impl<T: TreeToken> Parser<'_, T> {
                     {
                         Ok(count) => Some(count),
                         Err(_) => {
-                            return Err(CompileError::new(
-                                Error::ArrayTooLarge,
-                                int_span.in_mod(self.toks.module),
-                            ));
+                            return Err(CompileError::new(Error::ArrayTooLarge, int_span));
                         }
                     }
                 };
@@ -1458,7 +1447,7 @@ impl<T: TreeToken> Parser<'_, T> {
                 })
             }
             TokenType::Underscore => Ok(UnresolvedType::Infer(tok.span())),
-            _ => Err(unexpected(tok, self.toks.module, ExpectedTokens::Type)),
+            _ => Err(unexpected(tok, ExpectedTokens::Type)),
         }
     }
 
@@ -1504,8 +1493,7 @@ impl<T: TreeToken> Parser<'_, T> {
         if generic_count.is_err() {
             let start = generics[0].span().start;
             let end = generics.last().unwrap().span().end;
-            return Err(Error::TooManyGenerics(generics.len())
-                .at_span(TSpan::new(start, end).in_mod(self.toks.module)));
+            return Err(Error::TooManyGenerics(generics.len()).at_span(TSpan::new(start, end)));
         };
         Ok((generics.into_boxed_slice(), Some((lbracket, rbracket))))
     }

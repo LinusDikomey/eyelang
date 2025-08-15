@@ -6,7 +6,4 @@ edition = "2024"
 [dependencies]
 token.workspace = true
 dmap.workspace = true
-id.workspace = true
 error.workspace = true
-span.workspace = true
-types.workspace = true

@@ -157,9 +157,7 @@ dependencies = [
  "ir",
  "parser",
  "pathdiff",
- "span",
  "tracing",
- "types",
 ]
 
 [[package]]
@@ -179,7 +177,6 @@ dependencies = [
  "color-format",
  "id",
  "ir",
- "span",
  "token",
 ]
 
@@ -377,10 +374,7 @@ version = "0.1.0"
 dependencies = [
  "dmap",
  "error",
- "id",
- "span",
  "token",
- "types",
 ]
 
 [[package]]
@@ -535,13 +529,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "span"
-version = "0.1.0"
-dependencies = [
- "id",
-]
-
-[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -605,9 +592,6 @@ name = "token"
 version = "0.1.0"
 dependencies = [
  "color-format",
- "id",
- "span",
- "types",
 ]
 
 [[package]]
@@ -657,14 +641,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "types"
-version = "0.1.0"
-dependencies = [
- "id",
- "span",
 ]
 
 [[package]]

@@ -1,18 +1,20 @@
 use std::{num::NonZeroU64, rc::Rc};
 
 use error::Error;
-use id::ModuleId;
 use ir::eval::Val;
-use parser::ast::{Ast, Expr, ExprId, FloatLiteral, IntLiteral, ScopeId};
-use types::{Primitive, Type, UnresolvedType};
+use parser::ast::{
+    Ast, Expr, ExprId, FloatLiteral, IntLiteral, ModuleId, Primitive, ScopeId, UnresolvedType,
+};
 
 use crate::{
-    Compiler, Def,
-    compiler::{Generics, ResolvedPrimitive},
+    Compiler, Def, Type,
+    compiler::{Generics, ModuleSpan, ResolvedPrimitive},
     hir::HIRBuilder,
     irgen,
-    types::TypeTable,
+    typing::TypeTable,
 };
+
+id::id!(ConstValueId);
 
 #[derive(Debug, Clone)]
 pub enum ConstValue {
@@ -59,8 +61,9 @@ pub fn def_expr(
     let mismatched_type = |compiler: &mut Compiler, found| {
         let mut expected = String::new();
         ty.to_string(&mut expected, ast.src());
-        compiler.errors.emit_err(
-            Error::MismatchedType { expected, found }.at_span(ast[expr].span(ast).in_mod(module)),
+        compiler.errors.emit(
+            module,
+            Error::MismatchedType { expected, found }.at_span(ast[expr].span(ast)),
         );
     };
     // TODO: support untyped number constants again
@@ -103,9 +106,9 @@ pub fn def_expr(
                 }
             }
         }
-        Expr::Ident { span, .. } => {
-            let name = &ast[*span];
-            let def = compiler.resolve_in_scope(module, scope, name, span.in_mod(module));
+        &Expr::Ident { span, .. } => {
+            let name = &ast[span];
+            let def = compiler.resolve_in_scope(module, scope, name, ModuleSpan { module, span });
             match def.check_with_type(module, scope, compiler, ty) {
                 Ok(def) => def,
                 Err(found) => {
@@ -127,13 +130,7 @@ pub fn def_expr(
         &Expr::Return { val, .. } => def_expr(compiler, module, scope, ast, val, name, ty),
         &Expr::Function { id } => {
             if compiler
-                .check_signature_with_type(
-                    (module, id),
-                    ty,
-                    scope,
-                    module,
-                    ast[expr].span(ast).in_mod(module),
-                )
+                .check_signature_with_type((module, id), ty, scope, module)
                 .is_ok()
             {
                 Def::Function(module, id)
@@ -193,9 +190,9 @@ pub fn def_expr(
             match value_expr(compiler, module, scope, ast, expr, ty) {
                 Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
                 Err(err) => {
-                    compiler.errors.emit_err(
-                        Error::EvalFailed(err).at_span(ast[expr].span(ast).in_mod(module)),
-                    );
+                    compiler
+                        .errors
+                        .emit(module, Error::EvalFailed(err).at_span(ast[expr].span(ast)));
                     Def::Invalid
                 }
             }

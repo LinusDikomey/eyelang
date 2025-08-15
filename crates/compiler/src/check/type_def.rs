@@ -2,12 +2,10 @@ use std::rc::Rc;
 
 use dmap::DHashMap;
 use error::Error;
-use id::{ModuleId, TypeId};
-use parser::ast::{self, TraitId};
-use types::Type;
+use parser::ast::{self, ModuleId, TraitId};
 
 use crate::{
-    Compiler, Def,
+    Compiler, Def, Type, TypeId,
     compiler::{ResolvedEnumDef, ResolvedStructDef, ResolvedTypeContent, ResolvedTypeDef},
 };
 
@@ -69,9 +67,9 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
             Def::Trait(module, id) => (module, id),
             Def::Invalid => continue,
             _ => {
-                compiler.errors.emit_err(
-                    Error::TraitExpected
-                        .at_span(trait_impl.implemented_trait.span().in_mod(module)),
+                compiler.errors.emit(
+                    module,
+                    Error::TraitExpected.at_span(trait_impl.implemented_trait.span()),
                 );
                 continue;
             }
@@ -110,7 +108,7 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
                         .unwrap();
                     compiler
                         .errors
-                        .emit_err(Error::DuplicateDefinition.at_span(span.in_mod(module)));
+                        .emit(module, Error::DuplicateDefinition.at_span(span));
                 }
             }
             inherent_trait_impls

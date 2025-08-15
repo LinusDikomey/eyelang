@@ -7,21 +7,19 @@ use std::rc::Rc;
 
 pub use entry_point::entry_point;
 
-use ::types::Type;
-use id::ModuleId;
 use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
-use parser::ast;
+use parser::ast::{self, ModuleId};
 
-use crate::Compiler;
 use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
-use crate::types::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
+use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
+use crate::{Compiler, Type};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
-    types::{TypeInfo, TypeTable},
+    typing::{TypeInfo, TypeTable},
 };
 
 pub fn declare_function(

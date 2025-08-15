@@ -3,7 +3,7 @@ use error::Error;
 use crate::{
     Compiler,
     hir::CastType,
-    types::{LocalTypeId, TypeInfo, TypeTable},
+    typing::{LocalTypeId, TypeInfo, TypeTable},
 };
 
 pub fn check(

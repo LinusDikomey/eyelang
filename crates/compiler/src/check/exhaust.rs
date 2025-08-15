@@ -4,7 +4,8 @@ use dmap::DHashMap;
 
 use crate::{
     Compiler,
-    types::{TypeInfo, TypeTable},
+    types::Type,
+    typing::{TypeInfo, TypeTable},
 };
 
 #[derive(Clone, Copy)]
@@ -61,7 +62,7 @@ impl Exhaustion {
             Exhaustion::None => match ty {
                 TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
                 TypeInfo::TypeDef(id, generics) => {
-                    let generics: Box<[types::Type]> = generics
+                    let generics: Box<[Type]> = generics
                         .iter()
                         .map(|ty| types.to_generic_resolved(types[ty]).expect("TODO"))
                         .collect();

@@ -1,12 +1,9 @@
 use std::rc::Rc;
 
-use id::TypeId;
-use types::Type;
-
 use crate::{
-    Compiler,
+    Compiler, Type, TypeId,
     compiler::ResolvedTypeContent,
-    types::{LocalTypeIds, TypeInfo, TypeTable},
+    typing::{LocalTypeIds, TypeInfo, TypeTable},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -230,9 +227,9 @@ pub fn int_from_variant_count(count: u32) -> ir::Primitive {
     }
 }
 
-pub fn get_primitive(p: types::Primitive) -> ir::Primitive {
+pub fn get_primitive(p: parser::ast::Primitive) -> ir::Primitive {
     use ir::Primitive as I;
-    use types::Primitive as P;
+    use parser::ast::Primitive as P;
     match p {
         P::I8 => I::I8,
         P::I16 => I::I16,

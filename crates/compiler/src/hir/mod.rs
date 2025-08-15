@@ -2,14 +2,14 @@ mod display;
 
 use std::ops::{Index, IndexMut};
 
-use id::{ConstValueId, ModuleId, id};
-use parser::ast::{AssignType, FunctionId, GlobalId, TraitId};
-use types::{FloatType, IntType};
+use id::id;
+use parser::ast::{AssignType, FloatType, FunctionId, GlobalId, IntType, ModuleId, TraitId};
 
 use crate::{
     Compiler,
     compiler::{CaptureId, Generics, VarId},
-    types::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
+    eval::ConstValueId,
+    typing::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
 };
 
 /// High-level intermediate representation for a function. It is created during type checking and

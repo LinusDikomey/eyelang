@@ -4,10 +4,8 @@ use std::{
 };
 
 use error::Error;
-use id::{ModuleId, TypeId};
-use parser::ast::{self, TraitId};
-use span::{Span, TSpan};
-use types::{InvalidTypeError, Layout, Primitive, Type};
+use error::span::TSpan;
+use parser::ast::{self, ModuleId, Primitive, TraitId, UnresolvedType};
 
 mod display;
 mod unify;
@@ -15,12 +13,14 @@ mod unify;
 use unify::unify;
 
 use crate::{
-    Compiler,
+    Compiler, InvalidTypeError, TypeId,
     check::{
         expr::{int_primitive_from_variant_count, type_info_from_variant_count},
         traits,
     },
-    compiler::{Def, Generics, ResolvedTypeContent},
+    compiler::{Def, Generics, ModuleSpan, ResolvedTypeContent},
+    layout::Layout,
+    types::{FunctionType, Type},
 };
 
 id::id!(LocalTypeId);
@@ -222,7 +222,7 @@ impl TypeTable {
             TypeInfo::Function {
                 params,
                 return_type,
-            } => Type::Function(types::FunctionType {
+            } => Type::Function(FunctionType {
                 params: params
                     .iter()
                     .map(|id| self.to_generic_resolved(self[id]))
@@ -284,7 +284,7 @@ impl TypeTable {
     pub fn add_missing_bounds(&mut self, count: u32) -> Bounds {
         let start = self.bounds.len() as u32;
         self.bounds.extend((0..count).map(|_| Bound {
-            trait_id: (ModuleId::MISSING, TraitId::MISSING),
+            trait_id: (ModuleId::MISSING, TraitId::from_inner(u32::MAX)),
             generics: LocalTypeIds::EMPTY,
             span: TSpan::MISSING,
         }));
@@ -422,14 +422,14 @@ impl TypeTable {
 
     pub fn info_from_unresolved(
         &mut self,
-        ty: &types::UnresolvedType,
+        ty: &UnresolvedType,
         compiler: &mut crate::Compiler,
         module: ModuleId,
         scope: ast::ScopeId,
     ) -> TypeInfo {
         match ty {
-            types::UnresolvedType::Primitive { ty, .. } => TypeInfo::Primitive(*ty),
-            types::UnresolvedType::Unresolved(path, generics) => {
+            UnresolvedType::Primitive { ty, .. } => TypeInfo::Primitive(*ty),
+            UnresolvedType::Unresolved(path, generics) => {
                 let def = compiler.resolve_path(module, scope, *path);
                 match def {
                     Def::Invalid => TypeInfo::Invalid,
@@ -437,23 +437,25 @@ impl TypeTable {
                         // TODO: decide if types without generic annotations should be allowed
                         let required_generics = compiler.get_resolved_type_generic_count(id);
                         let Some((generics, generics_span)) = generics else {
-                            compiler.errors.emit_err(
+                            compiler.errors.emit(
+                                module,
                                 Error::InvalidGenericCount {
                                     expected: required_generics,
                                     found: 0,
                                 }
-                                .at_span(ty.span().in_mod(module)),
+                                .at_span(ty.span()),
                             );
                             return TypeInfo::Invalid;
                         };
                         let count = generics.len() as u8;
                         if count != required_generics {
-                            compiler.errors.emit_err(
+                            compiler.errors.emit(
+                                module,
                                 Error::InvalidGenericCount {
                                     expected: required_generics,
                                     found: count,
                                 }
-                                .at_span(generics_span.in_mod(module)),
+                                .at_span(*generics_span),
                             );
                             return TypeInfo::Invalid;
                         }
@@ -466,10 +468,10 @@ impl TypeTable {
                         TypeInfo::TypeDef(id, generic_types)
                     }
                     Def::Type(ty) => {
-                        if let Some((_, span)) = generics {
+                        if let &Some((_, span)) = generics {
                             compiler
                                 .errors
-                                .emit_err(Error::UnexpectedGenerics.at_span(span.in_mod(module)));
+                                .emit(module, Error::UnexpectedGenerics.at_span(span));
                             return TypeInfo::Invalid;
                         }
                         let generics = generics.as_ref().map(|(generics, _)| {
@@ -494,17 +496,17 @@ impl TypeTable {
                     | Def::Trait(_, _) => {
                         compiler
                             .errors
-                            .emit_err(Error::TypeExpected.at_span(path.span().in_mod(module)));
+                            .emit(module, Error::TypeExpected.at_span(path.span()));
                         TypeInfo::Invalid
                     }
                 }
             }
-            types::UnresolvedType::Pointer(b) => {
+            UnresolvedType::Pointer(b) => {
                 let (pointee, _) = &**b;
                 let pointee = self.info_from_unresolved(pointee, compiler, module, scope);
                 TypeInfo::Pointer(self.add(pointee))
             }
-            types::UnresolvedType::Array(b) => {
+            UnresolvedType::Array(b) => {
                 let (elem, count, _) = &**b;
                 let elem = self.info_from_unresolved(elem, compiler, module, scope);
                 TypeInfo::Array {
@@ -512,7 +514,7 @@ impl TypeTable {
                     count: *count,
                 }
             }
-            types::UnresolvedType::Tuple(elems, _) => {
+            UnresolvedType::Tuple(elems, _) => {
                 let ids = LocalTypeIds {
                     idx: self.types.len() as _,
                     count: elems.len() as _,
@@ -529,7 +531,7 @@ impl TypeTable {
 
                 TypeInfo::Tuple(ids)
             }
-            types::UnresolvedType::Function {
+            UnresolvedType::Function {
                 span_and_return_type,
                 params,
             } => {
@@ -545,7 +547,7 @@ impl TypeTable {
                     return_type: self.add(return_type),
                 }
             }
-            types::UnresolvedType::Infer(_) => TypeInfo::Unknown,
+            UnresolvedType::Infer(_) => TypeInfo::Unknown,
         }
     }
 
@@ -659,7 +661,7 @@ impl TypeTable {
         mut b: LocalTypeId,
         generics: &Generics,
         compiler: &mut Compiler,
-        span: impl FnOnce() -> Span,
+        span: impl FnOnce() -> ModuleSpan,
     ) {
         let a_ty = loop {
             match self.types[a.idx()] {
@@ -683,9 +685,11 @@ impl TypeTable {
             self.type_to_string(compiler, a_ty, &mut expected);
             let mut found = String::new();
             self.type_to_string(compiler, b_ty, &mut found);
-            compiler
-                .errors
-                .emit_err(Error::MismatchedType { expected, found }.at_span(span()));
+            let ModuleSpan { module, span } = span();
+            compiler.errors.emit(
+                module,
+                Error::MismatchedType { expected, found }.at_span(span),
+            );
             TypeInfo::Invalid
         });
         self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(new);
@@ -727,7 +731,7 @@ impl TypeTable {
         info: TypeInfo,
         function_generics: &Generics,
         compiler: &mut Compiler,
-        span: impl FnOnce() -> Span,
+        span: impl FnOnce() -> ModuleSpan,
     ) {
         if let Err((a, b)) = self.try_specify(a, info, function_generics, compiler) {
             self.mismatched_type_error(compiler, a, b, span());
@@ -741,7 +745,7 @@ impl TypeTable {
         generics: LocalTypeIds,
         function_generics: &Generics,
         compiler: &mut Compiler,
-        span: impl FnOnce() -> Span,
+        span: impl FnOnce() -> ModuleSpan,
     ) {
         if let Err((a, b)) =
             self.try_specify_resolved(id, resolved, generics, function_generics, compiler)
@@ -840,14 +844,22 @@ impl TypeTable {
         }
     }
 
-    fn mismatched_type_error(&self, compiler: &mut Compiler, a: TypeInfo, b: TypeInfo, span: Span) {
+    fn mismatched_type_error(
+        &self,
+        compiler: &mut Compiler,
+        a: TypeInfo,
+        b: TypeInfo,
+        span: ModuleSpan,
+    ) {
         let mut expected = String::new();
         self.type_to_string(compiler, a, &mut expected);
         let mut found = String::new();
         self.type_to_string(compiler, b, &mut found);
-        compiler
-            .errors
-            .emit_err(Error::MismatchedType { expected, found }.at_span(span));
+        let ModuleSpan { module, span } = span;
+        compiler.errors.emit(
+            module,
+            Error::MismatchedType { expected, found }.at_span(span),
+        );
     }
 
     pub fn try_specify_resolved(
@@ -1087,17 +1099,18 @@ impl TypeTable {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
                         self.type_to_string(compiler, info, &mut type_name);
-                        compiler.errors.emit_err(
+                        compiler.errors.emit(
+                            module,
                             Error::UnsatisfiedTraitBound {
                                 trait_name,
                                 ty: type_name,
                             }
-                            .at_span(span.in_mod(module)),
+                            .at_span(span),
                         );
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                     }
                     traits::Candidates::Unique { instance } => {
-                        let span = || span.in_mod(module);
+                        let span = || ModuleSpan { module, span };
                         match instance {
                             TypeInfoOrIdx::TypeInfo(info) => {
                                 self.specify(ty, info, function_generics, compiler, span)
@@ -1131,11 +1144,12 @@ impl TypeTable {
                         if let Some(new_info) = new_candidate {
                             self.replace(idx, new_info);
                         } else {
-                            compiler.errors.emit_err(
+                            compiler.errors.emit(
+                                module,
                                 Error::TypeAnnotationNeeded {
                                     bound: name, // TODO: should also show generics here
                                 }
-                                .at_span(span.in_mod(module)),
+                                .at_span(span),
                             );
                             self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Invalid);
                         }
@@ -1155,11 +1169,12 @@ impl TypeTable {
                         let name = compiler
                             .get_trait_name(bound.trait_id.0, bound.trait_id.1)
                             .to_owned();
-                        compiler.errors.emit_err(
+                        compiler.errors.emit(
+                            module,
                             Error::TypeMustBeKnownHere {
                                 needed_bound: Some(name),
                             }
-                            .at_span(bound.span.in_mod(module)),
+                            .at_span(bound.span),
                         );
                         *ty = TypeInfo::Invalid;
                     } else {
@@ -1345,7 +1360,7 @@ pub fn resolved_layout(
     generics: &[Type],
 ) -> Result<Layout, InvalidTypeError> {
     Ok(match ty {
-        Type::Primitive(p) => p.layout(),
+        &Type::Primitive(p) => Layout::primitive(p),
         Type::DefId {
             id,
             generics: ty_generics,
@@ -1372,7 +1387,7 @@ pub fn resolved_layout(
                 }
                 ResolvedTypeContent::Enum(enum_def) => {
                     let variant_ty = int_primitive_from_variant_count(enum_def.variants.len() as _);
-                    let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Primitive::layout);
+                    let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Layout::primitive);
                     let mut layout = Layout::EMPTY;
                     for (_, args) in &enum_def.variants {
                         let mut variant_layout = variant_ty_layout;
@@ -1397,7 +1412,7 @@ pub fn resolved_layout(
         &Type::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
         Type::LocalEnum(variants) => {
             let variant_ty = int_primitive_from_variant_count(variants.len() as _);
-            let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Primitive::layout);
+            let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Layout::primitive);
             let mut layout = Layout::EMPTY;
             for (_, args) in variants {
                 let mut variant_layout = variant_ty_layout;

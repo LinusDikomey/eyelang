@@ -17,17 +17,20 @@ mod eval;
 mod hir;
 /// hir->ir lowering
 mod irgen;
+/// Memory layout of types
+mod layout;
 /// call the system linker
 mod link;
 /// module file path discovery
 mod modules;
-/// TypeTable data structure and logic for type inference/checking
 mod types;
+/// TypeTable data structure and logic for type inference/checking
+mod typing;
 
-pub use compiler::{Compiler, Def, ProjectError};
+pub use compiler::{Compiler, Def, ModuleSpan, ProjectError};
 pub use link::link;
 pub use modules::all_project_files_from_root;
-pub use span::{IdentPath, Span, TSpan};
+pub use types::{FunctionType, InvalidTypeError, Type, TypeId};
 
 id::id!(ProjectId);
 impl Default for ProjectId {

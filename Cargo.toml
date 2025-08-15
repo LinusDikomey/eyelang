@@ -3,8 +3,6 @@
 members = [
     "crates/eye",
     "crates/compiler",
-    "crates/span",
-    "crates/types",
     "crates/id",
     "crates/dmap",
     "crates/ir",
@@ -22,8 +20,6 @@ resolver = "2"
 
 [workspace.dependencies]
 compiler.path = "crates/compiler"
-span.path = "crates/span"
-types.path = "crates/types"
 id.path = "crates/id"
 dmap.path = "crates/dmap"
 ir.path = "crates/ir"

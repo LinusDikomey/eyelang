@@ -1,11 +1,9 @@
-use id::{ModuleId, TypeId};
-use parser::ast::{FunctionId, TraitId};
-use span::Span;
-use types::Type;
+use parser::ast::{FunctionId, ModuleId, TraitId};
 
 use crate::{
-    Compiler, ProjectId,
-    types::{LocalTypeIds, TypeInfo},
+    Compiler, ProjectId, Type, TypeId,
+    compiler::ModuleSpan,
+    typing::{LocalTypeIds, TypeInfo},
 };
 
 use super::Def;
@@ -53,7 +51,7 @@ impl Default for Primitives {
 }
 
 fn resolve_module(compiler: &mut Compiler, module: ModuleId, name: &str) -> ModuleId {
-    let def = compiler.resolve_in_module(module, name, Span::MISSING);
+    let def = compiler.resolve_in_module(module, name, ModuleSpan::MISSING);
     let Def::Module(id) = def else {
         panic!("Missing builtin module {name}, found {def:?}");
     };
@@ -66,7 +64,7 @@ fn resolve_type(
     name: &str,
     generic_count: u8,
 ) -> TypeId {
-    let def = compiler.resolve_in_module(module, name, Span::MISSING);
+    let def = compiler.resolve_in_module(module, name, ModuleSpan::MISSING);
     let Def::Type(ty) = def else {
         panic!("Missing builtin type {name}, found {def:?}");
     };
@@ -108,7 +106,7 @@ pub fn get_str_eq(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
     let Def::Type(Type::DefId {
         id: str_type,
         generics: _,
-    }) = compiler.resolve_in_module(string_module, "str", Span::MISSING)
+    }) = compiler.resolve_in_module(string_module, "str", ModuleSpan::MISSING)
     else {
         panic!("missing std.string.str");
     };
@@ -127,7 +125,7 @@ pub fn get_prelude(compiler: &mut Compiler) -> Option<ModuleId> {
     let std = compiler.builtins.std;
     (std != ProjectId::MISSING).then(|| {
         let root = compiler.get_project(std).root_module;
-        let prelude = compiler.resolve_in_module(root, "prelude", Span::MISSING);
+        let prelude = compiler.resolve_in_module(root, "prelude", ModuleSpan::MISSING);
         let Def::Module(prelude) = prelude else {
             panic!("expected a module for std.prelude, found {prelude:?}");
         };
@@ -143,7 +141,7 @@ pub fn get_panic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
 
     let std = compiler.builtins.std;
     let root = compiler.get_project(std).root_module;
-    let def = compiler.resolve_in_module(root, "panic", Span::MISSING);
+    let def = compiler.resolve_in_module(root, "panic", ModuleSpan::MISSING);
     let Def::Function(panic_mod, panic_func) = def else {
         panic!("expected a function for std.panic, found {def:?}")
     };
@@ -157,11 +155,11 @@ pub fn get_intrinsic(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
     }
     let std = compiler.builtins.std;
     let root = compiler.get_project(std).root_module;
-    let def = compiler.resolve_in_module(root, "intrinsics", Span::MISSING);
+    let def = compiler.resolve_in_module(root, "intrinsics", ModuleSpan::MISSING);
     let Def::Module(intrinsics_module) = def else {
         panic!("expected a module for std.intrinsics but found {def:?}")
     };
-    let def = compiler.resolve_in_module(intrinsics_module, "intrinsic", Span::MISSING);
+    let def = compiler.resolve_in_module(intrinsics_module, "intrinsic", ModuleSpan::MISSING);
     let Def::Function(module, id) = def else {
         panic!("expected a module for std.intrinsics but found {def:?}")
     };
@@ -175,11 +173,11 @@ pub fn get_iterator(compiler: &mut Compiler) -> (ModuleId, TraitId) {
     }
     let std = compiler.builtins.std;
     let root = compiler.get_project(std).root_module;
-    let def = compiler.resolve_in_module(root, "iter", Span::MISSING);
+    let def = compiler.resolve_in_module(root, "iter", ModuleSpan::MISSING);
     let Def::Module(iter_module) = def else {
         panic!("expected a module for std.iter but found {def:?}");
     };
-    let def = compiler.resolve_in_module(iter_module, "Iterator", Span::MISSING);
+    let def = compiler.resolve_in_module(iter_module, "Iterator", ModuleSpan::MISSING);
     let Def::Trait(module, id) = def else {
         panic!("expected a trait for std.iter.Iterator but found {def:?}");
     };
@@ -193,11 +191,11 @@ pub fn get_option(compiler: &mut Compiler) -> TypeId {
     }
     let std = compiler.builtins.std;
     let root = compiler.get_project(std).root_module;
-    let def = compiler.resolve_in_module(root, "option", Span::MISSING);
+    let def = compiler.resolve_in_module(root, "option", ModuleSpan::MISSING);
     let Def::Module(option_module) = def else {
         panic!("expected a module for std.option but found {def:?}");
     };
-    let def = compiler.resolve_in_module(option_module, "Option", Span::MISSING);
+    let def = compiler.resolve_in_module(option_module, "Option", ModuleSpan::MISSING);
     let Def::GenericType(id) = def else {
         panic!("expected a type for std.option.Option but found {def:?}");
     };

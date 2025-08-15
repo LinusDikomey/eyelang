@@ -1,7 +1,6 @@
 use ir::{Environment, builder::Builder};
-use types::Type;
 
-use crate::compiler::Dialects;
+use crate::{Type, compiler::Dialects};
 
 /// Create function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.

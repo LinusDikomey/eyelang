@@ -1,13 +1,14 @@
 use std::rc::Rc;
 
-use types::{Layout, Primitive, Type};
+use parser::ast::Primitive;
 
 use crate::{
-    Compiler,
+    Compiler, Type,
     check::expr::{int_primitive_from_variant_count, type_from_variant_count},
     compiler::ResolvedTypeContent,
     eval::{self, ConstValue},
-    types::resolved_layout,
+    layout::Layout,
+    typing::resolved_layout,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -78,7 +79,7 @@ pub fn translate(
                         };
                         let variant_layout =
                             int_primitive_from_variant_count(enum_def.variants.len() as _)
-                                .map_or(Layout::EMPTY, |p| p.layout());
+                                .map_or(Layout::EMPTY, Layout::primitive);
                         let ty = type_from_variant_count(enum_def.variants.len() as _);
                         translate(
                             &elems[0],

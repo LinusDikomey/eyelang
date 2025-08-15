@@ -4,7 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-span.workspace = true
-id.workspace = true
 color-format.workspace = true
-types.workspace = true

@@ -4,7 +4,7 @@ use crate::{
     Compiler,
     check::expr::int_primitive_from_variant_count,
     compiler::{Generics, ResolvedTypeContent},
-    types::{TypeInfoOrIdx, traits},
+    typing::{TypeInfoOrIdx, traits},
 };
 
 use super::{LocalTypeId, TypeInfo, TypeTable};

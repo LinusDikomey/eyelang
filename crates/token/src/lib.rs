@@ -1,7 +1,10 @@
-use color_format::cwrite;
-use span::TSpan;
-use std::fmt;
-use types::{FloatType, IntType, Primitive};
+mod literal;
+mod primitive;
+mod token_types;
+
+pub use literal::{FloatLiteral, IntLiteral};
+pub use primitive::{FloatType, IntType, Primitive};
+pub use token_types::TokenType;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
@@ -24,139 +27,6 @@ impl Token {
 
     pub fn get_val<'a>(&self, src: &'a str) -> &'a str {
         &src[self.start as usize..self.end as usize]
-    }
-
-    pub fn span(&self) -> TSpan {
-        TSpan::new(self.start, self.end)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TokenType {
-    Eof,
-
-    Colon,
-    DoubleColon,
-    Comma,
-    Semicolon,
-    Dot,
-    DotDot,
-    DotDotLessThan,
-    TripleDot,
-
-    LParen,
-    RParen,
-    LBrace,
-    RBrace,
-    LBracket,
-    RBracket,
-
-    Bang,
-    At,
-
-    Plus,
-    Minus,
-    Star,
-    Slash,
-    Percent,
-
-    Ampersand,
-    SnackWave,
-    Caret,
-
-    Underscore,
-
-    Equals,
-    DoubleEquals,
-    BangEquals,
-
-    PlusEquals,
-    MinusEquals,
-    StarEquals,
-    SlashEquals,
-    PercentEquals,
-
-    LessThan,
-    GreaterThan,
-    LessEquals,
-    GreaterEquals,
-
-    Declare,
-
-    Arrow,
-
-    StringLiteral,
-    IntLiteral,
-    FloatLiteral,
-
-    Keyword(Keyword),
-    Ident,
-}
-impl fmt::Display for TokenType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (s, is_keyword) = self.text_repr();
-        if is_keyword {
-            cwrite!(f, "keyword #i;m<{}>", s)
-        } else {
-            cwrite!(f, "#c<{}>", s)
-        }
-    }
-}
-impl TokenType {
-    /// returns a raw text representation of the token type and wether it is a text
-    fn text_repr(self) -> (&'static str, bool) {
-        let mut is_keyword = false;
-        let s = match self {
-            TokenType::Colon => ":",
-            TokenType::DoubleColon => "::",
-            TokenType::Comma => ",",
-            TokenType::Semicolon => ";",
-            TokenType::Dot => ".",
-            TokenType::DotDot => "..",
-            TokenType::DotDotLessThan => "..<",
-            TokenType::TripleDot => "...",
-            TokenType::LParen => "(",
-            TokenType::RParen => ")",
-            TokenType::LBrace => "{",
-            TokenType::RBrace => "}",
-            TokenType::LBracket => "[",
-            TokenType::RBracket => "]",
-            TokenType::Bang => "!",
-            TokenType::At => "@",
-            TokenType::Plus => "+",
-            TokenType::Minus => "-",
-            TokenType::Star => "*",
-            TokenType::Slash => "/",
-            TokenType::Percent => "%",
-            TokenType::Ampersand => "&",
-            TokenType::SnackWave => "~",
-            TokenType::Caret => "^",
-            TokenType::Underscore => "_",
-            TokenType::Equals => "=",
-            TokenType::DoubleEquals => "==",
-            TokenType::BangEquals => "!=",
-            TokenType::PlusEquals => "+=",
-            TokenType::MinusEquals => "-=",
-            TokenType::StarEquals => "*=",
-            TokenType::SlashEquals => "/=",
-            TokenType::PercentEquals => "%=",
-            TokenType::LessThan => "<",
-            TokenType::GreaterThan => ">",
-            TokenType::LessEquals => "<=",
-            TokenType::GreaterEquals => ">=",
-            TokenType::Declare => ":=",
-            TokenType::Arrow => "->",
-            TokenType::StringLiteral => "string literal",
-            TokenType::IntLiteral => "int literal",
-            TokenType::FloatLiteral => "float literal",
-            TokenType::Keyword(kw) => {
-                is_keyword = true;
-                kw.into()
-            }
-            TokenType::Ident => "identifier",
-            TokenType::Eof => "<end of file>",
-        };
-        (s, is_keyword)
     }
 }
 
@@ -222,42 +92,6 @@ impl<const N: usize> From<TokenTypes<N>> for ExpectedTokens {
 impl From<TokenType> for ExpectedTokens {
     fn from(value: TokenType) -> Self {
         Self::Specific(value)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct IntLiteral {
-    pub val: u128,
-    pub ty: Option<IntType>,
-}
-impl IntLiteral {
-    pub fn parse(s: &str) -> Self {
-        let val = s.parse::<u128>().unwrap();
-        Self { val, ty: None }
-    }
-}
-impl fmt::Display for IntLiteral {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.val)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FloatLiteral {
-    pub val: f64,
-    pub ty: Option<FloatType>,
-}
-impl FloatLiteral {
-    pub fn parse(s: &str) -> Self {
-        Self {
-            val: s.parse().unwrap(),
-            ty: None,
-        }
-    }
-}
-impl fmt::Display for FloatLiteral {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.val)
     }
 }
 

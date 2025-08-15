@@ -5,7 +5,7 @@ use crate::{
     check::exhaust,
     compiler::{VarId, builtins},
     hir::Pattern,
-    types::{LocalTypeId, LocalTypeIds, TypeInfo},
+    typing::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
 use parser::ast::{Expr, ExprId, IntLiteral, Operator, UnOp};
@@ -54,9 +54,7 @@ pub fn check(
                 }
                 Expr::FloatLiteral { .. } => todo!("negative float patterns"),
                 _ => {
-                    ctx.compiler
-                        .errors
-                        .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
+                    ctx.emit(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
                     Pattern::Invalid
                 }
             }
@@ -106,17 +104,13 @@ pub fn check(
                             Kind::Float
                         }
                         _ => {
-                            ctx.compiler
-                                .errors
-                                .emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
+                            ctx.emit(Error::NotAPatternRangeValue.at_span(ctx.span(expr_ref)));
                             ctx.invalidate(expected);
                             Kind::Invalid
                         }
                     },
                     _ => {
-                        ctx.compiler
-                            .errors
-                            .emit_span(Error::NotAPatternRangeValue, ctx.span(expr_ref));
+                        ctx.emit(Error::NotAPatternRangeValue.at_span(ctx.span(expr_ref)));
                         ctx.invalidate(expected);
                         Kind::Invalid
                     }
@@ -132,9 +126,7 @@ pub fn check(
                     inclusive,
                 }
             } else {
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
+                ctx.emit(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
                 Pattern::Invalid
             }
         }
@@ -167,9 +159,7 @@ pub fn check(
                 Err(err) => {
                     ctx.invalidate(expected);
                     if let Some(err) = err {
-                        ctx.compiler
-                            .errors
-                            .emit_err(err.at_span(span.in_mod(ctx.module)));
+                        ctx.emit(err.at_span(span));
                     }
                     for arg in args {
                         let mut arg_exhaustion = Exhaustion::None;
@@ -223,9 +213,7 @@ pub fn check(
             }
         }
         _ => {
-            ctx.compiler
-                .errors
-                .emit_err(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
+            ctx.emit(Error::NotAPattern { coming_soon: false }.at_span(ctx.span(pat)));
             *exhaustion = Exhaustion::Invalid;
             Pattern::Invalid
         }

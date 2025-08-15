@@ -4,35 +4,31 @@ mod tokenize;
 
 use dmap::DHashMap;
 
-use id::ModuleId;
-
-use error::{CompileError, Error, Errors};
-use span::Span;
+use error::{CompileError, Error, Errors, span::TSpan};
 use token::{ExpectedTokens, Token};
 use tokenize::Tokenizer;
 
 use crate::ast::{Definition, TreeToken};
 
-fn unexpected(token: Token, module: ModuleId, expected: ExpectedTokens) -> CompileError {
+fn unexpected(token: Token, expected: ExpectedTokens) -> CompileError {
     CompileError {
         err: Error::UnexpectedToken {
             expected,
             found: token.ty,
         },
-        span: Span::new(token.start, token.end, module),
+        span: TSpan::new(token.start, token.end),
     }
 }
 
 pub fn parse<T: TreeToken>(
     source: Box<str>,
     errors: &mut Errors,
-    module: ModuleId,
     definitions: DHashMap<String, Definition<T>>,
 ) -> ast::Ast<T> {
     let mut ast_builder = ast::AstBuilder::new();
     let mut parser = Parser {
         ast: &mut ast_builder,
-        toks: Tokenizer::new(&source, module, errors),
+        toks: Tokenizer::new(&source, errors),
     };
 
     let scope = parser.parse_module(definitions);
@@ -71,8 +67,9 @@ mod tests {
 
     fn test_parse(s: &str) -> Ast {
         let mut errors = Errors::new();
-        errors.enable_crash_on_error();
-        super::parse(s.into(), &mut errors, id::ModuleId(0), dmap::new())
+        let ast = super::parse(s.into(), &mut errors, dmap::new());
+        assert_eq!(errors.error_count(), 0);
+        ast
     }
 
     #[test]

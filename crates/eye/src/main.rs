@@ -5,11 +5,11 @@ mod std_path;
 use std::path::{Path, PathBuf};
 
 use args::Backend;
-pub use compiler::{Compiler, Span};
+pub use compiler::Compiler;
 
-use compiler::Def;
+use compiler::{Def, ModuleSpan};
 
-use error::Error;
+use error::{Error, span::TSpan};
 
 #[derive(Debug)]
 pub enum MainError {
@@ -92,9 +92,15 @@ fn main() -> Result<(), MainError> {
     // check that the main function exists if we are not compiling a library
     let main = (!args.lib)
         .then(|| {
-            let main_def =
-                compiler.resolve_in_module(root_module, "main", Span::new(0, 0, root_module));
-            let (main_module, main_id) = match main_def {
+            let main_def = compiler.resolve_in_module(
+                root_module,
+                "main",
+                ModuleSpan {
+                    module: root_module,
+                    span: TSpan::new(0, 0),
+                },
+            );
+            let (main_function_module, main_id) = match main_def {
                 Def::Function(main_module, main_id) => (main_module, main_id),
                 Def::Invalid => {
                     compiler.print_errors();
@@ -106,20 +112,20 @@ fn main() -> Result<(), MainError> {
 
                     compiler
                         .errors
-                        .emit_err(Error::MainIsNotAFunction.at_span(span));
+                        .emit(span.module, Error::MainIsNotAFunction.at_span(span.span));
                     compiler.print_errors();
                     return Err(MainError::ErrorsFound);
                 }
             };
-            let signature = compiler.get_signature(main_module, main_id);
-            if let Err(err) = compiler::check::verify_main_signature(signature, main_module) {
+            let signature = compiler.get_signature(main_function_module, main_id);
+            if let Err(err) = compiler::check::verify_main_signature(signature) {
                 if let Some(error) = err {
-                    compiler.errors.emit_err(error);
+                    compiler.errors.emit(main_function_module, error);
                 }
                 compiler.print_errors();
                 return Err(MainError::ErrorsFound);
             }
-            Ok((main_module, main_id))
+            Ok((main_function_module, main_id))
         })
         .transpose()?;
 

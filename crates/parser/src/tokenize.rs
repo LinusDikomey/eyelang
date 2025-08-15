@@ -1,24 +1,19 @@
-use id::ModuleId;
-use span::Span;
-
-use error::{CompileError, Error, Errors};
+use error::{CompileError, Error, Errors, span::TSpan};
 use token::{ExpectedTokens, Keyword, Token, TokenType, TokenTypes};
 
 pub struct Tokenizer<'a> {
     pub src: &'a str,
-    pub module: ModuleId,
     pub errors: &'a mut Errors,
     cached: Option<Token>,
     pos: u32,
 }
 impl<'a> Tokenizer<'a> {
-    pub fn new(src: &'a str, module: ModuleId, errors: &'a mut Errors) -> Self {
+    pub fn new(src: &'a str, errors: &'a mut Errors) -> Self {
         if src.len() > u32::MAX as usize {
             panic!("Can't handle parsing of files larger than 2**32 bytes = 4GiB");
         }
         Self {
             src,
-            module,
             errors,
             cached: None,
             pos: 0,
@@ -62,7 +57,7 @@ impl<'a> Tokenizer<'a> {
                     expected: expected.into(),
                     found: token.ty,
                 },
-                span: token.span().in_mod(self.module),
+                span: TSpan::new(token.start, token.end),
             })
         }
     }
@@ -107,10 +102,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn next_token(&mut self) -> Token {
-        let module = self.module;
         let emit_invalid = |invalid: &mut Option<(u32, u32)>, errors: &mut Errors| {
             if let Some((start, end)) = invalid.take() {
-                errors.emit(Error::UnexpectedCharacters, start, end, module);
+                errors.emit_err(Error::UnexpectedCharacters.at_span(TSpan::new(start, end)));
             }
         };
         let mut invalid_chars = None;
@@ -222,11 +216,8 @@ impl<'a> Tokenizer<'a> {
                                 break;
                             }
                             if is_float {
-                                self.errors.emit(
-                                    Error::MultipleDotsInFloatLiteral,
-                                    self.pos,
-                                    self.pos,
-                                    self.module,
+                                self.errors.emit_err(
+                                    Error::MultipleDotsInFloatLiteral.at(self.pos, self.pos),
                                 );
                             }
                             is_float = true;
@@ -245,13 +236,11 @@ impl<'a> Tokenizer<'a> {
                             Some(b'"') => break,
                             Some(_) => {}
                             None => {
-                                self.errors.emit(
+                                self.errors.emit_err(
                                     Error::UnexpectedEndOfFile {
                                         expected: ExpectedTokens::EndOfStringLiteral,
-                                    },
-                                    start,
-                                    self.pos - 1,
-                                    self.module,
+                                    }
+                                    .at_span(TSpan::new(start, self.pos)),
                                 );
                                 break;
                             }
@@ -301,7 +290,7 @@ impl<'a> Tokenizer<'a> {
                     Error::UnexpectedEndOfFile {
                         expected: ExpectedTokens::EndOfMultilineComment,
                     }
-                    .at_span(Span::new(start, self.pos - 1, self.module)),
+                    .at_span(TSpan::new(start, self.pos)),
                 );
                 break;
             };

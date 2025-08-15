@@ -15,7 +15,3 @@ macro_rules! id {
         }
     };
 }
-
-id!(ModuleId);
-id!(TypeId);
-id!(ConstValueId);

@@ -1,15 +1,13 @@
 use std::rc::Rc;
 
-use id::ConstValueId;
-use span::TSpan;
-use types::Type;
-
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent},
+    eval::ConstValueId,
     hir::{Node, NodeIds},
-    types::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
+    types::Type,
+    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
 };
-use error::Error;
+use error::{Error, span::TSpan};
 use parser::ast::{Call, ExprId, ExprIds};
 
 use super::{Ctx, expr};
@@ -50,9 +48,7 @@ pub fn check_call(
                         })
                     }
                     ResolvedTypeContent::Enum(_) => {
-                        ctx.compiler
-                            .errors
-                            .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                        ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
                         Node::Invalid
                     }
                 }
@@ -60,9 +56,7 @@ pub fn check_call(
             TypeInfo::Invalid => Node::Invalid,
             _ => {
                 ctx.invalidate(expected);
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
                 Node::Invalid
             }
         },
@@ -123,7 +117,7 @@ pub fn check_call(
                     }
                 }
                 Err(err) => {
-                    ctx.compiler.errors.emit_err(err);
+                    ctx.emit(err);
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
@@ -175,7 +169,7 @@ pub fn check_call(
                     }
                 }
                 Err(err) => {
-                    ctx.compiler.errors.emit_err(err);
+                    ctx.emit(err);
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
@@ -240,7 +234,7 @@ pub fn check_call(
                     }
                 }
                 Err(err) => {
-                    ctx.compiler.errors.emit_err(err);
+                    ctx.emit(err);
                     ctx.invalidate(expected);
                     Node::Invalid
                 }
@@ -256,7 +250,7 @@ pub fn check_call(
                 ast[expr].span(ast)
             });
             if call.args.count + 1 != arg_types.count {
-                ctx.compiler.errors.emit_err(
+                ctx.emit(
                     Error::InvalidArgCount {
                         expected: arg_types.count - 1,
                         varargs: false,
@@ -360,7 +354,7 @@ pub fn check_call(
                     }
                 }
                 Err(err) => {
-                    ctx.compiler.errors.emit_err(err);
+                    ctx.emit(err);
                     ctx.invalidate(expected);
                     ctx.invalidate(self_ty);
                     Node::Invalid
@@ -374,14 +368,14 @@ pub fn check_call(
                     .get_trait_name(trait_id.0, trait_id.1)
                     .to_owned()
             });
-            ctx.compiler.errors.emit_err(
+            ctx.emit(
                 Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
             );
             ctx.invalidate(expected);
             Node::Invalid
         }
         TypeInfo::Unknown => {
-            ctx.compiler.errors.emit_err(
+            ctx.emit(
                 Error::TypeMustBeKnownHere { needed_bound: None }
                     .at_span(ctx.span(call.called_expr)),
             );
@@ -389,9 +383,7 @@ pub fn check_call(
             Node::Invalid
         }
         _ => {
-            ctx.compiler
-                .errors
-                .emit_err(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
+            ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
             Node::Invalid
         }
     }
@@ -459,7 +451,7 @@ fn check_call_args(
         varargs,
         extra_arg_slot,
     )
-    .map_err(|err| err.at_span(span.in_mod(ctx.module)))?;
+    .map_err(|err| err.at_span(span))?;
     check_call_args_inner(
         ctx,
         scope,
@@ -523,18 +515,16 @@ fn check_call_args_inner(
         ctx.hir.modify_node(node_idx, node);
     }
 
-    for (name_span, value) in named_args {
-        let name = &ctx.ast[*name_span];
+    for &(name_span, value) in named_args {
+        let name = &ctx.ast[name_span];
         let Some(i) = named_params
             .iter()
             .position(|(arg_name, _, _)| &**arg_name == name)
         else {
-            ctx.compiler
-                .errors
-                .emit_err(Error::NonexistantNamedArg.at_span(name_span.in_mod(ctx.module)));
+            ctx.emit(Error::NonexistantNamedArg.at_span(name_span));
             // still check the expr with an unknown expected type
             let ty = ctx.hir.types.add_unknown();
-            expr::check(ctx, *value, scope, ty, return_ty, noreturn);
+            expr::check(ctx, value, scope, ty, return_ty, noreturn);
             if *noreturn {
                 return Ok((all_arg_nodes, arg_types));
             }
@@ -542,7 +532,7 @@ fn check_call_args_inner(
         };
         let node_idx = arg_nodes.iter().nth(param_count as usize + i).unwrap();
         let ty = param_arg_types.nth(param_count + i as u32).unwrap();
-        let node = expr::check(ctx, *value, scope, ty, return_ty, noreturn);
+        let node = expr::check(ctx, value, scope, ty, return_ty, noreturn);
         if *noreturn {
             return Ok((all_arg_nodes, arg_types));
         }
@@ -574,7 +564,7 @@ fn check_call_args_inner(
         return Err(Error::MissingNamedArgs {
             names: missing_named_args.into_boxed_slice(),
         }
-        .at_span(span.in_mod(ctx.module)));
+        .at_span(span));
     }
     debug_assert_eq!(all_arg_nodes.count, arg_types.count);
     Ok((all_arg_nodes, arg_types))
@@ -606,7 +596,7 @@ fn check_struct_initializer(
     ) {
         Ok((elems, elem_types)) => Ok(Node::TupleLiteral { elems, elem_types }),
         Err(err) => {
-            ctx.compiler.errors.emit_err(err);
+            ctx.emit(err);
             Err(())
         }
     }

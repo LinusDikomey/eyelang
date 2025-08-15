@@ -2,11 +2,9 @@ use std::rc::Rc;
 
 use dmap::DHashMap;
 use error::Error;
-use id::{ModuleId, TypeId};
-use parser::ast::FunctionId;
+use error::span::TSpan;
 use parser::ast::{self, Ast, TraitId};
-use span::TSpan;
-use types::{InvalidTypeError, Primitive, Type};
+use parser::ast::{FunctionId, ModuleId};
 
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
@@ -14,8 +12,9 @@ use crate::{
     Compiler,
     compiler::Signature,
     compiler::{CheckedTrait, Generics},
-    types::Bound,
+    typing::Bound,
 };
+use crate::{InvalidTypeError, Type, TypeId};
 
 pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
     let module = id.0;
@@ -33,7 +32,7 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
             if prev.is_some() {
                 compiler
                     .errors
-                    .emit_err(Error::DuplicateDefinition.at_span(name_span.in_mod(module)));
+                    .emit(module, Error::DuplicateDefinition.at_span(*name_span));
             }
             compiler.check_signature(function, module, &ast)
         })
@@ -90,18 +89,19 @@ pub fn check_impl(
         .collect();
 
     if trait_generics.len() as u8 != trait_generic_count {
-        compiler.errors.emit_err(
+        compiler.errors.emit(
+            module,
             Error::InvalidGenericCount {
                 expected: trait_generic_count,
                 found: trait_generics.len() as _,
             }
-            .at_span(impl_.trait_generics.1.in_mod(module)),
+            .at_span(impl_.trait_generics.1),
         );
         return None;
     }
 
     let impl_tree = ImplTree::from_type(impl_ty);
-    let mut function_ids = vec![ast::FunctionId(u32::MAX); trait_functions.len()];
+    let mut function_ids = vec![ast::FunctionId::from_inner(u32::MAX); trait_functions.len()];
     let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
         .chain(trait_generics.clone())
         .collect();
@@ -109,19 +109,20 @@ pub fn check_impl(
     for &(name_span, function) in &impl_.functions {
         let name = &ast[name_span];
         let Some(&function_idx) = trait_functions_by_name.get(name) else {
-            compiler.errors.emit_err(
+            compiler.errors.emit(
+                module,
                 Error::NotATraitMember {
                     trait_name: trait_name.to_owned(),
                     function: name.to_owned(),
                 }
-                .at_span(name_span.in_mod(module)),
+                .at_span(name_span),
             );
             continue;
         };
-        if function_ids[function_idx as usize].0 != u32::MAX {
+        if function_ids[function_idx as usize] != ast::FunctionId::from_inner(u32::MAX) {
             compiler
                 .errors
-                .emit_err(Error::DuplicateDefinition.at_span(name_span.in_mod(module)));
+                .emit(module, Error::DuplicateDefinition.at_span(name_span));
             continue;
         }
 
@@ -135,22 +136,23 @@ pub fn check_impl(
         );
         match compatible {
             Ok(None) | Err(InvalidTypeError) => {}
-            Ok(Some(incompat)) => compiler.errors.emit_err(
-                Error::TraitSignatureMismatch(incompat).at_span(name_span.in_mod(module)),
+            Ok(Some(incompat)) => compiler.errors.emit(
+                module,
+                Error::TraitSignatureMismatch(incompat).at_span(name_span),
             ),
         }
         function_ids[function_idx as usize] = function;
     }
     let mut unimplemented = Vec::new();
     for (name, &i) in trait_functions_by_name {
-        if function_ids[i as usize] == ast::FunctionId(u32::MAX) {
+        if function_ids[i as usize] == ast::FunctionId::from_inner(u32::MAX) {
             unimplemented.push(name.clone());
         }
     }
     if !unimplemented.is_empty() {
-        compiler.errors.emit_err(
-            Error::NotAllFunctionsImplemented { unimplemented }
-                .at_span(ast[impl_.scope].span.in_mod(module)),
+        compiler.errors.emit(
+            module,
+            Error::NotAllFunctionsImplemented { unimplemented }.at_span(ast[impl_.scope].span),
         );
     }
     Some(Impl {
@@ -173,7 +175,7 @@ pub enum Candidates {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaseType {
     Invalid,
-    Primitive(Primitive),
+    Primitive(ast::Primitive),
     TypeId(TypeId),
     Pointer,
     Tuple,

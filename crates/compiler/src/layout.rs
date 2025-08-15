@@ -1,3 +1,5 @@
+use parser::ast::Primitive;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     pub size: u64,
@@ -18,6 +20,21 @@ impl Layout {
         Layout {
             size: elem.stride() * count as u64,
             alignment: elem.alignment,
+        }
+    }
+
+    pub fn primitive(p: Primitive) -> Layout {
+        let size_and_align = match p {
+            Primitive::Type => 0,
+            Primitive::I8 | Primitive::U8 => 1,
+            Primitive::I16 | Primitive::U16 => 2,
+            Primitive::I32 | Primitive::U32 | Primitive::F32 => 4,
+            Primitive::I64 | Primitive::U64 | Primitive::F64 => 8,
+            Primitive::I128 | Primitive::U128 => 16,
+        };
+        Layout {
+            size: size_and_align,
+            alignment: size_and_align.max(1),
         }
     }
 
@@ -47,26 +64,18 @@ impl Layout {
         self.size = self.size.max(variant.size);
         self.alignment = self.alignment.max(variant.alignment);
     }
-
-    #[must_use]
-    pub fn mul_size(self, factor: u64) -> Self {
-        Self {
-            size: self.size * factor,
-            alignment: self.alignment,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{IntType, Primitive};
+    use parser::ast::{IntType, Primitive};
 
     use super::*;
 
     fn layout(items: impl IntoIterator<Item = IntType>) -> Layout {
         let mut l = Layout::EMPTY;
         for item in items {
-            l.accumulate(Primitive::from(item).layout());
+            l.accumulate(Layout::primitive(Primitive::from(item)));
         }
         l
     }
@@ -105,7 +114,7 @@ mod tests {
         let a = layout([I::I32, I::I16]); // 6, 4
         let mut b = Layout::EMPTY;
         b.accumulate(a);
-        b.accumulate(Primitive::I32.layout());
+        b.accumulate(Layout::primitive(Primitive::I32));
         assert_eq!(
             b,
             Layout {

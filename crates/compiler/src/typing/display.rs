@@ -4,7 +4,7 @@ use color_format::cwrite;
 
 use crate::{
     Compiler,
-    types::{LocalTypeId, TypeTable},
+    typing::{LocalTypeId, TypeTable},
 };
 
 pub struct TypeDisplay<'a> {

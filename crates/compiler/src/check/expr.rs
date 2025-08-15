@@ -1,17 +1,19 @@
 use std::rc::Rc;
 
-use error::Error;
-use id::{ConstValueId, ModuleId, TypeId};
-use span::TSpan;
-use types::{Primitive, Type};
+use error::{Error, span::TSpan};
 
 use crate::{
-    compiler::{Def, LocalItem, LocalScope, LocalScopeParent, ResolvedTypeContent, builtins},
+    compiler::{
+        Def, LocalItem, LocalScope, LocalScopeParent, ModuleSpan, ResolvedTypeContent, builtins,
+    },
+    eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    types::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    types::{Type, TypeId},
+    typing::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 use parser::ast::{
-    Ast, Expr, ExprId, ExprIds, FloatLiteral, FunctionId, IntLiteral, Operator, UnOp,
+    Ast, Expr, ExprId, ExprIds, FloatLiteral, FunctionId, IntLiteral, ModuleId, Operator,
+    Primitive, UnOp,
 };
 
 use super::{Ctx, call, closure::closure, exhaust::Exhaustion, lval, pattern};
@@ -209,9 +211,7 @@ pub fn check(
         }
         Expr::Hole { .. } => {
             ctx.invalidate(expected);
-            ctx.compiler
-                .errors
-                .emit_err(Error::HoleLHSOnly.at_span(ctx.span(expr)));
+            ctx.emit(Error::HoleLHSOnly.at_span(ctx.span(expr)));
             Node::Invalid
         }
 
@@ -403,7 +403,7 @@ pub fn check(
                 _ => {
                     // TODO: could add TupleCountMode and stuff again to unify with tuple with
                     // Size::AtLeast. Not doing that for now since it is very rare.
-                    ctx.compiler.errors.emit_err(
+                    ctx.emit(
                         Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
                     );
                     ctx.invalidate(expected);
@@ -418,9 +418,7 @@ pub fn check(
                     elem_types,
                 }
             } else {
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
+                ctx.emit(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
                 Node::Invalid
             }
         }
@@ -584,7 +582,7 @@ pub fn check(
             let mut all_branches_noreturn = true;
             for i in 0..branch_count {
                 vars.clear();
-                let pat = ExprId(extra_branches + 2 * i);
+                let pat = ExprId::from_inner(extra_branches + 2 * i);
                 let pat = pattern::check(ctx, &mut vars, &mut exhaustion, pat, matched_ty);
                 ctx.hir
                     .modify_pattern(hir::PatternId(patterns.index + i), pat);
@@ -594,7 +592,7 @@ pub fn check(
                     module: scope.module,
                     static_scope: None,
                 };
-                let branch = ExprId(extra_branches + 2 * i + 1);
+                let branch = ExprId::from_inner(extra_branches + 2 * i + 1);
                 let mut branch_noreturn = false;
                 let branch = check(
                     ctx,
@@ -763,18 +761,14 @@ pub fn check(
         Expr::Asm { .. } => todo!("implement inline assembly properly"),
         Expr::Break { .. } => {
             if ctx.control_flow_stack.is_empty() {
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::BreakOutsideLoop.at_span(ctx.span(expr)));
+                ctx.emit(Error::BreakOutsideLoop.at_span(ctx.span(expr)));
                 return Node::Invalid;
             }
             Node::Break(0)
         }
         Expr::Continue { .. } => {
             if ctx.control_flow_stack.is_empty() {
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::ContinueOutsideLoop.at_span(ctx.span(expr)));
+                ctx.emit(Error::ContinueOutsideLoop.at_span(ctx.span(expr)));
                 return Node::Invalid;
             }
             Node::Continue(0)
@@ -786,7 +780,7 @@ fn check_ident(
     ctx: &mut Ctx<'_>,
     scope: &mut LocalScope<'_>,
     expected: LocalTypeId,
-    span: span::TSpan,
+    span: TSpan,
 ) -> Node {
     let name = &ctx.ast[span];
     match scope.resolve(name, span, ctx.compiler) {
@@ -907,9 +901,7 @@ fn check_enum_literal(
         Err(err) => {
             ctx.invalidate(expected);
             if let Some(err) = err {
-                ctx.compiler
-                    .errors
-                    .emit_err(err.at_span(span.in_mod(ctx.module)));
+                ctx.emit(err.at_span(span));
             }
             // the expected type was invalid, still check the arguments against an unknown type
             for arg in args.into_iter() {
@@ -973,9 +965,7 @@ fn check_member_access(
                 return Node::Invalid;
             };
             let Some(&method_index) = checked.functions_by_name.get(name) else {
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)));
+                ctx.emit(Error::NonexistantMember(None).at_span(name_span));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             };
@@ -991,9 +981,14 @@ fn check_member_access(
             return Node::Invalid;
         }
         TypeInfo::ModuleItem(id) => {
-            let def = ctx
-                .compiler
-                .resolve_in_module(id, name, name_span.in_mod(ctx.module));
+            let def = ctx.compiler.resolve_in_module(
+                id,
+                name,
+                ModuleSpan {
+                    module: ctx.module,
+                    span: name_span,
+                },
+            );
             return def_to_node(ctx, def, expected, name_span);
         }
         _ => {}
@@ -1017,9 +1012,7 @@ fn check_member_access(
                             ast[expr].span(ast)
                         })
                     else {
-                        ctx.compiler
-                            .errors
-                            .emit_err(Error::NotAnInstanceMethod.at_span(ctx.span(expr)));
+                        ctx.emit(Error::NotAnInstanceMethod.at_span(ctx.span(expr)));
                         ctx.invalidate(expected);
                         return Node::Invalid;
                     };
@@ -1067,9 +1060,7 @@ fn check_member_access(
                         };
                     }
                 }
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)));
+                ctx.emit(Error::NonexistantMember(None).at_span(name_span));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1080,16 +1071,12 @@ fn check_member_access(
                         .get_trait_name(trait_id.0, trait_id.1)
                         .to_owned()
                 });
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+                ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
             TypeInfo::Unknown => {
-                ctx.compiler.errors.emit_err(
-                    Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
-                );
+                ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1100,9 +1087,7 @@ fn check_member_access(
             other => {
                 let hint =
                     matches!(other, TypeInfo::Enum(_)).then_some(error::MemberHint::InferredEnum);
-                ctx.compiler
-                    .errors
-                    .emit_err(Error::NonexistantMember(hint).at_span(name_span.in_mod(ctx.module)));
+                ctx.emit(Error::NonexistantMember(hint).at_span(name_span));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1141,7 +1126,10 @@ fn check_is_instance_method(
                         generics,
                         ctx.generics,
                         ctx.compiler,
-                        || span(ctx.ast).in_mod(ctx.module),
+                        || ModuleSpan {
+                            module: ctx.module,
+                            span: span(ctx.ast),
+                        },
                     );
                 }
                 return Some((required_pointer_count, call_generics));
@@ -1259,22 +1247,16 @@ fn check_type_item_member_access(
                 let id = ctx.hir.types.get_bound(bound).trait_id;
                 ctx.compiler.get_trait_name(id.0, id.1).to_owned()
             });
-            ctx.compiler
-                .errors
-                .emit_err(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+            ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
             return Node::Invalid;
         }
         TypeInfo::Unknown => {
-            ctx.compiler.errors.emit_err(
-                Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
-            );
+            ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)));
             return Node::Invalid;
         }
         _ => {}
     };
-    ctx.compiler
-        .errors
-        .emit_err(Error::NonexistantMember(None).at_span(name_span.in_mod(ctx.module)));
+    ctx.emit(Error::NonexistantMember(None).at_span(name_span));
     ctx.invalidate(expected);
     Node::Invalid
 }

@@ -1,26 +1,97 @@
 use dmap::{self, DHashMap};
-use id::ModuleId;
-use span::{Span, TSpan};
+use error::span::TSpan;
 use std::{fmt::Debug, ops::Index};
 
-pub use span::IdentPath;
-pub use token::{AssignType, FloatLiteral, IntLiteral, Operator, Token, TokenType};
-pub use types::{Primitive, UnresolvedType};
+pub use error::span::IdentPath;
+pub use token::{
+    AssignType, FloatLiteral, FloatType, IntLiteral, IntType, Operator, Primitive, Token, TokenType,
+};
 
-pub mod repr;
+macro_rules! ids {
+    ($($name: ident)*) => {
+        $(
+            #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+            pub struct $name(u32);
+            impl $name {
+                pub const fn from_inner(inner: u32) -> Self {
+                    Self(inner)
+                }
+
+                pub fn idx(self) -> usize {
+                    self.0 as usize
+                }
+            }
+        )*
+    };
+}
 
 // All of these ids are local to their ast
+ids! {
+    ScopeId
+    ExprId
+    CallId
+    FunctionId
+    TypeId
+    TraitId
+    GlobalId
+    IdentId
+    MemberAccessId
+    DefExprId
+    ModuleId
+}
 
-id::id!(ScopeId);
-id::id!(ExprId);
-id::id!(CallId);
-id::id!(FunctionId);
-id::id!(TypeId);
-id::id!(TraitId);
-id::id!(GlobalId);
-id::id!(IdentId);
-id::id!(MemberAccessId);
-id::id!(DefExprId);
+impl ModuleId {
+    pub const MISSING: Self = Self(u32::MAX);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExprIds {
+    pub idx: u32,
+    pub count: u32,
+}
+impl ExprIds {
+    pub const EMPTY: Self = Self { idx: 0, count: 0 };
+}
+impl Iterator for ExprIds {
+    type Item = ExprId;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.count.checked_sub(1).map(|count| {
+            self.count = count;
+            let idx = self.idx;
+            self.idx += 1;
+            ExprId(idx)
+        })
+    }
+}
+impl ExactSizeIterator for ExprIds {
+    fn len(&self) -> usize {
+        self.count as usize
+    }
+}
+
+pub struct ExprIdPairs {
+    idx: u32,
+    pair_count: u32,
+}
+impl ExprIdPairs {
+    pub const EMPTY: Self = Self {
+        idx: 0,
+        pair_count: 0,
+    };
+}
+impl Iterator for ExprIdPairs {
+    type Item = (ExprId, ExprId);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pair_count.checked_sub(1).map(|count| {
+            self.pair_count = count;
+            let idx = self.idx;
+            self.idx += 2;
+            (ExprId(idx), ExprId(idx + 1))
+        })
+    }
+}
 
 /// Ast for a single file
 #[derive(Debug)]
@@ -415,32 +486,6 @@ pub enum Definition<T: TreeToken = ()> {
     Global(GlobalId),
     Module(ModuleId),
     Generic(u8),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ExprIds {
-    pub idx: u32,
-    pub count: u32,
-}
-impl ExprIds {
-    pub const EMPTY: Self = Self { idx: 0, count: 0 };
-}
-impl Iterator for ExprIds {
-    type Item = ExprId;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.count.checked_sub(1).map(|count| {
-            self.count = count;
-            let idx = self.idx;
-            self.idx += 1;
-            ExprId(idx)
-        })
-    }
-}
-impl ExactSizeIterator for ExprIds {
-    fn len(&self) -> usize {
-        self.count as usize
-    }
 }
 
 pub struct Item<T: TreeToken> {
@@ -879,10 +924,6 @@ impl<T: TreeToken> Expr<T> {
         }
     }
 
-    pub fn span_in(&self, ast: &Ast<T>, module: ModuleId) -> Span {
-        self.span(ast).in_mod(module)
-    }
-
     pub fn start(&self, ast: &Ast<T>) -> u32 {
         self.start_inner(
             &ast.exprs,
@@ -960,5 +1001,120 @@ pub enum UnOp {
 impl UnOp {
     pub fn postfix(self) -> bool {
         matches!(self, UnOp::Deref)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UnresolvedType {
+    Primitive {
+        ty: Primitive,
+        span_start: u32,
+    },
+    Unresolved(IdentPath, Option<(Box<[UnresolvedType]>, TSpan)>),
+    Pointer(Box<(UnresolvedType, u32)>),
+    Array(Box<(UnresolvedType, Option<u32>, TSpan)>),
+    Tuple(Vec<UnresolvedType>, TSpan),
+    Function {
+        span_and_return_type: Box<(TSpan, UnresolvedType)>,
+        params: Box<[UnresolvedType]>,
+    },
+    Infer(TSpan),
+}
+impl UnresolvedType {
+    pub fn to_string(&self, s: &mut String, src: &str) {
+        match self {
+            &UnresolvedType::Primitive { ty, .. } => s.push_str(ty.into()),
+            UnresolvedType::Unresolved(path, generics) => {
+                let (root, segments, last) = path.segments(src);
+                if root.is_some() {
+                    s.push_str("root");
+                }
+                let mut prev = root.is_some();
+                for (segment, _) in segments {
+                    if prev {
+                        s.push('.');
+                    }
+                    s.push_str(segment);
+                    prev = true;
+                }
+                if let Some((last, _)) = last {
+                    if prev {
+                        s.push('.');
+                    }
+                    s.push_str(last);
+                }
+                if let Some((generics, _)) = generics {
+                    s.push('[');
+                    for (i, ty) in generics.iter().enumerate() {
+                        if i != 0 {
+                            s.push_str(", ");
+                            ty.to_string(s, src);
+                        }
+                    }
+                    s.push(']');
+                }
+            }
+            UnresolvedType::Pointer(pointee) => {
+                s.push('*');
+                pointee.0.to_string(s, src);
+            }
+            UnresolvedType::Array(b) => {
+                s.push('[');
+                b.0.to_string(s, src);
+                s.push_str("; ");
+                use core::fmt::Write;
+                match b.1 {
+                    Some(count) => write!(s, "{count}]").unwrap(),
+                    None => s.push_str("_]"),
+                }
+            }
+            UnresolvedType::Tuple(types, _) => {
+                s.push('(');
+                for (i, ty) in types.iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    ty.to_string(s, src);
+                }
+                s.push(')');
+            }
+            UnresolvedType::Function {
+                span_and_return_type,
+                params,
+            } => {
+                s.push_str("fn(");
+                for (i, ty) in params.iter().enumerate() {
+                    if i != 0 {
+                        s.push_str(", ");
+                    }
+                    ty.to_string(s, src);
+                }
+                s.push_str(") -> ");
+                span_and_return_type.1.to_string(s, src);
+            }
+            UnresolvedType::Infer(_) => s.push('_'),
+        }
+    }
+
+    pub fn span(&self) -> TSpan {
+        match self {
+            &UnresolvedType::Primitive { ty, span_start } => {
+                TSpan::with_len(span_start, ty.token_len().get())
+            }
+            UnresolvedType::Tuple(_, span) | UnresolvedType::Infer(span) => *span,
+            UnresolvedType::Unresolved(path, generics) => generics.as_ref().map_or_else(
+                || path.span(),
+                |generics| TSpan::new(path.span().start, generics.1.end),
+            ),
+            UnresolvedType::Array(array) => array.2,
+            UnresolvedType::Pointer(ptr) => {
+                let (inner, start) = &**ptr;
+                TSpan::new(*start, inner.span().end)
+            }
+            UnresolvedType::Function {
+                span_and_return_type,
+                ..
+            } => span_and_return_type.0,
+        }
     }
 }

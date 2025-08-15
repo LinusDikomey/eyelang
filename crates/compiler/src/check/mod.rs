@@ -10,22 +10,19 @@ mod type_def;
 
 use std::rc::Rc;
 
-use error::{CompileError, Error};
-use parser::ast::{Ast, ExprId, ScopeId};
+use error::{CompileError, Error, Errors, span::TSpan};
+use parser::ast::{Ast, ExprId, ModuleId, ScopeId};
 pub use traits::trait_def;
 pub use type_def::type_def;
 
-use id::ModuleId;
-use span::TSpan;
-use types::Type;
-
 use crate::{
-    Compiler,
+    Compiler, Type,
     compiler::{
-        CheckedFunction, Generics, LocalScopeParent, Resolvable, Signature, VarId, builtins,
+        CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Resolvable, Signature, VarId,
+        builtins,
     },
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
-    types::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
+    typing::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use self::exhaust::Exhaustion;
@@ -172,6 +169,38 @@ pub fn check(
     (hir, types)
 }
 
+pub struct ProjectErrors {
+    pub by_file: dmap::DHashMap<ModuleId, Errors>,
+    crash_on_error: bool,
+}
+impl ProjectErrors {
+    #[track_caller]
+    pub fn emit(&mut self, module: ModuleId, error: CompileError) {
+        if self.crash_on_error {
+            panic!(
+                "Error encountered and --crash-on-error is enabled. The error is: {error:?} in {module:?}"
+            );
+        }
+        self.by_file.entry(module).or_default().emit_err(error);
+    }
+
+    pub fn enable_crash_on_error(&mut self) {
+        self.crash_on_error = true;
+    }
+
+    pub fn new() -> Self {
+        Self {
+            by_file: dmap::new(),
+            crash_on_error: false,
+        }
+    }
+
+    pub fn add_module(&mut self, module: ModuleId, errors: Errors) {
+        let previous = self.by_file.insert(module, errors);
+        debug_assert!(previous.is_none(), "Duplicate module inserted into errors");
+    }
+}
+
 pub struct Ctx<'a> {
     pub compiler: &'a mut Compiler,
     pub ast: &'a Ast,
@@ -188,12 +217,16 @@ pub struct Ctx<'a> {
     pub capture_elements_to_replace: Vec<NodeId>,
 }
 impl Ctx<'_> {
+    fn emit(&mut self, error: CompileError) {
+        self.compiler.errors.emit(self.module, error);
+    }
+
     fn primitives(&self) -> &builtins::Primitives {
         &self.compiler.builtins.primitives
     }
 
-    fn span(&self, expr: ExprId) -> span::Span {
-        self.ast[expr].span_in(self.ast, self.module)
+    fn span(&self, expr: ExprId) -> TSpan {
+        self.ast[expr].span(self.ast)
     }
 
     fn specify(
@@ -205,8 +238,9 @@ impl Ctx<'_> {
         let info = info.into();
         self.hir
             .types
-            .specify(ty, info, self.generics, self.compiler, || {
-                span(self.ast).in_mod(self.module)
+            .specify(ty, info, self.generics, self.compiler, || ModuleSpan {
+                module: self.module,
+                span: span(self.ast),
             })
     }
 
@@ -228,8 +262,9 @@ impl Ctx<'_> {
     fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
         self.hir
             .types
-            .unify(a, b, self.generics, self.compiler, || {
-                span(self.ast).in_mod(self.module)
+            .unify(a, b, self.generics, self.compiler, || ModuleSpan {
+                module: self.module,
+                span: span(self.ast),
             })
     }
 
@@ -307,9 +342,8 @@ impl Ctx<'_> {
                 .finish(root, self.compiler, self.generics, self.module, params);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
-                let error =
-                    Error::Inexhaustive.at_span(self.ast[pat].span_in(self.ast, self.module));
-                self.compiler.errors.emit_err(error)
+                let error = Error::Inexhaustive.at_span(self.ast[pat].span(self.ast));
+                self.compiler.errors.emit(self.module, error);
             }
         }
         for (from_ty, to_ty, cast_expr, cast_id) in self.deferred_casts {
@@ -318,34 +352,26 @@ impl Ctx<'_> {
             if let Some(err) = err {
                 self.compiler
                     .errors
-                    .emit_err(err.at_span(self.ast[cast_expr].span_in(self.ast, self.module)));
+                    .emit(self.module, err.at_span(self.ast[cast_expr].span(self.ast)));
             }
         }
         (hir, types)
     }
 }
 
-pub fn verify_main_signature(
-    signature: &Signature,
-    main_module: ModuleId,
-) -> Result<(), Option<CompileError>> {
+pub fn verify_main_signature(signature: &Signature) -> Result<(), Option<CompileError>> {
     if !signature.params.is_empty() || signature.varargs {
-        return Err(Some(
-            Error::MainArgs.at_span(signature.span.in_mod(main_module)),
-        ));
+        return Err(Some(Error::MainArgs.at_span(signature.span)));
     }
     if signature.generics.count() != 0 {
-        return Err(Some(
-            Error::MainGenerics.at_span(signature.span.in_mod(main_module)),
-        ));
+        return Err(Some(Error::MainGenerics.at_span(signature.span)));
     }
     match &signature.return_type {
         Type::Invalid => Err(None),
         Type::Tuple(elems) if elems.is_empty() => Ok(()),
         Type::Primitive(p) if p.is_int() => Ok(()),
         ty => Err(Some(
-            Error::InvalidMainReturnType(ty.to_string())
-                .at_span(signature.span.in_mod(main_module)),
+            Error::InvalidMainReturnType(ty.to_string()).at_span(signature.span),
         )),
     }
 }

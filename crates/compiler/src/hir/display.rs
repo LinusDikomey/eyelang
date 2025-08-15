@@ -1,8 +1,7 @@
 use std::fmt;
 
 use color_format::{cwrite, cwriteln};
-use parser::ast::AssignType;
-use types::Primitive;
+use parser::ast::{AssignType, Primitive};
 
 use crate::{
     Compiler,
@@ -10,7 +9,7 @@ use crate::{
         Arithmetic, CastType, Comparison, Hir, LValue, LValueId, Logic, Node, NodeId, Pattern,
         PatternId, PatternIds, TypeProperty,
     },
-    types::{LocalTypeId, LocalTypeIds, TypeTable},
+    typing::{LocalTypeId, LocalTypeIds, TypeTable},
 };
 
 pub struct HirDisplay<'a> {
@@ -130,8 +129,8 @@ impl<'a> fmt::Display for HirDisplay<'a> {
             &Node::Global(module, id, ty) => cwrite!(
                 f,
                 "(#b<global> {}:{}): {}",
-                module.0,
-                id.0,
+                module.idx(),
+                id.idx(),
                 types.display(compiler, ty)
             )?,
             &Node::Assign(lval, val, assign_ty, ty) => {
@@ -445,8 +444,8 @@ impl<'a> fmt::Display for HirDisplay<'a> {
                 cwrite!(
                     f,
                     "(#b<call-trait-method> <#m<trait> {}:{}",
-                    trait_id.0.0,
-                    trait_id.1.0
+                    trait_id.0.idx(),
+                    trait_id.1.idx()
                 )?;
                 if trait_generics.count > 0 {
                     cwrite!(f, "[")?;
@@ -478,7 +477,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
                 )?;
             }
             &Node::FunctionItem(module, function, generics) => {
-                cwrite!(f, "(#b<function> {}:{}[", module.0, function.0)?;
+                cwrite!(f, "(#b<function> {}:{}[", module.idx(), function.idx())?;
                 for (i, generic) in generics.iter().enumerate() {
                     if i != 0 {
                         cwrite!(f, " ")?;
@@ -626,7 +625,7 @@ impl<'a> fmt::Display for LValueDisplay<'a> {
         match hir[*lval] {
             LValue::Invalid => cwrite!(f, "(#b<invalid>)"),
             LValue::Variable(id) => cwrite!(f, "(#b<var> #y<{}>)", id.0),
-            LValue::Global(module, id) => cwrite!(f, "(#b<global> {} {})", module.0, id.0),
+            LValue::Global(module, id) => cwrite!(f, "(#b<global> {} {})", module.idx(), id.idx()),
             LValue::Deref(val) => cwrite!(
                 f,
                 "(deref {})",

@@ -1,12 +1,14 @@
 use core::fmt;
 
-use crate::Primitive;
+use parser::ast::Primitive;
+
+id::id!(TypeId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Primitive(Primitive),
     DefId {
-        id: id::TypeId,
+        id: TypeId,
         generics: Box<[Type]>,
     },
     Pointer(Box<Type>),
