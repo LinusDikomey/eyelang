@@ -26,6 +26,10 @@ impl TSpan {
     pub fn range(self) -> std::ops::Range<usize> {
         self.start as usize..self.end as usize
     }
+
+    pub fn contains(&self, offset: u32) -> bool {
+        self.start <= offset && offset < self.end
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

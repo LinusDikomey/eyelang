@@ -70,15 +70,20 @@ impl ExactSizeIterator for ExprIds {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct ExprIdPairs {
-    idx: u32,
-    pair_count: u32,
+    pub(crate) idx: u32,
+    pub(crate) pair_count: u32,
 }
 impl ExprIdPairs {
     pub const EMPTY: Self = Self {
         idx: 0,
         pair_count: 0,
     };
+
+    pub fn pair_count(&self) -> u32 {
+        self.pair_count
+    }
 }
 impl Iterator for ExprIdPairs {
     type Item = (ExprId, ExprId);
@@ -600,7 +605,7 @@ pub struct Function<T: TreeToken = ()> {
 #[derive(Clone, Debug)]
 pub struct GenericDef<T: TreeToken = ()> {
     /// missing span indicates that this is a `Self` type in a trait definition
-    pub(super) name: TSpan,
+    pub name: TSpan,
     pub t_name: T::Opt<T>,
     pub bounds: Box<[TraitBound]>,
 }
@@ -783,8 +788,7 @@ pub enum Expr<T: TreeToken = ()> {
     Match {
         span: TSpan,
         val: ExprId,
-        extra_branches: u32, // each branch consists of a pat expr and a branch expr
-        branch_count: u32,
+        branches: ExprIdPairs,
     },
     While {
         start: u32,

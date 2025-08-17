@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
-use compiler::{Compiler, ProjectId, check::ProjectErrors};
+use compiler::{Compiler, Def, ModuleSpan, ProjectId, check::ProjectErrors};
+use parser::ast::ModuleId;
 use serde_json::Value;
 
 use crate::{
@@ -8,6 +9,7 @@ use crate::{
     types::{self, Diagnostic, Uri, request::Request},
 };
 
+mod find_in_ast;
 mod handlers;
 
 pub struct Lsp {
@@ -73,13 +75,59 @@ impl Lsp {
     pub fn find_project_of_uri(&self, uri: &Uri) -> Option<ProjectId> {
         let path = uri.path();
         self.projects.iter().copied().find(|&project| {
-            pathdiff::diff_paths(path, &self.compiler.get_project(project).root).is_some_and(
-                |diff| {
-                    !diff
-                        .components()
-                        .any(|c| c == std::path::Component::ParentDir)
-                },
-            )
+            pathdiff::diff_paths(path, &self.compiler.get_project(project).root)
+                .is_some_and(|diff| !diff.components().any(|c| c == Component::ParentDir))
+        })
+    }
+
+    pub fn find_module_of_uri(&mut self, uri: &Uri) -> Option<ModuleId> {
+        let path = uri.path();
+        self.projects.iter().copied().find_map(|project_id| {
+            let project = self.compiler.get_project(project_id);
+            if path == project.root {
+                return Some(project.root_module);
+            }
+            let diff = pathdiff::diff_paths(path, &project.root)?;
+            if diff.components().any(|c| c == Component::ParentDir) {
+                tracing::debug!("Project at {:?} has no relative path", project.root);
+                return None;
+            }
+            let mut module = project.root_module;
+            let mut components = diff.components();
+            let file_name = components.next_back()?;
+            let Component::Normal(file_name) = file_name else {
+                tracing::debug!("not normal");
+                return None;
+            };
+            tracing::debug!("looking for module in project");
+            let final_name = file_name.to_str()?.strip_suffix(".eye")?;
+            for component in components {
+                let Component::Normal(name) = component else {
+                    continue;
+                };
+                let name = name.to_str()?;
+                let Def::Module(new_module) =
+                    self.compiler
+                        .resolve_in_module(module, name, ModuleSpan::MISSING)
+                else {
+                    tracing::debug!("not a module resolved");
+                    return None;
+                };
+                module = new_module;
+            }
+            Some(match final_name {
+                "mod" | "main" => module,
+                _ => {
+                    let Def::Module(module) =
+                        self.compiler
+                            .resolve_in_module(module, final_name, ModuleSpan::MISSING)
+                    else {
+                        tracing::debug!("not a module resolvedin final");
+                        return None;
+                    };
+                    module
+                }
+            })
         })
     }
 

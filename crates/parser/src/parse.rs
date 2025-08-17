@@ -3,9 +3,9 @@ use dmap::DHashMap;
 use std::collections::hash_map::Entry;
 
 use crate::ast::{
-    self, Attribute, Definition, EnumVariantDefinition, Expr, ExprIds, Function, GenericDef,
-    Global, InherentImpl, Item, ItemValue, StructMember, TraitDefinition, TraitFunctions,
-    TreeToken, UnOp, UnresolvedType,
+    self, Attribute, Definition, EnumVariantDefinition, Expr, ExprIdPairs, ExprIds, Function,
+    GenericDef, Global, InherentImpl, Item, ItemValue, StructMember, TraitDefinition,
+    TraitFunctions, TreeToken, UnOp, UnresolvedType,
 };
 
 use crate::unexpected;
@@ -1126,12 +1126,14 @@ impl<T: TreeToken> Parser<'_, T> {
                     })?;
                 debug_assert_eq!(branches.len() % 2, 0);
                 let branch_count = (branches.len() / 2) as u32;
-                let extra_branches = self.ast.exprs(branches).idx;
+                let branches = self.ast.exprs(branches).idx;
                 Expr::Match {
                     span: TSpan::new(lbrace.start, rbrace.end),
                     val,
-                    extra_branches,
-                    branch_count,
+                    branches: ExprIdPairs {
+                        idx: branches,
+                        pair_count: branch_count,
+                    },
                 }
             }
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, scope)?,

@@ -9,9 +9,9 @@ pub trait Request: DeserializeOwned {
 #[derive(Deserialize, Debug)]
 pub struct HoverParams {
     #[serde(flatten)]
-    position: TextDocumentPositionParams,
+    pub position: TextDocumentPositionParams,
     #[serde(flatten)]
-    work_done: WorkDoneProgressParams,
+    pub work_done: WorkDoneProgressParams,
 }
 impl Request for HoverParams {
     type Response = Hover;

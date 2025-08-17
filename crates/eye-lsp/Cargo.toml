@@ -7,6 +7,7 @@ edition = "2024"
 compiler.workspace = true
 error.workspace = true
 dmap.workspace = true
+parser.workspace = true
 
 tracing.workspace = true
 tracing-subscriber.workspace = true

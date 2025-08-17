@@ -569,20 +569,19 @@ pub fn check(
         &Expr::Match {
             span: _,
             val,
-            extra_branches,
-            branch_count,
+            branches,
         } => {
+            let branch_count = branches.pair_count();
             let matched_ty = ctx.hir.types.add_unknown();
             let value = check(ctx, val, scope, matched_ty, return_ty, noreturn);
             let value = ctx.hir.add(value);
             let mut vars = dmap::new();
             let mut exhaustion = Exhaustion::None;
             let patterns = ctx.hir.add_invalid_patterns(branch_count);
-            let branches = ctx.hir.add_invalid_nodes(branch_count);
+            let branch_nodes = ctx.hir.add_invalid_nodes(branch_count);
             let mut all_branches_noreturn = true;
-            for i in 0..branch_count {
+            for ((pat, branch), i) in branches.into_iter().zip(0..) {
                 vars.clear();
-                let pat = ExprId::from_inner(extra_branches + 2 * i);
                 let pat = pattern::check(ctx, &mut vars, &mut exhaustion, pat, matched_ty);
                 ctx.hir
                     .modify_pattern(hir::PatternId(patterns.index + i), pat);
@@ -592,7 +591,6 @@ pub fn check(
                     module: scope.module,
                     static_scope: None,
                 };
-                let branch = ExprId::from_inner(extra_branches + 2 * i + 1);
                 let mut branch_noreturn = false;
                 let branch = check(
                     ctx,
@@ -606,14 +604,15 @@ pub fn check(
                     all_branches_noreturn = false;
                 }
                 vars = scope.variables;
-                ctx.hir.modify_node(hir::NodeId(branches.index + i), branch);
+                ctx.hir
+                    .modify_node(hir::NodeId(branch_nodes.index + i), branch);
             }
             if all_branches_noreturn {
                 *noreturn = true;
             }
             Node::Match {
                 value,
-                branch_index: branches.index,
+                branch_index: branch_nodes.index,
                 pattern_index: patterns.index,
                 branch_count,
                 resulting_ty: expected,

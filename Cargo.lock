@@ -206,6 +206,7 @@ dependencies = [
  "dmap",
  "error",
  "home",
+ "parser",
  "pathdiff",
  "serde",
  "serde_json",

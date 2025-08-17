@@ -89,11 +89,31 @@ pub struct Position {
     pub line: u32,
     pub character: u32,
 }
+impl Position {
+    pub fn to_offset(&self, mut src: &str) -> Option<u32> {
+        let mut offset = 0;
+        for _ in 0..self.line {
+            let i = src.find('\n')? + 1;
+            offset += i as u32;
+            src = &src[i..];
+        }
+        let mut chars = src.chars();
+        for _ in 0..self.character {
+            let c = chars.next()?;
+            if c == '\n' {
+                return None;
+            }
+            offset += c.len_utf8() as u32;
+        }
+
+        Some(offset)
+    }
+}
 
 #[derive(Deserialize, Debug)]
 pub struct TextDocumentPositionParams {
-    textDocument: TextDocumentIdentifier,
-    position: Position,
+    pub textDocument: TextDocumentIdentifier,
+    pub position: Position,
 }
 
 #[derive(Serialize, Deserialize)]

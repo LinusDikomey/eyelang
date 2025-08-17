@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::{
     ResponseError,
-    lsp::Lsp,
+    lsp::{Lsp, find_in_ast},
     types::{
         notification::{DidOpenTextDocumentParams, DidSaveTextDocumentParams},
         request::{Hover, HoverParams},
@@ -126,8 +126,26 @@ impl Lsp {
     }
 
     pub fn hover(&mut self, hover: HoverParams) -> Hover {
+        self.find_project_of_uri(&hover.position.textDocument.uri);
+        let Some(module) = self.find_module_of_uri(&hover.position.textDocument.uri) else {
+            return Hover {
+                contents: "Failed to locate file for hover".to_owned(),
+                range: None,
+            };
+        };
+        let ast = self.compiler.get_module_ast(module);
+        let Some(offset) = hover.position.position.to_offset(ast.src()) else {
+            return Hover {
+                contents: format!(
+                    "invalid offset {}:{}",
+                    hover.position.position.line, hover.position.position.character
+                ),
+                range: None,
+            };
+        };
+        let found = find_in_ast::find(ast, offset);
         Hover {
-            contents: format!("This is a hover text with {hover:?}"),
+            contents: format!("{found:?}"),
             range: None,
         }
     }
