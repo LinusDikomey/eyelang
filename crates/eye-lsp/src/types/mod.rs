@@ -1,13 +1,27 @@
+#![allow(non_snake_case, dead_code)]
+
+pub mod notification;
+pub mod request;
+
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Uri(String);
 impl Uri {
-    pub fn path(&self) -> &str {
-        self.0.strip_prefix("file://").unwrap_or(&self.0)
+    pub fn from_path(path: &Path) -> Self {
+        Self(format!(
+            "file://{}",
+            path.canonicalize().unwrap().to_string_lossy()
+        ))
+    }
+    pub fn path(&self) -> &Path {
+        Path::new(self.0.strip_prefix("file://").unwrap_or(&self.0))
     }
 }
 type DocumentUri = Uri;
+type Integer = i32;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -35,11 +49,27 @@ pub struct InitializeResult {
 
 #[derive(Serialize)]
 pub struct ServerCapabilities {
-    #[serde(rename = "positionEncoding")]
-    pub position_encoding: String,
-    #[serde(rename = "hoverProvider")]
-    pub hover_provider: bool,
+    pub positionEncoding: String,
+    pub hoverProvider: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub textDocumentSync: Option<TextDocumentSyncOptions>,
     // ...
+}
+
+#[derive(Serialize)]
+pub struct TextDocumentSyncOptions {
+    pub openClose: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<TextDocumentSyncKind>,
+    pub save: bool,
+}
+
+#[derive(serde_repr::Serialize_repr)]
+#[repr(i32)]
+pub enum TextDocumentSyncKind {
+    None = 0,
+    Full = 1,
+    Incremental = 2,
 }
 
 #[derive(Serialize)]
@@ -48,22 +78,47 @@ pub struct ServerInfo {
     pub version: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct Hover {
-    pub contents: String, // TODO: can be MarkedString/MarkupContents/...
-    pub range: Option<Range>,
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct Range {
     pub start: Position,
     pub end: Position,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Position {
-    pub line: u64,
-    pub character: u64,
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TextDocumentPositionParams {
+    textDocument: TextDocumentIdentifier,
+    position: Position,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TextDocumentItem {
+    pub uri: DocumentUri,
+    pub languageId: String,
+    pub version: Integer,
+    pub text: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct WorkDoneProgressParams {
+    workDoneToken: Option<ProgressToken>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum ProgressToken {
+    String(String),
+    Int(i32),
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TextDocumentIdentifier {
+    pub uri: DocumentUri,
 }
 
 #[derive(Serialize)]
@@ -71,8 +126,7 @@ pub struct Diagnostic {
     pub range: Range,
     pub severity: Option<DiagnosticSeverity>,
     pub code: Option<String>,
-    #[serde(rename = "codeDescription")]
-    pub code_description: Option<CodeDescription>,
+    pub codeDescription: Option<CodeDescription>,
     pub source: Option<String>,
     pub message: String,
     // ...
@@ -97,18 +151,4 @@ impl Serialize for DiagnosticSeverity {
 #[derive(Serialize)]
 pub struct CodeDescription {
     pub href: Uri,
-}
-
-pub struct PublishDiagnosticsParams {
-    pub uri: DocumentUri,
-
-    /**
-     * Optional the version number of the document the diagnostics are published
-     * for.
-     *
-     * @since 3.15.0
-     */
-    pub version: Option<i32>,
-
-    pub diagnostics: Vec<Diagnostic>,
 }

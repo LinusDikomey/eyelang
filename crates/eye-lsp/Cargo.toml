@@ -4,7 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-compiler = { path = "../compiler" }
+compiler.workspace = true
+error.workspace = true
+dmap.workspace = true
+
+tracing.workspace = true
+tracing-subscriber.workspace = true
+pathdiff.workspace = true
+
 home = "0.5.9"
 serde = { version = "1.0.204", features = ["derive"] }
+serde_repr = "0.1.20"
 serde_json = "1.0.120"

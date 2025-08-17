@@ -39,6 +39,11 @@ impl From<compiler::ProjectError> for MainError {
 
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
+    #[cfg(feature = "lsp")]
+    if args.cmd != args::Cmd::Lsp {
+        enable_tracing(&args);
+    }
+    #[cfg(not(feature = "lsp"))]
     enable_tracing(&args);
     match args.cmd {
         args::Cmd::ListTargets => {
@@ -47,7 +52,8 @@ fn main() -> Result<(), MainError> {
         }
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => {
-            return eye_lsp::run().map_err(|err| MainError::LspFailed(format!("{err:?}")));
+            eye_lsp::run();
+            return Ok(());
         }
         args::Cmd::Fmt => {
             let (name, path) = path_arg(args.path)?;

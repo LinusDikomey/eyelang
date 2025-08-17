@@ -13,6 +13,6 @@ id.workspace = true
 color-format.workspace = true
 ir.workspace = true
 tracing.workspace = true
+pathdiff.workspace = true
 
-pathdiff = "0.2.1"
 indexmap = "2.7.0"

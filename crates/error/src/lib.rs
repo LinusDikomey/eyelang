@@ -507,21 +507,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     let s = span.start as usize;
     let e = span.end as usize;
 
-    // calculate line and position in line
-    let until_start = if s >= src.len() { src } else { &src[..s] };
-    let mut line = 1;
-    let mut col = 1;
-    let mut start_of_line_byte = 0;
-    for (i, c) in until_start.char_indices() {
-        if c == '\n' {
-            line += 1;
-            col = 1;
-
-            start_of_line_byte = i + 1;
-        } else {
-            col += 1;
-        }
-    }
+    let pos = calculate_position(src, span.start);
 
     let src_loc: std::borrow::Cow<str> = if e >= src.len() {
         if s >= src.len() {
@@ -534,7 +520,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     };
     assert!(!src_loc.is_empty(), "empty source location in error");
 
-    let pre = &src[start_of_line_byte..s];
+    let pre = &src[pos.start_of_line_byte as usize..s];
 
     // find end of the line to print the rest of the line
     let post = if e == src.len() || src.as_bytes()[e] == b'\n' {
@@ -552,8 +538,18 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         Severity::Error => cprintln!("#r!<{}>", error.conclusion()),
         Severity::Warn => cprintln!("#y!<{}>", error.conclusion()),
     }
-    cprintln!("#c<at>: #u<{}:{}:{}>", file.to_string_lossy(), line, col);
-    let spaces = std::cmp::max(4, (line + src_loc.lines().count() - 1).to_string().len());
+    cprintln!(
+        "#c<at>: #u<{}:{}:{}>",
+        file.to_string_lossy(),
+        pos.line + 1,
+        pos.column + 1
+    );
+    let spaces = std::cmp::max(
+        4,
+        (pos.line + src_loc.lines().count() as u32)
+            .to_string()
+            .len(),
+    );
     let p = cformat!("{} #c<|> ", " ".repeat(spaces));
 
     println!("{p}");
@@ -570,7 +566,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         }
     };
 
-    cprint!("#c<{:#4} | >{}{}", line, pre, first.1);
+    cprint!("#c<{:#4} | >{}{}", pos.line + 1, pre, first.1);
     post_if_last(&mut lines);
 
     let pre_error_offset = " ".repeat(pre.chars().count());
@@ -593,7 +589,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     }
 
     while let Some((i, line_str)) = lines.next() {
-        let line = line + i;
+        let line = pos.line + 1 + i as u32;
 
         cprint!("#c<{:#4} | >{}", line, line_str);
         post_if_last(&mut lines);
@@ -604,6 +600,42 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
         }
     }
     println!();
+}
+
+pub struct Position {
+    /// zero-indexed line
+    pub line: u32,
+    /// zero-indexed column in the line
+    pub column: u32,
+    /// index of the start of the line the position is located in
+    pub start_of_line_byte: u32,
+}
+
+pub fn calculate_position(src: &str, position: u32) -> Position {
+    // calculate line and position in line
+    let until_start = if position as usize >= src.len() {
+        src
+    } else {
+        &src[..position as usize]
+    };
+    let mut line = 0;
+    let mut column = 0;
+    let mut start_of_line_byte = 0;
+    for (i, c) in until_start.char_indices() {
+        if c == '\n' {
+            line += 1;
+            column = 0;
+
+            start_of_line_byte = i as u32 + 1;
+        } else {
+            column += 1;
+        }
+    }
+    Position {
+        line,
+        column,
+        start_of_line_byte,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -245,6 +245,14 @@ impl Compiler {
         }
     }
 
+    pub fn project_ids(&self) -> impl use<> + ExactSizeIterator<Item = ProjectId> {
+        (0..self.projects.len() as u32).map(ProjectId)
+    }
+
+    pub fn module_ids(&self) -> impl use<> + ExactSizeIterator<Item = ModuleId> {
+        (0..self.modules.len() as u32).map(ModuleId::from_inner)
+    }
+
     pub fn resolve_in_module(
         &mut self,
         module: ModuleId,
@@ -1263,6 +1271,7 @@ impl Compiler {
     }
 }
 
+#[derive(Debug)]
 pub enum ProjectError {
     CantAccessPath(std::io::Error, PathBuf),
     NonexistentPath(PathBuf),

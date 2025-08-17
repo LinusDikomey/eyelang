@@ -28,5 +28,7 @@ parser.path = "crates/parser"
 token.path = "crates/token"
 format.path = "crates/format"
 
+pathdiff = "0.2.1"
 tracing = { version = "0.1.41", default-features = false, features = ["release_max_level_off"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 color-format = { git = "https://github.com/LinusDikomey/color-format" }
