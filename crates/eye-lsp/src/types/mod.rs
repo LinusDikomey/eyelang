@@ -52,8 +52,23 @@ pub struct ServerCapabilities {
     pub positionEncoding: String,
     pub hoverProvider: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub completionProvider: Option<CompletionOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub textDocumentSync: Option<TextDocumentSyncOptions>,
     // ...
+}
+
+#[derive(Serialize)]
+pub struct CompletionOptions {
+    pub triggerCharacters: Vec<String>,
+    // resolveProvider
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completionItem: Option<CompletionItem>,
+}
+
+#[derive(Serialize)]
+pub struct CompletionItem {
+    pub labelDetailsSupport: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -90,23 +105,28 @@ pub struct Position {
     pub character: u32,
 }
 impl Position {
-    pub fn to_offset(&self, mut src: &str) -> Option<u32> {
+    pub fn to_offset(&self, mut src: &str) -> u32 {
         let mut offset = 0;
         for _ in 0..self.line {
-            let i = src.find('\n')? + 1;
+            let Some(i) = src.find('\n') else {
+                return src.len() as u32;
+            };
+            let i = i + 1;
             offset += i as u32;
             src = &src[i..];
         }
         let mut chars = src.chars();
         for _ in 0..self.character {
-            let c = chars.next()?;
+            let Some(c) = chars.next() else {
+                break;
+            };
             if c == '\n' {
-                return None;
+                break;
             }
             offset += c.len_utf8() as u32;
         }
 
-        Some(offset)
+        offset
     }
 }
 

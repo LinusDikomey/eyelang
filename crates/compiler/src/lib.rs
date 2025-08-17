@@ -8,7 +8,7 @@
 /// typechecking and emitting hir from the ast
 pub mod check;
 /// the query-based compiler able to answer and cache various requests
-mod compiler;
+pub mod compiler;
 /// compiler errors and error formatting
 pub mod error;
 /// compile-time code evaluation

@@ -126,6 +126,7 @@ pub fn get_prelude(compiler: &mut Compiler) -> Option<ModuleId> {
     (std != ProjectId::MISSING).then(|| {
         let root = compiler.get_project(std).root_module;
         let prelude = compiler.resolve_in_module(root, "prelude", ModuleSpan::MISSING);
+        tracing::debug!("NOCHECKIN Resolving prelude: {std:?} {root:?} {prelude:?}");
         let Def::Module(prelude) = prelude else {
             panic!("expected a module for std.prelude, found {prelude:?}");
         };

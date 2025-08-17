@@ -1,13 +1,17 @@
-use std::path::Path;
+use std::{path::Path, rc::Rc};
 
+use compiler::{Def, ModuleSpan};
+use parser::ast;
 use serde_json::Value;
 
 use crate::{
     ResponseError,
-    lsp::{Lsp, find_in_ast},
+    lsp::Lsp,
     types::{
         notification::{DidOpenTextDocumentParams, DidSaveTextDocumentParams},
-        request::{Hover, HoverParams},
+        request::{
+            CompletionItem, CompletionItemKind, CompletionParams, Hover, HoverParams, Request,
+        },
     },
 };
 
@@ -29,7 +33,8 @@ impl Lsp {
 
     pub fn handle_request(&mut self, method: &str, params: Value) -> Result<Value, ResponseError> {
         match method {
-            "textDocument/hover" => self.on_request(Self::hover, params),
+            HoverParams::METHOD => self.on_request(Self::hover, params),
+            CompletionParams::METHOD => self.on_request(Self::complete, params),
             _ => {
                 tracing::info!("Unhandled request {method} {params}");
                 Err(ResponseError {
@@ -126,28 +131,72 @@ impl Lsp {
     }
 
     pub fn hover(&mut self, hover: HoverParams) -> Hover {
-        self.find_project_of_uri(&hover.position.textDocument.uri);
-        let Some(module) = self.find_module_of_uri(&hover.position.textDocument.uri) else {
+        let Some((_module, found)) = self.find_document_position(&hover.position) else {
             return Hover {
-                contents: "Failed to locate file for hover".to_owned(),
+                contents: String::new(),
                 range: None,
             };
         };
-        let ast = self.compiler.get_module_ast(module);
-        let Some(offset) = hover.position.position.to_offset(ast.src()) else {
-            return Hover {
-                contents: format!(
-                    "invalid offset {}:{}",
-                    hover.position.position.line, hover.position.position.character
-                ),
-                range: None,
-            };
-        };
-        let found = find_in_ast::find(ast, offset);
         Hover {
             contents: format!("{found:?}"),
             range: None,
         }
+    }
+
+    pub fn complete(&mut self, complete: CompletionParams) -> Vec<CompletionItem> {
+        tracing::info!("Handling completion");
+        let Some((module, found)) = self.find_document_position(&complete.position) else {
+            tracing::info!("Document not found: {:?}", complete.position);
+            return Vec::new();
+        };
+        let mut completions = Vec::new();
+
+        let mut current = (module, found.scope);
+        let mut in_prelude = false;
+        loop {
+            let ast = Rc::clone(self.compiler.get_module_ast(current.0));
+            let scope = &ast[current.1];
+            for name in scope.definitions.keys() {
+                let def =
+                    self.compiler
+                        .resolve_in_scope(current.0, current.1, name, ModuleSpan::MISSING);
+                let kind = match def {
+                    Def::Invalid => CompletionItemKind::Constant,
+                    Def::Function(_, _) => CompletionItemKind::Function,
+                    Def::GenericType(_) => CompletionItemKind::TypeParameter,
+                    Def::Type(_) => CompletionItemKind::Struct, // there is no Type Kind onfortunately
+                    Def::Trait(_, _) => CompletionItemKind::Interface,
+                    Def::ConstValue(_) => CompletionItemKind::Constant,
+                    Def::Module(_) => CompletionItemKind::Module,
+                    Def::Global(_, _) => CompletionItemKind::Variable,
+                };
+                completions.push(CompletionItem {
+                    label: name.clone(),
+                    kind: Some(kind),
+                });
+            }
+
+            match scope.parent {
+                Some(parent) => current.1 = parent,
+                None => {
+                    if !in_prelude
+                        && let Some(prelude) =
+                            compiler::compiler::builtins::get_prelude(&mut self.compiler)
+                    {
+                        current = (
+                            prelude,
+                            self.compiler.get_module_ast(prelude).top_level_scope_id(),
+                        );
+                        in_prelude = true;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        tracing::info!("Returning {} completions", completions.len());
+        completions
     }
 }
 

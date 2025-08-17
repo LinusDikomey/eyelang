@@ -102,7 +102,11 @@ fn find_at_offset_expr(
                     return Some(found);
                 }
             }
-            None
+            Some(Found {
+                ty: FoundType::None,
+                span: ast[scope].span,
+                scope,
+            })
         }
         &Expr::Nested { inner, .. } => rec(inner),
         Expr::IntLiteral { .. } | Expr::FloatLiteral { .. } | Expr::StringLiteral { .. } => {
@@ -166,9 +170,16 @@ fn find_at_offset_expr(
                     return Some(found);
                 }
             }
-            function
-                .body
-                .and_then(|body| find_at_offset_expr(ast, offset, function.scope, body, false))
+            Some(
+                function
+                    .body
+                    .and_then(|body| find_at_offset_expr(ast, offset, scope, body, false))
+                    .unwrap_or(Found {
+                        ty: FoundType::None,
+                        span: ast[scope].span,
+                        scope,
+                    }),
+            )
         }
         &Expr::Primitive { primitive, .. } => Some(Found {
             ty: FoundType::Primitive(primitive),

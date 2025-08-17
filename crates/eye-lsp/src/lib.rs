@@ -105,6 +105,10 @@ impl State {
                                     capabilities: types::ServerCapabilities {
                                         positionEncoding: "utf-8".to_owned(),
                                         hoverProvider: true,
+                                        completionProvider: Some(types::CompletionOptions {
+                                            triggerCharacters: vec![".".to_owned()],
+                                            completionItem: None,
+                                        }),
                                         textDocumentSync: Some(TextDocumentSyncOptions {
                                             openClose: true,
                                             change: Some(types::TextDocumentSyncKind::None),

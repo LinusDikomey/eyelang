@@ -5,8 +5,10 @@ use parser::ast::ModuleId;
 use serde_json::Value;
 
 use crate::{
-    ResponseError, send_notification,
-    types::{self, Diagnostic, Uri, request::Request},
+    ResponseError,
+    lsp::find_in_ast::Found,
+    send_notification,
+    types::{self, Diagnostic, TextDocumentPositionParams, Uri, request::Request},
 };
 
 mod find_in_ast;
@@ -25,7 +27,10 @@ impl Lsp {
             |uri| Some(uri.path().to_path_buf()),
         );
         let std = match compiler.add_project("std".to_owned(), compiler::std_path::find()) {
-            Ok(std) => Some(std),
+            Ok(std) => {
+                compiler.resolve_builtins(std);
+                Some(std)
+            }
             Err(err) => {
                 tracing::error!("Failed to add std library: {err:?}");
                 None
@@ -129,6 +134,19 @@ impl Lsp {
                 }
             })
         })
+    }
+
+    pub fn find_document_position(
+        &mut self,
+        position: &TextDocumentPositionParams,
+    ) -> Option<(ModuleId, Found)> {
+        let Some(module) = self.find_module_of_uri(&position.textDocument.uri) else {
+            tracing::debug!("Module not found for {:?}", position.textDocument.uri);
+            return None;
+        };
+        let ast = self.compiler.get_module_ast(module);
+        let offset = position.position.to_offset(ast.src());
+        Some((module, find_in_ast::find(ast, offset)))
     }
 
     pub fn update_diagnostics(&mut self) {
