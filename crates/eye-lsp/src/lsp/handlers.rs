@@ -69,10 +69,15 @@ impl Lsp {
             .compiler
             .add_project(name.to_owned(), project_path.to_path_buf())
         {
-            Ok(id) => self.projects.push(id),
+            Ok(id) => {
+                if let Some(std) = self.std {
+                    self.compiler.add_dependency(id, std);
+                }
+                self.projects.push(id);
+                self.update_diagnostics();
+            }
             Err(err) => tracing::error!("Failed to add new project: {err:?}"),
         }
-        self.update_diagnostics();
     }
 
     pub fn did_save(&mut self, save: DidSaveTextDocumentParams) {

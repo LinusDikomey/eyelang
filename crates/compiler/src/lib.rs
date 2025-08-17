@@ -23,6 +23,8 @@ mod layout;
 mod link;
 /// module file path discovery
 mod modules;
+/// find the path of the std library
+pub mod std_path;
 mod types;
 /// TypeTable data structure and logic for type inference/checking
 mod typing;

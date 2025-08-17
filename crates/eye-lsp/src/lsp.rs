@@ -13,6 +13,7 @@ mod handlers;
 pub struct Lsp {
     compiler: Compiler,
     projects: Vec<ProjectId>,
+    std: Option<ProjectId>,
 }
 impl Lsp {
     pub fn new(initialize: types::Initialize) -> Self {
@@ -21,6 +22,13 @@ impl Lsp {
             || initialize.root_path.as_deref().map(PathBuf::from),
             |uri| Some(uri.path().to_path_buf()),
         );
+        let std = match compiler.add_project("std".to_owned(), compiler::std_path::find()) {
+            Ok(std) => Some(std),
+            Err(err) => {
+                tracing::error!("Failed to add std library: {err:?}");
+                None
+            }
+        };
         let project = project_path.and_then(|path| {
             let name = path.components().next_back().map_or_else(
                 || "<unnamed project>".to_owned(),
@@ -29,23 +37,20 @@ impl Lsp {
             if !path.join("main.eye").exists() {
                 return None;
             }
-            compiler.add_project(name, path).ok()
-        });
-        let std_path = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|path| path.join("std/")))
-            .and_then(|std_path| {
-                std_path
-                    .try_exists()
-                    .is_ok_and(|exists| exists)
-                    .then_some(std_path)
+            compiler.add_project(name, path).ok().inspect(|&project| {
+                if let Some(std) = std {
+                    compiler.add_dependency(project, std);
+                }
             })
-            .unwrap_or(PathBuf::from("std/"));
-        _ = compiler.add_project("std".to_owned(), std_path.join("main.eye"));
-        Self {
+        });
+        let mut lsp = Self {
             compiler,
             projects: project.into_iter().collect(),
-        }
+            std,
+        };
+        lsp.update_diagnostics();
+
+        lsp
     }
 
     fn on_request<F: FnMut(&mut Self, R) -> R::Response, R: Request>(
@@ -79,6 +84,7 @@ impl Lsp {
     }
 
     pub fn update_diagnostics(&mut self) {
+        tracing::debug!("Updating diagnostics for {} projects", self.projects.len());
         for &project in &self.projects {
             self.compiler.errors = ProjectErrors::new();
             self.compiler.check_complete_project(project);

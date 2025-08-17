@@ -1,6 +1,5 @@
 /// command line argument parsing
 mod args;
-mod std_path;
 
 use std::{
     io::Read,
@@ -103,8 +102,7 @@ fn main() -> Result<(), MainError> {
     let root_module = compiler.get_project(project).root_module;
 
     // add standard library
-    let std_path = std_path::find();
-    let std = compiler.add_project("std".to_owned(), std_path)?;
+    let std = compiler.add_project("std".to_owned(), compiler::std_path::find())?;
     compiler.add_dependency(project, std);
     compiler.resolve_builtins(std);
 
