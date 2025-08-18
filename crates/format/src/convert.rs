@@ -729,6 +729,9 @@ impl<'a> Converter<'a> {
             let mut first = true;
             // TODO: probably breaks with inhereted generics
             for generic in &generics.types {
+                if generic.name == TSpan::MISSING {
+                    continue;
+                }
                 if !first {
                     group.push(Node::TextIf(Cond::Flat, ", ".into()));
                     group.push(Node::TextIf(Cond::Broken, "\n".into()));

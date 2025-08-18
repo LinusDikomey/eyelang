@@ -25,6 +25,7 @@ color-format.workspace = true
 clap = { version = "4.4.13", features = ["derive"] }
 eye-lsp = { path = "../eye-lsp", optional = true }
 pathdiff = "0.2.1"
+diff = "0.1.13"
 
 # backends
 ir-backend-llvm = { path = "../ir-backend-llvm", optional = true }

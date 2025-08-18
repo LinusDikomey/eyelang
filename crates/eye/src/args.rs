@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+#[derive(clap::Subcommand)]
 pub enum Cmd {
     /// Check a file or project for errors and warnings.
     Check,
@@ -15,14 +15,9 @@ pub enum Cmd {
     /// lists all available targets for the selected backend
     ListTargets,
     /// format a project
-    Fmt,
+    Fmt(FmtArgs),
     // format stdin and print the formatted output to stdout
     FmtStdin,
-}
-impl Default for Cmd {
-    fn default() -> Self {
-        Self::Check
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -78,61 +73,68 @@ impl Default for Backend {
     long_about = "Eye is a simple, compiled, performant programming language"
 )]
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Default)]
 pub struct Args {
-    #[clap(value_enum)]
+    #[command(subcommand)]
     pub cmd: Cmd,
     /// Path to a file or project directory
+    #[clap(global = true)]
     pub path: Option<String>,
 
-    #[clap(short, long, value_delimiter = ',', num_args = 1..)]
+    #[clap(global = true, short, long, value_delimiter = ',', num_args = 1..)]
     pub debug: Vec<Box<str>>,
 
-    #[clap(long, value_delimiter = ',', num_args = 1..)]
+    #[clap(global = true, long, value_delimiter = ',', num_args = 1..)]
     pub debug_functions: Vec<Box<str>>,
 
     /// Used for providing a custom link command. Use '[OBJ]' and '[OUT]' as placeholders for object and out file.
     /// Example: --link-cmd "ld [OBJ] -lc -o [OUT]"
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub link_cmd: Option<String>,
 
     /// Just emit an object file. Doesn't require a main function
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub emit_obj: bool,
 
     /// Library that doesn't require a main function.
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub lib: bool,
 
     /// Report compilation times of all files/compilation steps.
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub timings: bool,
 
     /// prints out all tokens after lexing.
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub tokens: bool,
 
     /// Crash once a single error is encountered. Mostly used for debugging the compiler.
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub crash_on_error: bool,
 
     /// Libraries to link against
-    #[clap(short, long)]
+    #[clap(global = true, short, long)]
     pub link: Vec<String>,
 
-    #[clap(short, long, value_enum, default_value_t=Backend::default())]
+    #[clap(global = true, short, long, value_enum, default_value_t=Backend::default())]
     pub backend: Backend,
 
-    #[clap(short, long)]
+    #[clap(global = true, short, long)]
     /// The targeted backend to emit code for.
     pub target: Option<String>,
 
     /// This will still try to build and run the program even if errors are present. Most errors
     /// will lead to a runtime crash when the corresponding code is encountered. No correctness is
     /// guaranteed.
-    #[clap(long)]
+    #[clap(global = true, long)]
     pub run_with_errors: bool,
 
-    #[clap(short('O'), long)]
+    #[clap(global = true, short('O'), long)]
     pub optimize: bool,
+}
+
+#[derive(clap::Parser)]
+pub struct FmtArgs {
+    #[clap(short, long)]
+    /// Only check the formatting instead of formatting in-place
+    pub check: bool,
 }

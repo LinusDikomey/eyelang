@@ -1,5 +1,6 @@
 /// command line argument parsing
 mod args;
+mod fmt_command;
 
 use std::{
     io::Read,
@@ -39,7 +40,7 @@ impl From<compiler::ProjectError> for MainError {
 fn main() -> Result<(), MainError> {
     let args: args::Args = clap::Parser::parse();
     #[cfg(feature = "lsp")]
-    if args.cmd != args::Cmd::Lsp {
+    if !matches!(args.cmd, args::Cmd::Lsp) {
         enable_tracing(&args);
     }
     #[cfg(not(feature = "lsp"))]
@@ -54,19 +55,7 @@ fn main() -> Result<(), MainError> {
             eye_lsp::run();
             return Ok(());
         }
-        args::Cmd::Fmt => {
-            let (name, path) = path_arg(args.path)?;
-            eprintln!("Formatting project {name}");
-            for file in compiler::all_project_files_from_root(&path) {
-                eprintln!("Project file {}", file.display());
-                let src = std::fs::read_to_string(&file).unwrap_or_else(|err| {
-                    panic!("Failed to read project file {}: {err:?}", file.display())
-                });
-                let (formatted, _errors) = format::format(src.into());
-                println!("{}", formatted);
-            }
-            return Ok(());
-        }
+        args::Cmd::Fmt(fmt_args) => return fmt_command::format(args.path, fmt_args),
         args::Cmd::FmtStdin => {
             let mut s = String::new();
             std::io::stdin()
@@ -74,7 +63,7 @@ fn main() -> Result<(), MainError> {
                 .expect("Failed to read stdin");
             let (formatted, errors) = format::format(s.into_boxed_str());
             if errors.error_count() > 0 {
-                // TODO: print errors
+                // TODO: print errors here
                 return Err(MainError::ErrorsFound);
             }
             print!("{formatted}");
@@ -235,7 +224,7 @@ fn main() -> Result<(), MainError> {
             {
                 return Err(MainError::LinkingFailed(err));
             }
-            if args.cmd == args::Cmd::Run {
+            if matches!(args.cmd, args::Cmd::Run) {
                 println!("Running {name}...");
                 // make sure to clean up compiler resources before running
                 drop(compiler);
@@ -257,7 +246,7 @@ fn main() -> Result<(), MainError> {
                 }
             }
         }
-        args::Cmd::ListTargets | args::Cmd::Fmt | args::Cmd::FmtStdin => unreachable!(),
+        args::Cmd::ListTargets | args::Cmd::Fmt(_) | args::Cmd::FmtStdin => unreachable!(),
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => unreachable!(),
     }
