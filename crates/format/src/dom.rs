@@ -6,6 +6,11 @@ pub enum Node {
     TextIf(Cond, Box<str>),
     Indent(Box<Node>),
 }
+impl From<&str> for Node {
+    fn from(value: &str) -> Self {
+        Self::Text(value.into())
+    }
+}
 impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         debug_print_node(0, self, f)
@@ -52,6 +57,11 @@ fn debug_print_node(indent: usize, node: &Node, f: &mut fmt::Formatter<'_>) -> f
 pub enum Cond {
     Flat,
     Broken,
+}
+impl Cond {
+    pub fn then(self, text: impl Into<Box<str>>) -> Node {
+        Node::TextIf(self, text.into())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

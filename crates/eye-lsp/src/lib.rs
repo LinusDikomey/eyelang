@@ -254,9 +254,8 @@ fn message_loop() -> Result<(), LspError> {
                 continue;
             }
         };
-        let dbg = format!("{:?}", message);
         if let Err(err) = state.handle(message) {
-            tracing::debug!("Failed to handle message {dbg}: {err:?}");
+            tracing::debug!("Failed to handle message: {err:?}");
         }
     }
 }

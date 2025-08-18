@@ -4,8 +4,8 @@ use std::collections::hash_map::Entry;
 
 use crate::ast::{
     self, Attribute, Definition, EnumVariantDefinition, Expr, ExprIdPairs, ExprIds, Function,
-    GenericDef, Global, InherentImpl, Item, ItemValue, StructMember, TraitDefinition,
-    TraitFunctions, TreeToken, UnOp, UnresolvedType,
+    GenericDef, Generics, Global, InherentImpl, Item, ItemValue, Method, StructMember,
+    TraitDefinition, TreeToken, UnOp, UnresolvedType,
 };
 
 use crate::unexpected;
@@ -142,7 +142,6 @@ impl<T: TreeToken> Parser<'_, T> {
         let scope_id = self.ast.scope(ast::Scope::missing());
         let mut scope = ast::Scope {
             parent,
-            braces: T::opt_none(),
             definitions,
             span: TSpan::MISSING, // span will be updated at the end of this function
             has_errors: false,
@@ -222,9 +221,6 @@ impl<T: TreeToken> Parser<'_, T> {
                 }
             };
         };
-        if let Some((start, _)) = start_end {
-            scope.braces = T::opt((t(start), t(end_tok)));
-        }
         scope.span = TSpan::new(start, end_tok.end);
         *self.ast.get_scope_mut(scope_id) = scope;
         (scope_id, end_tok)
@@ -278,11 +274,11 @@ impl<T: TreeToken> Parser<'_, T> {
         };
     }
 
-    fn parse_block_or_stmt(&mut self, scope: ScopeId) -> ParseResult<Expr<T>> {
+    fn parse_block_or_stmt(&mut self, scope: ScopeId) -> ParseResult<(T::Opt<T>, Expr<T>)> {
         step_or_unexpected! {self, tok,
-            LBrace => Ok(self.parse_block_from_lbrace(tok, scope)),
+            LBrace => Ok((T::opt_none(), self.parse_block_from_lbrace(tok, scope))),
             Colon => {
-                self.parse_stmt(scope)
+                self.parse_stmt(scope).map(|expr| (T::opt(t(tok)), expr))
             }
         }
     }
@@ -420,24 +416,27 @@ impl<T: TreeToken> Parser<'_, T> {
         Ok(Item { attributes, value })
     }
 
-    fn parse_attributes(&mut self, scope: ScopeId) -> ParseResult<Box<[Attribute]>> {
+    fn parse_attributes(&mut self, scope: ScopeId) -> ParseResult<Box<[Attribute<T>]>> {
         let mut attributes = Vec::new();
         while let Some(at) = self.toks.step_if(TokenType::At) {
             let path = self.parse_path()?;
             let mut args = Vec::new();
             let peeked = self.toks.peek();
-            let end = if peeked.ty == TokenType::LParen && !peeked.new_line {
+            let (end, t_parens) = if peeked.ty == TokenType::LParen && !peeked.new_line {
                 let lparen = self.toks.step_assert(TokenType::LParen);
-                self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
-                    args.push(p.parse_expr(scope)?);
-                    Ok(Delimit::OptionalIfNewLine)
-                })?
-                .end
+                let rparen =
+                    self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
+                        args.push(p.parse_expr(scope)?);
+                        Ok(Delimit::OptionalIfNewLine)
+                    })?;
+                (rparen.end, T::opt((t(lparen), t(rparen))))
             } else {
-                path.span().end
+                (path.span().end, T::opt_none())
             };
             attributes.push(Attribute {
+                t_at: t(at),
                 path,
+                t_parens,
                 args: self.ast.exprs(args),
                 span: TSpan::new(at.start, end),
             });
@@ -464,16 +463,11 @@ impl<T: TreeToken> Parser<'_, T> {
         scope: ScopeId,
     ) -> ParseResult<ast::TypeDef<T>> {
         debug_assert_eq!(struct_tok.ty, TokenType::Keyword(Keyword::Struct));
-        let (generics, brackets) = self.parse_optional_generics(Vec::new())?;
+        let generics = self.parse_optional_generics(Vec::new())?;
 
         let scope = {
-            let scope = ast::Scope::from_generics(
-                scope,
-                self.toks.src,
-                &generics,
-                TSpan::MISSING,
-                brackets,
-            );
+            let scope =
+                ast::Scope::from_generics(scope, self.toks.src, &generics.types, TSpan::MISSING);
             self.ast.scope(scope)
         };
 
@@ -485,17 +479,22 @@ impl<T: TreeToken> Parser<'_, T> {
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let attributes = p.parse_attributes(scope)?;
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics)?);
+                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics.types)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
-            if p.toks.step_if(TokenType::DoubleColon).is_some() {
+            if let Some(colon_colon) = p.toks.step_if(TokenType::DoubleColon) {
                 let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                 let method =
-                    p.parse_function_def(fn_tok, scope, ident.span(), generics.to_vec())?;
+                    p.parse_function_def(fn_tok, scope, ident.span(), generics.types.to_vec())?;
                 let func_id = p.ast.function(method);
                 let name = ident.get_val(p.toks.src).to_owned();
-                if let Some(_existing) = methods.insert(name, func_id) {
+                let method = Method {
+                    name: ident.span(),
+                    t_colon_colon: t(colon_colon),
+                    function: func_id,
+                };
+                if let Some(_existing) = methods.insert(name, method) {
                     return Err(CompileError::new(Error::DuplicateDefinition, ident.span()));
                 }
                 Ok(Delimit::No)
@@ -514,23 +513,24 @@ impl<T: TreeToken> Parser<'_, T> {
         Ok(ast::TypeDef {
             t_introducer: t(struct_tok),
             generics,
+            t_lbrace: t(lbrace),
             scope,
             methods,
             impls: impls.into_boxed_slice(),
             content: ast::TypeContent::Struct { members },
+            t_rbrace: t(rbrace),
         })
     }
 
     fn enum_definition(&mut self, enum_tok: Token, scope: ScopeId) -> ParseResult<ast::TypeDef<T>> {
         debug_assert_eq!(enum_tok.ty, TokenType::Keyword(Keyword::Enum));
-        let (generics, brackets) = self.parse_optional_generics(Vec::new())?;
+        let generics = self.parse_optional_generics(Vec::new())?;
 
         let scope = self.ast.scope(ast::Scope::from_generics(
             scope,
             self.toks.src,
-            &generics,
+            &generics.types,
             TSpan::MISSING,
-            brackets,
         ));
 
         let mut variants = Vec::new();
@@ -540,7 +540,7 @@ impl<T: TreeToken> Parser<'_, T> {
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics)?);
+                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics.types)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -550,27 +550,32 @@ impl<T: TreeToken> Parser<'_, T> {
 
                     let name_span = ident.span();
                     let mut args = vec![];
-                    let end = p
-                        .parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
+                    let rparen =
+                        p.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                             p.parse_type().map(|ty| args.push(ty))
-                        })?
-                        .end;
+                        })?;
                     variants.push(EnumVariantDefinition {
                         name_span,
+                        t_parens: T::opt((t(lparen), t(rparen))),
                         args: args.into_boxed_slice(),
-                        end,
+                        end: rparen.end,
                     });
                     Ok(Delimit::OptionalIfNewLine)
                 }
                 TokenType::DoubleColon => {
-                    p.toks.step_assert(TokenType::DoubleColon);
+                    let t_colon_colon = t(p.toks.step_assert(TokenType::DoubleColon));
 
                     let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                     let method =
-                        p.parse_function_def(fn_tok, scope, ident.span(), generics.to_vec())?;
+                        p.parse_function_def(fn_tok, scope, ident.span(), generics.types.to_vec())?;
                     let func_id = p.ast.function(method);
                     let name = ident.get_val(p.toks.src).to_owned();
-                    if let Some(_existing) = methods.insert(name, func_id) {
+                    let method = Method {
+                        name: ident.span(),
+                        t_colon_colon,
+                        function: func_id,
+                    };
+                    if let Some(_existing) = methods.insert(name, method) {
                         return Err(CompileError::new(Error::DuplicateDefinition, ident.span()));
                     }
                     Ok(Delimit::No)
@@ -580,6 +585,7 @@ impl<T: TreeToken> Parser<'_, T> {
                     let name_span = ident.span();
                     variants.push(EnumVariantDefinition {
                         name_span,
+                        t_parens: T::opt_none(),
                         args: Box::new([]),
                         end: name_span.end,
                     });
@@ -593,12 +599,14 @@ impl<T: TreeToken> Parser<'_, T> {
         Ok(ast::TypeDef {
             t_introducer: t(enum_tok),
             generics,
+            t_lbrace: t(lbrace),
             scope,
             methods,
             impls: impls.into_boxed_slice(),
             content: ast::TypeContent::Enum {
                 variants: variants.into_boxed_slice(),
             },
+            t_rbrace: t(rbrace),
         })
     }
 
@@ -613,7 +621,7 @@ impl<T: TreeToken> Parser<'_, T> {
         debug_assert_eq!(fn_tok.ty, TokenType::Keyword(Keyword::Fn));
         let start = fn_tok.start;
         let mut end = fn_tok.end;
-        let (generics, generics_brackets) = self.parse_optional_generics(inherited_generics)?;
+        let generics = self.parse_optional_generics(inherited_generics)?;
 
         let mut params = Vec::new();
         let mut named_params = Vec::new();
@@ -673,9 +681,8 @@ impl<T: TreeToken> Parser<'_, T> {
         let function_scope = self.ast.scope(ast::Scope::from_generics(
             scope,
             self.toks.src,
-            &generics,
+            &generics.types,
             span,
-            generics_brackets,
         ));
 
         Ok(Function {
@@ -730,94 +737,100 @@ impl<T: TreeToken> Parser<'_, T> {
         debug_assert_eq!(trait_tok.ty, TokenType::Keyword(Keyword::Trait));
         let self_generic = GenericDef {
             name: TSpan::MISSING,
-            t_name: T::opt_none(),
+            t_colon: T::opt_none(),
             bounds: Box::new([]),
         };
-        let (generics, brackets) = self.parse_optional_generics(vec![self_generic])?;
-        let scope = ast::Scope::from_generics(
-            parent_scope,
-            self.toks.src,
-            &generics,
-            TSpan::MISSING,
-            brackets,
-        );
+        let generics = self.parse_optional_generics(vec![self_generic])?;
+        let scope =
+            ast::Scope::from_generics(parent_scope, self.toks.src, &generics.types, TSpan::MISSING);
         let scope = self.ast.scope(scope);
-        self.toks.step_expect(TokenType::LBrace)?;
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
         let mut functions = Vec::new();
-        let end = loop {
+        let rbrace = loop {
             step_or_unexpected! {self, tok,
-                RBrace => break tok.end,
+                RBrace => break tok,
                 Ident => {
                     let name_span = tok.span();
-                    self.toks.step_expect(TokenType::DoubleColon)?;
+                    let t_colon_colon = t(self.toks.step_expect(TokenType::DoubleColon)?);
                     let fn_tok = self.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
                     let mut func = self.parse_function_header(
                         fn_tok,
                         scope,
                         name_span,
-                        generics.to_vec(),
+                        generics.types.to_vec(),
                     )?;
                     if matches!(self.toks.peek().ty, TokenType::Colon | TokenType::LBrace) {
                         self.parse_function_body(&mut func)?;
                     }
-                    functions.push((name_span, func));
+                    let function = self.ast.function(func);
+                    functions.push(Method { name: name_span, t_colon_colon, function });
                 }
             }
         };
         let mut impls = Vec::new();
-        if self
-            .toks
-            .step_if(TokenType::Keyword(Keyword::For))
-            .is_some()
+        let t_attached_impls = if let Some(t_for) =
+            self.toks.step_if(TokenType::Keyword(Keyword::For))
         {
-            self.toks.step_expect(TokenType::LBrace)?;
-            loop {
+            let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+            let rbrace = loop {
                 step_or_unexpected! {self, tok,
-                    RBrace => break,
+                    RBrace => break tok,
                     Keyword Impl => {
                         let start = tok.start;
-                        let (generics, brackets) = self.parse_optional_generics(Vec::new())?;
-                        let underscore_end = self.toks.step_expect(TokenType::Underscore)?.end;
-                        let trait_generics = self.parse_optional_generic_instance()?
-                            .unwrap_or_else(|| (Box::new([]), TSpan::new(underscore_end, underscore_end)));
+                        let generics = self.parse_optional_generics(Vec::new())?;
+                        let underscore = self.toks.step_expect(TokenType::Underscore)?;
+                        let (trait_generics, t_brackets, trait_generics_span) = self.parse_generics_instance(
+                            TSpan::new(underscore.end, underscore.end),
+                        )?;
                         let t_for = t(self.toks.step_expect(TokenType::Keyword(Keyword::For))?);
                         let impl_scope = self.ast.scope(ast::Scope::from_generics(
                             parent_scope,
                             self.toks.src,
-                            &generics,
+                            &generics.types,
                             TSpan::MISSING,
-                            brackets,
                         ));
                         let implemented_type = self.parse_type()?;
                         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-                        let (functions, end) = self.parse_trait_impl_body(
+                        let (functions, rbrace) = self.parse_trait_impl_body(
                             lbrace,
                             impl_scope,
-                            &generics,
+                            &generics.types,
                         )?;
-                        self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, end);
+                        self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, rbrace.end);
                         impls.push(ast::Impl {
                             t_impl: t(tok),
-                            implemented_type,
+                            t_underscore: t(underscore),
                             t_for,
+                            implemented_type,
                             base: ast::BaseImpl {
                                 scope: impl_scope,
                                 generics,
+                                t_brackets,
                                 trait_generics,
+                                trait_generics_span,
+                                t_lbrace: t(lbrace),
                                 functions,
+                                t_rbrace: t(rbrace),
                             }
                         });
                     }
                 }
-            }
-        }
-        let span = TSpan::new(trait_tok.start, end);
+            };
+            T::opt((t(t_for), t(lbrace), t(rbrace)))
+        } else {
+            T::opt_none()
+        };
+        let span = TSpan::new(trait_tok.start, rbrace.end);
         self.ast.get_scope_mut(scope).span = span;
 
         Ok(TraitDefinition {
+            t_trait: t(trait_tok),
             generics,
             scope,
+            t_lbrace: t(lbrace),
             functions,
+            t_rbrace: t(rbrace),
+            t_attached_impls,
             impls: impls.into_boxed_slice(),
             associated_name,
         })
@@ -828,51 +841,60 @@ impl<T: TreeToken> Parser<'_, T> {
         lbrace: Token,
         scope: ScopeId,
         impl_generics: &[GenericDef<T>],
-    ) -> ParseResult<(TraitFunctions, u32)> {
+    ) -> ParseResult<(Box<[Method<T>]>, Token)> {
         debug_assert_eq!(lbrace.ty, TokenType::LBrace);
         let mut functions = Vec::new();
-        let last = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
+        let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let name = p.toks.step_expect(TokenType::Ident)?;
             let name_span = name.span();
-            p.toks.step_expect(TokenType::DoubleColon)?;
+            let t_colon_colon = t(p.toks.step_expect(TokenType::DoubleColon)?);
             let fn_tok = p.toks.step_expect(TokenType::Keyword(Keyword::Fn))?;
             // TODO: figure out inherited generics here
             let func = p.parse_function_def(fn_tok, scope, name_span, impl_generics.to_vec())?;
             let func_id = p.ast.function(func);
-            functions.push((name_span, func_id));
+            functions.push(Method {
+                name: name_span,
+                t_colon_colon,
+                function: func_id,
+            });
             Ok(Delimit::OptionalIfNewLine)
         })?;
-        Ok((functions.into_boxed_slice(), last.end))
+        Ok((functions.into_boxed_slice(), rbrace))
     }
 
     fn parse_inherent_impl(
         &mut self,
-        impl_tok: Token,
+        t_impl: Token,
         outer_scope: ScopeId,
         type_generics: &[GenericDef<T>],
     ) -> ParseResult<InherentImpl<T>> {
-        let (impl_generics, brackets) = self.parse_optional_generics(type_generics.to_vec())?;
+        let impl_generics = self.parse_optional_generics(type_generics.to_vec())?;
         let scope = self.ast.scope(ast::Scope::from_generics(
             outer_scope,
             self.toks.src,
-            &impl_generics,
+            &impl_generics.types,
             TSpan::MISSING,
-            brackets,
         ));
         let implemented_trait = self.parse_path()?;
-        let trait_generics = self
-            .parse_optional_generic_instance()?
-            .unwrap_or((Box::new([]), implemented_trait.span()));
+        let pos = implemented_trait.span().end;
+        let (trait_generics, t_brackets, generics_span) =
+            self.parse_generics_instance(TSpan::new(pos, pos))?;
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-        let (functions, end) = self.parse_trait_impl_body(lbrace, scope, &impl_generics)?;
-        self.ast.get_scope_mut(scope).span = TSpan::new(impl_tok.start, end);
+        let (functions, rbrace) =
+            self.parse_trait_impl_body(lbrace, scope, &impl_generics.types)?;
+        self.ast.get_scope_mut(scope).span = TSpan::new(t_impl.start, rbrace.end);
         Ok(InherentImpl {
+            t_impl: t(t_impl),
             implemented_trait,
             base: ast::BaseImpl {
                 scope,
                 generics: impl_generics,
+                t_brackets,
                 trait_generics,
+                trait_generics_span: generics_span,
+                t_lbrace: t(lbrace),
                 functions,
+                t_rbrace: t(rbrace),
             },
         })
     }
@@ -1012,15 +1034,30 @@ impl<T: TreeToken> Parser<'_, T> {
             }
             TokenType::Minus => {
                 let val = self.parse_factor(false, scope)?;
-                Expr::UnOp(first.start, UnOp::Neg, self.ast.expr(val))
+                Expr::UnOp {
+                    start_or_end: first.start,
+                    t_op: t(first),
+                    op: UnOp::Neg,
+                    inner: self.ast.expr(val),
+                }
             }
             TokenType::Bang => {
                 let val = self.parse_factor(false, scope)?;
-                Expr::UnOp(first.start, UnOp::Not, self.ast.expr(val))
+                Expr::UnOp {
+                    start_or_end: first.start,
+                    t_op: t(first),
+                    op: UnOp::Not,
+                    inner: self.ast.expr(val),
+                }
             }
             TokenType::Ampersand => {
                 let val = self.parse_factor(false, scope)?;
-                Expr::UnOp(first.start, UnOp::Ref, self.ast.expr(val))
+                Expr::UnOp {
+                    start_or_end: first.start,
+                    t_op: t(first),
+                    op: UnOp::Ref,
+                    inner: self.ast.expr(val),
+                }
             }
             TokenType::Keyword(Keyword::Ret) => {
                 if !self.toks.peek().new_line {
@@ -1032,7 +1069,10 @@ impl<T: TreeToken> Parser<'_, T> {
                         val,
                     }
                 } else {
-                    Expr::ReturnUnit { start: first.start }
+                    Expr::ReturnUnit {
+                        start: first.start,
+                        t: t(first),
+                    }
                 }
             }
             TokenType::IntLiteral => Expr::IntLiteral {
@@ -1056,50 +1096,65 @@ impl<T: TreeToken> Parser<'_, T> {
                 t: t(first),
             },
             TokenType::Keyword(Keyword::If) => {
+                let t_if = t(first);
                 let cond = self.parse_expr(scope)?;
                 let cond = self.ast.expr(cond);
                 let pat_value = self
                     .toks
                     .step_if(TokenType::Declare)
-                    .map(|_| {
+                    .map(|colon_eq| {
                         let pat_value = self.parse_expr(scope)?;
-                        Ok(self.ast.expr(pat_value))
+                        Ok((t(colon_eq), self.ast.expr(pat_value)))
                     })
                     .transpose()?;
-                let then = self.parse_block_or_stmt(scope)?;
+                let (t_colon, then) = self.parse_block_or_stmt(scope)?;
                 let then = self.ast.expr(then);
 
-                let else_ = if self
-                    .toks
-                    .step_if(TokenType::Keyword(Keyword::Else))
-                    .is_some()
-                {
-                    let else_ = self.parse_stmt(scope)?;
-                    Some(self.ast.expr(else_))
-                } else {
-                    None
-                };
+                let else_ =
+                    if let Some(else_) = self.toks.step_if(TokenType::Keyword(Keyword::Else)) {
+                        let t_else = t(else_);
+                        let else_ = self.parse_stmt(scope)?;
+                        Some((t_else, self.ast.expr(else_)))
+                    } else {
+                        None
+                    };
 
                 let start = first.start;
                 match (pat_value, else_) {
-                    (None, None) => Expr::If { start, cond, then },
-                    (None, Some(else_)) => Expr::IfElse {
+                    (None, None) => Expr::If {
+                        t_if,
                         start,
                         cond,
+                        t_colon,
                         then,
+                    },
+                    (None, Some((t_else, else_))) => Expr::IfElse {
+                        t_if,
+                        start,
+                        cond,
+                        t_colon,
+                        then,
+                        t_else,
                         else_,
                     },
-                    (Some(value), None) => Expr::IfPat {
+                    (Some((t_colon_eq, value)), None) => Expr::IfPat {
+                        t_if,
                         start,
                         pat: cond,
+                        t_colon_eq,
                         value,
+                        t_colon,
                         then,
                     },
-                    (Some(value), Some(else_)) => Expr::IfPatElse {
+                    (Some((t_colon_eq, value)), Some((t_else, else_))) => Expr::IfPatElse {
+                        t_if,
                         start,
                         pat: cond,
+                        t_colon_eq,
                         value,
+                        t_colon,
                         then,
+                        t_else,
                         else_,
                     },
                 }
@@ -1128,25 +1183,31 @@ impl<T: TreeToken> Parser<'_, T> {
                 let branch_count = (branches.len() / 2) as u32;
                 let branches = self.ast.exprs(branches).idx;
                 Expr::Match {
+                    t_match: t(first),
                     span: TSpan::new(lbrace.start, rbrace.end),
                     val,
+                    t_lbrace: t(lbrace),
                     branches: ExprIdPairs {
                         idx: branches,
                         pair_count: branch_count,
                     },
+                    t_rbrace: t(rbrace),
                 }
             }
             TokenType::Keyword(Keyword::While) => self.parse_while_from_cond(first, scope)?,
             TokenType::Keyword(Keyword::For) => {
                 //self.parse_
                 let pat = self.parse_expr(scope)?;
-                self.toks.step_expect(TokenType::Keyword(Keyword::In))?;
+                let t_in = self.toks.step_expect(TokenType::Keyword(Keyword::In))?;
                 let iter = self.parse_expr(scope)?;
-                let body = self.parse_block_or_stmt(scope)?;
+                let (t_colon, body) = self.parse_block_or_stmt(scope)?;
                 Expr::For {
                     start: first.start,
+                    t_for: t(first),
                     pat: self.ast.expr(pat),
+                    t_in: t(t_in),
                     iter: self.ast.expr(iter),
+                    t_colon,
                     body: self.ast.expr(body),
                 }
             }
@@ -1155,7 +1216,10 @@ impl<T: TreeToken> Parser<'_, T> {
                 start: first.start,
                 t: t(first),
             },
-            TokenType::Keyword(Keyword::Root) => Expr::Root(first.start),
+            TokenType::Keyword(Keyword::Root) => Expr::Root {
+                start: first.start,
+                t: t(first),
+            },
             TokenType::Dot => {
                 step_or_unexpected! {self, tok,
                     Ident => {
@@ -1196,8 +1260,14 @@ impl<T: TreeToken> Parser<'_, T> {
                     args: self.ast.exprs(args),
                 }
             }
-            TokenType::Keyword(Keyword::Break) => Expr::Break { start: first.start },
-            TokenType::Keyword(Keyword::Continue) => Expr::Continue { start: first.start },
+            TokenType::Keyword(Keyword::Break) => Expr::Break {
+                start: first.start,
+                t: t(first),
+            },
+            TokenType::Keyword(Keyword::Continue) => Expr::Continue {
+                start: first.start,
+                t: t(first),
+            },
             _ => {
                 return Err(unexpected(first, ExpectedTokens::Expr));
             }
@@ -1254,43 +1324,62 @@ impl<T: TreeToken> Parser<'_, T> {
                     Expr::FunctionCall(call)
                 }
                 TokenType::LBracket if !tok.new_line => {
-                    self.toks.step_assert(TokenType::LBracket);
+                    let lbracket = self.toks.step_assert(TokenType::LBracket);
 
                     // array index
                     let idx = self.parse_expr(scope)?;
                     let idx = self.ast.expr(idx);
 
-                    let end = self.toks.step_expect(TokenType::RBracket)?.end;
+                    let rbracket = self.toks.step_expect(TokenType::RBracket)?;
+                    let end = rbracket.end;
 
                     Expr::Index {
                         expr: self.ast.expr(expr),
+                        t_lbracket: t(lbracket),
                         idx,
+                        t_rbracket: t(rbracket),
                         end,
                     }
                 }
                 TokenType::Dot => {
-                    self.toks.step_assert(TokenType::Dot);
+                    let dot = self.toks.step_assert(TokenType::Dot);
                     step_or_unexpected! {self, tok,
                         Ident => {
                             Expr::MemberAccess {
                                 left: self.ast.expr(expr),
+                                t_dot: t(dot),
                                 name: tok.span(),
                             }
                         },
                         IntLiteral => {
                             let idx = self.toks.src[tok.span().range()].parse().unwrap();
-                            Expr::TupleIdx { left: self.ast.expr(expr), idx, end: tok.end }
+                            Expr::TupleIdx {
+                                left: self.ast.expr(expr),
+                                t_dot: t(dot),
+                                t_int: t(tok),
+                                idx,
+                                end: tok.end,
+                            }
                         }
                     }
                 }
                 TokenType::Caret => {
                     let caret = self.toks.step_assert(TokenType::Caret);
-                    Expr::UnOp(caret.end, UnOp::Deref, self.ast.expr(expr))
+                    Expr::UnOp {
+                        start_or_end: caret.end,
+                        t_op: t(caret),
+                        op: UnOp::Deref,
+                        inner: self.ast.expr(expr),
+                    }
                 }
                 TokenType::Keyword(Keyword::As) if include_as => {
-                    self.toks.step_assert(TokenType::Keyword(Keyword::As));
+                    let t_as = self.toks.step_assert(TokenType::Keyword(Keyword::As));
                     let target_ty = self.parse_type()?;
-                    Expr::As(self.ast.expr(expr), target_ty)
+                    Expr::As {
+                        value: self.ast.expr(expr),
+                        t_as: t(t_as),
+                        ty: target_ty,
+                    }
                 }
                 _ => break Ok(expr),
             };
@@ -1330,25 +1419,31 @@ impl<T: TreeToken> Parser<'_, T> {
 
     /// Starts after the while keyword has already been parsed
     fn parse_while_from_cond(&mut self, while_tok: Token, scope: ScopeId) -> ParseResult<Expr<T>> {
+        let t_while = t(while_tok);
         debug_assert_eq!(while_tok.ty, TokenType::Keyword(Keyword::While));
         let cond = self.parse_expr(scope)?;
         let cond = self.ast.expr(cond);
-        if self.toks.step_if(TokenType::Declare).is_some() {
+        if let Some(colon_eq) = self.toks.step_if(TokenType::Declare) {
             let val = self.parse_expr(scope)?;
             let val = self.ast.expr(val);
-            let body = self.parse_block_or_stmt(scope)?;
+            let (t_colon, body) = self.parse_block_or_stmt(scope)?;
             let body = self.ast.expr(body);
             Ok(Expr::WhilePat {
+                t_while,
                 start: while_tok.start,
                 pat: cond,
+                t_colon_eq: t(colon_eq),
                 val,
+                t_colon,
                 body,
             })
         } else {
-            let body = self.parse_block_or_stmt(scope)?;
+            let (t_colon, body) = self.parse_block_or_stmt(scope)?;
             Ok(Expr::While {
+                t_while,
                 start: while_tok.start,
                 cond,
+                t_colon,
                 body: self.ast.expr(body),
             })
         }
@@ -1374,11 +1469,13 @@ impl<T: TreeToken> Parser<'_, T> {
         match tok.ty {
             TokenType::Keyword(Keyword::Root) => Ok(UnresolvedType::Unresolved(
                 self.parse_rest_of_path(tok.start, tok.end)?,
-                self.parse_optional_generic_instance()?,
+                self.parse_optional_generic_instance()?
+                    .map(|(_, types, _, span)| (types, span)),
             )),
             TokenType::Ident => Ok(UnresolvedType::Unresolved(
                 self.parse_rest_of_path(tok.start, tok.end)?,
-                self.parse_optional_generic_instance()?,
+                self.parse_optional_generic_instance()?
+                    .map(|(_, types, _, span)| (types, span)),
             )),
             TokenType::Keyword(Keyword::Primitive(primitive)) => Ok(UnresolvedType::Primitive {
                 ty: primitive,
@@ -1456,9 +1553,12 @@ impl<T: TreeToken> Parser<'_, T> {
     fn parse_optional_generics(
         &mut self,
         inherited: Vec<GenericDef<T>>,
-    ) -> ParseResult<(Box<[GenericDef<T>]>, Option<(Token, Token)>)> {
+    ) -> ParseResult<Generics<T>> {
         let Some(lbracket) = self.toks.step_if(TokenType::LBracket) else {
-            return Ok((inherited.into_boxed_slice(), None));
+            return Ok(Generics {
+                t_brackets: T::opt_none(),
+                types: inherited.into_boxed_slice(),
+            });
         };
         let mut generics = inherited;
         let rbracket =
@@ -1466,16 +1566,16 @@ impl<T: TreeToken> Parser<'_, T> {
                 let name = p.toks.step_expect(TokenType::Ident)?;
                 let name_span = name.span();
                 let mut requirements = Vec::new();
-                if p.toks.step_if(TokenType::Colon).is_some() {
+                let t_colon = if let Some(colon) = p.toks.step_if(TokenType::Colon) {
                     loop {
                         let path = p.parse_path()?;
-                        let (generics, generics_span) =
-                            p.parse_optional_generic_instance()?.unwrap_or_else(|| {
-                                (Box::new([]), TSpan::new(path.span().end, path.span().end))
-                            });
+                        let pos = path.span().end;
+                        let (generics, brackets, generics_span) =
+                            p.parse_generics_instance(TSpan::new(pos, pos))?;
                         requirements.push(ast::TraitBound {
                             path,
                             generics,
+                            brackets,
                             generics_span,
                         });
                         if p.toks.step_if(TokenType::Plus).is_none() {
@@ -1483,10 +1583,13 @@ impl<T: TreeToken> Parser<'_, T> {
                         }
                     }
                     p.toks.step_if(TokenType::Ident);
-                }
+                    T::opt(t(colon))
+                } else {
+                    T::opt_none()
+                };
                 generics.push(GenericDef {
                     name: name_span,
-                    t_name: T::opt(t(name)),
+                    t_colon,
                     bounds: requirements.into_boxed_slice(),
                 });
                 Ok(Delimit::OptionalIfNewLine)
@@ -1497,24 +1600,39 @@ impl<T: TreeToken> Parser<'_, T> {
             let end = generics.last().unwrap().span().end;
             return Err(Error::TooManyGenerics(generics.len()).at_span(TSpan::new(start, end)));
         };
-        Ok((generics.into_boxed_slice(), Some((lbracket, rbracket))))
+        Ok(Generics {
+            t_brackets: T::opt((t(lbracket), t(rbracket))),
+            types: generics.into_boxed_slice(),
+        })
+    }
+
+    fn parse_generics_instance(
+        &mut self,
+        default_span: TSpan,
+    ) -> ParseResult<(Box<[UnresolvedType]>, T::Opt<(T, T)>, TSpan)> {
+        Ok(self.parse_optional_generic_instance()?.map_or(
+            (Box::new([]), T::opt_none(), default_span),
+            |(lbracket, types, rbracket, span)| (types, T::opt((lbracket, rbracket)), span),
+        ))
     }
 
     fn parse_optional_generic_instance(
         &mut self,
-    ) -> ParseResult<Option<(Box<[UnresolvedType]>, TSpan)>> {
+    ) -> ParseResult<Option<(T, Box<[UnresolvedType]>, T, TSpan)>> {
         self.toks
             .step_if(TokenType::LBracket)
             .map(|lbracket| {
                 let mut types = Vec::new();
-                let r_bracket =
+                let rbracket =
                     self.parse_delimited(lbracket, TokenType::Comma, TokenType::RBracket, |p| {
                         types.push(p.parse_type()?);
                         Ok(())
                     })?;
                 Ok((
+                    t(lbracket),
                     types.into_boxed_slice(),
-                    TSpan::new(lbracket.start, r_bracket.end),
+                    t(rbracket),
+                    TSpan::new(lbracket.start, rbracket.end),
                 ))
             })
             .transpose()

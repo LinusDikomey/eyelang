@@ -56,18 +56,14 @@ fn main() -> Result<(), MainError> {
         }
         args::Cmd::Fmt => {
             let (name, path) = path_arg(args.path)?;
-            println!("Formatting project {name}");
+            eprintln!("Formatting project {name}");
             for file in compiler::all_project_files_from_root(&path) {
                 eprintln!("Project file {}", file.display());
                 let src = std::fs::read_to_string(&file).unwrap_or_else(|err| {
                     panic!("Failed to read project file {}: {err:?}", file.display())
                 });
                 let (formatted, _errors) = format::format(src.into());
-                println!(
-                    "\nFormatted {}:\n==========\n{}\n==========",
-                    file.display(),
-                    formatted
-                );
+                println!("{}", formatted);
             }
             return Ok(());
         }

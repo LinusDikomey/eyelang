@@ -405,34 +405,43 @@ pub enum Either<A, B> {
 #[derive(Debug)]
 pub struct TypeDef<T: TreeToken = ()> {
     pub t_introducer: T,
-    pub generics: Box<[GenericDef<T>]>,
+    pub generics: Generics<T>,
+    pub t_lbrace: T,
     pub scope: ScopeId,
-    pub methods: DHashMap<String, FunctionId>,
+    pub content: TypeContent<T>,
+    pub methods: DHashMap<String, Method<T>>,
     pub impls: Box<[InherentImpl<T>]>,
-    pub content: TypeContent,
+    pub t_rbrace: T,
 }
 impl<T: TreeToken> TypeDef<T> {
     pub fn generic_count(&self) -> u8 {
-        self.generics.len() as u8
+        self.generics.types.len() as u8
     }
     pub fn span(&self, scopes: &[Scope<T>]) -> TSpan {
         scopes[self.scope.idx()].span
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Method<T: TreeToken> {
+    pub name: TSpan,
+    pub t_colon_colon: T,
+    pub function: FunctionId,
+}
+
 #[derive(Debug)]
-pub enum TypeContent {
+pub enum TypeContent<T: TreeToken> {
     Struct {
-        members: Vec<StructMember>,
+        members: Vec<StructMember<T>>,
     },
     Enum {
-        variants: Box<[EnumVariantDefinition]>,
+        variants: Box<[EnumVariantDefinition<T>]>,
     },
 }
 
 #[derive(Debug)]
-pub struct StructMember {
-    pub attributes: Box<[Attribute]>,
+pub struct StructMember<T: TreeToken> {
+    pub attributes: Box<[Attribute<T>]>,
     pub name: TSpan,
     pub ty: UnresolvedType,
 }
@@ -440,7 +449,6 @@ pub struct StructMember {
 #[derive(Debug)]
 pub struct Scope<T: TreeToken = ()> {
     pub parent: Option<ScopeId>,
-    pub braces: T::Opt<(T, T)>,
     pub definitions: DHashMap<String, Definition<T>>,
     pub span: TSpan,
     pub has_errors: bool,
@@ -449,7 +457,6 @@ impl<T: TreeToken> Scope<T> {
     pub fn missing() -> Self {
         Self {
             parent: None,
-            braces: T::opt_none(),
             definitions: dmap::new(),
             span: TSpan::MISSING,
             has_errors: true,
@@ -461,11 +468,9 @@ impl<T: TreeToken> Scope<T> {
         src: &str,
         generics: &[GenericDef<T>],
         span: TSpan,
-        parens: Option<(Token, Token)>,
     ) -> Self {
         Self {
             parent: Some(parent),
-            braces: parens.map_or_else(T::opt_none, |(l, r)| T::opt((T::t(l), T::t(r)))),
             definitions: generics
                 .iter()
                 .enumerate()
@@ -495,7 +500,7 @@ pub enum Definition<T: TreeToken = ()> {
 
 pub struct Item<T: TreeToken> {
     #[allow(unused)] // TODO: remove when using attributes
-    pub attributes: Box<[Attribute]>,
+    pub attributes: Box<[Attribute<T>]>,
     pub value: ItemValue<T>,
 }
 
@@ -516,19 +521,22 @@ pub enum ItemValue<T: TreeToken> {
 }
 
 #[derive(Debug)]
-pub struct Attribute {
+pub struct Attribute<T: TreeToken> {
+    pub t_at: T,
     pub path: IdentPath,
+    pub t_parens: T::Opt<(T, T)>,
     pub args: ExprIds,
     pub span: TSpan,
 }
 
 #[derive(Debug)]
-pub struct EnumVariantDefinition {
+pub struct EnumVariantDefinition<T: TreeToken> {
     pub name_span: TSpan,
+    pub t_parens: T::Opt<(T, T)>,
     pub args: Box<[UnresolvedType]>,
     pub end: u32,
 }
-impl EnumVariantDefinition {
+impl<T: TreeToken> EnumVariantDefinition<T> {
     pub fn span(&self) -> TSpan {
         TSpan::new(self.name_span.start, self.end)
     }
@@ -536,9 +544,14 @@ impl EnumVariantDefinition {
 
 #[derive(Debug)]
 pub struct TraitDefinition<T: TreeToken = ()> {
-    pub generics: Box<[GenericDef<T>]>,
+    pub t_trait: T,
+    pub generics: Generics<T>,
     pub scope: ScopeId,
-    pub functions: Vec<(TSpan, Function<T>)>,
+    pub t_lbrace: T,
+    pub functions: Vec<Method<T>>,
+    pub t_rbrace: T,
+    /// (for, lbrace, rbrace)
+    pub t_attached_impls: T::Opt<(T, T, T)>,
     pub impls: Box<[Impl<T>]>,
     pub associated_name: TSpan,
 }
@@ -553,6 +566,7 @@ pub type TraitFunctions = Box<[(TSpan, FunctionId)]>;
 #[derive(Debug)]
 pub struct Impl<T: TreeToken = ()> {
     pub t_impl: T,
+    pub t_underscore: T,
     pub implemented_type: UnresolvedType,
     pub t_for: T,
     pub base: BaseImpl<T>,
@@ -560,6 +574,7 @@ pub struct Impl<T: TreeToken = ()> {
 
 #[derive(Debug)]
 pub struct InherentImpl<T: TreeToken = ()> {
+    pub t_impl: T,
     pub implemented_trait: IdentPath,
     pub base: BaseImpl<T>,
 }
@@ -567,9 +582,13 @@ pub struct InherentImpl<T: TreeToken = ()> {
 #[derive(Debug)]
 pub struct BaseImpl<T: TreeToken = ()> {
     pub scope: ScopeId,
-    pub generics: Box<[GenericDef<T>]>,
-    pub trait_generics: (Box<[UnresolvedType]>, TSpan),
-    pub functions: TraitFunctions,
+    pub generics: Generics<T>,
+    pub t_brackets: T::Opt<(T, T)>,
+    pub trait_generics: Box<[UnresolvedType]>,
+    pub trait_generics_span: TSpan,
+    pub t_lbrace: T,
+    pub functions: Box<[Method<T>]>,
+    pub t_rbrace: T,
 }
 
 #[derive(Debug)]
@@ -586,7 +605,7 @@ pub struct Global<T: TreeToken = ()> {
 #[derive(Debug)]
 pub struct Function<T: TreeToken = ()> {
     pub t_fn: T,
-    pub generics: Box<[GenericDef<T>]>,
+    pub generics: Generics<T>,
     pub t_parens: T::Opt<(T, T)>,
     pub params: Box<[(TSpan, UnresolvedType)]>,
     pub named_params: Box<[(TSpan, UnresolvedType, Option<ExprId>)]>,
@@ -602,12 +621,23 @@ pub struct Function<T: TreeToken = ()> {
     pub associated_name: TSpan,
 }
 
+#[derive(Debug)]
+pub struct Generics<T: TreeToken = ()> {
+    pub t_brackets: T::Opt<(T, T)>,
+    pub types: Box<[GenericDef<T>]>,
+}
+impl<T: TreeToken> Generics<T> {
+    pub fn count(&self) -> u8 {
+        self.types.len() as u8
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct GenericDef<T: TreeToken = ()> {
+pub struct GenericDef<T: TreeToken> {
     /// missing span indicates that this is a `Self` type in a trait definition
     pub name: TSpan,
-    pub t_name: T::Opt<T>,
-    pub bounds: Box<[TraitBound]>,
+    pub t_colon: T::Opt<T>,
+    pub bounds: Box<[TraitBound<T>]>,
 }
 impl<T: TreeToken> GenericDef<T> {
     pub fn span(&self) -> TSpan {
@@ -629,8 +659,9 @@ impl<T: TreeToken> GenericDef<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct TraitBound {
+pub struct TraitBound<T: TreeToken = ()> {
     pub path: IdentPath,
+    pub brackets: T::Opt<(T, T)>,
     pub generics: Box<[UnresolvedType]>,
     pub generics_span: TSpan,
 }
@@ -724,28 +755,45 @@ pub enum Expr<T: TreeToken = ()> {
     },
 
     // ---------- operations ----------
-    UnOp(u32, UnOp, ExprId),
+    UnOp {
+        start_or_end: u32,
+        t_op: T,
+        op: UnOp,
+        inner: ExprId,
+    },
     BinOp {
         t_op: T,
         op: Operator,
         l: ExprId,
         r: ExprId,
     },
-    As(ExprId, UnresolvedType),
-    Root(u32),
+    As {
+        value: ExprId,
+        t_as: T,
+        ty: UnresolvedType,
+    },
+    Root {
+        start: u32,
+        t: T,
+    },
 
     // ---------- members and paths ----------
     MemberAccess {
         left: ExprId,
+        t_dot: T,
         name: TSpan,
     },
     Index {
         expr: ExprId,
+        t_lbracket: T,
         idx: ExprId,
+        t_rbracket: T,
         end: u32,
     },
     TupleIdx {
         left: ExprId,
+        t_dot: T,
+        t_int: T,
         idx: u32,
         end: u32,
     },
@@ -753,6 +801,7 @@ pub enum Expr<T: TreeToken = ()> {
     // ---------- return ----------
     ReturnUnit {
         start: u32,
+        t: T,
     },
     Return {
         start: u32,
@@ -763,49 +812,72 @@ pub enum Expr<T: TreeToken = ()> {
     // ---------- control flow ----------
     If {
         start: u32,
+        t_if: T,
         cond: ExprId,
+        t_colon: T::Opt<T>,
         then: ExprId,
     },
     IfElse {
         start: u32,
+        t_if: T,
         cond: ExprId,
+        t_colon: T::Opt<T>,
         then: ExprId,
+        t_else: T,
         else_: ExprId,
     },
     IfPat {
         start: u32,
+        t_if: T,
+        t_colon_eq: T,
         pat: ExprId,
+        t_colon: T::Opt<T>,
         value: ExprId,
         then: ExprId,
     },
     IfPatElse {
         start: u32,
+        t_if: T,
         pat: ExprId,
+        t_colon_eq: T,
         value: ExprId,
+        t_colon: T::Opt<T>,
         then: ExprId,
+        t_else: T,
         else_: ExprId,
     },
     Match {
+        t_match: T,
         span: TSpan,
         val: ExprId,
+        t_lbrace: T,
         branches: ExprIdPairs,
+        t_rbrace: T,
     },
     While {
         start: u32,
+        t_while: T,
         cond: ExprId,
+        t_colon: T::Opt<T>,
         body: ExprId,
     },
     /// while ... := ...
     WhilePat {
         start: u32,
+        t_while: T,
         pat: ExprId,
+        t_colon_eq: T,
         val: ExprId,
+        t_colon: T::Opt<T>,
         body: ExprId,
     },
     For {
         start: u32,
+        t_for: T,
         pat: ExprId,
+        t_in: T,
         iter: ExprId,
+        t_colon: T::Opt<T>,
         body: ExprId,
     },
     FunctionCall(CallId),
@@ -818,9 +890,11 @@ pub enum Expr<T: TreeToken = ()> {
     },
     Break {
         start: u32,
+        t: T,
     },
     Continue {
         start: u32,
+        t: T,
     },
 }
 impl<T: TreeToken> Expr<T> {
@@ -885,7 +959,7 @@ impl<T: TreeToken> Expr<T> {
             } => TSpan::new(s(pat), annotated_ty.span().end),
             Expr::DeclareWithVal { pat, val, .. } => TSpan::new(s(pat), e(val)),
             Expr::Return { start, val, .. } => TSpan::new(*start, e(val)),
-            Expr::ReturnUnit { start } => TSpan::new(*start, start + 3),
+            &Expr::ReturnUnit { start, .. } => TSpan::new(start, start + 4),
             &Expr::Hole { loc, .. } => TSpan::new(loc, loc + 1),
             Expr::If { start, then, .. } | Expr::IfPat { start, then, .. } => {
                 TSpan::new(*start, e(then))
@@ -902,29 +976,32 @@ impl<T: TreeToken> Expr<T> {
                 } = &calls[call_id.idx()];
                 TSpan::new(s(called_expr), *end)
             }
-            Expr::UnOp(start_or_end, un_op, expr) => {
-                if un_op.postfix() {
-                    TSpan::new(s(expr), *start_or_end)
+            Expr::UnOp {
+                start_or_end,
+                op,
+                inner,
+                ..
+            } => {
+                if op.postfix() {
+                    TSpan::new(s(inner), *start_or_end)
                 } else {
-                    TSpan::new(*start_or_end, e(expr))
+                    TSpan::new(*start_or_end, e(inner))
                 }
             }
             Expr::BinOp { l, r, .. } => TSpan::new(s(l), e(r)),
             Expr::MemberAccess { left, name, .. } => TSpan::new(s(left), name.end),
-            Expr::Index { expr, idx: _, end } => TSpan::new(s(expr), *end),
+            Expr::Index { expr, end, .. } => TSpan::new(s(expr), *end),
             Expr::TupleIdx {
-                left: expr,
-                idx: _,
-                end,
+                left: expr, end, ..
             } => TSpan::new(s(expr), *end),
-            Expr::As(val, ty) => TSpan::new(s(val), ty.span().end),
-            Expr::Root(start) => TSpan::new(*start, *start + 3),
+            Expr::As { value, ty, .. } => TSpan::new(s(value), ty.span().end),
+            &Expr::Root { start, .. } => TSpan::new(start, start + 4),
             Expr::Asm { span, .. } => *span,
             &Expr::Primitive {
                 primitive, start, ..
-            } => TSpan::new(start, start + <&str>::from(primitive).len() as u32 - 1),
-            &Expr::Break { start } => TSpan::new(start, start + 4),
-            &Expr::Continue { start } => TSpan::new(start, start + 7),
+            } => TSpan::new(start, start + <&str>::from(primitive).len() as u32),
+            &Expr::Break { start, .. } => TSpan::new(start, start + 5),
+            &Expr::Continue { start, .. } => TSpan::new(start, start + 8),
         }
     }
 

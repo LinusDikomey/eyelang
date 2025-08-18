@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use dmap::DHashMap;
 use error::Error;
-use parser::ast::{self, ModuleId, TraitId};
+use parser::ast::{self, FunctionId, ModuleId, TraitId};
 
 use crate::{
     Compiler, Def, Type, TypeId,
@@ -17,7 +17,7 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
     let ast_id = resolved_ty.id;
     let ast = Rc::clone(compiler.get_module_ast(module));
     let def = &ast[ast_id];
-    let generics = compiler.resolve_generics(&def.generics, module, def.scope, &ast);
+    let generics = compiler.resolve_generics(&def.generics.types, module, def.scope, &ast);
     let resolved_def = match &def.content {
         ast::TypeContent::Struct { members } => {
             let named_fields = members
@@ -53,7 +53,11 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
         }
     };
 
-    let mut methods = def.methods.clone();
+    let mut methods: DHashMap<Box<str>, FunctionId> = def
+        .methods
+        .iter()
+        .map(|(name, method)| (name.clone().into_boxed_str(), method.function))
+        .collect();
 
     let mut inherent_trait_impls: DHashMap<(ModuleId, TraitId), Vec<traits::Impl>> = dmap::new();
 
@@ -97,14 +101,14 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
             );
             for (name, &idx) in &checked_trait.functions_by_name {
                 let id = checked.functions[idx as usize];
-                let prev = methods.insert(name.to_owned(), id);
+                let prev = methods.insert(name.clone().into_boxed_str(), id);
                 if prev.is_some() {
                     // duplicate function, find the correct function in the impl functions for the span
                     let span = trait_impl
                         .base
                         .functions
                         .iter()
-                        .find_map(|&(span, other_id)| (other_id == id).then_some(span))
+                        .find_map(|m| (m.function == id).then_some(m.name))
                         .unwrap();
                     compiler
                         .errors

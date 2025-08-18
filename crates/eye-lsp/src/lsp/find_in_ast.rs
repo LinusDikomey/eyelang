@@ -133,7 +133,7 @@ fn find_at_offset_expr(
         &Expr::Function { id } => {
             let function = &ast[id];
             let scope = function.scope;
-            for generic_def in &function.generics {
+            for generic_def in &function.generics.types {
                 if generic_def.name.contains(offset) {
                     return Some(Found {
                         ty: FoundType::Generic,
@@ -215,15 +215,15 @@ fn find_at_offset_expr(
             span,
             scope,
         }),
-        Expr::UnOp(_, _, expr_id) => rec(*expr_id),
+        Expr::UnOp { inner, .. } => rec(*inner),
         &Expr::BinOp { l, r, .. } => rec(l).or_else(|| rec(r)),
-        Expr::As(expr_id, ty) => rec(*expr_id).or_else(|| find_at_offset_ty(offset, scope, ty)),
-        Expr::Root(_) => Some(Found {
+        Expr::As { value, ty, .. } => rec(*value).or_else(|| find_at_offset_ty(offset, scope, ty)),
+        Expr::Root { .. } => Some(Found {
             ty: FoundType::RootModule,
             span,
             scope,
         }),
-        &Expr::MemberAccess { left, name } => {
+        &Expr::MemberAccess { left, name, .. } => {
             if name.contains(offset) {
                 Some(Found {
                     ty: FoundType::Member,

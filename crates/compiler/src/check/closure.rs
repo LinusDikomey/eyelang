@@ -23,9 +23,12 @@ pub fn closure(
     let body = function
         .body
         .expect("TODO: handle/error on extern closures");
-    let generics =
-        ctx.compiler
-            .resolve_generics(&function.generics, ctx.module, function.scope, ctx.ast);
+    let generics = ctx.compiler.resolve_generics(
+        &function.generics.types,
+        ctx.module,
+        function.scope,
+        ctx.ast,
+    );
     let mut types = TypeTable::new();
 
     let name = crate::compiler::function_name(ctx.ast, function, ctx.module, id);

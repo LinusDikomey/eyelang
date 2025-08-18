@@ -20,21 +20,21 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
     let module = id.0;
     let def = &ast[id.1];
     // don't include self type in generics, it is handled seperately
-    let generics = compiler.resolve_generics(&def.generics[1..], id.0, def.scope, &ast);
+    let generics = compiler.resolve_generics(&def.generics.types[1..], id.0, def.scope, &ast);
     let mut functions_by_name = dmap::with_capacity(def.functions.len());
     let functions: Vec<Signature> = def
         .functions
         .iter()
         .zip(0..)
-        .map(|((name_span, function), function_index)| {
-            let name = ast[*name_span].to_owned();
+        .map(|(function, function_index)| {
+            let name = ast[function.name].to_owned();
             let prev = functions_by_name.insert(name, function_index);
             if prev.is_some() {
                 compiler
                     .errors
-                    .emit(module, Error::DuplicateDefinition.at_span(*name_span));
+                    .emit(module, Error::DuplicateDefinition.at_span(function.name));
             }
-            compiler.check_signature(function, module, &ast)
+            compiler.check_signature(&ast[function.function], module, &ast)
         })
         .collect();
     let impls = def
@@ -79,11 +79,10 @@ pub fn check_impl(
     trait_functions_by_name: &DHashMap<String, u16>,
     trait_name: &str,
 ) -> Option<Impl> {
-    let impl_generics = compiler.resolve_generics(&impl_.generics, module, impl_.scope, ast);
+    let impl_generics = compiler.resolve_generics(&impl_.generics.types, module, impl_.scope, ast);
 
     let trait_generics: Vec<_> = impl_
         .trait_generics
-        .0
         .iter()
         .map(|generic| compiler.resolve_type(generic, module, impl_.scope))
         .collect();
@@ -95,7 +94,7 @@ pub fn check_impl(
                 expected: trait_generic_count,
                 found: trait_generics.len() as _,
             }
-            .at_span(impl_.trait_generics.1),
+            .at_span(impl_.trait_generics_span),
         );
         return None;
     }
@@ -106,8 +105,8 @@ pub fn check_impl(
         .chain(trait_generics.clone())
         .collect();
     let base_offset = base_generics.len() as u8;
-    for &(name_span, function) in &impl_.functions {
-        let name = &ast[name_span];
+    for method in &impl_.functions {
+        let name = &ast[method.name];
         let Some(&function_idx) = trait_functions_by_name.get(name) else {
             compiler.errors.emit(
                 module,
@@ -115,18 +114,18 @@ pub fn check_impl(
                     trait_name: trait_name.to_owned(),
                     function: name.to_owned(),
                 }
-                .at_span(name_span),
+                .at_span(method.name),
             );
             continue;
         };
         if function_ids[function_idx as usize] != ast::FunctionId::from_inner(u32::MAX) {
             compiler
                 .errors
-                .emit(module, Error::DuplicateDefinition.at_span(name_span));
+                .emit(module, Error::DuplicateDefinition.at_span(method.name));
             continue;
         }
 
-        let signature = compiler.get_signature(module, function);
+        let signature = compiler.get_signature(module, method.function);
         let trait_signature = &trait_functions[function_idx as usize];
         let compatible = signature.compatible_with(
             trait_signature,
@@ -138,10 +137,10 @@ pub fn check_impl(
             Ok(None) | Err(InvalidTypeError) => {}
             Ok(Some(incompat)) => compiler.errors.emit(
                 module,
-                Error::TraitSignatureMismatch(incompat).at_span(name_span),
+                Error::TraitSignatureMismatch(incompat).at_span(method.name),
             ),
         }
-        function_ids[function_idx as usize] = function;
+        function_ids[function_idx as usize] = method.function;
     }
     let mut unimplemented = Vec::new();
     for (name, &i) in trait_functions_by_name {

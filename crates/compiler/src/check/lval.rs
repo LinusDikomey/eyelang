@@ -32,7 +32,11 @@ pub fn check(
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }
-        Expr::UnOp(_, UnOp::Deref, inner) => {
+        Expr::UnOp {
+            op: UnOp::Deref,
+            inner,
+            ..
+        } => {
             let pointee = ctx.hir.types.add_unknown();
             let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
             let node = expr::check(ctx, inner, scope, pointer, return_ty, noreturn);
@@ -41,6 +45,7 @@ pub fn check(
         Expr::MemberAccess {
             left,
             name: name_span,
+            ..
         } => {
             let left_ty = ctx.hir.types.add_unknown();
             let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);

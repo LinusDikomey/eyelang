@@ -1,7 +1,7 @@
 use crate::dom::{Cond, Node, R};
 
 pub fn render(mut dom: Node) -> String {
-    let line_width = 30;
+    let line_width = crate::LINE_WIDTH;
     compute(&mut dom, line_width);
     tracing::debug!(target: "format", "Dom after width compute:\n{dom:?}");
     let mut s = String::new();

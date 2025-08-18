@@ -40,7 +40,11 @@ pub fn check(
             );
             Pattern::String(str)
         }
-        &Expr::UnOp(_, UnOp::Neg, inner) => {
+        &Expr::UnOp {
+            op: UnOp::Neg,
+            inner,
+            ..
+        } => {
             match ctx.ast[inner] {
                 Expr::IntLiteral { span, .. } => {
                     let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
@@ -93,7 +97,11 @@ pub fn check(
                         ctx.specify(expected, TypeInfo::Float, |ast| ast[expr_ref].span(ast));
                         Kind::Float
                     }
-                    Expr::UnOp(_, UnOp::Neg, inner) => match ctx.ast[inner] {
+                    Expr::UnOp {
+                        op: UnOp::Neg,
+                        inner,
+                        ..
+                    } => match ctx.ast[inner] {
                         Expr::IntLiteral { span: l, .. } => {
                             let lit = IntLiteral::parse(&ctx.ast.src()[l.range()]);
                             ctx.specify(expected, TypeInfo::Integer, |ast| ast[expr_ref].span(ast));

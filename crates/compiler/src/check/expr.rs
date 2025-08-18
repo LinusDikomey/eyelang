@@ -215,18 +215,18 @@ pub fn check(
             Node::Invalid
         }
 
-        &Expr::UnOp(_, op, value) => {
+        &Expr::UnOp { op, inner, .. } => {
             match op {
                 UnOp::Neg => {
                     // TODO(trait): this should constrain the value with a trait
-                    let value = check(ctx, value, scope, expected, return_ty, noreturn);
+                    let value = check(ctx, inner, scope, expected, return_ty, noreturn);
                     Node::Negate(ctx.hir.add(value), expected)
                 }
                 UnOp::Not => {
                     ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
                         ast[expr].span(ast)
                     });
-                    let value = check(ctx, value, scope, expected, return_ty, noreturn);
+                    let value = check(ctx, inner, scope, expected, return_ty, noreturn);
                     Node::Not(ctx.hir.add(value))
                 }
                 UnOp::Ref => {
@@ -236,7 +236,7 @@ pub fn check(
                     ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| {
                         ast[expr].span(ast)
                     });
-                    let value = check(ctx, value, scope, pointee, return_ty, noreturn);
+                    let value = check(ctx, inner, scope, pointee, return_ty, noreturn);
                     if let Some(lval) = LValue::try_from_node(&value, &mut ctx.hir) {
                         Node::AddressOf {
                             value: ctx.hir.add_lvalue(lval),
@@ -253,7 +253,7 @@ pub fn check(
                 }
                 UnOp::Deref => {
                     let ptr_ty = ctx.hir.types.add(TypeInfo::Pointer(expected));
-                    let value = check(ctx, value, scope, ptr_ty, return_ty, noreturn);
+                    let value = check(ctx, inner, scope, ptr_ty, return_ty, noreturn);
                     Node::Deref {
                         value: ctx.hir.add(value),
                         deref_ty: expected,
@@ -349,9 +349,11 @@ pub fn check(
                 }
             }
         }
-        Expr::As(val, new_ty) => {
+        Expr::As {
+            value, ty: new_ty, ..
+        } => {
             let from_ty = ctx.hir.types.add_unknown();
-            let val = check(ctx, *val, scope, from_ty, return_ty, noreturn);
+            let val = check(ctx, *value, scope, from_ty, return_ty, noreturn);
             let val = ctx.hir.add(val);
             let new_type_info = ctx.hir.types.info_from_unresolved(
                 new_ty,
@@ -367,7 +369,7 @@ pub fn check(
             ctx.deferred_casts.push((from_ty, expected, expr, cast_id));
             Node::Cast(cast_id)
         }
-        &Expr::Root(_) => {
+        &Expr::Root { .. } => {
             let root_module = ctx.compiler.get_root_module(ctx.module);
             ctx.specify(expected, TypeInfo::ModuleItem(root_module), |ast| {
                 ast[expr].span(ast)
@@ -377,10 +379,11 @@ pub fn check(
         &Expr::MemberAccess {
             left,
             name: name_span,
+            ..
         } => check_member_access(
             ctx, left, name_span, expr, scope, expected, return_ty, noreturn,
         ),
-        &Expr::Index { expr, idx, end: _ } => {
+        &Expr::Index { expr, idx, .. } => {
             let array_ty = ctx.hir.types.add(TypeInfo::Array {
                 element: expected,
                 count: None,
@@ -434,11 +437,7 @@ pub fn check(
         }
 
         // FIXME: some code duplication going on with the 4 different If variants
-        &Expr::If {
-            start: _,
-            cond,
-            then,
-        } => {
+        &Expr::If { cond, then, .. } => {
             ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
@@ -451,10 +450,7 @@ pub fn check(
             }
         }
         &Expr::IfElse {
-            start: _,
-            cond,
-            then,
-            else_,
+            cond, then, else_, ..
         } => {
             let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
@@ -473,10 +469,7 @@ pub fn check(
             }
         }
         &Expr::IfPat {
-            start: _,
-            pat,
-            value,
-            then,
+            pat, value, then, ..
         } => {
             ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             let pattern_ty = ctx.hir.types.add_unknown();
@@ -509,11 +502,11 @@ pub fn check(
             }
         }
         &Expr::IfPatElse {
-            start: _,
             pat,
             value,
             then,
             else_,
+            ..
         } => {
             let pattern_ty = ctx.hir.types.add_unknown();
             let value = check(ctx, value, scope, pattern_ty, return_ty, noreturn);
@@ -566,11 +559,7 @@ pub fn check(
                 resulting_ty: expected,
             }
         }
-        &Expr::Match {
-            span: _,
-            val,
-            branches,
-        } => {
+        &Expr::Match { val, branches, .. } => {
             let branch_count = branches.pair_count();
             let matched_ty = ctx.hir.types.add_unknown();
             let value = check(ctx, val, scope, matched_ty, return_ty, noreturn);
@@ -618,11 +607,7 @@ pub fn check(
                 resulting_ty: expected,
             }
         }
-        &Expr::While {
-            start: _,
-            cond,
-            body,
-        } => {
+        &Expr::While { cond, body, .. } => {
             let bool_ty = ctx.hir.types.add(ctx.primitives().bool_info());
             let cond = check(ctx, cond, scope, bool_ty, return_ty, noreturn);
             let body_ty = ctx.hir.types.add_unknown();
@@ -634,12 +619,7 @@ pub fn check(
                 body: ctx.hir.add(body),
             }
         }
-        &Expr::WhilePat {
-            start: _,
-            pat,
-            val,
-            body,
-        } => {
+        &Expr::WhilePat { pat, val, body, .. } => {
             ctx.control_flow_stack.push(());
             let value_ty = ctx.hir.types.add_unknown();
             let val = check(ctx, val, scope, value_ty, return_ty, noreturn);
@@ -670,10 +650,7 @@ pub fn check(
             }
         }
         &Expr::For {
-            start: _,
-            pat,
-            iter,
-            body,
+            pat, iter, body, ..
         } => {
             let iterator_trait = builtins::get_iterator(ctx.compiler);
             let option_ty = builtins::get_option(ctx.compiler);

@@ -2,7 +2,6 @@ use std::{path::Path, rc::Rc};
 
 use compiler::{Def, ModuleSpan};
 use error::span::TSpan;
-use parser::ast;
 use serde_json::Value;
 
 use crate::{

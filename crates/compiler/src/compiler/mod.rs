@@ -625,7 +625,7 @@ impl Compiler {
 
     pub fn resolve_generics(
         &mut self,
-        generics: &[GenericDef],
+        generics: &[GenericDef<()>],
         module: ModuleId,
         scope: ScopeId,
         ast: &Ast,
@@ -679,7 +679,7 @@ impl Compiler {
         ast: &Ast,
     ) -> Signature {
         let scope = function.scope;
-        let generics = self.resolve_generics(&function.generics, module, scope, ast);
+        let generics = self.resolve_generics(&function.generics.types, module, scope, ast);
 
         let params = function
             .params
@@ -735,6 +735,7 @@ impl Compiler {
         // subtract the self generic
         (self.get_parsed_module(trait_id.0).ast[trait_id.1]
             .generics
+            .types
             .len()
             - 1)
         .try_into()
@@ -1156,7 +1157,7 @@ impl Compiler {
             let ast = Rc::clone(self.get_module_ast(module));
             let functions = ast.function_ids();
             for function in functions {
-                if ast[function].generics.is_empty() {
+                if ast[function].generics.types.is_empty() {
                     self.emit_ir_from_root((module, function));
                 }
             }
@@ -1734,7 +1735,7 @@ pub struct TraitBound {
 pub struct ResolvedTypeDef {
     pub def: ResolvedTypeContent,
     pub module: ModuleId,
-    pub methods: DHashMap<String, FunctionId>,
+    pub methods: DHashMap<Box<str>, FunctionId>,
     pub generics: Generics,
     pub inherent_trait_impls: DHashMap<(ModuleId, TraitId), Vec<check::traits::Impl>>,
 }
