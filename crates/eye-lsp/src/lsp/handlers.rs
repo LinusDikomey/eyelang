@@ -1,16 +1,19 @@
 use std::{path::Path, rc::Rc};
 
 use compiler::{Def, ModuleSpan};
+use error::span::TSpan;
 use parser::ast;
 use serde_json::Value;
 
 use crate::{
     ResponseError,
-    lsp::Lsp,
+    lsp::{Lsp, find_in_ast::FoundType},
     types::{
+        Location, Range,
         notification::{DidOpenTextDocumentParams, DidSaveTextDocumentParams},
         request::{
-            CompletionItem, CompletionItemKind, CompletionParams, Hover, HoverParams, Request,
+            CompletionItem, CompletionItemKind, CompletionParams, DefinitionParams, Hover,
+            HoverParams, Request,
         },
     },
 };
@@ -35,6 +38,7 @@ impl Lsp {
         match method {
             HoverParams::METHOD => self.on_request(Self::hover, params),
             CompletionParams::METHOD => self.on_request(Self::complete, params),
+            DefinitionParams::METHOD => self.on_request(Self::definition, params),
             _ => {
                 tracing::info!("Unhandled request {method} {params}");
                 Err(ResponseError {
@@ -197,6 +201,44 @@ impl Lsp {
 
         tracing::info!("Returning {} completions", completions.len());
         completions
+    }
+
+    pub fn definition(&mut self, params: DefinitionParams) -> Option<Location> {
+        let (module, found) = self.find_document_position(&params.position)?;
+        let (module, span) = match found.ty {
+            FoundType::VarRef | FoundType::Generic => {
+                let ast = Rc::clone(self.compiler.get_module_ast(module));
+                let name = &ast.src()[found.span.range()];
+                match self
+                    .compiler
+                    .resolve_in_scope(module, found.scope, name, ModuleSpan::MISSING)
+                {
+                    Def::Invalid => return None,
+                    Def::Function(module, function) => {
+                        let ast = self.compiler.get_module_ast(module);
+                        let span = ast[ast[function].scope].span;
+                        (module, span)
+                    }
+                    Def::Module(module) => (module, TSpan::EMPTY),
+                    Def::Global(module, global) => {
+                        let ast = self.compiler.get_module_ast(module);
+                        (module, ast[ast[global].scope].span)
+                    }
+                    Def::Trait(module, trait_id) => {
+                        let ast = self.compiler.get_module_ast(module);
+                        (module, ast[ast[trait_id].scope].span)
+                    }
+                    Def::GenericType(_) | Def::Type(_) | Def::ConstValue(_) => return None, // TODO
+                }
+            }
+            _ => return None,
+        };
+        let ast = self.compiler.get_module_ast(module);
+        let range = Range::from_span(span, ast.src());
+        Some(Location {
+            uri: self.uri_from_module(module),
+            range,
+        })
     }
 }
 

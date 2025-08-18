@@ -5,6 +5,7 @@ pub mod request;
 
 use std::path::Path;
 
+use error::span::TSpan;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -55,6 +56,7 @@ pub struct ServerCapabilities {
     pub completionProvider: Option<CompletionOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub textDocumentSync: Option<TextDocumentSyncOptions>,
+    pub definitionProvider: bool,
     // ...
 }
 
@@ -98,6 +100,14 @@ pub struct Range {
     pub start: Position,
     pub end: Position,
 }
+impl Range {
+    pub fn from_span(span: TSpan, src: &str) -> Self {
+        Self {
+            start: Position::from_offset(span.start, src),
+            end: Position::from_offset(span.end, src),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Position {
@@ -127,6 +137,14 @@ impl Position {
         }
 
         offset
+    }
+
+    pub fn from_offset(offset: u32, src: &str) -> Self {
+        let position = error::calculate_position(src, offset);
+        Self {
+            line: position.line,
+            character: position.column,
+        }
     }
 }
 
@@ -191,4 +209,10 @@ impl Serialize for DiagnosticSeverity {
 #[derive(Serialize)]
 pub struct CodeDescription {
     pub href: Uri,
+}
+
+#[derive(Serialize)]
+pub struct Location {
+    pub uri: DocumentUri,
+    pub range: Range,
 }

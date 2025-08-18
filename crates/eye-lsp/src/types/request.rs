@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-use crate::types::{Range, TextDocumentPositionParams, WorkDoneProgressParams};
+use crate::types::{Location, Range, TextDocumentPositionParams, WorkDoneProgressParams};
 
 pub trait Request: DeserializeOwned {
     const METHOD: &'static str;
@@ -88,4 +88,15 @@ pub enum CompletionItemKind {
     Event = 23,
     Operator = 24,
     TypeParameter = 25,
+}
+
+#[derive(Deserialize)]
+pub struct DefinitionParams {
+    #[serde(flatten)]
+    pub position: TextDocumentPositionParams,
+    // WorkDoneProgressParams, PartialResultParams
+}
+impl Request for DefinitionParams {
+    const METHOD: &'static str = "textDocument/definition";
+    type Response = Option<Location>;
 }

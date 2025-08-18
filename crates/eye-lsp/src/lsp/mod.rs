@@ -85,6 +85,10 @@ impl Lsp {
         })
     }
 
+    pub fn uri_from_module(&self, module: ModuleId) -> Uri {
+        Uri::from_path(&self.compiler.modules[module.idx()].path)
+    }
+
     pub fn find_module_of_uri(&mut self, uri: &Uri) -> Option<ModuleId> {
         let path = uri.path();
         self.projects.iter().copied().find_map(|project_id| {

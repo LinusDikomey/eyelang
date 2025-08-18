@@ -114,6 +114,7 @@ impl State {
                                             change: Some(types::TextDocumentSyncKind::None),
                                             save: true,
                                         }),
+                                        definitionProvider: true,
                                     },
                                     server_info: types::ServerInfo {
                                         name: "eye-lsp".to_owned(),
