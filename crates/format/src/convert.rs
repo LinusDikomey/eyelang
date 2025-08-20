@@ -203,21 +203,17 @@ impl<'a> Converter<'a> {
                 self.tok(nodes, t_lbracket);
                 let mut group = Vec::new();
                 let mut first = true;
-                group.push(Node::TextIf(Cond::Broken, "\n".into()));
+                group.push(Cond::Broken.then("\n"));
                 for elem in elements {
                     // TODO: not handling the comma as a token here so comments may get lost
                     if !first {
-                        group.push(Node::Text(",".into()));
-                        group.push(Node::TextIf(Cond::Flat, " ".into()));
-                        group.push(Node::TextIf(Cond::Broken, "\n".into()));
+                        group.push(Cond::Flat.then(", "));
+                        group.push(Cond::Broken.then("\n"));
                     }
                     first = false;
                     self.expr(&mut group, elem);
                 }
-                group.push(Node::TextIf(
-                    Cond::Broken,
-                    if !first { ",\n" } else { "\n" }.into(),
-                ));
+                group.push(Cond::Broken.then("\n"));
                 nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
                 self.tok(nodes, t_rbracket);
             }
@@ -230,7 +226,7 @@ impl<'a> Converter<'a> {
                 self.args_with_extra(nodes, t_lparen, t_rparen, elements, |s, nodes, _| {
                     if elements.len() == 1 {
                         nodes.push(Node::Text(",".into()));
-                        nodes.push(Node::TextIf(Cond::Broken, "\n".into()));
+                        nodes.push(Cond::Broken.then("\n"));
                     }
                 });
             }
@@ -563,9 +559,26 @@ impl<'a> Converter<'a> {
                     },
                 );
             }
-            &Expr::Asm { span, .. } => {
-                // TODO: format asm expressions
-                self.tok_span(nodes, span);
+            &Expr::Asm {
+                t_asm,
+                t_lparen,
+                t_string_literal,
+                args,
+                t_rparen,
+                ..
+            } => {
+                self.tok(nodes, t_asm);
+                self.tok(nodes, t_lparen);
+                let mut group = vec![Cond::Broken.then("\n")];
+                self.tok(&mut group, t_string_literal);
+                for arg in args {
+                    group.push(Cond::Flat.then(", "));
+                    group.push(Cond::Broken.then("\n"));
+                    self.expr(&mut group, arg);
+                }
+                group.push(Cond::Broken.then("\n"));
+                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
+                self.tok_s(nodes, t_rparen);
             }
         }
     }
@@ -598,24 +611,31 @@ impl<'a> Converter<'a> {
         then: ExprId,
         else_: Option<(Token, ExprId)>,
     ) {
-        self.tok_s(nodes, t_if);
-        self.expr(nodes, cond);
+        let mut group = Vec::new();
+        self.tok_s(&mut group, t_if);
+        self.expr(&mut group, cond);
         if let Some((colon_colon, val)) = pat {
-            nodes.push(" ".into());
-            self.tok_s(nodes, colon_colon);
-            self.expr(nodes, val);
+            group.push(" ".into());
+            self.tok_s(&mut group, colon_colon);
+            self.expr(&mut group, val);
         }
         if let Some(t_colon) = t_colon {
-            self.tok_s(nodes, t_colon);
+            self.tok_s(&mut group, t_colon);
         } else {
-            nodes.push(" ".into());
+            group.push(" ".into());
         }
-        self.expr(nodes, then);
+        self.expr(&mut group, then);
         if let Some((t_else, else_)) = else_ {
-            nodes.push(" ".into());
-            self.tok_s(nodes, t_else);
-            self.expr(nodes, else_);
+            if t_colon.is_some() {
+                group.push(Cond::Flat.then(" "));
+                group.push(Cond::Broken.then("\n"));
+            } else {
+                group.push(" ".into());
+            }
+            self.tok_s(&mut group, t_else);
+            self.expr(&mut group, else_);
         }
+        nodes.push(Node::Group(group, R::Width(0)));
     }
 
     fn args(&mut self, nodes: &mut Vec<Node>, l: Token, r: Token, elements: ExprIds) {
@@ -645,7 +665,7 @@ impl<'a> Converter<'a> {
         }
         extra_end(self, &mut group, &mut first);
         if !first {
-            group.push(Node::TextIf(Cond::Broken, "\n".into()));
+            group.push(Cond::Broken.then("\n"));
         }
         nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
         self.tok(nodes, r);
@@ -733,8 +753,8 @@ impl<'a> Converter<'a> {
                     continue;
                 }
                 if !first {
-                    group.push(Node::TextIf(Cond::Flat, ", ".into()));
-                    group.push(Node::TextIf(Cond::Broken, "\n".into()));
+                    group.push(Cond::Flat.then(", "));
+                    group.push(Cond::Broken.then("\n"));
                 }
                 first = false;
                 self.tok_span(&mut group, generic.name);
@@ -791,7 +811,7 @@ impl<'a> Converter<'a> {
             self.tok(&mut group, l);
             let mut args = Vec::new();
             let mut first = true;
-            args.push(Node::TextIf(Cond::Broken, "\n".into()));
+            args.push(Cond::Broken.then("\n"));
             for (name_span, ty) in &function.params {
                 if !first {
                     args.push(Cond::Flat.then(", "));
@@ -800,11 +820,11 @@ impl<'a> Converter<'a> {
                 first = false;
                 self.tok_with_char(&mut args, *name_span, Some(' '));
                 args.push(self.ty(ty));
-                args.push(Node::TextIf(Cond::Broken, "\n".into()));
+                args.push(Cond::Broken.then("\n"));
             }
             if let Some(t) = function.t_varargs {
                 if !function.params.is_empty() {
-                    args.push(Node::TextIf(Cond::Flat, ", ".into()));
+                    args.push(Cond::Flat.then(", "));
                 }
                 self.tok(nodes, t);
             }

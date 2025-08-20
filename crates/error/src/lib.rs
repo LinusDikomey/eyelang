@@ -518,7 +518,6 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
     } else {
         (&src[s..e]).into()
     };
-    assert!(!src_loc.is_empty(), "empty source location in error");
 
     let pre = &src[pos.start_of_line_byte as usize..s];
 
@@ -556,7 +555,7 @@ pub fn print(error: &Error, span: TSpan, src: &str, file: &Path) {
 
     let mut lines = src_loc.lines().enumerate().peekable();
 
-    let first = lines.next().unwrap();
+    let first = lines.next().unwrap_or((s, ""));
 
     let post_if_last = |lines: &mut Peekable<Enumerate<Lines>>| {
         if lines.peek().is_some() {

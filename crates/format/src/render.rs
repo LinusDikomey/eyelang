@@ -26,7 +26,7 @@ fn compute(node: &mut Node, line_width: u32) -> R {
                 *r += compute(node, line_width);
             }
             if let R::Width(w) = *r
-                && w > line_width
+                && w >= line_width
             {
                 *r = R::Broken;
             }
@@ -96,7 +96,7 @@ impl<'a> Formatter<'a> {
             Node::Group(nodes, r) => {
                 let cond = match r {
                     R::Broken => Cond::Broken,
-                    &R::Width(w) if self.column_position + w > self.line_width => Cond::Broken,
+                    &R::Width(w) if self.column_position + w >= self.line_width => Cond::Broken,
                     _ => Cond::Flat,
                 };
                 for node in nodes {

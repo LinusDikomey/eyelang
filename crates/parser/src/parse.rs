@@ -59,7 +59,7 @@ impl<T: TreeToken> Parser<'_, T> {
     /// result itself.
     /// `delim` is a delimiter. Trailing delimiters are allowed, but optional here.
     /// `end` is the ending token. It will be returned from this function once parsed.
-    fn parse_delimited<F, D>(
+    fn parse_delimited<F>(
         &mut self,
         open: Token,
         delim: TokenType,
@@ -67,8 +67,7 @@ impl<T: TreeToken> Parser<'_, T> {
         mut item: F,
     ) -> ParseResult<Token>
     where
-        F: FnMut(&mut Parser<T>) -> Result<D, CompileError>,
-        D: Into<Delimit>,
+        F: FnMut(&mut Parser<T>) -> Result<Delimit, CompileError>,
     {
         let expected = || ExpectedTokens::AnyOf(Box::new([delim, close]));
         loop {
@@ -551,7 +550,10 @@ impl<T: TreeToken> Parser<'_, T> {
                     let mut args = vec![];
                     let rparen =
                         p.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
-                            p.parse_type().map(|ty| args.push(ty))
+                            p.parse_type().map(|ty| {
+                                args.push(ty);
+                                Delimit::OptionalIfNewLine
+                            })
                         })?;
                     variants.push(EnumVariantDefinition {
                         name_span,
@@ -1034,8 +1036,10 @@ impl<T: TreeToken> Parser<'_, T> {
                             // tuple
                             let mut elems = vec![expr];
                             let rparen = self.parse_delimited(first, TokenType::Comma, TokenType::RParen, |p| {
-                                elems.push(p.parse_expr(scope)?);
-                                Ok(())
+                                p.parse_expr(scope).map(|elem| {
+                                    elems.push(elem);
+                                    Delimit::OptionalIfNewLine
+                                })
                             })?;
                             Expr::Tuple {
                                 span: TSpan::new(first.start, rparen.end),
@@ -1236,22 +1240,20 @@ impl<T: TreeToken> Parser<'_, T> {
                 t: t(first),
             },
             TokenType::Dot => {
-                step_or_unexpected! {self, tok,
-                    Ident => {
-                        let (args, parens) = self.parse_enum_args(scope)?;
-                        let args = self.ast.exprs(args);
-                        let span = TSpan::new(first.start, parens.map_or(tok.end, |(_, rparen)| rparen.end));
-                        Expr::EnumLiteral { span,
-                            t_dot: t(first),
-                            ident: tok.span(),
-                            t_ident: t(tok),
-                            t_parens: parens.map_or(T::opt_none(), |(l, r)| T::opt((t(l), t(r)))),
-                            args,
-                        }
-                    },
-                    LBrace => {
-                        unimplemented!("no more record syntax")
-                    }
+                let ident = self.toks.step_expect(TokenType::Ident)?;
+                let (args, parens) = self.parse_enum_args(scope)?;
+                let args = self.ast.exprs(args);
+                let span = TSpan::new(
+                    first.start,
+                    parens.map_or(ident.end, |(_, rparen)| rparen.end),
+                );
+                Expr::EnumLiteral {
+                    span,
+                    t_dot: t(first),
+                    ident: ident.span(),
+                    t_ident: t(ident),
+                    t_parens: parens.map_or(T::opt_none(), |(l, r)| T::opt((t(l), t(r)))),
+                    args,
                 }
             }
             TokenType::Keyword(Keyword::Asm) => {
@@ -1265,7 +1267,7 @@ impl<T: TreeToken> Parser<'_, T> {
                 {
                     self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
                         args.push(p.parse_expr(scope)?);
-                        Ok(())
+                        Ok(Delimit::OptionalIfNewLine)
                     })?
                 } else {
                     self.recover_in_delimited(lparen, TokenType::RParen);
@@ -1510,7 +1512,7 @@ impl<T: TreeToken> Parser<'_, T> {
                 let rparen_end = self
                     .parse_delimited(tok, TokenType::Comma, TokenType::RParen, |p| {
                         tuple_types.push(p.parse_type()?);
-                        Ok(())
+                        Ok(Delimit::OptionalIfNewLine)
                     })?
                     .end;
                 Ok(UnresolvedType::Tuple(
@@ -1650,7 +1652,7 @@ impl<T: TreeToken> Parser<'_, T> {
                 let rbracket =
                     self.parse_delimited(lbracket, TokenType::Comma, TokenType::RBracket, |p| {
                         types.push(p.parse_type()?);
-                        Ok(())
+                        Ok(Delimit::OptionalIfNewLine)
                     })?;
                 Ok((
                     t(lbracket),
