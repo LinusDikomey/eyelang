@@ -4,7 +4,7 @@ use std::collections::hash_map::Entry;
 
 use crate::ast::{
     self, Attribute, Definition, EnumVariantDefinition, Expr, ExprIdPairs, ExprIds, Function,
-    GenericDef, Generics, Global, InherentImpl, Item, ItemValue, Method, StructMember,
+    GenericDef, Generics, Global, Impl, InherentImpl, Item, ItemValue, Method, StructMember,
     TraitDefinition, TreeToken, UnOp, UnresolvedType,
 };
 
@@ -70,9 +70,12 @@ impl<T: TreeToken> Parser<'_, T> {
         F: FnMut(&mut Parser<T>) -> Result<D, CompileError>,
         D: Into<Delimit>,
     {
+        let expected = || ExpectedTokens::AnyOf(Box::new([delim, close]));
         loop {
             if let Some(end_tok) = self.toks.step_if(close) {
                 return Ok(end_tok);
+            } else if let Some(eof) = self.toks.step_if(TokenType::Eof) {
+                return Err(unexpected(eof, expected()));
             }
             match item(self).map(Into::into) {
                 Ok(Delimit::Yes) => match self.toks.step() {
@@ -93,29 +96,25 @@ impl<T: TreeToken> Parser<'_, T> {
                     if self.toks.step_if(delim).is_none() {
                         let after = self.toks.peek();
                         if after.ty != TokenType::Eof && !after.new_line && after.ty != close {
-                            self.recover_in_delimited(open.ty, close);
-                            return Err(Error::UnexpectedToken {
-                                expected: ExpectedTokens::AnyOf(Box::new([delim, close])),
-                                found: after.ty,
-                            }
-                            .at_span(after.span()));
+                            self.recover_in_delimited(open, close);
+                            return Err(unexpected(after, expected()));
                         }
                     }
                 }
                 Err(err) => {
-                    self.recover_in_delimited(open.ty, close);
+                    self.recover_in_delimited(open, close);
                     return Err(err);
                 }
             }
         }
     }
 
-    fn recover_in_delimited(&mut self, open: TokenType, close: TokenType) {
+    fn recover_in_delimited(&mut self, open: Token, close: TokenType) {
         let mut open_count: u32 = 0;
         // try to find the close of the current enclosed delimited
         loop {
             match self.toks.step().ty {
-                ty if ty == open => open_count += 1,
+                ty if ty == open.ty => open_count += 1,
                 ty if ty == close => {
                     if let Some(x) = open_count.checked_sub(1) {
                         open_count = x
@@ -768,58 +767,34 @@ impl<T: TreeToken> Parser<'_, T> {
             }
         };
         let mut impls = Vec::new();
-        let t_attached_impls = if let Some(t_for) =
-            self.toks.step_if(TokenType::Keyword(Keyword::For))
-        {
-            let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-            let rbrace = loop {
-                step_or_unexpected! {self, tok,
-                    RBrace => break tok,
-                    Keyword Impl => {
-                        let start = tok.start;
-                        let generics = self.parse_optional_generics(Vec::new())?;
-                        let underscore = self.toks.step_expect(TokenType::Underscore)?;
-                        let (trait_generics, t_brackets, trait_generics_span) = self.parse_generics_instance(
-                            TSpan::new(underscore.end, underscore.end),
-                        )?;
-                        let t_for = t(self.toks.step_expect(TokenType::Keyword(Keyword::For))?);
-                        let impl_scope = self.ast.scope(ast::Scope::from_generics(
-                            parent_scope,
-                            self.toks.src,
-                            &generics.types,
-                            TSpan::MISSING,
-                        ));
-                        let implemented_type = self.parse_type()?;
-                        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
-                        let (functions, rbrace) = self.parse_trait_impl_body(
-                            lbrace,
-                            impl_scope,
-                            &generics.types,
-                        )?;
-                        self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, rbrace.end);
-                        impls.push(ast::Impl {
-                            t_impl: t(tok),
-                            t_underscore: t(underscore),
-                            t_for,
-                            implemented_type,
-                            base: ast::BaseImpl {
-                                scope: impl_scope,
-                                generics,
-                                t_brackets,
-                                trait_generics,
-                                trait_generics_span,
-                                t_lbrace: t(lbrace),
-                                functions,
-                                t_rbrace: t(rbrace),
-                            }
-                        });
+        let t_attached_impls =
+            if let Some(t_for) = self.toks.step_if(TokenType::Keyword(Keyword::For)) {
+                let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+                let rbrace = loop {
+                    let token = self.toks.step();
+                    match token.ty {
+                        TokenType::RBrace => break token,
+                        TokenType::Keyword(Keyword::Impl) => {
+                            impls.push(self.parse_attached_impl(token, parent_scope).inspect_err(
+                                |_| self.recover_in_delimited(lbrace, TokenType::RBrace),
+                            )?);
+                        }
+                        _ => {
+                            self.recover_in_delimited(lbrace, TokenType::RBrace);
+                            return Err(unexpected(
+                                token,
+                                ExpectedTokens::AnyOf(Box::new([
+                                    TokenType::RBrace,
+                                    TokenType::Keyword(Keyword::Impl),
+                                ])),
+                            ));
+                        }
                     }
-                }
+                };
+                T::opt((t(t_for), t(lbrace), t(rbrace)))
+            } else {
+                T::opt_none()
             };
-            T::opt((t(t_for), t(lbrace), t(rbrace)))
-        } else {
-            T::opt_none()
-        };
         let span = TSpan::new(trait_tok.start, rbrace.end);
         self.ast.get_scope_mut(scope).span = span;
 
@@ -833,6 +808,46 @@ impl<T: TreeToken> Parser<'_, T> {
             t_attached_impls,
             impls: impls.into_boxed_slice(),
             associated_name,
+        })
+    }
+
+    fn parse_attached_impl(
+        &mut self,
+        impl_tok: Token,
+        parent_scope: ScopeId,
+    ) -> ParseResult<Impl<T>> {
+        let start = impl_tok.start;
+        let generics = self.parse_optional_generics(Vec::new())?;
+        let underscore = self.toks.step_expect(TokenType::Underscore)?;
+        let (trait_generics, t_brackets, trait_generics_span) =
+            self.parse_generics_instance(TSpan::new(underscore.end, underscore.end))?;
+        let t_for = t(self.toks.step_expect(TokenType::Keyword(Keyword::For))?);
+        let impl_scope = self.ast.scope(ast::Scope::from_generics(
+            parent_scope,
+            self.toks.src,
+            &generics.types,
+            TSpan::MISSING,
+        ));
+        let implemented_type = self.parse_type()?;
+        let lbrace = self.toks.step_expect(TokenType::LBrace)?;
+        let (functions, rbrace) =
+            self.parse_trait_impl_body(lbrace, impl_scope, &generics.types)?;
+        self.ast.get_scope_mut(impl_scope).span = TSpan::new(start, rbrace.end);
+        Ok(ast::Impl {
+            t_impl: t(impl_tok),
+            t_underscore: t(underscore),
+            t_for,
+            implemented_type,
+            base: ast::BaseImpl {
+                scope: impl_scope,
+                generics,
+                t_brackets,
+                trait_generics,
+                trait_generics_span,
+                t_lbrace: t(lbrace),
+                functions,
+                t_rbrace: t(rbrace),
+            },
         })
     }
 
@@ -1240,23 +1255,32 @@ impl<T: TreeToken> Parser<'_, T> {
                 }
             }
             TokenType::Keyword(Keyword::Asm) => {
-                self.toks.step_expect(TokenType::LParen)?;
-                let asm_str_span = self.toks.step_expect(TokenType::StringLiteral)?.span();
+                let lparen = self.toks.step_expect(TokenType::LParen)?;
+                let string_lit = self.toks.step_expect(TokenType::StringLiteral)?;
+                let asm_str_span = string_lit.span();
                 let mut args = Vec::new();
-                let end = loop {
-                    let paren_or_comma = self
-                        .toks
-                        .step_expect([TokenType::Comma, TokenType::RParen])?;
-                    match paren_or_comma.ty {
-                        TokenType::Comma => {}
-                        TokenType::RParen => break paren_or_comma.end,
-                        _ => unreachable!(),
-                    }
-                    args.push(self.parse_expr(scope)?);
+                let rparen = if let Some(rparen) = self.toks.step_if(TokenType::RParen) {
+                    rparen
+                } else if self.toks.step_if(TokenType::Comma).is_some() || self.toks.peek().new_line
+                {
+                    self.parse_delimited(lparen, TokenType::Comma, TokenType::RParen, |p| {
+                        args.push(p.parse_expr(scope)?);
+                        Ok(())
+                    })?
+                } else {
+                    self.recover_in_delimited(lparen, TokenType::RParen);
+                    return Err(unexpected(
+                        self.toks.step(),
+                        ExpectedTokens::AnyOf(Box::new([TokenType::Comma, TokenType::RParen])),
+                    ));
                 };
                 Expr::Asm {
-                    span: TSpan::new(first.start, end),
+                    t_asm: t(first),
+                    t_lparen: t(lparen),
+                    t_string_literal: t(string_lit),
+                    span: TSpan::new(first.start, rparen.end),
                     asm_str_span,
+                    t_rparen: t(rparen),
                     args: self.ast.exprs(args),
                 }
             }

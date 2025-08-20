@@ -884,9 +884,13 @@ pub enum Expr<T: TreeToken = ()> {
 
     // ---------- other ----------
     Asm {
-        span: TSpan,
+        t_asm: T,
+        t_lparen: T,
+        t_string_literal: T,
         asm_str_span: TSpan,
         args: ExprIds,
+        t_rparen: T,
+        span: TSpan,
     },
     Break {
         start: u32,
