@@ -76,7 +76,7 @@ impl<T: TreeToken> Parser<'_, T> {
             } else if let Some(eof) = self.toks.step_if(TokenType::Eof) {
                 return Err(unexpected(eof, expected()));
             }
-            match item(self).map(Into::into) {
+            match item(self) {
                 Ok(Delimit::Yes) => match self.toks.step() {
                     tok if tok.ty == delim => continue,
                     tok if tok.ty == close => return Ok(tok),

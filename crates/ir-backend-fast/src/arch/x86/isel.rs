@@ -1,7 +1,9 @@
 use std::convert::Infallible;
 
 use ir::{
-    BlockGraph, BlockId, Environment, FunctionIr, MCReg, ModuleId, Primitive, Ref, Type, Types,
+    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, ModuleId, Primitive, Ref,
+    Type, Types,
+    dialect::Arith,
     mc::{Abi, BackendState, IselCtx},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
@@ -95,7 +97,7 @@ fn int_size_of_ref(r: Ref, ir: &IrModify, types: &Types) -> IntSize {
 ir::visitor! {
     InstructionSelector,
     Rewrite,
-    ir, types, inst, env,
+    ir, types, inst, env, dialects,
     ctx: IselCtx<'_, X86>;
 
     use builtin: ir::Builtin;
@@ -182,39 +184,12 @@ ir::visitor! {
         ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
         x86.jmp(b2, ctx.unit)
     };
-    (%r = arith.Add a b) => {
-        let primitive = primitive_of_ref(r, ir, types);
-        let mut single_reg = || {
-            let out = ctx.regs.get_one(r);
-            let a = ctx.regs.get_one(a);
-            let b = ctx.regs.get_one(b);
-            ctx.copy(env, r, mc, ir, &[out, a]);
-            (out, b)
-        };
-        match primitive {
-            Primitive::I1 => todo!(),
-            Primitive::I8 | Primitive::U8 => {
-                let (out, b) = single_reg();
-                ir.replace(env, r, x86.add_rr8(out, b, ctx.unit));
-            }
-            Primitive::I16 | Primitive::U16 => {
-                let (out, b) = single_reg();
-                ir.replace(env, r, x86.add_rr16(out, b, ctx.unit));
-            }
-            Primitive::I32 | Primitive::U32 => {
-                let (out, b) = single_reg();
-                ir.replace(env, r, x86.add_rr32(out, b, ctx.unit));
-            }
-            Primitive::I64 | Primitive::U64 => {
-                let (out, b) = single_reg();
-                ir.replace(env, r, x86.add_rr64(out, b, ctx.unit));
-            }
-            Primitive::I128 | Primitive::U128 => todo!("128-bit add"),
-            Primitive::F32 => todo!(),
-            Primitive::F64 => todo!(),
-            Primitive::Unit | Primitive::Ptr => unreachable!(),
-        }
-    };
+    (%r = arith.Add a b) => int_bin_op(ctx, ir, types, env, dialects, r, a, b, IntBinOp {
+        i8: [X86::add_rr8, X86::add_rr8],
+        i16: [X86::add_rr16, X86::add_rr16],
+        i32: [X86::add_rr32, X86::add_rr32],
+        i64: [X86::add_rr64, X86::add_rr64],
+    });
     (%r = mem.Decl (type ty)) => {
         let layout = ir::type_layout(types[ty], types, env.primitives());
         let offset = ctx.alloc_stack(layout);
@@ -275,4 +250,60 @@ ir::visitor! {
             todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
         }
     };
+}
+
+struct IntBinOp {
+    i8: [X86; 2],
+    i16: [X86; 2],
+    i32: [X86; 2],
+    i64: [X86; 2],
+}
+fn int_bin_op(
+    ctx: &mut IselCtx<X86>,
+    ir: &mut IrModify,
+    types: &Types,
+    env: &Environment,
+    dialects: &InstructionSelector,
+    r: Ref,
+    a: Ref,
+    b: Ref,
+    ops: IntBinOp,
+) {
+    let InstructionSelector { mc, x86, .. } = *dialects;
+    {
+        let primitive = primitive_of_ref(r, ir, types);
+        let [op_rr, op_ri] = match primitive {
+            Primitive::I1 => todo!(),
+            Primitive::I8 | Primitive::U8 => ops.i8,
+            Primitive::I16 | Primitive::U16 => ops.i16,
+            Primitive::I32 | Primitive::U32 => ops.i32,
+            Primitive::I64 | Primitive::U64 => ops.i64,
+            Primitive::I128 | Primitive::U128 => todo!("128-bit add"),
+            Primitive::F32 => todo!(),
+            Primitive::F64 => todo!(),
+            Primitive::Unit | Primitive::Ptr => unreachable!(),
+        };
+        // encode_args
+        let out = ctx.regs.get_one(r);
+        let a = ctx.regs.get_one(a);
+        ctx.copy(env, r, mc, ir, &[out, a]);
+        if let Some(c) = ir
+            .get_inst(b)
+            .as_module(dialects.arith)
+            .and_then(|inst| (inst.op() == Arith::Int).then(|| ir.typed_args::<u32, _>(&inst)))
+        {
+            ir.replace(
+                env,
+                r,
+                (FunctionId::new(x86.id(), op_ri.id()), (out, c), ctx.unit),
+            );
+        } else {
+            let b = ctx.regs.get_one(b);
+            ir.replace(
+                env,
+                r,
+                (FunctionId::new(x86.id(), op_rr.id()), (out, b), ctx.unit),
+            );
+        }
+    }
 }

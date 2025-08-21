@@ -2,7 +2,7 @@ use dmap::DHashMap;
 
 use crate::{
     Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
-    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction,
+    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction, argument,
     builder::write_args, mc::RegClass,
 };
 
@@ -40,12 +40,19 @@ impl IrModify {
         }
     }
 
-    pub fn args<'a>(
+    pub fn args<'a, A: argument::Args<'a>>(
         &'a self,
         inst: &'a Instruction,
         env: &'a Environment,
-    ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
-        self.ir.args_iter(inst, env)
+    ) -> A {
+        self.ir.args(inst, env)
+    }
+
+    pub fn typed_args<'a, A: argument::Args<'a>, I: Inst>(
+        &'a self,
+        inst: &'a TypedInstruction<I>,
+    ) -> A {
+        self.ir.typed_args(inst)
     }
 
     pub fn args_n<'a, I: Inst + 'static, const N: usize>(

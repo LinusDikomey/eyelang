@@ -154,14 +154,17 @@ ir::instructions! {
 
     cmp_rr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);
 
-    add_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    add_rr8  a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     add_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     add_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     add_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
 
+    add_ri8  reg: MCReg(Usage::DefUse) imm: Int32;
+    add_ri16 reg: MCReg(Usage::DefUse) imm: Int32;
+    add_ri32 reg: MCReg(Usage::DefUse) imm: Int32;
     add_ri64 reg: MCReg(Usage::DefUse) imm: Int32;
 
-    sub_rr8 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
+    sub_rr8  a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     sub_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     sub_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);
     sub_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::DefUse);

@@ -51,9 +51,13 @@ pub fn write(
                                 let to = to.phys().unwrap();
                                 let from: Reg = from.phys().unwrap();
                                 let mut wide = false;
+                                let mut prefix = None;
                                 let opcode = match from.class() {
                                     RegClass::GP8 => 0x88,
-                                    RegClass::GP16 => 0x89,
+                                    RegClass::GP16 => {
+                                        prefix = Some(P16);
+                                        0x89
+                                    }
                                     RegClass::GP32 => 0x89,
                                     RegClass::GP64 => {
                                         wide = true;
@@ -70,6 +74,9 @@ pub fn write(
                                 // register size might be wrong after regalloc so only the encoded
                                 // registers will be equal.
                                 if ra != rb || r != b {
+                                    if let Some(prefix) = prefix {
+                                        text.push(prefix);
+                                    }
                                     let rex = encode_rex(wide, r, false, b);
                                     let modrm = MODRM_RR | (rb << 3) | ra;
                                     if rex != 0 {
@@ -180,11 +187,19 @@ pub fn write(
                     );
                 }
                 I::add_rr8 => inst_rr(text, &[0x00], ir.args(i, env), false),
-                I::add_rr16 => inst_rr(text, &[0x01], ir.args(i, env), false),
-                I::add_rr32 | I::add_rr64 => {
+                I::add_rr16 | I::add_rr32 | I::add_rr64 => {
+                    if inst.op() == I::add_rr16 {
+                        text.push(P16);
+                    }
                     inst_rr(text, &[0x01], ir.args(i, env), inst.op() == I::add_rr64)
                 }
-                I::add_ri64 => inst_ri(text, &[0x81], ir.args(i, env), true, 0),
+                I::add_ri8 => inst_ri(text, &[0x80], ir.args(i, env), false, 0),
+                I::add_ri16 | I::add_ri32 | I::add_ri64 => {
+                    if inst.op() == I::add_ri16 {
+                        text.push(P16);
+                    }
+                    inst_ri(text, &[0x81], ir.args(i, env), inst.op() == I::add_ri64, 0)
+                }
 
                 I::sub_rr8 | I::sub_rr16 | I::sub_rr32 | I::sub_rr64 => todo!("sub"),
 
@@ -335,7 +350,9 @@ fn emit_jmp(
     }
 }
 
-//const PRECISION_16: u8 = 0x66;
+/// 16-bit instruction prefix
+const P16: u8 = 0x66;
+const MODRM_RR: u8 = 0b1100_0000;
 
 #[derive(Debug, Clone, Copy)]
 enum OffsetClass {
@@ -376,34 +393,32 @@ struct Modrm {
     rex: u8,
     modrm: u8,
 }
-#[rustfmt::skip]
 fn encode_reg(r: Reg) -> (u8, bool) {
     use Reg::*;
     let mut b = false;
 
+    #[rustfmt::skip]
     let modrm = match r {
-        rax | eax => 0b_000,
-        rcx | ecx => 0b_001,
-        rdx | edx => 0b_010,
-        rbx | ebx => 0b_011,
-        rsp | esp => 0b_100,
-        rsi | esi => 0b_110,
-        rdi | edi => 0b_111,
-        r8  | r8d => { b = true; 0b_000 }
-        r9  | r9d => { b = true; 0b_001 }
-        r10  | r10d => { b = true; 0b_010 }
-        r11  | r11d => { b = true; 0b_011 }
-        r12  | r12d => { b = true; 0b_100 }
-        r13  | r13d => { b = true; 0b_101 }
-        r14  | r14d => { b = true; 0b_110 }
-        r15  | r15d => { b = true; 0b_111 }
+          al |   ax | rax |  eax => 0b_000,
+          cl |   cx | rcx |  ecx => 0b_001,
+          dl |   dx | rdx |  edx => 0b_010,
+          bl |   bx | rbx |  ebx => 0b_011,
+         spl |   sp | rsp |  esp => 0b_100,
+         sil |   si | rsi |  esi => 0b_110,
+         dil |   di | rdi |  edi => 0b_111,
+         r8b |  r8w |  r8 |  r8d => { b = true; 0b_000 }
+         r9b |  r9w |  r9 |  r9d => { b = true; 0b_001 }
+        r10b | r10w | r10 | r10d => { b = true; 0b_010 }
+        r11b | r11w | r11 | r11d => { b = true; 0b_011 }
+        r12b | r12w | r12 | r12d => { b = true; 0b_100 }
+        r13b | r13w | r13 | r13d => { b = true; 0b_101 }
+        r14b | r14w | r14 | r14d => { b = true; 0b_110 }
+        r15b | r15w | r15 | r15d => { b = true; 0b_111 }
         rbp => 0b_101,
         reg => todo!("encode {reg:?}"),
     };
     (modrm, b)
 }
-
-const MODRM_RR: u8 = 0b1100_0000;
 
 fn encode_rex(w: bool, r: bool, x: bool, b: bool) -> u8 {
     if w || r || x || b {

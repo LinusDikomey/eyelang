@@ -114,6 +114,11 @@ pub struct FunctionId {
     pub module: ModuleId,
     pub function: LocalFunctionId,
 }
+impl FunctionId {
+    pub fn new(module: ModuleId, function: LocalFunctionId) -> Self {
+        Self { module, function }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlobalId {
@@ -637,7 +642,7 @@ impl FunctionIr {
         env: &'a Environment,
     ) -> A {
         // intentionally not using unwrap_or_else here so track_caller works for the panic
-        match A::get(self, inst, env) {
+        match A::get(self.args_iter(inst, env)) {
             Ok(args) => args,
             Err(err) => {
                 let module_name = &env[inst.module()].name;
@@ -658,18 +663,37 @@ impl FunctionIr {
         )
     }
 
-    pub fn typed_args<'a, I: Inst + 'static>(
+    #[inline]
+    #[track_caller]
+    pub fn typed_args<'a, A: argument::Args<'a>, I: Inst>(
         &'a self,
         inst: &'a TypedInstruction<I>,
-    ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
-        inst.args(&self.blocks, &self.extra)
+    ) -> A {
+        // intentionally not using unwrap_or_else here so track_caller works for the panic
+        match A::get(self.typed_args_iter(inst)) {
+            Ok(args) => args,
+            Err(err) => {
+                panic!(
+                    "Invalid arguments for {}.{}: {err:?}",
+                    std::any::type_name::<I>(),
+                    inst.op().name()
+                );
+            }
+        }
+    }
+
+    pub fn typed_args_iter<'a, I: Inst + 'static>(
+        &'a self,
+        inst: &'a TypedInstruction<I>,
+    ) -> ArgsIter<'a> {
+        inst.args_iter(&self.blocks, &self.extra)
     }
 
     pub fn args_n<'a, I: Inst + 'static, const N: usize>(
         &'a self,
         inst: &'a TypedInstruction<I>,
     ) -> [Argument<'a>; N] {
-        let mut args = self.typed_args(inst);
+        let mut args = self.typed_args_iter(inst);
         let args_array = std::array::from_fn(|_| args.next().expect("not enough args"));
         assert!(args.next().is_none(), "too many args");
         args_array
@@ -975,11 +999,7 @@ impl<I: Inst> TypedInstruction<I> {
         self.ty
     }
 
-    pub fn args<'a>(
-        &'a self,
-        blocks: &'a [BlockInfo],
-        extra: &'a [u32],
-    ) -> impl Iterator<Item = Argument<'a>> + use<'a, I> {
+    pub fn args_iter<'a>(&'a self, blocks: &'a [BlockInfo], extra: &'a [u32]) -> ArgsIter<'a> {
         let params = self.inst.params();
         let varargs = self.inst.varargs();
         decode_args(&self.args, params, varargs, blocks, extra)
@@ -993,6 +1013,8 @@ pub trait Inst: TryFrom<LocalFunctionId, Error = InvalidInstruction> + Copy + 's
 
     fn functions() -> Vec<Function>;
     fn inst_table(module: &ModuleOf<Self>) -> &Self::InstTable;
+    fn id(self) -> LocalFunctionId;
+    fn name(self) -> &'static str;
     fn params(self) -> &'static [Parameter];
     fn varargs(self) -> Option<Parameter>;
 }
@@ -1339,6 +1361,18 @@ macro_rules! instructions {
                 match self {
                     $(
                         Self::$instruction => &[$( $crate::Parameter::$arg $(($arg_param))*, )*],
+                    )*
+                }
+            }
+
+            fn id(self) -> $crate::LocalFunctionId {
+                $crate::LocalFunctionId(self as u32)
+            }
+
+            fn name(self) -> &'static ::std::primitive::str {
+                match self {
+                    $(
+                        Self::$instruction => stringify!(Self::$instruction),
                     )*
                 }
             }

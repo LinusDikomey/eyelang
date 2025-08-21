@@ -126,6 +126,7 @@ macro_rules! visitor {
         $types: ident,
         $inst: ident,
         $env: ident,
+        $dialects: ident,
         $ctx: ident: $ctx_ty: ty;
 
         $(use $module: ident: $module_path: path;)*
@@ -162,6 +163,7 @@ macro_rules! visitor {
                 block: $crate::BlockId,
                 $ctx: &mut $ctx_ty,
             ) -> ::core::option::Option<$output> {
+                let $dialects = &*self;
                 $(
                     use $module_path as $module;
                     #[allow(unused)]

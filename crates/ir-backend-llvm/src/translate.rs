@@ -325,7 +325,7 @@ unsafe fn build_func(
                 }
             } else if let Some(inst) = inst.as_module(dialects.arith) {
                 use ir::dialect::Arith as I;
-                let mut args = inst.args(ir.blocks(), ir.extra());
+                let mut args = inst.args_iter(ir.blocks(), ir.extra());
                 let un_op = || {
                     let [Argument::Ref(a)] = ir.args_n(&inst) else {
                         unreachable!()
@@ -605,7 +605,7 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.cf) {
-                let mut args = ir.typed_args(&inst);
+                let mut args = ir.typed_args_iter(&inst);
                 use ir::dialect::Cf as I;
                 match inst.op() {
                     I::Goto => {

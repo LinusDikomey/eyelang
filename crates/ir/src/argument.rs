@@ -1,6 +1,5 @@
 use crate::{
-    BlockId, BlockTarget, Environment, FunctionId, FunctionIr, GlobalId, Instruction, MCReg,
-    Parameter, Ref, TypeId, Usage,
+    ArgsIter, BlockId, BlockTarget, FunctionId, GlobalId, MCReg, Parameter, Ref, TypeId, Usage,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -324,11 +323,7 @@ pub struct ArgError {
 }
 
 pub trait Args<'a>: Sized {
-    fn get(
-        ir: &'a FunctionIr,
-        inst: &'a Instruction,
-        env: &'a Environment,
-    ) -> Result<Self, ArgsError>;
+    fn get(args: ArgsIter<'a>) -> Result<Self, ArgsError>;
 }
 
 macro_rules! count {
@@ -349,11 +344,8 @@ macro_rules! args_impl {
         )*
         {
             fn get(
-                ir: &'a FunctionIr,
-                inst: &'a Instruction,
-                env: &'a Environment,
+                mut it: ArgsIter<'a>,
             ) -> Result<Self, ArgsError> {
-                let mut it = ir.args_iter(inst, env);
                 let expected_count = count!($($t)*);
                 let mut found_so_far = 0;
                 let value = (
