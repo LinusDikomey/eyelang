@@ -884,23 +884,27 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            // PERF: we probably need to collect here but reusing the Vec might be better
-            // if possible (difficult because calls can be inside the argument list etc.)
-            let arg_refs = args
-                .iter()
-                .map(|arg| lower(ctx, arg))
-                .collect::<Result<Vec<_>>>()?;
             let return_info = ctx.types[return_ty];
             let return_ty = ctx.get_type(return_info)?;
             let res = if let Node::FunctionItem(module, id, call_generics) = ctx.hir[function] {
                 if (module, id) == builtins::get_intrinsic(ctx.builder.env) {
+                    let arg_refs = args
+                        .iter()
+                        .skip(1)
+                        .map(|arg| lower(ctx, arg))
+                        .collect::<Result<Vec<_>>>()?;
                     let Node::StringLiteral(intrinsic) = &ctx.hir[args.iter().next().unwrap()]
                     else {
                         panic!("expected string literal passed to intrinsic call");
                     };
                     let return_ty = ctx.builder.types.add(return_ty);
-                    return intrinsics::call_intrinsic(ctx, intrinsic, &arg_refs[1..], return_ty);
+                    return intrinsics::call_intrinsic(ctx, intrinsic, &arg_refs, return_ty);
                 }
+                // PERF: make it possible to write refs directly into the ir to avoid collecting here
+                let arg_refs = args
+                    .iter()
+                    .map(|arg| lower(ctx, arg))
+                    .collect::<Result<Vec<_>>>()?;
                 let call_generics = call_generics
                     .iter()
                     .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
