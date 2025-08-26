@@ -203,6 +203,14 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         }
     }
 
+    pub fn remove_use(&mut self, r: Ref, ir: &mut IrModify, env: &Environment) {
+        self.use_counts[r.idx()] -= 1;
+        if self.use_counts[r.idx()] == 0 && env[ir.get_inst(r).function].flags.pure() {
+            // last use of pure instruction was remove, delete it
+            ir.replace_with(r, Ref::UNIT);
+        }
+    }
+
     /// creates a properly aligned stack index assuming the stack frame's total alignment is at least
     /// as large as the one from the Layout.
     /// Assumes a stack growing down, subtract layout.size if the stack should grow up.

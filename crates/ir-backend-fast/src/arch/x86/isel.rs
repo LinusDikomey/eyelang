@@ -143,7 +143,12 @@ ir::visitor! {
                 ctx.copy(env, r, mc, ir, &[out, x]);
                 ir.replace(env, r, x86.neg_r8(out, ctx.unit));
             }
-            IntSize::I16 | IntSize::I32 => {
+            IntSize::I16 => {
+                let (&[out], &[x]) = (out, x) else { unreachable!() };
+                ctx.copy(env, r, mc, ir, &[out, x]);
+                ir.replace(env, r, x86.neg_r16(out, ctx.unit));
+            }
+            IntSize::I32 => {
                 let (&[out], &[x]) = (out, x) else { unreachable!() };
                 ctx.copy(env, r, mc, ir, &[out, x]);
                 ir.replace(env, r, x86.neg_r32(x, ctx.unit));
@@ -185,10 +190,16 @@ ir::visitor! {
         x86.jmp(b2, ctx.unit)
     };
     (%r = arith.Add a b) => int_bin_op(ctx, ir, types, env, dialects, r, a, b, IntBinOp {
-        i8: [X86::add_rr8, X86::add_rr8],
-        i16: [X86::add_rr16, X86::add_rr16],
-        i32: [X86::add_rr32, X86::add_rr32],
-        i64: [X86::add_rr64, X86::add_rr64],
+        i8: [X86::add_rr8, X86::add_ri8],
+        i16: [X86::add_rr16, X86::add_ri16],
+        i32: [X86::add_rr32, X86::add_ri32],
+        i64: [X86::add_rr64, X86::add_ri64],
+    });
+    (%r = arith.Sub a b) => int_bin_op(ctx, ir, types, env, dialects, r, a, b, IntBinOp {
+        i8: [X86::sub_rr8, X86::sub_ri8],
+        i16: [X86::sub_rr16, X86::sub_ri16],
+        i32: [X86::sub_rr32, X86::sub_ri32],
+        i64: [X86::sub_rr64, X86::sub_ri64],
     });
     (%r = mem.Decl (type ty)) => {
         let layout = ir::type_layout(types[ty], types, env.primitives());
@@ -292,6 +303,7 @@ fn int_bin_op(
             .as_module(dialects.arith)
             .and_then(|inst| (inst.op() == Arith::Int).then(|| ir.typed_args::<u32, _>(&inst)))
         {
+            ctx.remove_use(b, ir, env);
             ir.replace(
                 env,
                 r,
