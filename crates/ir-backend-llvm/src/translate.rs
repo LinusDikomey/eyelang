@@ -3,8 +3,8 @@
 use std::{collections::VecDeque, ffi::CString, ptr};
 
 use ir::{
-    Argument, BlockId, BlockTarget, Environment, ModuleId, Ref, Type, TypeId, Types,
-    dialect::Primitive,
+    Argument, BlockId, BlockTarget, Environment, FunctionId, GlobalId, ModuleId, Ref, Type, TypeId,
+    Types, dialect::Primitive,
 };
 use llvm_sys::{
     LLVMIntPredicate, LLVMRealPredicate, LLVMTypeKind,
@@ -73,8 +73,7 @@ pub unsafe fn add_function(
     )
     .map_err(|_| Error::NulByte)?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
-    // TODO: noreturn attribute in ir
-    if false {
+    if function.flags().terminator() {
         let noreturn = core::LLVMCreateEnumAttribute(ctx, attribs.noreturn, 0);
         core::LLVMAddAttributeAtIndex(llvm_func, -1i32 as u32, noreturn);
     }
@@ -325,19 +324,8 @@ unsafe fn build_func(
                 }
             } else if let Some(inst) = inst.as_module(dialects.arith) {
                 use ir::dialect::Arith as I;
-                let mut args = inst.args_iter(ir.blocks(), ir.extra());
-                let un_op = || {
-                    let [Argument::Ref(a)] = ir.args_n(&inst) else {
-                        unreachable!()
-                    };
-                    a
-                };
-                let bin_op = || {
-                    let [Argument::Ref(a), Argument::Ref(b)] = ir.args_n(&inst) else {
-                        unreachable!()
-                    };
-                    (a, b)
-                };
+                let un_op = || -> Ref { ir.typed_args(&inst) };
+                let bin_op = || -> (Ref, Ref) { ir.typed_args(&inst) };
                 let comparison = |builder: LLVMBuilderRef,
                                   instructions: &[LLVMValueRef],
                                   (a, b): (Ref, Ref),
@@ -361,15 +349,11 @@ unsafe fn build_func(
                 };
                 match inst.op() {
                     I::Int => {
-                        let Some(Argument::Int(int)) = args.next() else {
-                            unreachable!()
-                        };
+                        let int: u64 = ir.typed_args(&inst);
                         LLVMConstInt(table_ty(inst.ty()).unwrap(), int, FALSE)
                     }
                     I::Float => {
-                        let [Argument::Float(float)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let float: f64 = ir.typed_args(&inst);
                         LLVMConstReal(table_ty(inst.ty()).unwrap(), float)
                     }
                     I::Neg => {
@@ -605,26 +589,15 @@ unsafe fn build_func(
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.cf) {
-                let mut args = ir.typed_args_iter(&inst);
                 use ir::dialect::Cf as I;
                 match inst.op() {
                     I::Goto => {
-                        let Some(Argument::BlockTarget(target)) = args.next() else {
-                            unreachable!()
-                        };
+                        let target: BlockTarget = ir.typed_args(&inst);
                         handle_successor(ir, &instructions, target);
                         LLVMBuildBr(builder, blocks[target.0.idx()])
                     }
                     I::Branch => {
-                        let (cond, on_true, on_false) =
-                            match [args.next(), args.next(), args.next()] {
-                                [
-                                    Some(Argument::Ref(cond)),
-                                    Some(Argument::BlockTarget(on_true)),
-                                    Some(Argument::BlockTarget(on_false)),
-                                ] => (cond, on_true, on_false),
-                                _ => unreachable!(),
-                            };
+                        let (cond, on_true, on_false) = ir.typed_args(&inst);
                         let cond = get_ref(&instructions, cond).unwrap();
                         handle_successor(ir, &instructions, on_true);
                         handle_successor(ir, &instructions, on_false);
@@ -636,17 +609,7 @@ unsafe fn build_func(
                         )
                     }
                     I::Ret => {
-                        let Some(Argument::Ref(value)) = args.next() else {
-                            unreachable!()
-                        };
-                        /*if value == ir::Ref::UNDEF {
-                            if let Some(ty) = llvm_ty(ctx, func.return_type, types) {
-                                let val = LLVMGetUndef(ty);
-                                LLVMBuildRet(builder, val)
-                            } else {
-                                LLVMBuildRetVoid(builder)
-                            }
-                        } else {*/
+                        let value = ir.typed_args(&inst);
                         let (r, ty) = get_ref_and_type(&instructions, value);
 
                         if let Some(r) =
@@ -656,16 +619,13 @@ unsafe fn build_func(
                         } else {
                             LLVMBuildRetVoid(builder)
                         }
-                        //}
                     }
                 }
             } else if let Some(inst) = inst.as_module(dialects.mem) {
                 use ir::dialect::Mem as I;
                 match inst.op() {
                     I::Decl => {
-                        let [Argument::TypeId(ty)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let ty = ir.typed_args(&inst);
                         if let Some(ty) = table_ty(ty) {
                             LLVMBuildAlloca(builder, ty, NONE)
                         } else {
@@ -674,9 +634,7 @@ unsafe fn build_func(
                         }
                     }
                     I::Load => {
-                        let [Argument::Ref(r)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let r = ir.typed_args(&inst);
                         let val = get_ref(&instructions, r);
                         if let Some(pointee_ty) = llvm_ty(ctx, types[inst.ty()], types) {
                             let val = val.unwrap();
@@ -686,9 +644,7 @@ unsafe fn build_func(
                         }
                     }
                     I::Store => {
-                        let [Argument::Ref(ptr), Argument::Ref(val)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let (ptr, val) = ir.typed_args(&inst);
                         let (val, ty) = get_ref_and_type(&instructions, val);
                         if !types.is_zero_sized(ty, env.primitives()) {
                             let ptr = get_ref(&instructions, ptr).unwrap();
@@ -697,23 +653,11 @@ unsafe fn build_func(
                         ptr::null_mut()
                     }
                     I::MemberPtr => {
-                        let [
-                            Argument::Ref(ptr),
-                            Argument::TypeId(tuple),
-                            Argument::Int(idx),
-                        ] = ir.args_n(&inst)
-                        else {
-                            unreachable!()
-                        };
+                        let (ptr, tuple, idx): (Ref, TypeId, u32) = ir.typed_args(&inst);
                         let Type::Tuple(elem_types) = types[tuple] else {
                             panic!()
                         };
-                        let offset = ir::offset_in_tuple(
-                            elem_types,
-                            idx.try_into().unwrap(),
-                            types,
-                            env.primitives(),
-                        );
+                        let offset = ir::offset_in_tuple(elem_types, idx, types, env.primitives());
 
                         let i8_ty = LLVMInt8TypeInContext(ctx);
                         if let Some(llvm_ptr) = get_ref(&instructions, ptr) {
@@ -725,9 +669,7 @@ unsafe fn build_func(
                         }
                     }
                     I::IntToPtr => {
-                        let [Argument::Ref(int)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let int = ir.typed_args(&inst);
                         // no zero-sized integers so unwrapping is fine
                         let val = get_ref(&instructions, int).unwrap();
                         core::LLVMBuildIntToPtr(
@@ -738,18 +680,14 @@ unsafe fn build_func(
                         )
                     }
                     I::PtrToInt => {
-                        let [Argument::Ref(ptr)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let ptr = ir.typed_args(&inst);
                         // no zero-sized integers so unwrapping is fine
                         let val = get_ref(&instructions, ptr).unwrap();
                         let ty = llvm_ty(ctx, types[inst.ty()], types).unwrap();
                         core::LLVMBuildPtrToInt(builder, val, ty, NONE)
                     }
                     I::FunctionPtr => {
-                        let [Argument::FunctionId(func_id)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let func_id: FunctionId = ir.typed_args(&inst);
                         if func_id.module != module {
                             panic!(
                                 "unsupported: can't take function pointer of function in different module"
@@ -759,23 +697,14 @@ unsafe fn build_func(
                         llvm_func
                     }
                     I::Global => {
-                        let [Argument::GlobalId(id)] = ir.args_n(&inst) else {
-                            unreachable!()
-                        };
+                        let id: GlobalId = ir.typed_args(&inst);
                         if id.module != module {
                             panic!("unsupported: can't take global in in different module")
                         }
                         globals[id.idx as usize]
                     }
                     I::ArrayIndex => {
-                        let [
-                            Argument::Ref(array_ptr),
-                            Argument::TypeId(elem_ty),
-                            Argument::Ref(idx),
-                        ] = ir.args_n(&inst)
-                        else {
-                            unreachable!()
-                        };
+                        let (array_ptr, elem_ty, idx): (Ref, TypeId, Ref) = ir.typed_args(&inst);
                         let ptr = get_ref(&instructions, array_ptr).unwrap();
                         let ty = llvm_ty(ctx, func[elem_ty], func.types()).unwrap();
                         let mut indices = [get_ref(&instructions, idx).unwrap()];
@@ -793,10 +722,7 @@ unsafe fn build_func(
                 use ir::dialect::Tuple as I;
                 match inst.op() {
                     I::MemberValue => {
-                        let [Argument::Ref(tuple), Argument::Int(mut idx)] = ir.args_n(&inst)
-                        else {
-                            panic!()
-                        };
+                        let (tuple, mut idx): (Ref, u32) = ir.typed_args(&inst);
                         if let (Some(val), tuple_ty) = get_ref_and_type(&instructions, tuple) {
                             let Type::Tuple(ids) = tuple_ty else { panic!() };
                             for ty in ids.iter().take(idx as usize) {
@@ -804,20 +730,13 @@ unsafe fn build_func(
                                     idx -= 1;
                                 }
                             }
-                            LLVMBuildExtractValue(builder, val, idx.try_into().unwrap(), NONE)
+                            LLVMBuildExtractValue(builder, val, idx, NONE)
                         } else {
                             ptr::null_mut()
                         }
                     }
                     I::InsertMember => {
-                        let [
-                            Argument::Ref(tuple),
-                            Argument::Int(mut idx),
-                            Argument::Ref(member),
-                        ] = ir.args_n(&inst)
-                        else {
-                            panic!()
-                        };
+                        let (tuple, mut idx, member): (Ref, u32, Ref) = ir.typed_args(&inst);
                         let (tuple, tuple_ty) = get_ref_and_type(&instructions, tuple);
                         if let Some((tuple, member)) = tuple.and_then(|tuple| {
                             get_ref(&instructions, member).map(|member| (tuple, member))
@@ -828,13 +747,7 @@ unsafe fn build_func(
                                     idx -= 1;
                                 }
                             }
-                            core::LLVMBuildInsertValue(
-                                builder,
-                                tuple,
-                                member,
-                                idx.try_into().unwrap(),
-                                NONE,
-                            )
+                            core::LLVMBuildInsertValue(builder, tuple, member, idx, NONE)
                         } else {
                             ptr::null_mut()
                         }
@@ -873,569 +786,6 @@ unsafe fn build_func(
             } else {
                 panic!("unknown module")
             };
-            /*
-            let val: LLVMValueRef = match tag {
-                ir::Tag::Nothing => ptr::null_mut(),
-                ir::Tag::BlockArg => unreachable!(),
-                ir::Tag::Ret => {
-                    let value = data.un_op;
-                    if value == ir::Ref::UNDEF {
-                        if let Some(ty) = llvm_ty(ctx, func.return_type, &func.types) {
-                            let val = LLVMGetUndef(ty);
-                            LLVMBuildRet(builder, val)
-                        } else {
-                            LLVMBuildRetVoid(builder)
-                        }
-                    } else {
-                        let (r, ty) = get_ref_and_type(&instructions, data.un_op);
-                        if let Some(r) = r.and_then(|r| (!matches!(ty, IrType::Unit)).then_some(r))
-                        {
-                            LLVMBuildRet(builder, r)
-                        } else {
-                            LLVMBuildRetVoid(builder)
-                        }
-                    }
-                }
-                ir::Tag::Global => globals[data.global.0 as usize],
-                ir::Tag::Int => LLVMConstInt(table_ty(ty).unwrap(), data.int, FALSE),
-                ir::Tag::LargeInt => {
-                    let mut bytes = [0; 16];
-                    bytes.copy_from_slice(
-                        &ir.extra()[data.extra as usize..data.extra as usize + 16],
-                    );
-                    let num = u128::from_le_bytes(bytes);
-                    let words = [(num >> 64) as u64, (num as u64)];
-                    LLVMConstIntOfArbitraryPrecision(table_ty(ty).unwrap(), 2, words.as_ptr())
-                }
-                ir::Tag::Float => LLVMConstReal(table_ty(ty).unwrap(), data.float),
-                ir::Tag::Decl => {
-                    if let Some(ty) = table_ty(data.ty) {
-                        LLVMBuildAlloca(builder, ty, NONE)
-                    } else {
-                        // return a null pointer if a declaration has a zero-sized type
-                        core::LLVMConstPointerNull(LLVMPointerTypeInContext(ctx, 0))
-                    }
-                }
-                ir::Tag::Load => {
-                    let val = get_ref(&instructions, data.un_op);
-                    if let Some(pointee_ty) = llvm_ty(ctx, func.types[ty], &func.types) {
-                        let val = val.unwrap();
-                        LLVMBuildLoad2(builder, pointee_ty, val, NONE)
-                    } else {
-                        ptr::null_mut()
-                    }
-                }
-                ir::Tag::Store => {
-                    let (ptr, val) = data.bin_op();
-                    let (val, ty) = get_ref_and_type(&instructions, val);
-                    if !func.types.is_zero_sized(ty) {
-                        let ptr = get_ref(&instructions, ptr).unwrap();
-                        LLVMBuildStore(builder, val.unwrap(), ptr);
-                    }
-                    ptr::null_mut()
-                }
-                ir::Tag::String => LLVMBuildGlobalStringPtr(
-                    builder,
-                    ir.extra.as_ptr().add(data.extra_len.0 as usize).cast(),
-                    NONE,
-                ),
-                ir::Tag::Call => {
-                    let begin = data.extra_len.0 as usize;
-                    let mut func_id = [0; 8];
-                    func_id.copy_from_slice(&ir.extra[begin..begin + 8]);
-                    let func_id = u64::from_le_bytes(func_id);
-                    let (llvm_func, llvm_func_ty) = llvm_funcs[func_id as usize];
-
-                    let mut r_bytes = [0; 4];
-                    let mut args = (0..data.extra_len.1 as usize)
-                        .filter_map(|i| {
-                            r_bytes.copy_from_slice(
-                                &ir.extra[begin + 8 + 4 * i..begin + 8 + 4 * (i + 1)],
-                            );
-                            get_ref(&instructions, ir::Ref::from_bytes(r_bytes))
-                        })
-                        .collect::<Vec<_>>();
-                    LLVMBuildCall2(
-                        builder,
-                        llvm_func_ty,
-                        llvm_func,
-                        args.as_mut_ptr(),
-                        args.len() as u32,
-                        NONE,
-                    )
-                }
-                ir::Tag::FunctionPtr => {
-                    let func_id = data.function();
-                    let (llvm_func, _) = llvm_funcs[func_id.0 as usize];
-                    llvm_func
-                }
-                ir::Tag::CallPtr => {
-                    let (func_ref, arg_types, args) = data.call_ptr(&ir.extra);
-                    let llvm_func = get_ref(&instructions, func_ref).unwrap();
-                    let mut args: Vec<_> =
-                        args.filter_map(|arg| get_ref(&instructions, arg)).collect();
-                    let return_ty = llvm_ty(ctx, func.types[ty], &func.types)
-                        .unwrap_or_else(|| LLVMVoidTypeInContext(ctx));
-                    let mut param_types: Vec<_> = arg_types
-                        .iter()
-                        .filter_map(|ty| llvm_ty(ctx, func.types[ty], &func.types))
-                        .collect();
-                    debug_assert_eq!(args.len(), param_types.len());
-                    let func_ty = LLVMFunctionType(
-                        return_ty,
-                        param_types.as_mut_ptr(),
-                        param_types.len() as u32,
-                        FALSE,
-                    );
-                    LLVMBuildCall2(
-                        builder,
-                        func_ty,
-                        llvm_func,
-                        args.as_mut_ptr(),
-                        args.len() as u32,
-                        NONE,
-                    )
-                }
-                ir::Tag::Neg => {
-                    let r = get_ref(&instructions, data.un_op).unwrap();
-                    match func.types[ty] {
-                        t if t.is_int() => LLVMBuildNeg(builder, r, NONE),
-                        t if t.is_float() => LLVMBuildFNeg(builder, r, NONE),
-                        _ => panic!("invalid type for neg"),
-                    }
-                }
-                ir::Tag::Not => {
-                    let r = get_ref(&instructions, data.un_op).unwrap();
-                    LLVMBuildNot(builder, r, NONE)
-                }
-                ir::Tag::Add
-                | ir::Tag::Sub
-                | ir::Tag::Mul
-                | ir::Tag::Div
-                | ir::Tag::Rem
-                | ir::Tag::Or
-                | ir::Tag::And => {
-                    // can unwrap here because these operations don't support zero-sized types:
-                    let l = get_ref(&instructions, data.bin_op.0).unwrap();
-                    let r = get_ref(&instructions, data.bin_op.1).unwrap();
-
-                    match tag {
-                        ir::Tag::Add => match func.types[ty] {
-                            t if t.is_int() => LLVMBuildAdd(builder, l, r, NONE),
-                            t if t.is_float() => LLVMBuildFAdd(builder, l, r, NONE),
-                            _ => panic!("invalid type for add"),
-                        },
-                        ir::Tag::Sub => match func.types[ty] {
-                            t if t.is_int() => LLVMBuildSub(builder, l, r, NONE),
-                            t if t.is_float() => LLVMBuildFSub(builder, l, r, NONE),
-                            _ => panic!("invalid type for sub"),
-                        },
-                        ir::Tag::Mul => match func.types[ty] {
-                            t if t.is_int() => LLVMBuildMul(builder, l, r, NONE),
-                            t if t.is_float() => LLVMBuildFMul(builder, l, r, NONE),
-                            _ => panic!("invalid type for mul"),
-                        },
-                        ir::Tag::Div => match func.types[ty] {
-                            t if t.is_unsigned_int() => LLVMBuildUDiv(builder, l, r, NONE),
-                            t if t.is_signed_int() => LLVMBuildSDiv(builder, l, r, NONE),
-                            t if t.is_float() => LLVMBuildFDiv(builder, l, r, NONE),
-                            _ => panic!("invalid type for div"),
-                        },
-                        ir::Tag::Rem => match func.types[ty] {
-                            t if t.is_unsigned_int() => LLVMBuildURem(builder, l, r, NONE),
-                            t if t.is_signed_int() => LLVMBuildSRem(builder, l, r, NONE),
-                            t if t.is_float() => LLVMBuildFRem(builder, l, r, NONE),
-                            _ => panic!("invalid type for mod"),
-                        },
-                        ir::Tag::Or => LLVMBuildOr(builder, l, r, NONE),
-                        ir::Tag::And => LLVMBuildAnd(builder, l, r, NONE),
-                        _ => unreachable!(),
-                    }
-                }
-                ir::Tag::Eq | ir::Tag::NE => {
-                    let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                    let r = get_ref(&instructions, data.bin_op.1);
-
-                    if let (Some(l), Some(r)) = (l, r) {
-                        match ty {
-                            t if t.is_int() => {
-                                let pred = if tag == ir::Tag::Eq {
-                                    LLVMIntPredicate::LLVMIntEQ
-                                } else {
-                                    LLVMIntPredicate::LLVMIntNE
-                                };
-                                LLVMBuildICmp(builder, pred, l, r, NONE)
-                            }
-                            t if t.is_float() => {
-                                let pred = if tag == ir::Tag::Eq {
-                                    LLVMRealPredicate::LLVMRealUEQ
-                                } else {
-                                    LLVMRealPredicate::LLVMRealUNE
-                                };
-                                LLVMBuildFCmp(builder, pred, l, r, NONE)
-                            }
-                            IrType::Ptr => {
-                                let pred = if tag == ir::Tag::Eq {
-                                    LLVMIntPredicate::LLVMIntEQ
-                                } else {
-                                    LLVMIntPredicate::LLVMIntNE
-                                };
-                                LLVMBuildICmp(builder, pred, l, r, NONE)
-                            }
-                            t => panic!("invalid type for eq/ne: {t:?}"),
-                        }
-                    } else {
-                        ptr::null_mut()
-                    }
-                }
-                ir::Tag::LT => {
-                    let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                    let l = l.unwrap();
-                    let r = get_ref(&instructions, data.bin_op.1).unwrap();
-                    match ty {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULT, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSLT, l, r, NONE)
-                        }
-                        t if t.is_float() => {
-                            LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLT, l, r, NONE)
-                        }
-                        IrType::Ptr => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULT, l, r, NONE)
-                        }
-                        t => panic!("invalid type for lt {t:?}"),
-                    }
-                }
-                ir::Tag::GT => {
-                    let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                    let l = l.unwrap();
-                    let r = get_ref(&instructions, data.bin_op.1).unwrap();
-                    match ty {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGT, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSGT, l, r, NONE)
-                        }
-                        t if t.is_float() => {
-                            LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGT, l, r, NONE)
-                        }
-                        IrType::Ptr => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGT, l, r, NONE)
-                        }
-                        t => panic!("invalid type for gt {t:?}"),
-                    }
-                }
-                ir::Tag::LE => {
-                    let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                    let l = l.unwrap();
-                    let r = get_ref(&instructions, data.bin_op.1).unwrap();
-                    match ty {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULE, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSLE, l, r, NONE)
-                        }
-                        t if t.is_float() => {
-                            LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOLE, l, r, NONE)
-                        }
-                        IrType::Ptr => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntULE, l, r, NONE)
-                        }
-                        t => panic!("invalid type for le: {t:?}"),
-                    }
-                }
-                ir::Tag::GE => {
-                    let (l, ty) = get_ref_and_type(&instructions, data.bin_op.0);
-                    let l = l.unwrap();
-                    let r = get_ref(&instructions, data.bin_op.1).unwrap();
-                    match ty {
-                        t if t.is_unsigned_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGE, l, r, NONE)
-                        }
-                        t if t.is_signed_int() => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntSGE, l, r, NONE)
-                        }
-                        t if t.is_float() => {
-                            LLVMBuildFCmp(builder, LLVMRealPredicate::LLVMRealOGE, l, r, NONE)
-                        }
-                        IrType::Ptr => {
-                            LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntUGE, l, r, NONE)
-                        }
-                        t => panic!("invalid type for ge: {t:?}"),
-                    }
-                }
-                ir::Tag::Xor => {
-                    let (l, r) = inst.data.bin_op();
-                    core::LLVMBuildXor(
-                        builder,
-                        get_ref(&instructions, l).unwrap(),
-                        get_ref(&instructions, r).unwrap(),
-                        NONE,
-                    )
-                }
-                ir::Tag::Rol => {
-                    let (l, r) = inst.data.bin_op();
-                    let ((Some(l), l_ty), Some(r)) = (
-                        get_ref_and_type(&instructions, l),
-                        get_ref(&instructions, r),
-                    ) else {
-                        panic!("invalid types for rol/ror")
-                    };
-                    let l_ty = llvm_ty(ctx, l_ty, &func.types).unwrap();
-                    let mut fshl_args = [l_ty];
-                    let fshl = core::LLVMGetIntrinsicDeclaration(
-                        llvm_module,
-                        intrinsics.fshl,
-                        fshl_args.as_mut_ptr(),
-                        fshl_args.len(),
-                    );
-                    let ty = core::LLVMIntrinsicGetType(
-                        ctx,
-                        intrinsics.fshl,
-                        fshl_args.as_mut_ptr(),
-                        fshl_args.len(),
-                    );
-                    let mut args = [l, l, r];
-                    LLVMBuildCall2(
-                        builder,
-                        ty,
-                        fshl,
-                        args.as_mut_ptr(),
-                        args.len() as u32,
-                        NONE,
-                    )
-                }
-
-                ir::Tag::Ror => todo!(),
-                ir::Tag::MemberPtr => {
-                    let (ptr, extra_idx) = data.ref_int;
-                    let i = extra_idx as usize;
-                    let elem_types = TypeRefs::from_bytes(ir.extra[i..i + 8].try_into().unwrap());
-                    let elem_idx = u32::from_le_bytes(ir.extra[i + 8..i + 12].try_into().unwrap());
-
-                    let offset = ir::offset_in_tuple(elem_types, elem_idx, &func.types);
-
-                    let i8_ty = LLVMInt8TypeInContext(ctx);
-                    if let Some(llvm_ptr) = get_ref(&instructions, ptr) {
-                        let mut offset = LLVMConstInt(LLVMInt32TypeInContext(ctx), offset, FALSE);
-                        LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
-                    } else {
-                        ptr::null_mut()
-                    }
-                }
-                ir::Tag::MemberValue => {
-                    let (ptr, idx) = data.ref_int;
-                    if let Some(val) = get_ref(&instructions, ptr) {
-                        // extract_value_from_byte_array(ctx, builder, &func.types, val, elem_types, idx)
-                        LLVMBuildExtractValue(builder, val, idx, NONE)
-                    } else {
-                        ptr::null_mut()
-                    }
-                    /*
-                    if let (Some(r), r_ty) = get_ref_and_type(&instructions,  data.ref_int.0) {
-                    match r_ty {
-                    IrType::Id(id, generics) => {
-                    let generics: Vec<_> = generics.iter()
-                    .map(|ty| ir.types[ty].as_resolved_type(&ir.types))
-                    .collect();
-                    let (_, offsets) = get_id_ty(id, &generics, ctx, module, types);
-                    let OffsetsRef::Struct(offsets) = offsets else { panic!("invalid argument for Value") };
-                    let offset = offsets[data.ref_int.1 as usize];
-                    extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, r_ty,
-                    offset, ir.types[ty])
-                    }
-                    IrType::Tuple(elems) => {
-                    // TODO: cache offsets
-                    let mut layout = Layout::EMPTY;
-                    for elem in elems.iter().take(data.ref_int.1 as usize) {
-                    layout.accumulate(ir.types[elem].layout(&ir.types, |id| &module.types[id.idx()].1));
-                    println!("{layout:?}");
-                    }
-                    let elem_align = ir.types[elems.nth(data.ref_int.1)]
-                    .layout(&ir.types, |id| &module.types[id.idx()].1)
-                    .alignment;
-                    let offset = Layout::align(layout.size, elem_align) as u32;
-                    extract_value_from_byte_array(ctx, module, types, builder, &ir.types, r, r_ty,
-                    offset, ir.types[ty])
-
-                    }
-                    IrType::Primitive(_) | IrType::Ptr(_) | IrType::Enum(_)
-                    => panic!("invalid argument for Value"),
-                    IrType::Array(_, _) => {
-                    LLVMBuildExtractValue(builder, r, data.ref_int.1, NONE)
-                    }
-                    IrType::Const(_) => panic!("invalid const type in LLVM backend"),
-                    IrType::Ref(_) => unreachable!(),
-                    }
-                    } else {
-                    ptr::null_mut()
-                    }
-                    */
-                }
-                ir::Tag::InsertMember => {
-                    let (tuple, idx, member) = data.ref_int_ref(&ir.extra);
-                    let tuple = if tuple == ir::Ref::UNDEF {
-                        llvm_ty(ctx, func.types[ty], &func.types).map(|ty| LLVMGetUndef(ty))
-                    } else {
-                        get_ref(&instructions, tuple)
-                    };
-                    if let Some((tuple, member)) = tuple.and_then(|tuple| {
-                        get_ref(&instructions, member).map(|member| (tuple, member))
-                    }) {
-                        core::LLVMBuildInsertValue(builder, tuple, member, idx, NONE)
-                    } else {
-                        ptr::null_mut()
-                    }
-                }
-                ir::Tag::ArrayIndex => {
-                    let (array_ptr, extra_idx) = data.ref_int;
-                    let i = extra_idx as usize;
-                    let elem_ty = ir::TypeRef::from_bytes(ir.extra[i..i + 4].try_into().unwrap());
-                    let index_ref = ir::Ref::from_bytes(ir.extra[i + 4..i + 8].try_into().unwrap());
-
-                    let ptr = get_ref(&instructions, array_ptr).unwrap();
-                    let ty = llvm_ty(ctx, func.types[elem_ty], &func.types).unwrap();
-                    let mut indices = [get_ref(&instructions, index_ref).unwrap()];
-                    LLVMBuildInBoundsGEP2(
-                        builder,
-                        ty,
-                        ptr,
-                        indices.as_mut_ptr(),
-                        indices.len() as _,
-                        NONE,
-                    )
-                }
-                ir::Tag::CastInt => {
-                    let val = get_ref(&instructions, data.un_op);
-                    // there are no zero-sized integers so unwraps are fine
-                    let val = val.unwrap();
-                    let to_ty = func.types[ty];
-                    let signed = to_ty.is_signed_int();
-                    let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
-                    LLVMBuildIntCast2(builder, val, target_ty, llvm_bool(signed), NONE)
-                }
-                ir::Tag::CastFloat => {
-                    let (val, from_ty) = get_ref_and_type(&instructions, data.un_op);
-                    // there are no zero-sized floats so unwraps are fine
-                    let val = val.unwrap();
-                    let to_ty = func.types[ty];
-                    let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
-                    match (from_ty, to_ty) {
-                        (IrType::F32, IrType::F64) => {
-                            core::LLVMBuildFPExt(builder, val, target_ty, NONE)
-                        }
-                        (IrType::F64, IrType::F32) => {
-                            core::LLVMBuildFPTrunc(builder, val, target_ty, NONE)
-                        }
-                        _ => panic!("invalid types for CastFloat"),
-                    }
-                }
-                ir::Tag::CastIntToFloat => {
-                    let (val, from_ty) = get_ref_and_type(&instructions, data.un_op);
-                    // there are no zero-sized ints/floats so unwraps are fine
-                    let val = val.unwrap();
-                    let to_ty = func.types[ty];
-                    let target_ty = llvm_ty(ctx, to_ty, &func.types).unwrap();
-                    if from_ty.is_unsigned_int() {
-                        core::LLVMBuildUIToFP(builder, val, target_ty, NONE)
-                    } else {
-                        core::LLVMBuildSIToFP(builder, val, target_ty, NONE)
-                    }
-                }
-                ir::Tag::CastFloatToInt => {
-                    // there are no zero-sized ints/floats so unwraps are fine
-                    let val = get_ref(&instructions, data.un_op).unwrap();
-                    let to_ty = func.types[ty];
-                    let target_ty = llvm_ty(ctx, func.types[ty], &func.types).unwrap();
-                    if to_ty.is_unsigned_int() {
-                        core::LLVMBuildFPToUI(builder, val, target_ty, NONE)
-                    } else {
-                        core::LLVMBuildFPToSI(builder, val, target_ty, NONE)
-                    }
-                }
-                ir::Tag::Goto => {
-                    let (block, extra_idx) = data.goto();
-                    handle_successor(ir, &instructions, block, extra_idx);
-                    LLVMBuildBr(builder, blocks[block.idx() as usize])
-                }
-                ir::Tag::Branch => {
-                    let (r, a, b, extra_idx) = data.branch(&ir.extra);
-                    // TODO block_args
-                    let cond = get_ref(&instructions, r).unwrap();
-                    handle_successor(ir, &instructions, a, extra_idx);
-                    handle_successor(
-                        ir,
-                        &instructions,
-                        b,
-                        extra_idx + 4 * ir.get_block_args(a).count(),
-                    );
-
-                    LLVMBuildCondBr(
-                        builder,
-                        cond,
-                        blocks[a.idx() as usize],
-                        blocks[b.idx() as usize],
-                    )
-                }
-                /*
-                ir::Tag::Phi => {
-                    if let Some(ty) = table_ty(ty) {
-                        let phi = LLVMBuildPhi(builder, ty, NONE);
-                        for (block, r) in inst.data.phi(&ir.extra) {
-                            let mut block = blocks[block.idx() as usize];
-                            LLVMAddIncoming(
-                                phi,
-                                &mut get_ref(&instructions, r).unwrap(),
-                                &mut block,
-                                1,
-                            );
-                        }
-                        phi
-                    } else {
-                        ptr::null_mut()
-                    }
-                }
-                */
-                ir::Tag::IntToPtr => {
-                    // no zero-sized integers so unwrapping is fine
-                    let val = get_ref(&instructions, data.un_op).unwrap();
-                    core::LLVMBuildIntToPtr(builder, val, LLVMPointerTypeInContext(ctx, 0), NONE)
-                }
-                ir::Tag::PtrToInt => {
-                    // no zero-sized integers so unwrapping is fine
-                    let val = get_ref(&instructions, data.un_op).unwrap();
-                    let ty = llvm_ty(ctx, func.types[ty], &func.types).unwrap();
-                    core::LLVMBuildPtrToInt(builder, val, ty, NONE)
-                }
-                ir::Tag::Asm => {
-                    let ir::Data {
-                        asm: (extra, str_len, arg_count),
-                    } = data;
-                    let _str_bytes = &ir.extra[extra as usize..extra as usize + str_len as usize];
-
-                    let expr_base = extra as usize + str_len as usize;
-                    let mut asm_values = Vec::with_capacity(arg_count as usize);
-                    let mut asm_types = Vec::with_capacity(arg_count as usize);
-                    for i in 0..arg_count as usize {
-                        let mut arg_bytes = [0; 4];
-                        arg_bytes
-                            .copy_from_slice(&ir.extra[expr_base + 4 * i..expr_base + 4 * (i + 1)]);
-                        let (val, ty) =
-                            get_ref_and_type(&instructions, ir::Ref::from_bytes(arg_bytes));
-                        let val = val.unwrap(); // TODO: this might actually be zero-sized
-                        asm_values.push(val);
-                        asm_types.push(llvm_ty(ctx, ty, &func.types));
-                    }
-
-                    // inline_asm(std::str::from_utf8_unchecked(str_bytes), ctx, builder, &asm_values, &mut asm_types)
-                    todo!("reimplement inline_asm")
-                }
-            };
-            */
             if !val.is_null() {
                 tracing::debug!(target: "backend-gen", "  -> {:?}", val_str(val));
             }
@@ -1466,63 +816,6 @@ fn is_float(t: Type) -> bool {
     }
 }
 
-/*
-unsafe fn const_val(val: &ir::ConstValue, ty: LLVMTypeRef) -> Option<LLVMValueRef> {
-    Some(match val {
-        ConstValue::Undefined | ConstValue::Unit => return None,
-        &ConstValue::Int(int) => LLVMConstInt(ty, int as u64, FALSE),
-        &ConstValue::Float(val) => LLVMConstReal(ty, val),
-    })
-}
-*/
-
 fn val_str(val: LLVMValueRef) -> CString {
     unsafe { CString::from_raw(LLVMPrintValueToString(val)) }
 }
-
-/*
-unsafe fn extract_value_from_byte_array(
-    ctx: LLVMContextRef,
-    builder: LLVMBuilderRef,
-    ir_types: &IrTypes,
-    r: LLVMValueRef,
-    elem_types: TypeRefs,
-    index: u32,
-) -> LLVMValueRef {
-    let elem_ty = elem_types.nth(index);
-    let Some(llvm_elem_ty) = llvm_ty(ctx, ir_types[elem_ty], ir_types) else {
-        return ptr::null_mut();
-    };
-    let mut layout = Layout::EMPTY;
-    for elem_ty in elem_types.iter().take(index as usize) {
-        let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
-        layout.accumulate(elem_layout);
-    }
-    let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
-    layout.align_for(elem_layout.align);
-    let offset = layout.align;
-    layout.accumulate(elem_layout);
-    // accumulate rest of element types
-    for elem_ty in elem_types.iter().skip(index as usize + 1) {
-        let elem_layout = ir::type_layout(ir_types[elem_ty], ir_types);
-        layout.accumulate(elem_layout);
-    }
-
-    let i8_ty = LLVMInt8TypeInContext(ctx);
-    let before = LLVMArrayType2(i8_ty, offset.get());
-    let after_bytes = layout.size - offset.get() - elem_layout.size;
-    let ty = if after_bytes != 0 {
-        let after = LLVMArrayType2(i8_ty, after_bytes);
-        let mut ty = [before, llvm_elem_ty, after];
-        LLVMStructTypeInContext(ctx, ty.as_mut_ptr(), ty.len() as _, FALSE)
-    } else {
-        let mut ty = [before, llvm_elem_ty];
-        LLVMStructTypeInContext(ctx, ty.as_mut_ptr(), ty.len() as _, FALSE)
-    };
-
-    let cast_val = LLVMBuildBitCast(builder, r, ty, NONE);
-    LLVMSetAlignment(cast_val, layout.align.get() as _);
-
-    LLVMBuildExtractValue(builder, cast_val, 1, NONE)
-}
-*/

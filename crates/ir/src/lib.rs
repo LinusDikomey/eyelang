@@ -408,6 +408,10 @@ impl Function {
             function: self,
         }
     }
+
+    pub fn flags(&self) -> InstFlags {
+        self.flags
+    }
 }
 
 pub struct Global {

@@ -82,8 +82,8 @@ instructions! {
 instructions! {
     Tuple "tuple" TupleInsts
 
-    MemberValue tuple: Ref element: Int !pure;
-    InsertMember tuple: Ref element: Int value: Ref !pure;
+    MemberValue tuple: Ref element: Int32 !pure;
+    InsertMember tuple: Ref element: Int32 value: Ref !pure;
 }
 
 instructions! {

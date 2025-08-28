@@ -704,9 +704,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ValueOrPlace::Value(val) => {
                     let elem_ty = ctx.get_type(ctx.types[elem_types.nth(index).unwrap()])?;
                     let elem_ty = ctx.builder.types.add(elem_ty);
-                    let value = ctx
-                        .builder
-                        .append(tuple.MemberValue(val, index.into(), elem_ty));
+                    let value = ctx.builder.append(tuple.MemberValue(val, index, elem_ty));
                     ValueOrPlace::Value(value)
                 }
                 ValueOrPlace::Place { ptr, value_ty: _ } => {
@@ -1105,9 +1103,7 @@ fn lower_pattern(
                 let member_pat = PatternId(patterns + i);
                 let member_ty = ctx.get_type(ctx.types[LocalTypeId(types + i)])?;
                 let member_ty = ctx.builder.types.add(member_ty);
-                let member_value =
-                    ctx.builder
-                        .append(tuple.MemberValue(value, i.into(), member_ty));
+                let member_value = ctx.builder.append(tuple.MemberValue(value, i, member_ty));
                 lower_pattern(ctx, member_pat, member_value, on_mismatch)?;
             }
         }

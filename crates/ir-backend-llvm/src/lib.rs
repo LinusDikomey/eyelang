@@ -51,11 +51,18 @@ impl Backend {
 
     pub fn emit_module(
         &self,
-        env: &ir::Environment,
+        env: &mut ir::Environment,
         module_id: ModuleId,
         target: Option<&CStr>,
         out_file: &Path,
     ) -> Result<(), Error> {
+        let dialects = Dialects {
+            arith: env.get_dialect_module(),
+            tuple: env.get_dialect_module(),
+            mem: env.get_dialect_module(),
+            cf: env.get_dialect_module(),
+        };
+
         let llvm_module: LLVMModuleRef =
             unsafe { LLVMModuleCreateWithNameInContext(c"main".as_ptr(), self.context) };
         let builder = unsafe { core::LLVMCreateBuilderInContext(self.context) };
@@ -67,29 +74,6 @@ impl Backend {
                 translate::add_function(self.context, llvm_module, func, &self.attribs)
             })
             .collect::<Result<Vec<_>, _>>()?;
-
-        let dialects = Dialects {
-            arith: env.get_dialect_module_if_present().unwrap(),
-            tuple: env.get_dialect_module_if_present().unwrap(),
-            mem: env.get_dialect_module_if_present().unwrap(),
-            cf: env.get_dialect_module_if_present().unwrap(),
-        };
-        // TODO: reimplement globals
-        /*let llvm_globals = module
-        .globals()
-        .iter()
-        .map(|global| unsafe {
-            translate::add_global(
-                self.context,
-                llvm_module,
-                global.name(),
-                &global.types,
-                global.ty,
-                &global.value,
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-        */
 
         let globals: Vec<_> = module
             .globals()

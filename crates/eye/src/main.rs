@@ -200,7 +200,7 @@ fn main() -> Result<(), MainError> {
                     });
                     backend
                         .emit_module(
-                            &compiler.ir,
+                            &mut compiler.ir,
                             compiler.ir_module,
                             target.as_deref(),
                             Path::new(&obj_file),

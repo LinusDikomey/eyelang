@@ -33,7 +33,6 @@ impl Backend {
     ) -> Result<(), Error> {
         assert!(target.is_none(), "todo: check target");
 
-        env.get_dialect_module::<arch::x86::X86>();
         let mut writer = exe::elf::ElfObjectWriter::new();
         let mut text_section = Vec::new();
         let mut symtab = exe::elf::symtab::SymtabWriter::new();
