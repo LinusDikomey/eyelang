@@ -25,6 +25,7 @@ use crate::Ref;
 use crate::TypeId;
 use crate::modify::IrModify;
 use crate::slots::Slots;
+use crate::use_counts::UseCounts;
 use std::ops::{BitAnd, BitOr, Not};
 
 pub trait McInst: Inst {
@@ -151,7 +152,7 @@ pub struct IselCtx<'a, I: McInst> {
     pub abi: &'static dyn Abi<I>,
     pub unit: crate::TypeId,
     mc: ModuleOf<Mc>,
-    use_counts: Box<[u32]>,
+    use_counts: UseCounts,
     pub state: &'a mut BackendState,
 }
 impl<'a, I: McInst> IselCtx<'a, I> {
@@ -165,33 +166,7 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         abi: &'static dyn Abi<I>,
         state: &'a mut BackendState,
     ) -> Self {
-        let mut use_counts = vec![0; ir.inst_count() as usize].into_boxed_slice();
-        for i in 0..ir.inst_count() {
-            let inst = ir.get_inst(Ref::index(i));
-            for arg in ir.args_iter(inst, env) {
-                match arg {
-                    crate::Argument::Ref(r) => {
-                        if let Some(r) = r.into_ref() {
-                            use_counts[r as usize] += 1;
-                        }
-                    }
-                    crate::Argument::BlockTarget(crate::BlockTarget(_block, args)) => {
-                        for r in args {
-                            if let Some(r) = r.into_ref() {
-                                use_counts[r as usize] += 1;
-                            }
-                        }
-                    }
-                    crate::Argument::BlockId(_)
-                    | crate::Argument::Int(_)
-                    | crate::Argument::Float(_)
-                    | crate::Argument::TypeId(_)
-                    | crate::Argument::FunctionId(_)
-                    | crate::Argument::GlobalId(_)
-                    | crate::Argument::MCReg(_) => {}
-                }
-            }
-        }
+        let use_counts = UseCounts::compute(ir, env);
         Self {
             main_module,
             unit,
@@ -204,8 +179,8 @@ impl<'a, I: McInst> IselCtx<'a, I> {
     }
 
     pub fn remove_use(&mut self, r: Ref, ir: &mut IrModify, env: &Environment) {
-        self.use_counts[r.idx()] -= 1;
-        if self.use_counts[r.idx()] == 0 && env[ir.get_inst(r).function].flags.pure() {
+        self.use_counts[r] -= 1;
+        if self.use_counts[r] == 0 && env[ir.get_inst(r).function].flags.pure() {
             // last use of pure instruction was remove, delete it
             ir.replace_with(r, Ref::UNIT);
         }
@@ -243,8 +218,8 @@ impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
 
 impl<'a, I: McInst> IselCtx<'a, I> {
     pub fn use_count(&self, r: Ref) -> u32 {
-        if let Some(r) = r.into_ref() {
-            self.use_counts[r as usize]
+        if r.into_ref().is_some() {
+            self.use_counts[r]
         } else {
             0
         }

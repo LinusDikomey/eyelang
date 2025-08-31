@@ -1,4 +1,4 @@
-use crate::{instructions, primitives};
+use crate::{Type, instructions, primitives};
 
 primitives! {
     Unit = 0
@@ -77,6 +77,129 @@ instructions! {
     CastFloat value: Ref !pure;
     CastIntToFloat value: Ref !pure;
     CastFloatToInt value: Ref !pure;
+}
+
+impl Arith {
+    pub fn int_binop(self, ty: Type) -> Option<ArithIntBinOp> {
+        let Type::Primitive(p) = ty else {
+            return None;
+        };
+        let p = Primitive::try_from(p).unwrap();
+        if !p.is_int() {
+            return None;
+        }
+        let signed = p.is_signed_int();
+        Some(match self {
+            Self::Int
+            | Self::Float
+            | Self::Neg
+            | Self::Not
+            | Self::CastInt
+            | Self::CastFloat
+            | Self::CastIntToFloat
+            | Self::CastFloatToInt => return None,
+            Self::Add => ArithIntBinOp::new(|a, b| a.wrapping_add(b))
+                .commutative()
+                .associative()
+                .identity(0),
+            Self::Sub => ArithIntBinOp::new(|a, b| a.wrapping_sub(b)).rhs_identity(0),
+            Self::Mul => ArithIntBinOp::new(if signed {
+                |a, b| (a as i64).wrapping_mul(b as i64) as u64
+            } else {
+                |a, b| a.wrapping_mul(b)
+            })
+            .commutative()
+            .associative()
+            .identity(1),
+            Self::Div => ArithIntBinOp::new(if signed {
+                |a, b| (a as i64).wrapping_div(b as i64) as u64
+            } else {
+                |a, b| a.wrapping_div(b)
+            })
+            .rhs_identity(1),
+            Self::Rem => ArithIntBinOp::new(|a, b| a.wrapping_rem(b)).rhs_identity(1),
+            Self::Or => ArithIntBinOp::new(|a, b| a & b)
+                .commutative()
+                .associative()
+                .identity(0),
+            Self::And => ArithIntBinOp::new(|a, b| a & b)
+                .commutative()
+                .identity(u64::MAX),
+            Self::Eq => ArithIntBinOp::new(|a, b| (a == b) as u64).commutative(),
+            Self::NE => ArithIntBinOp::new(|a, b| (a != b) as u64).commutative(),
+            Self::LT => ArithIntBinOp::new(if signed {
+                |a, b| ((a as i64) < b as i64) as u64
+            } else {
+                |a, b| (a < b) as u64
+            }),
+            Self::GT => ArithIntBinOp::new(if signed {
+                |a, b| ((a as i64) > b as i64) as u64
+            } else {
+                |a, b| (a > b) as u64
+            }),
+            Self::LE => ArithIntBinOp::new(if signed {
+                |a, b| ((a as i64) <= b as i64) as u64
+            } else {
+                |a, b| (a <= b) as u64
+            }),
+            Self::GE => ArithIntBinOp::new(if signed {
+                |a, b| ((a as i64) >= b as i64) as u64
+            } else {
+                |a, b| (a >= b) as u64
+            }),
+            Arith::Xor => ArithIntBinOp::new(|a, b| a ^ b)
+                .commutative()
+                .associative()
+                .identity(0),
+            Arith::Rol => ArithIntBinOp::new(|a, b| a.wrapping_shl(b as u32)).rhs_identity(0),
+            Arith::Ror => ArithIntBinOp::new(|a, b| a.wrapping_shr(b as u32)).rhs_identity(0),
+        })
+    }
+}
+
+pub struct ArithIntBinOp {
+    pub fold: fn(u64, u64) -> u64,
+    pub commutative: bool,
+    pub associative: bool,
+    pub lhs_identity: Option<u64>,
+    pub rhs_identity: Option<u64>,
+}
+impl ArithIntBinOp {
+    fn new(fold: fn(u64, u64) -> u64) -> Self {
+        Self {
+            fold,
+            commutative: false,
+            associative: false,
+            lhs_identity: None,
+            rhs_identity: None,
+        }
+    }
+
+    fn commutative(mut self) -> Self {
+        self.commutative = true;
+        self
+    }
+
+    fn associative(mut self) -> Self {
+        self.associative = true;
+        self
+    }
+
+    fn identity(mut self, identity: u64) -> Self {
+        self.lhs_identity = Some(identity);
+        self.rhs_identity = Some(identity);
+        self
+    }
+
+    fn lhs_identity(mut self, identity: u64) -> Self {
+        self.lhs_identity = Some(identity);
+        self
+    }
+
+    fn rhs_identity(mut self, identity: u64) -> Self {
+        self.rhs_identity = Some(identity);
+        self
+    }
 }
 
 instructions! {

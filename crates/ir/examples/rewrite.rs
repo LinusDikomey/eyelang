@@ -14,7 +14,7 @@ fn main() {
         env[func_id].types(),
         &env,
         &mut (),
-        &mut rewriter,
+        &rewriter,
         LinearRewriteOrder::new(),
     );
     env.reattach_body(func_id, func_ir.finish_and_compress(&env));

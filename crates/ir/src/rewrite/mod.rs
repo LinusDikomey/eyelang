@@ -9,7 +9,7 @@ use crate::{
 pub trait Visitor<Ctx = ()> {
     type Output;
     fn visit_instruction(
-        &mut self,
+        &self,
         ir: &mut IrModify,
         types: &Types,
         env: &Environment,
@@ -38,7 +38,7 @@ impl RewriteStrategy for LinearRewriteOrder {
     fn next_block(&mut self, ir: &IrModify) -> Option<BlockId> {
         ir.block_ids()
             .last()
-            .is_some_and(|last| self.next_block < last.0)
+            .is_some_and(|last| self.next_block <= last.0)
             .then(|| {
                 let id = BlockId(self.next_block);
                 self.next_block += 1;
@@ -132,7 +132,7 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
     types: &Types,
     env: &Environment,
     ctx: &mut Ctx,
-    rewriter: &mut R,
+    rewriter: &R,
     mut strategy: impl RewriteStrategy,
 ) {
     while let Some(block) = strategy.next_block(ir) {

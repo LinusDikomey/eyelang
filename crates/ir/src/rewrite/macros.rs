@@ -154,7 +154,7 @@ macro_rules! visitor {
             type Output = $output;
 
             fn visit_instruction(
-                &mut self,
+                &self,
                 #[allow(unused)] $ir: &mut $crate::modify::IrModify,
                 #[allow(unused)] $types: &$crate::Types,
                 $env: &$crate::Environment,

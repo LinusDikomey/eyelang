@@ -19,6 +19,7 @@ pub mod parse;
 pub mod pipeline;
 pub mod rewrite;
 pub mod slots;
+pub mod use_counts;
 pub mod verify;
 
 mod argument;
