@@ -297,7 +297,7 @@ pub fn eval<E: EvalEnvironment>(
             Ptr::from_u64(values.slots[values.slot_map[r.idx()] as usize])
         };
         macro_rules! bin_op {
-            ($int_f: path, $float_f: ident, $inst: expr) => {{
+            ($float_f: ident, $inst: expr) => {{
                 let (l, r): (Ref, Ref) = ir.args($inst, env.env());
                 let l = get_ref(&values, l);
                 let r = get_ref(&values, r);
@@ -307,11 +307,6 @@ pub fn eval<E: EvalEnvironment>(
                 };
                 let ty = Primitive::try_from(ty).unwrap();
                 match ty {
-                    ty if ty.is_int() => {
-                        let Val::Int(l_val) = l else { panic!() };
-                        let Val::Int(r_val) = r else { panic!() };
-                        Val::Int($int_f(l_val, r_val))
-                    }
                     Primitive::F32 => {
                         let Val::F32(l_val) = l else { panic!() };
                         let Val::F32(r_val) = r else { panic!() };
@@ -345,207 +340,213 @@ pub fn eval<E: EvalEnvironment>(
                 }
             } else if let Some(typed_inst) = inst.as_module(dialects.arith) {
                 use crate::dialect::Arith as I;
-                match typed_inst.op() {
-                    I::Int => {
-                        let i: u64 = ir.args(inst, env.env());
-                        Val::Int(i)
-                    }
-                    I::Float => {
-                        let x: f64 = ir.args(inst, env.env());
-                        match must_primitive(types[inst.ty()]) {
-                            Primitive::F32 => Val::F32(x as f32),
-                            Primitive::F64 => Val::F64(x),
-                            _ => invalid_ty(types[inst.ty()]),
+                if let Some(binop) = typed_inst.op().int_binop(types[typed_inst.ty()]) {
+                    let (l, r): (Ref, Ref) = ir.args(inst, env.env());
+                    let l = get_int_ref(&values, l);
+                    let r = get_int_ref(&values, r);
+                    Val::Int((binop.fold)(l, r))
+                } else {
+                    match typed_inst.op() {
+                        I::Int => {
+                            let i: u64 = ir.args(inst, env.env());
+                            Val::Int(i)
                         }
-                    }
-                    I::Neg => match get_ref(&values, ir.args(inst, env.env())) {
-                        Val::Invalid => Val::Invalid,
-                        Val::Int(val) => Val::Int(-(val as i64) as u64),
-                        Val::F32(val) => Val::F32(-val),
-                        Val::F64(val) => Val::F64(-val),
-                        _ => panic!("Invalid value to negate"),
-                    },
-                    I::Not => {
-                        let x = get_int_ref(&values, ir.args(inst, env.env()));
-                        Val::Int(1 - x)
-                    }
-                    I::Add => bin_op!(u64::wrapping_add, add, inst),
-                    I::Sub => bin_op!(u64::wrapping_sub, sub, inst),
-                    I::Mul => bin_op!(u64::wrapping_mul, mul, inst),
-                    I::Div => bin_op!(div_int, div, inst),
-                    I::Rem => bin_op!(u64::wrapping_rem, rem, inst),
-                    I::Or => {
-                        let (l, r): (Ref, Ref) = ir.args(inst, env.env());
-                        let Val::Int(l) = get_ref(&values, l) else {
-                            unreachable!()
-                        };
-                        let Val::Int(r) = get_ref(&values, r) else {
-                            unreachable!()
-                        };
-                        Val::Int(((l != 0) || (r != 0)) as u64)
-                    }
-                    I::And => {
-                        let (l, r) = ir.args(inst, env.env());
-                        let l = get_int_ref(&values, l);
-                        let r = get_int_ref(&values, r);
-                        Val::Int(((l != 0) && (r != 0)) as u64)
-                    }
-                    op @ (I::Eq | I::NE | I::LT | I::GT | I::LE | I::GE) => {
-                        let (l, r) = ir.args(inst, env.env());
-                        let Type::Primitive(p) = types[inst.ty()] else {
-                            unreachable!()
-                        };
-                        let p: Primitive = p.try_into().unwrap();
-                        let res = match p {
-                            Primitive::Unit => Some(Ordering::Equal),
-                            Primitive::I1
-                            | Primitive::I8
-                            | Primitive::I16
-                            | Primitive::I32
-                            | Primitive::I64 => {
-                                let l = get_int_ref(&values, l);
-                                let r = get_int_ref(&values, r);
-                                Some((l as i64).cmp(&(r as i64)))
+                        I::Float => {
+                            let x: f64 = ir.args(inst, env.env());
+                            match must_primitive(types[inst.ty()]) {
+                                Primitive::F32 => Val::F32(x as f32),
+                                Primitive::F64 => Val::F64(x),
+                                _ => invalid_ty(types[inst.ty()]),
                             }
-                            Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64 => {
-                                let l = get_int_ref(&values, l);
-                                let r = get_int_ref(&values, r);
-                                Some(l.cmp(&r))
-                            }
-                            Primitive::I128 => todo!(),
-                            Primitive::U128 => todo!(),
-                            Primitive::F32 => {
-                                let l = get_f32_ref(&values, l);
-                                let r = get_f32_ref(&values, r);
-                                l.partial_cmp(&r)
-                            }
-                            Primitive::F64 => {
-                                let l = get_f64_ref(&values, l);
-                                let r = get_f64_ref(&values, r);
-                                l.partial_cmp(&r)
-                            }
-                            Primitive::Ptr => {
-                                let l = get_ptr_ref(&values, l);
-                                let r = get_ptr_ref(&values, r);
-                                Some(l.addr.cmp(&r.addr))
-                            }
-                        };
-                        let val = match op {
-                            I::Eq => res.is_some_and(|ord| ord.is_eq()),
-                            I::NE => res.is_none_or(|ord| ord.is_ne()),
-                            I::LT => res.is_some_and(|ord| ord.is_lt()),
-                            I::LE => res.is_some_and(|ord| ord.is_le()),
-                            I::GT => res.is_some_and(|ord| ord.is_gt()),
-                            I::GE => res.is_some_and(|ord| ord.is_ge()),
-                            _ => unreachable!(),
-                        };
-                        Val::Int(val as u64)
-                    }
-                    I::Xor => {
-                        let (l, r) = ir.args(inst, env.env());
-                        let l = get_int_ref(&values, l);
-                        let r = get_int_ref(&values, r);
-                        Val::Int(l ^ r)
-                    }
-                    I::Rol => {
-                        let (l, r) = ir.args(inst, env.env());
-                        let l = get_int_ref(&values, l);
-                        let r = get_int_ref(&values, r) as u32;
-                        Val::Int(match must_primitive(types[inst.ty()]) {
-                            Primitive::I1 => l,
-                            Primitive::I8 | Primitive::U8 => (l as u8).rotate_left(r).into(),
-                            Primitive::I16 | Primitive::U16 => (l as u16).rotate_left(r).into(),
-                            Primitive::I32 | Primitive::U32 => (l as u32).rotate_left(r).into(),
-                            Primitive::I64 | Primitive::U64 => l.rotate_left(r),
-                            Primitive::I128 | Primitive::U128 => todo!(),
-                            _ => invalid_ty(types[inst.ty()]),
-                        })
-                    }
-                    I::Ror => {
-                        let (l, r) = ir.args(inst, env.env());
-                        let l = get_int_ref(&values, l);
-                        let r = get_int_ref(&values, r) as u32;
-                        Val::Int(match must_primitive(types[inst.ty()]) {
-                            Primitive::I1 => l,
-                            Primitive::I8 | Primitive::U8 => (l as u8).rotate_right(r).into(),
-                            Primitive::I16 | Primitive::U16 => (l as u16).rotate_right(r).into(),
-                            Primitive::I32 | Primitive::U32 => (l as u32).rotate_right(r).into(),
-                            Primitive::I64 | Primitive::U64 => l.rotate_right(r),
-                            Primitive::I128 | Primitive::U128 => todo!(),
-                            _ => invalid_ty(types[inst.ty()]),
-                        })
-                    }
-                    I::CastInt => {
-                        let r = ir.args(inst, env.env());
-                        let x = get_int_ref(&values, r);
-                        // TODO: probably not correct for casting, especially sign-extension
-                        Val::Int(x)
-                    }
-                    I::CastFloat => {
-                        let val = get_ref(&values, ir.args(inst, env.env()));
-                        match (val, must_primitive(types[inst.ty()])) {
-                            (Val::F32(x), Primitive::F32) => Val::F32(x),
-                            (Val::F32(x), Primitive::F64) => Val::F64(x.into()),
-                            (Val::F64(x), Primitive::F32) => Val::F32(x as f32),
-                            (Val::F64(x), Primitive::F64) => Val::F64(x),
-                            _ => panic!("invalid types for CastFloat"),
                         }
-                    }
-                    I::CastIntToFloat => {
-                        let r = ir.args(inst, env.env());
-                        let val = get_int_ref(&values, r);
-                        let ty = must_primitive(types[ir.get_ref_ty(r)]);
-                        match (ty, must_primitive(types[inst.ty()])) {
-                            (Primitive::I1, Primitive::F32) => Val::F32((val & 1) as _),
-                            (Primitive::U8, Primitive::F32) => Val::F32(val as u8 as _),
-                            (Primitive::I8, Primitive::F32) => Val::F32(val as i8 as _),
-                            (Primitive::U16, Primitive::F32) => Val::F32(val as u16 as _),
-                            (Primitive::I16, Primitive::F32) => Val::F32(val as i16 as _),
-                            (Primitive::U32, Primitive::F32) => Val::F32(val as u32 as _),
-                            (Primitive::I32, Primitive::F32) => Val::F32(val as i32 as _),
-                            (Primitive::U64, Primitive::F32) => Val::F32(val as _),
-                            (Primitive::I64, Primitive::F32) => Val::F32(val as i64 as _),
-                            (Primitive::U128, Primitive::F32) => todo!(),
-                            (Primitive::I128, Primitive::F32) => todo!(),
-                            (Primitive::I1, Primitive::F64) => Val::F64((val & 1) as _),
-                            (Primitive::U8, Primitive::F64) => Val::F64(val as u8 as _),
-                            (Primitive::I8, Primitive::F64) => Val::F64(val as i8 as _),
-                            (Primitive::U16, Primitive::F64) => Val::F64(val as u16 as _),
-                            (Primitive::I16, Primitive::F64) => Val::F64(val as i16 as _),
-                            (Primitive::U32, Primitive::F64) => Val::F64(val as u32 as _),
-                            (Primitive::I32, Primitive::F64) => Val::F64(val as i32 as _),
-                            (Primitive::U64, Primitive::F64) => Val::F64(val as _),
-                            (Primitive::I64, Primitive::F64) => Val::F64(val as i64 as _),
-                            (Primitive::U128, Primitive::F64) => todo!(),
-                            (Primitive::I128, Primitive::F64) => todo!(),
-                            _ => panic!("invalid types for CastIntToFloat"),
+                        I::Neg => match get_ref(&values, ir.args(inst, env.env())) {
+                            Val::Invalid => Val::Invalid,
+                            Val::Int(val) => Val::Int(-(val as i64) as u64),
+                            Val::F32(val) => Val::F32(-val),
+                            Val::F64(val) => Val::F64(-val),
+                            _ => panic!("Invalid value to negate"),
+                        },
+                        I::Not => {
+                            let x = get_int_ref(&values, ir.args(inst, env.env()));
+                            Val::Int(1 - x)
                         }
-                    }
-                    I::CastFloatToInt => {
-                        let val = get_ref(&values, ir.args(inst, env.env()));
-                        Val::Int(match (val, must_primitive(types[inst.ty()])) {
-                            (Val::F32(x), Primitive::I1) => (x as u8 & 1) as _,
-                            (Val::F32(x), Primitive::U8) => (x as u8) as _,
-                            (Val::F32(x), Primitive::I8) => (x as i8) as _,
-                            (Val::F32(x), Primitive::U16) => (x as u16) as _,
-                            (Val::F32(x), Primitive::I16) => (x as i16) as _,
-                            (Val::F32(x), Primitive::U32) => (x as u32) as _,
-                            (Val::F32(x), Primitive::I32) => (x as i32) as _,
-                            (Val::F32(x), Primitive::U64) => (x as u64) as _,
-                            (Val::F32(x), Primitive::I64) => (x as i64) as _,
-                            (Val::F32(_), Primitive::U128) => todo!(),
-                            (Val::F32(_), Primitive::I128) => todo!(),
-                            (Val::F64(x), Primitive::I1) => (x as u8 & 1) as _,
-                            (Val::F64(x), Primitive::U8) => (x as u8) as _,
-                            (Val::F64(x), Primitive::I8) => (x as i8) as _,
-                            (Val::F64(x), Primitive::U16) => (x as u16) as _,
-                            (Val::F64(x), Primitive::I16) => (x as i16) as _,
-                            (Val::F64(x), Primitive::U32) => (x as u32) as _,
-                            (Val::F64(x), Primitive::I32) => (x as i32) as _,
-                            (Val::F64(_), Primitive::U128) => todo!(),
-                            (Val::F64(_), Primitive::I128) => todo!(),
-                            _ => panic!("invalid types for CastFloatToInt"),
-                        })
+                        I::Add => bin_op!(add, inst),
+                        I::Sub => bin_op!(sub, inst),
+                        I::Mul => bin_op!(mul, inst),
+                        I::Div => bin_op!(div, inst),
+                        I::Rem => bin_op!(rem, inst),
+                        I::Or => {
+                            let (l, r): (Ref, Ref) = ir.args(inst, env.env());
+                            let Val::Int(l) = get_ref(&values, l) else {
+                                unreachable!()
+                            };
+                            let Val::Int(r) = get_ref(&values, r) else {
+                                unreachable!()
+                            };
+                            Val::Int(((l != 0) || (r != 0)) as u64)
+                        }
+                        I::And => {
+                            let (l, r) = ir.args(inst, env.env());
+                            let l = get_int_ref(&values, l);
+                            let r = get_int_ref(&values, r);
+                            Val::Int(((l != 0) && (r != 0)) as u64)
+                        }
+                        op @ (I::Eq | I::NE | I::LT | I::GT | I::LE | I::GE) => {
+                            let (l, r) = ir.args(inst, env.env());
+                            let Type::Primitive(p) = types[inst.ty()] else {
+                                unreachable!()
+                            };
+                            let p: Primitive = p.try_into().unwrap();
+                            let res = match p {
+                                Primitive::Unit => Some(Ordering::Equal),
+                                Primitive::I1
+                                | Primitive::I8
+                                | Primitive::I16
+                                | Primitive::I32
+                                | Primitive::I64
+                                | Primitive::U8
+                                | Primitive::U16
+                                | Primitive::U32
+                                | Primitive::U64 => unreachable!(), // handled by int_bin_op
+                                Primitive::I128 => todo!(),
+                                Primitive::U128 => todo!(),
+                                Primitive::F32 => {
+                                    let l = get_f32_ref(&values, l);
+                                    let r = get_f32_ref(&values, r);
+                                    l.partial_cmp(&r)
+                                }
+                                Primitive::F64 => {
+                                    let l = get_f64_ref(&values, l);
+                                    let r = get_f64_ref(&values, r);
+                                    l.partial_cmp(&r)
+                                }
+                                Primitive::Ptr => {
+                                    let l = get_ptr_ref(&values, l);
+                                    let r = get_ptr_ref(&values, r);
+                                    Some(l.addr.cmp(&r.addr))
+                                }
+                            };
+                            let val = match op {
+                                I::Eq => res.is_some_and(|ord| ord.is_eq()),
+                                I::NE => res.is_none_or(|ord| ord.is_ne()),
+                                I::LT => res.is_some_and(|ord| ord.is_lt()),
+                                I::LE => res.is_some_and(|ord| ord.is_le()),
+                                I::GT => res.is_some_and(|ord| ord.is_gt()),
+                                I::GE => res.is_some_and(|ord| ord.is_ge()),
+                                _ => unreachable!(),
+                            };
+                            Val::Int(val as u64)
+                        }
+                        I::Xor => {
+                            let (l, r) = ir.args(inst, env.env());
+                            let l = get_int_ref(&values, l);
+                            let r = get_int_ref(&values, r);
+                            Val::Int(l ^ r)
+                        }
+                        I::Rol => {
+                            let (l, r) = ir.args(inst, env.env());
+                            let l = get_int_ref(&values, l);
+                            let r = get_int_ref(&values, r) as u32;
+                            Val::Int(match must_primitive(types[inst.ty()]) {
+                                Primitive::I1 => l,
+                                Primitive::I8 | Primitive::U8 => (l as u8).rotate_left(r).into(),
+                                Primitive::I16 | Primitive::U16 => (l as u16).rotate_left(r).into(),
+                                Primitive::I32 | Primitive::U32 => (l as u32).rotate_left(r).into(),
+                                Primitive::I64 | Primitive::U64 => l.rotate_left(r),
+                                Primitive::I128 | Primitive::U128 => todo!(),
+                                _ => invalid_ty(types[inst.ty()]),
+                            })
+                        }
+                        I::Ror => {
+                            let (l, r) = ir.args(inst, env.env());
+                            let l = get_int_ref(&values, l);
+                            let r = get_int_ref(&values, r) as u32;
+                            Val::Int(match must_primitive(types[inst.ty()]) {
+                                Primitive::I1 => l,
+                                Primitive::I8 | Primitive::U8 => (l as u8).rotate_right(r).into(),
+                                Primitive::I16 | Primitive::U16 => {
+                                    (l as u16).rotate_right(r).into()
+                                }
+                                Primitive::I32 | Primitive::U32 => {
+                                    (l as u32).rotate_right(r).into()
+                                }
+                                Primitive::I64 | Primitive::U64 => l.rotate_right(r),
+                                Primitive::I128 | Primitive::U128 => todo!(),
+                                _ => invalid_ty(types[inst.ty()]),
+                            })
+                        }
+                        I::CastInt => {
+                            let r = ir.args(inst, env.env());
+                            let x = get_int_ref(&values, r);
+                            // TODO: probably not correct for casting, especially sign-extension
+                            Val::Int(x)
+                        }
+                        I::CastFloat => {
+                            let val = get_ref(&values, ir.args(inst, env.env()));
+                            match (val, must_primitive(types[inst.ty()])) {
+                                (Val::F32(x), Primitive::F32) => Val::F32(x),
+                                (Val::F32(x), Primitive::F64) => Val::F64(x.into()),
+                                (Val::F64(x), Primitive::F32) => Val::F32(x as f32),
+                                (Val::F64(x), Primitive::F64) => Val::F64(x),
+                                _ => panic!("invalid types for CastFloat"),
+                            }
+                        }
+                        I::CastIntToFloat => {
+                            let r = ir.args(inst, env.env());
+                            let val = get_int_ref(&values, r);
+                            let ty = must_primitive(types[ir.get_ref_ty(r)]);
+                            match (ty, must_primitive(types[inst.ty()])) {
+                                (Primitive::I1, Primitive::F32) => Val::F32((val & 1) as _),
+                                (Primitive::U8, Primitive::F32) => Val::F32(val as u8 as _),
+                                (Primitive::I8, Primitive::F32) => Val::F32(val as i8 as _),
+                                (Primitive::U16, Primitive::F32) => Val::F32(val as u16 as _),
+                                (Primitive::I16, Primitive::F32) => Val::F32(val as i16 as _),
+                                (Primitive::U32, Primitive::F32) => Val::F32(val as u32 as _),
+                                (Primitive::I32, Primitive::F32) => Val::F32(val as i32 as _),
+                                (Primitive::U64, Primitive::F32) => Val::F32(val as _),
+                                (Primitive::I64, Primitive::F32) => Val::F32(val as i64 as _),
+                                (Primitive::U128, Primitive::F32) => todo!(),
+                                (Primitive::I128, Primitive::F32) => todo!(),
+                                (Primitive::I1, Primitive::F64) => Val::F64((val & 1) as _),
+                                (Primitive::U8, Primitive::F64) => Val::F64(val as u8 as _),
+                                (Primitive::I8, Primitive::F64) => Val::F64(val as i8 as _),
+                                (Primitive::U16, Primitive::F64) => Val::F64(val as u16 as _),
+                                (Primitive::I16, Primitive::F64) => Val::F64(val as i16 as _),
+                                (Primitive::U32, Primitive::F64) => Val::F64(val as u32 as _),
+                                (Primitive::I32, Primitive::F64) => Val::F64(val as i32 as _),
+                                (Primitive::U64, Primitive::F64) => Val::F64(val as _),
+                                (Primitive::I64, Primitive::F64) => Val::F64(val as i64 as _),
+                                (Primitive::U128, Primitive::F64) => todo!(),
+                                (Primitive::I128, Primitive::F64) => todo!(),
+                                _ => panic!("invalid types for CastIntToFloat"),
+                            }
+                        }
+                        I::CastFloatToInt => {
+                            let val = get_ref(&values, ir.args(inst, env.env()));
+                            Val::Int(match (val, must_primitive(types[inst.ty()])) {
+                                (Val::F32(x), Primitive::I1) => (x as u8 & 1) as _,
+                                (Val::F32(x), Primitive::U8) => (x as u8) as _,
+                                (Val::F32(x), Primitive::I8) => (x as i8) as _,
+                                (Val::F32(x), Primitive::U16) => (x as u16) as _,
+                                (Val::F32(x), Primitive::I16) => (x as i16) as _,
+                                (Val::F32(x), Primitive::U32) => (x as u32) as _,
+                                (Val::F32(x), Primitive::I32) => (x as i32) as _,
+                                (Val::F32(x), Primitive::U64) => (x as u64) as _,
+                                (Val::F32(x), Primitive::I64) => (x as i64) as _,
+                                (Val::F32(_), Primitive::U128) => todo!(),
+                                (Val::F32(_), Primitive::I128) => todo!(),
+                                (Val::F64(x), Primitive::I1) => (x as u8 & 1) as _,
+                                (Val::F64(x), Primitive::U8) => (x as u8) as _,
+                                (Val::F64(x), Primitive::I8) => (x as i8) as _,
+                                (Val::F64(x), Primitive::U16) => (x as u16) as _,
+                                (Val::F64(x), Primitive::I16) => (x as i16) as _,
+                                (Val::F64(x), Primitive::U32) => (x as u32) as _,
+                                (Val::F64(x), Primitive::I32) => (x as i32) as _,
+                                (Val::F64(_), Primitive::U128) => todo!(),
+                                (Val::F64(_), Primitive::I128) => todo!(),
+                                _ => panic!("invalid types for CastFloatToInt"),
+                            })
+                        }
                     }
                 }
             } else if let Some(typed_inst) = inst.as_module(dialects.tuple) {
@@ -1408,10 +1409,6 @@ impl Values {
             self.slots.copy_within(src..src + n, dst);
         }
     }
-}
-
-fn div_int(a: u64, b: u64) -> u64 {
-    a.checked_div(b).unwrap_or_default()
 }
 
 fn must_primitive(ty: Type) -> Primitive {
