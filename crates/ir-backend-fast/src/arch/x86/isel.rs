@@ -4,7 +4,7 @@ use ir::{
     BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, ModuleId, Primitive, Ref,
     Type, Types,
     dialect::Arith,
-    mc::{Abi, BackendState, IselCtx},
+    mc::{Abi, BackendState, IselCtx, parallel_copy},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
@@ -201,6 +201,38 @@ ir::visitor! {
         i32: [X86::sub_rr32, X86::sub_ri32],
         i64: [X86::sub_rr64, X86::sub_ri64],
     });
+    (%r = arith.Mul a (arith.Int (#x))) => {
+        let primitive = primitive_of_ref(r, ir, types);
+        match primitive {
+            Primitive::Unit => unreachable!(),
+            Primitive::I1 => todo!(),
+            Primitive::I8 => {
+                let a = ctx.regs.get_one(a);
+                let out = ctx.regs.get_one(r);
+                ctx.copy(env, r, mc, ir, &[out, a]);
+                // TODO: figure out how to truncate
+                ir.add_before(env, r, x86.imul_ri16(out, x as _, ctx.unit));
+                ir.replace_with(r, Ref::UNIT);
+            }
+            Primitive::I16 => {
+                let a = ctx.regs.get_one(a);
+                let out = ctx.regs.get_one(r);
+                ctx.copy(env, r, mc, ir, &[out, a]);
+                ir.replace(env, r, x86.imul_ri16(out, x as _, ctx.unit));
+            }
+            Primitive::I32 => todo!(),
+            Primitive::I64 => todo!(),
+            Primitive::I128 => todo!(),
+            Primitive::U8 => todo!(),
+            Primitive::U16 => todo!(),
+            Primitive::U32 => todo!(),
+            Primitive::U64 => todo!(),
+            Primitive::U128 => todo!(),
+            Primitive::F32 => todo!(),
+            Primitive::F64 => todo!(),
+            Primitive::Ptr => todo!(),
+        }
+    };
     (%r = mem.Decl (type ty)) => {
         let layout = ir::type_layout(types[ty], types, env.primitives());
         let offset = ctx.alloc_stack(layout);

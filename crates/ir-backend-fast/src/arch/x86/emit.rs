@@ -138,7 +138,7 @@ pub fn write(
                     text.extend([0xB8 + ra]);
                     text.extend(imm.to_le_bytes());
                 }
-                I::mov_ri64 => inst_ri(text, &[0xC7], ir.args(i, env), true, 0),
+                I::mov_ri64 => inst_ri32(text, &[0xC7], ir.args(i, env), true, 0),
                 I::mov_rr32 | I::mov_rr64 => {
                     inst_rr(text, &[0x89], ir.args(i, env), inst.op() == I::mov_rr64)
                 }
@@ -197,7 +197,7 @@ pub fn write(
                 I::add_ri8 => inst_ri8(text, &[0x80], ir.args(i, env), 0),
                 I::add_ri16 => inst_ri16(text, &[0x81], ir.args(i, env), 0),
                 I::add_ri32 | I::add_ri64 => {
-                    inst_ri(text, &[0x81], ir.args(i, env), inst.op() == I::add_ri64, 0);
+                    inst_ri32(text, &[0x81], ir.args(i, env), inst.op() == I::add_ri64, 0);
                 }
 
                 I::sub_rr8 => inst_rr(text, &[0x28], ir.args(i, env), false),
@@ -210,7 +210,23 @@ pub fn write(
                 I::sub_ri8 => inst_ri8(text, &[0x80], ir.args(i, env), 5),
                 I::sub_ri16 => inst_ri16(text, &[0x81], ir.args(i, env), 5),
                 I::sub_ri32 | I::sub_ri64 => {
-                    inst_ri(text, &[0x81], ir.args(i, env), inst.op() == I::sub_ri64, 5);
+                    inst_ri32(text, &[0x81], ir.args(i, env), inst.op() == I::sub_ri64, 5);
+                }
+                I::imul_r8 => inst_r(text, &[0xF6], ir.args(i, env), 5, false),
+                I::imul_rr16 | I::imul_rr32 | I::imul_rr64 => {
+                    if inst.op() == I::imul_rr16 {
+                        text.push(P16);
+                    }
+                    inst_rr(
+                        text,
+                        &[0x0F, 0xAF],
+                        ir.args(i, env),
+                        inst.op() == I::imul_rr64,
+                    )
+                }
+                I::imul_ri16 => inst_ri16(text, &[0x69], ir.args(i, env), 0),
+                I::imul_ri32 | I::imul_ri64 => {
+                    inst_ri32(text, &[0x69], ir.args(i, env), inst.op() == I::imul_ri64, 0);
                 }
                 I::neg_r8 => inst_r(text, &[0xF6], ir.args(i, env), 3, false),
                 I::neg_r16 | I::neg_r32 | I::neg_r64 => {
@@ -319,7 +335,7 @@ fn inst_ri16(text: &mut Vec<u8>, opcode: &[u8], (r, imm): (Reg, u32), i: u8) {
     text.extend((imm as u16).to_le_bytes());
 }
 
-fn inst_ri(text: &mut Vec<u8>, opcode: &[u8], (r, imm): (Reg, u32), wide: bool, i: u8) {
+fn inst_ri32(text: &mut Vec<u8>, opcode: &[u8], (r, imm): (Reg, u32), wide: bool, i: u8) {
     let modrm = encode_modrm_ri(r, wide, i);
     if modrm.rex != 0 {
         text.push(modrm.rex);

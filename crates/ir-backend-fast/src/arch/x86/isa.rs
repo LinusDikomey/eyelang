@@ -174,6 +174,15 @@ ir::instructions! {
     sub_ri32 reg: MCReg(Usage::DefUse) imm: Int32;
     sub_ri64 reg: MCReg(Usage::DefUse) imm: Int32;
 
+    /// ax = al * reg
+    imul_r8   reg: MCReg(Usage::Use);
+    imul_rr16 a: MCReg(Usage::DefUse) b: MCReg(Usage::Use);
+    imul_rr32 a: MCReg(Usage::DefUse) b: MCReg(Usage::Use);
+    imul_rr64 a: MCReg(Usage::DefUse) b: MCReg(Usage::Use);
+
+    imul_ri16 reg: MCReg(Usage::DefUse) imm: Int32;
+    imul_ri32 reg: MCReg(Usage::DefUse) imm: Int32;
+    imul_ri64 reg: MCReg(Usage::DefUse) imm: Int32;
 
     neg_r8 a: MCReg(Usage::DefUse);
     neg_r16 a: MCReg(Usage::DefUse);
