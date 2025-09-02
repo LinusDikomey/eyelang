@@ -668,6 +668,17 @@ unsafe fn build_func(
                             ptr::null_mut()
                         }
                     }
+                    I::Offset => {
+                        let (ptr, offset): (Ref, u32) = ir.typed_args(&inst);
+                        let i8_ty = LLVMInt8TypeInContext(ctx);
+                        if let Some(llvm_ptr) = get_ref(&instructions, ptr) {
+                            let mut offset =
+                                LLVMConstInt(LLVMInt32TypeInContext(ctx), offset.into(), FALSE);
+                            LLVMBuildInBoundsGEP2(builder, i8_ty, llvm_ptr, &mut offset, 1, NONE)
+                        } else {
+                            ptr::null_mut()
+                        }
+                    }
                     I::IntToPtr => {
                         let int = ir.typed_args(&inst);
                         // no zero-sized integers so unwrapping is fine

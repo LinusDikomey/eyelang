@@ -222,6 +222,7 @@ instructions! {
     Global global: GlobalId !pure;
     // CallPtr  (TODO: dynamic argument list)
     ArrayIndex array_ptr: Ref elem_ty: TypeId a: Ref !pure;
+    Offset ptr: Ref offset: Int32 !pure;
 }
 
 instructions! {

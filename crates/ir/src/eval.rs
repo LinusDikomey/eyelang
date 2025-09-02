@@ -648,7 +648,7 @@ pub fn eval<E: EvalEnvironment>(
                         Val::Invalid
                     }
                     I::MemberPtr => {
-                        let (ptr, tuple_ty, i): (Ref, TypeId, u64) = ir.args(inst, env.env());
+                        let (ptr, tuple_ty, i): (Ref, TypeId, u32) = ir.args(inst, env.env());
                         let Type::Tuple(elem_types) = types[tuple_ty] else {
                             panic!("tuple type expected for MemberPtr");
                         };
@@ -660,6 +660,11 @@ pub fn eval<E: EvalEnvironment>(
                             env.env().primitives(),
                         );
                         Val::Ptr(ptr.add_offset(offset.try_into().unwrap())?)
+                    }
+                    I::Offset => {
+                        let (ptr, offset): (Ref, u32) = ir.args(inst, env.env());
+                        let ptr = values.load_ptr(ptr);
+                        Val::Ptr(ptr.add_offset(offset)?)
                     }
                     I::IntToPtr => {
                         let i = get_int_ref(&values, ir.args(inst, env.env()));

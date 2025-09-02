@@ -5,9 +5,9 @@ use crate::{Instruction, ModuleId, ModuleOf, instructions};
 instructions! {
     Builtin "builtin" BuiltinInsts
 
-    Nothing;
-    BlockArg;
-    Undef;
+    Nothing  !pure;
+    BlockArg !pure;
+    Undef    !pure;
 }
 
 pub const BUILTIN: ModuleOf<Builtin> = ModuleOf(ModuleId::BUILTINS, std::marker::PhantomData);

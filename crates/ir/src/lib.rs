@@ -480,6 +480,20 @@ impl Types {
                 .all(|elem| self.is_zero_sized(self[elem], primitives)),
         }
     }
+
+    pub fn are_equal(&self, a: TypeId, b: TypeId) -> bool {
+        a == b
+            || match (self[a], self[b]) {
+                (Type::Primitive(a), Type::Primitive(b)) => a == b,
+                (Type::Array(a, a_len), Type::Array(b, b_len)) if a_len == b_len => {
+                    self.are_equal(a, b)
+                }
+                (Type::Tuple(a), Type::Tuple(b)) if a.count == b.count => {
+                    a.iter().zip(b.iter()).all(|(a, b)| self.are_equal(a, b))
+                }
+                _ => false,
+            }
+    }
 }
 impl Index<TypeId> for Types {
     type Output = Type;

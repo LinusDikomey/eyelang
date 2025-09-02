@@ -4,7 +4,7 @@ use ir::{
     BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, ModuleId, Primitive, Ref,
     Type, Types,
     dialect::Arith,
-    mc::{Abi, BackendState, IselCtx, parallel_copy},
+    mc::{Abi, BackendState, IselCtx},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
