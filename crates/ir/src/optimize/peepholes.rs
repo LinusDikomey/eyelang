@@ -111,7 +111,7 @@ fn pre_peephole(
                 (Some(l), Some(r)) => {
                     return dialects
                         .arith
-                        .Int(dbg!((binop.fold)(l, r)), inst.ty())
+                        .Int((binop.fold)(l, r), inst.ty())
                         .into_visit(ir, env, block);
                 }
                 (Some(l), None) => {

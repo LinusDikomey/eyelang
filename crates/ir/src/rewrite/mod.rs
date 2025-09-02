@@ -3,7 +3,7 @@ pub use macros::visitor;
 
 use crate::{
     BlockGraph, BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs,
-    Parameter, Ref, TypeId, Types, modify::IrModify,
+    Parameter, Ref, Type, TypeId, Types, modify::IrModify,
 };
 
 pub trait Visitor<Ctx = ()> {
@@ -159,41 +159,88 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
 }
 /// Tracks renames of values to replace all uses of values with other values
 pub struct RenameTable {
-    renames: Box<[Option<Ref>]>,
+    refs: Box<[Ref]>,
+    blocks: Box<[BlockId]>,
+    old_types_offset: u32,
 }
 impl RenameTable {
-    pub fn new(ir: &FunctionIr) -> Self {
+    pub fn new(ir: &FunctionIr, old_types_offset: u32) -> Self {
         Self {
-            renames: vec![None; ir.inst_count() as usize].into_boxed_slice(),
+            refs: ir.refs().collect(),
+            blocks: ir.block_ids().collect(),
+            old_types_offset,
         }
     }
 
-    pub fn rename(&mut self, idx: u32, rename: Ref) {
-        self.renames[idx as usize] = Some(rename);
+    pub fn rename(&mut self, old: Ref, renamed: Ref) {
+        self.refs[old.idx()] = renamed;
     }
 
-    pub fn visit_inst(&self, ir: &mut IrModify, inst: &mut Instruction, env: &Environment) {
-        let get_new =
-            |r: Ref| -> Option<Ref> { r.into_ref().and_then(|i| self.renames[i as usize]) };
-        let get = |r: Ref| get_new(r).unwrap_or(r);
+    pub fn rename_block(&mut self, old: BlockId, renamed: BlockId) {
+        self.blocks[old.idx()] = renamed;
+    }
+
+    pub fn visit_inst(
+        &self,
+        ir: &mut IrModify,
+        types: &mut Types,
+        old_extra: &[u32],
+        old_types: &Types,
+        inst: &mut Instruction,
+        env: &Environment,
+    ) {
+        let get = |r: Ref| -> Ref { r.into_ref().map_or(r, |i| self.refs[i as usize]) };
+        let get_block = |b: BlockId| self.blocks[b.idx()];
         let params = &env[inst.function].params;
         let count = params.iter().map(|p| p.slot_count()).sum();
         let args = if count <= INLINE_ARGS {
             &mut inst.args[..count]
         } else {
             let i = inst.args[0] as usize;
-            &mut ir.ir.extra[i..i + count]
+            let old = &old_extra[i..i + count];
+            let new_i = ir.ir.extra.len();
+            ir.ir.extra.extend_from_slice(old);
+            &mut ir.ir.extra[new_i..]
         };
         let mut args = args.iter_mut();
 
+        inst.ty.0 += self.old_types_offset;
+
         for param in params {
-            if matches!(param, Parameter::Ref | Parameter::RefOf(_)) {
-                let value = args.next().unwrap();
-                *value = get(Ref(*value)).0;
-            } else {
-                for _ in 0..param.slot_count() {
-                    let ignored = args.next();
-                    debug_assert!(ignored.is_some());
+            match param {
+                Parameter::Ref | Parameter::RefOf(_) => {
+                    let value = args.next().unwrap();
+                    *value = get(Ref(*value)).0;
+                }
+                Parameter::BlockId => {
+                    let value = args.next().unwrap();
+                    *value = get_block(BlockId(*value)).0;
+                }
+                Parameter::BlockTarget => {
+                    debug_assert_eq!(count, 2);
+                    todo!()
+                    /*
+                    let target = args.next().unwrap();
+                    let block = get_block(BlockId(*target));
+                    *target = block.0;
+                    let arg_count = ir.ir.blocks[block.idx()].arg_count;
+                    let idx = args.next().unwrap();
+                    let args = &old_extra[*idx as usize..*idx as usize + arg_count as usize];
+                    let new_idx = ir.ir.extra.len() as u32;
+                    *idx = new_idx;
+                    ir.ir.extra.extend(args.iter().map(|&arg| get(Ref(arg)).0));
+                    *idx
+                    */
+                }
+                Parameter::TypeId => {
+                    let value = args.next().unwrap();
+                    *value += self.old_types_offset;
+                }
+                _ => {
+                    for _ in 0..param.slot_count() {
+                        let ignored = args.next();
+                        debug_assert!(ignored.is_some());
+                    }
                 }
             }
         }

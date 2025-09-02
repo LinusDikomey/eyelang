@@ -1,5 +1,9 @@
 use crate::{Environment, FunctionIr, ModuleId, Types};
 
+pub trait ModulePass: std::fmt::Debug {
+    fn run(&self, env: &mut Environment, module: ModuleId);
+}
+
 pub trait FunctionPass<State = ()>: std::fmt::Debug {
     fn run(
         &self,
@@ -14,18 +18,25 @@ pub trait FunctionPass<State = ()>: std::fmt::Debug {
 #[derive(Default)]
 pub struct Pipeline<State = ()> {
     pub context: &'static str,
-    function_passes: Vec<Box<dyn FunctionPass<State>>>,
+    steps: Vec<(Vec<Box<dyn FunctionPass<State>>>, Box<dyn ModulePass>)>,
+    final_step: Vec<Box<dyn FunctionPass<State>>>,
 }
 impl<State> Pipeline<State> {
     pub fn new(context: &'static str) -> Self {
         Self {
             context,
-            function_passes: Vec::new(),
+            steps: Vec::new(),
+            final_step: Vec::new(),
         }
     }
 
     pub fn add_function_pass(&mut self, pass: Box<dyn FunctionPass<State>>) {
-        self.function_passes.push(pass);
+        self.final_step.push(pass);
+    }
+
+    pub fn add_module_pass(&mut self, pass: Box<dyn ModulePass>) {
+        let function_passes = std::mem::take(&mut self.final_step);
+        self.steps.push((function_passes, pass));
     }
 }
 
@@ -39,22 +50,41 @@ impl<State: Default> Pipeline<State> {
         env: &mut Environment,
         module: ModuleId,
     ) {
-        for i in 0..env[module].functions().len() {
-            let Some(mut ir) = env.modules[module.idx()].functions[i].ir.take() else {
+        for id in env[module].function_ids() {
+            let function = &env[module][id];
+            let Some(ir) = &function.ir else {
                 continue;
             };
             tracing::debug!(
                 target: "passes",
                 stage = self.context,
-                function = env[module].functions[i].name,
+                function = env[module][id].name,
                 "IR for {} before:\n{}",
-                env[module].functions[i].name,
-                ir.display_with_phys_regs::<R>(env, &env[module].functions[i].types),
+                env[module][id].name,
+                ir.display_with_phys_regs::<R>(env, &function.types),
             );
+        }
+        for (step, module_pass) in &self.steps {
+            self.process_step::<R>(env, module, step);
+            module_pass.run(env, module);
+        }
+        self.process_step::<R>(env, module, &self.final_step);
+    }
+
+    fn process_step<R: crate::mc::Register>(
+        &self,
+        env: &mut Environment,
+        module: ModuleId,
+        step: &[Box<dyn FunctionPass<State>>],
+    ) {
+        for i in 0..env[module].functions().len() {
+            let Some(mut ir) = env.modules[module.idx()].functions[i].ir.take() else {
+                continue;
+            };
 
             let mut state = State::default();
 
-            for pass in &self.function_passes {
+            for pass in step {
                 let types;
                 let func = &env[module].functions[i];
                 (ir, types) = pass.run(env, &func.types, ir, &func.name, &mut state);
@@ -66,7 +96,7 @@ impl<State: Default> Pipeline<State> {
                     function = env[module].functions[i].name,
                     pass = ?pass,
                     "After {pass:?}:\n{}",
-                    ir.display(env, &env[module].functions[i].types),
+                    ir.display_with_phys_regs::<R>(env, &env[module].functions[i].types),
                 );
             }
             tracing::debug!(target: "passes", function = env[module].functions[i].name, "Done optimizing");
@@ -91,10 +121,14 @@ impl<State: Default> Pipeline<State> {
         types: &mut Types,
         name: &str,
     ) -> FunctionIr {
+        assert!(
+            self.steps.is_empty(),
+            "Pipeline contains module passes, can't process single function"
+        );
         tracing::debug!(target: "passes", function = name, "IR before {}:\n{}", self.context, ir.display_with_phys_regs::<R>(env, types));
 
         let mut state = State::default();
-        for pass in &self.function_passes {
+        for pass in &self.final_step {
             let new_types;
             (ir, new_types) = pass.run(env, types, ir, name, &mut state);
             if let Some(new_types) = new_types {

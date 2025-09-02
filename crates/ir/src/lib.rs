@@ -78,6 +78,10 @@ impl Module {
         &self.functions
     }
 
+    pub fn function_ids(&self) -> impl ExactSizeIterator<Item = LocalFunctionId> {
+        (0..self.functions.len() as u32).map(LocalFunctionId)
+    }
+
     pub fn globals(&self) -> &[Global] {
         &self.globals
     }

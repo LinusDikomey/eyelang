@@ -1,9 +1,9 @@
-use dmap::DHashMap;
+use dmap::{DHashMap, DHashSet};
 
 use crate::{
-    Argument, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr, INLINE_ARGS, Inst,
-    Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId, TypedInstruction, argument,
-    builder::write_args, mc::RegClass,
+    Argument, BlockId, BlockInfo, BlockTarget, Builtin, Environment, FunctionId, FunctionIr,
+    INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId,
+    TypedInstruction, argument, builder::write_args, mc::RegClass,
 };
 
 pub struct IrModify {
@@ -235,10 +235,8 @@ impl IrModify {
         let r = Ref((self.ir.insts.len() + self.additional.len())
             .try_into()
             .expect("too many instructions"));
-        self.additional.push(AdditionalInst {
-            before,
-            inst: Instruction { function, args, ty },
-        });
+        let inst = Instruction { function, args, ty };
+        self.additional.push(AdditionalInst { before, inst });
         r
     }
 
@@ -252,6 +250,72 @@ impl IrModify {
             .into_ref()
             .expect("Can't add an instruction after a value Ref");
         self.add_before(env, Ref::index(i + 1), inst)
+    }
+
+    pub fn add_at_end<'r>(
+        &mut self,
+        env: &Environment,
+        (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) -> Ref {
+        let def = &env[function];
+        // PERF: iterating blocks every time is bad, somehow avoid this
+        let block_count = self.ir.block_count();
+        let (block, block_id) = self
+            .ir
+            .blocks
+            .iter_mut()
+            .zip((0..block_count).map(BlockId))
+            .rev()
+            .max_by_key(|(block, _)| block.idx)
+            .unwrap();
+        block.len += 1;
+        let args = write_args(
+            &mut self.ir.extra,
+            block_id,
+            &mut self.ir.blocks,
+            &def.params,
+            def.varargs,
+            args,
+        );
+        let r = Ref((self.ir.insts.len())
+            .try_into()
+            .expect("too many instructions"));
+        let inst = Instruction { function, args, ty };
+        self.ir.insts.push(inst);
+        r
+    }
+
+    pub fn add_inst_at_end(&mut self, env: &Environment, inst: Instruction) -> Ref {
+        let block_count = self.ir.blocks.len() as u32;
+        let (block, block_id) = self
+            .ir
+            .blocks
+            .iter_mut()
+            .zip((0..block_count).map(BlockId))
+            .rev()
+            .max_by_key(|(block, _)| block.idx)
+            .unwrap();
+        block.len += 1;
+        if env[inst.function].flags.terminator() {
+            // PERF: collecting target blocks
+            let targets: Box<[BlockId]> = self
+                .ir
+                .args_iter(&inst, env)
+                .filter_map(|arg| {
+                    let Argument::BlockTarget(BlockTarget(target, _)) = arg else {
+                        return None;
+                    };
+                    Some(target)
+                })
+                .collect();
+            for target in targets {
+                self.ir.blocks[block_id.idx()].succs.insert(target);
+                self.ir.blocks[target.idx()].preds.insert(target);
+            }
+        }
+        let r = Ref(self.ir.insts.len() as u32);
+        self.ir.insts.push(inst);
+        r
     }
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
@@ -411,6 +475,34 @@ impl IrModify {
         self.ir.new_reg(class)
     }
 
+    pub fn add_block(&mut self, args: impl IntoIterator<Item = TypeId>) -> (BlockId, Refs) {
+        let id = BlockId(self.ir.blocks.len() as _);
+        let idx = self.ir.insts.len() as u32;
+        self.ir
+            .insts
+            .extend(args.into_iter().map(|arg_ty| Instruction {
+                function: crate::FunctionId {
+                    module: crate::ModuleId::BUILTINS,
+                    function: Builtin::BlockArg.id(),
+                },
+                args: [0, 0],
+                ty: arg_ty,
+            }));
+        let arg_count = self.ir.insts.len() as u32 - idx;
+        self.ir.blocks.push(BlockInfo {
+            arg_count,
+            idx,
+            len: 0,
+            preds: dmap::new_set(),
+            succs: dmap::new_set(),
+        });
+        let arg_refs = Refs {
+            idx,
+            count: arg_count,
+        };
+        (id, arg_refs)
+    }
+
     pub fn replace_with(&mut self, r: Ref, new: Ref) {
         self.renames.insert(r, new);
         let inst = if (r.0 as usize) < self.ir.insts.len() {
@@ -492,6 +584,49 @@ impl IrModify {
         env: &'a Environment,
     ) -> crate::ArgsIter<'a> {
         self.ir.args_iter(inst, env)
+    }
+
+    pub fn split_block_after(&mut self, r: Ref) -> BlockId {
+        let block = self
+            .ir
+            .blocks
+            .iter()
+            .position(|block| {
+                (block.idx + block.arg_count..block.idx + block.arg_count + block.len)
+                    .contains(&r.0)
+            })
+            .unwrap();
+        let info = &mut self.ir.blocks[block];
+        let is_end = info.idx + info.arg_count + info.len == r.0 + 1;
+        let split_offset = r.0 - (info.idx + info.arg_count) + 1;
+        let new_block_len = if is_end {
+            0
+        } else {
+            let additional_before_split = self
+                .additional
+                .iter()
+                .filter(|inst| (info.idx..=r.0).contains(&inst.before.0))
+                .count() as u32;
+            let old_count = split_offset + additional_before_split;
+            let new_block_len = info.len - old_count;
+            info.len = old_count;
+            new_block_len
+        };
+        let new_block_idx = info.idx + info.arg_count + split_offset;
+        let succs = if is_end {
+            DHashSet::default()
+        } else {
+            std::mem::take(&mut info.succs)
+        };
+        let id = BlockId(self.ir.blocks.len() as _);
+        self.ir.blocks.push(BlockInfo {
+            arg_count: 0,
+            idx: new_block_idx,
+            len: new_block_len,
+            preds: DHashSet::default(),
+            succs,
+        });
+        id
     }
 }
 

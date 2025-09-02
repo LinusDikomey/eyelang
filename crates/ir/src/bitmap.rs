@@ -60,4 +60,8 @@ impl Bitmap {
         }
         changed
     }
+
+    pub fn clear(&mut self) {
+        self.bits.fill(0);
+    }
 }

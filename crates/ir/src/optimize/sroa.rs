@@ -114,7 +114,7 @@ impl FunctionPass for SROA {
                             if let Some((decl, _)) =
                                 self.find_decl_offset_of_ptr(&ir, types, env, ptr)
                             {
-                                let (accesses, _, uses) = typed_accesses.entry(decl).or_default();
+                                let (_, _, uses) = typed_accesses.entry(decl).or_default();
                                 uses.push(r);
                                 continue;
                             }

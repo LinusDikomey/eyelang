@@ -17,7 +17,6 @@ pub enum FoundType {
     Literal,
     EnumLiteral,
     Primitive(ast::Primitive),
-    Type(ast::TypeId),
     Path(IdentPath),
     TypePlaceholder,
     Underscore,
