@@ -3,7 +3,7 @@ pub use macros::visitor;
 
 use crate::{
     BlockGraph, BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs,
-    Parameter, Ref, Type, TypeId, Types, modify::IrModify,
+    Parameter, Ref, TypeId, Types, modify::IrModify,
 };
 
 pub trait Visitor<Ctx = ()> {
@@ -183,9 +183,7 @@ impl RenameTable {
     pub fn visit_inst(
         &self,
         ir: &mut IrModify,
-        types: &mut Types,
         old_extra: &[u32],
-        old_types: &Types,
         inst: &mut Instruction,
         env: &Environment,
     ) {

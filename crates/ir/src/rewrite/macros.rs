@@ -29,6 +29,11 @@ macro_rules! arg {
             unreachable!("invalid argument type, expected TypeId");
         };
     };
+    ($modules: ident, $ir: ident, $env: ident, $arg: ident, (global $global: ident)) => {
+        let $crate::Argument::GlobalId($global) = $arg else {
+            unreachable!("invalid argument type, expected GlobalId");
+        };
+    };
     ($modules: ident, $ir: ident, $env: ident, $arg: ident, $($inner: tt)*) => {
         let $crate::Argument::Ref(r) = $arg else {
             unreachable!("invalid argument type, expected Ref");
@@ -125,6 +130,7 @@ macro_rules! visitor {
         $ir: ident,
         $types: ident,
         $inst: ident,
+        $block: ident,
         $env: ident,
         $dialects: ident,
         $ctx: ident: $ctx_ty: ty;
@@ -160,7 +166,7 @@ macro_rules! visitor {
                 $env: &$crate::Environment,
                 #[allow(unused)] $inst: &$crate::Instruction,
                 r: $crate::Ref,
-                block: $crate::BlockId,
+                $block: $crate::BlockId,
                 $ctx: &mut $ctx_ty,
             ) -> ::core::option::Option<$output> {
                 let $dialects = &*self;
@@ -179,7 +185,7 @@ macro_rules! visitor {
                             }
                         )*
                         ::core::option::Option::Some(
-                            $crate::rewrite::IntoVisit::into_visit($result, $ir, $env, block)
+                            $crate::rewrite::IntoVisit::into_visit($result, $ir, $env, $block)
                         )
                     })();
                     if let Some(value) = result {

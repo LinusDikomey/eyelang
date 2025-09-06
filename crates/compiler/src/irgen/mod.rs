@@ -3,6 +3,7 @@ mod entry_point;
 mod intrinsics;
 pub mod types;
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 pub use entry_point::entry_point;
@@ -666,21 +667,21 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             match logic {
                 crate::hir::Logic::And => ctx.builder.append(cf.Branch(
                     l,
-                    BlockTarget(rhs, &[]),
-                    BlockTarget(res, &[Ref::FALSE]),
+                    BlockTarget::new(rhs),
+                    BlockTarget(res, Cow::Borrowed(&[Ref::FALSE])),
                     ctx.unit_ty,
                 )),
                 crate::hir::Logic::Or => ctx.builder.append(cf.Branch(
                     l,
-                    BlockTarget(res, &[Ref::TRUE]),
-                    BlockTarget(rhs, &[]),
+                    BlockTarget(res, Cow::Borrowed(&[Ref::TRUE])),
+                    BlockTarget::new(rhs),
                     ctx.unit_ty,
                 )),
             };
             ctx.builder.begin_block(rhs, []);
             if let Ok(r) = lower(ctx, r) {
                 ctx.builder
-                    .append(cf.Goto(BlockTarget(res, &[r]), ctx.unit_ty));
+                    .append(cf.Goto(BlockTarget(res, Cow::Borrowed(&[r])), ctx.unit_ty));
             }
             let args = ctx.builder.begin_block(res, [ctx.i1_ty]);
             args.nth(0)
@@ -757,8 +758,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let else_block = ctx.builder.create_block();
             ctx.builder.append(cf.Branch(
                 cond,
-                BlockTarget(then_block, &[]),
-                BlockTarget(else_block, &[]),
+                BlockTarget::new(then_block),
+                BlockTarget::new(else_block),
                 ctx.unit_ty,
             ));
             ctx.builder.begin_block(then_block, []);
@@ -811,7 +812,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 if let Ok(val) = val {
                     let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
                     ctx.builder
-                        .append(cf.Goto(BlockTarget(after, &[val]), ctx.unit_ty));
+                        .append(cf.Goto(BlockTarget(after, Cow::Borrowed(&[val])), ctx.unit_ty));
                 }
                 if let Some(next) = next_block {
                     ctx.builder.begin_block(next, []);
@@ -831,7 +832,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::While { cond, body } => {
             let cond_block = ctx.builder.create_block();
             ctx.builder
-                .append(cf.Goto(BlockTarget(cond_block, &[]), ctx.unit_ty));
+                .append(cf.Goto(BlockTarget::new(cond_block), ctx.unit_ty));
             ctx.builder.begin_block(cond_block, []);
             let cond = lower(ctx, cond)?;
             let body_block = ctx.builder.create_block();
@@ -842,14 +843,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             });
             ctx.builder.append(cf.Branch(
                 cond,
-                BlockTarget(body_block, &[]),
-                BlockTarget(after_block, &[]),
+                BlockTarget::new(body_block),
+                BlockTarget::new(after_block),
                 ctx.unit_ty,
             ));
             ctx.builder.begin_block(body_block, []);
             if lower(ctx, body).is_ok() {
                 ctx.builder
-                    .append(cf.Goto(BlockTarget(cond_block, &[]), ctx.unit_ty));
+                    .append(cf.Goto(BlockTarget::new(cond_block), ctx.unit_ty));
             }
             ctx.builder.begin_block(after_block, []);
             Ref::UNIT
@@ -858,7 +859,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let loop_start = ctx.builder.create_block();
             let after = ctx.builder.create_block();
             ctx.builder
-                .append(cf.Goto(BlockTarget(loop_start, &[]), ctx.unit_ty));
+                .append(cf.Goto(BlockTarget::new(loop_start), ctx.unit_ty));
             ctx.builder.begin_block(loop_start, []);
             let val = lower(ctx, val)?;
             lower_pattern(ctx, pat, val, Some(after))?;
@@ -870,7 +871,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             ctx.control_flow_stack.pop();
             if body_value.is_ok() {
                 ctx.builder
-                    .append(cf.Goto(BlockTarget(loop_start, &[]), ctx.unit_ty));
+                    .append(cf.Goto(BlockTarget::new(loop_start), ctx.unit_ty));
             }
             ctx.builder.begin_block(after, []);
             Ref::UNIT
@@ -1016,7 +1017,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 entry.loop_begin
             };
             ctx.builder
-                .append(cf.Goto(BlockTarget(target, &[]), ctx.unit_ty));
+                .append(cf.Goto(BlockTarget::new(target), ctx.unit_ty));
             return Err(NoReturn);
         }
     };
@@ -1081,8 +1082,8 @@ fn lower_pattern(
         let on_match = ctx.builder.create_block();
         ctx.builder.append(cf.Branch(
             cond,
-            BlockTarget(on_match, &[]),
-            BlockTarget(on_mismatch, &[]),
+            BlockTarget::new(on_match),
+            BlockTarget::new(on_mismatch),
             ctx.unit_ty,
         ));
         ctx.builder.begin_block(on_match, []);
@@ -1131,8 +1132,8 @@ fn lower_pattern(
             };
             ctx.builder.append(cf.Branch(
                 value,
-                BlockTarget(on_true, &[]),
-                BlockTarget(on_false, &[]),
+                BlockTarget::new(on_true),
+                BlockTarget::new(on_false),
                 ctx.unit_ty,
             ));
             ctx.builder.begin_block(on_match, []);
@@ -1346,7 +1347,7 @@ fn lower_if_else_branches(
             let block = ctx.builder.current_block().unwrap();
             let after_block = after_block(ctx);
             ctx.builder
-                .append(cf.Goto(BlockTarget(after_block, &[val]), ctx.unit_ty));
+                .append(cf.Goto(BlockTarget(after_block, Cow::Borrowed(&[val])), ctx.unit_ty));
             block
         })
     };

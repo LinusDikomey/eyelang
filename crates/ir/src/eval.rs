@@ -347,6 +347,7 @@ pub fn eval<E: EvalEnvironment>(
                     Val::Int((binop.fold)(l, r))
                 } else {
                     match typed_inst.op() {
+                        I::Shl | I::Shr | I::Rol | I::Ror => unreachable!("handled by int_binop"),
                         I::Int => {
                             let i: u64 = ir.args(inst, env.env());
                             Val::Int(i)
@@ -442,38 +443,6 @@ pub fn eval<E: EvalEnvironment>(
                             let l = get_int_ref(&values, l);
                             let r = get_int_ref(&values, r);
                             Val::Int(l ^ r)
-                        }
-                        I::Rol => {
-                            let (l, r) = ir.args(inst, env.env());
-                            let l = get_int_ref(&values, l);
-                            let r = get_int_ref(&values, r) as u32;
-                            Val::Int(match must_primitive(types[inst.ty()]) {
-                                Primitive::I1 => l,
-                                Primitive::I8 | Primitive::U8 => (l as u8).rotate_left(r).into(),
-                                Primitive::I16 | Primitive::U16 => (l as u16).rotate_left(r).into(),
-                                Primitive::I32 | Primitive::U32 => (l as u32).rotate_left(r).into(),
-                                Primitive::I64 | Primitive::U64 => l.rotate_left(r),
-                                Primitive::I128 | Primitive::U128 => todo!(),
-                                _ => invalid_ty(types[inst.ty()]),
-                            })
-                        }
-                        I::Ror => {
-                            let (l, r) = ir.args(inst, env.env());
-                            let l = get_int_ref(&values, l);
-                            let r = get_int_ref(&values, r) as u32;
-                            Val::Int(match must_primitive(types[inst.ty()]) {
-                                Primitive::I1 => l,
-                                Primitive::I8 | Primitive::U8 => (l as u8).rotate_right(r).into(),
-                                Primitive::I16 | Primitive::U16 => {
-                                    (l as u16).rotate_right(r).into()
-                                }
-                                Primitive::I32 | Primitive::U32 => {
-                                    (l as u32).rotate_right(r).into()
-                                }
-                                Primitive::I64 | Primitive::U64 => l.rotate_right(r),
-                                Primitive::I128 | Primitive::U128 => todo!(),
-                                _ => invalid_ty(types[inst.ty()]),
-                            })
                         }
                         I::CastInt => {
                             let r = ir.args(inst, env.env());
@@ -653,12 +622,8 @@ pub fn eval<E: EvalEnvironment>(
                             panic!("tuple type expected for MemberPtr");
                         };
                         let ptr = values.load_ptr(ptr);
-                        let offset = crate::offset_in_tuple(
-                            elem_types,
-                            i as u32,
-                            types,
-                            env.env().primitives(),
-                        );
+                        let offset =
+                            crate::offset_in_tuple(elem_types, i, types, env.env().primitives());
                         Val::Ptr(ptr.add_offset(offset.try_into().unwrap())?)
                     }
                     I::Offset => {
@@ -702,7 +667,7 @@ pub fn eval<E: EvalEnvironment>(
                                 return Err(Error::InfiniteLoop);
                             }
                         }
-                        values.copy_args(info, args, ir, types);
+                        values.copy_args(info, &args, ir, types);
                         pc = target_pos;
                         continue;
                     }
@@ -718,7 +683,7 @@ pub fn eval<E: EvalEnvironment>(
                                 return Err(Error::InfiniteLoop);
                             }
                         }
-                        values.copy_args(info, args, ir, types);
+                        values.copy_args(info, &args, ir, types);
                         pc = target_pos;
                         continue;
                     }

@@ -1,11 +1,9 @@
-use std::{cmp::min, fmt};
-
-use dmap::{DHashMap, DHashSet};
+use std::{borrow::Cow, cmp::min, fmt};
 
 use crate::{
     Argument, Bitmap, BlockGraph, BlockId, Environment, Function, FunctionIr, LocalFunctionId,
-    Module, ModuleId, ModuleOf, Primitive, Ref, TypeId, builder::write_args, dialect::Cf,
-    modify::IrModify, pipeline::ModulePass, rewrite::RenameTable,
+    Module, ModuleId, ModuleOf, Primitive, Ref, TypeId, dialect::Cf, modify::IrModify,
+    pipeline::ModulePass, rewrite::RenameTable,
 };
 
 pub struct Inline {
@@ -94,7 +92,8 @@ impl Inline {
                     ir.replace(
                         env,
                         call_ref,
-                        self.cf.Goto(crate::BlockTarget(new_block, &args), unit_ty),
+                        self.cf
+                            .Goto(crate::BlockTarget(new_block, args.into()), unit_ty),
                     );
                 }
                 for (arg, renamed) in callee_ir.get_block_args(block).iter().zip(args.iter()) {
@@ -102,14 +101,7 @@ impl Inline {
                 }
                 for (r, inst) in callee_ir.get_block(block) {
                     let mut inst = *inst;
-                    renames.visit_inst(
-                        &mut ir,
-                        &mut types,
-                        &callee_ir.extra,
-                        callee_types,
-                        &mut inst,
-                        env,
-                    );
+                    renames.visit_inst(&mut ir, &callee_ir.extra, &mut inst, env);
                     let renamed = if inst
                         .as_module(self.cf)
                         .is_some_and(|inst| inst.op() == Cf::Ret)
@@ -119,7 +111,10 @@ impl Inline {
                         ir.add_at_end(
                             env,
                             self.cf.Goto(
-                                crate::BlockTarget(after_call_block, &[return_value]),
+                                crate::BlockTarget(
+                                    after_call_block,
+                                    Cow::Borrowed(&[return_value]),
+                                ),
                                 unit_ty,
                             ),
                         )
@@ -155,15 +150,6 @@ impl ModulePass for Inline {
 fn should_inline(_caller: &IrModify, callee: &FunctionIr) -> bool {
     // TODO: better inlining metric
     callee.refs().count() < 20
-}
-
-fn call_graph(
-    env: &Environment,
-    module: ModuleId,
-) -> DHashMap<LocalFunctionId, DHashSet<LocalFunctionId>> {
-    let mut called: DHashMap<LocalFunctionId, DHashSet<LocalFunctionId>> = dmap::new();
-    for func_id in env[module].function_ids() {}
-    called
 }
 
 fn called(f: &Function, module: ModuleId) -> Box<[LocalFunctionId]> {

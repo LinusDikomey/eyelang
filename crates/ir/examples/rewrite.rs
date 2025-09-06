@@ -45,7 +45,7 @@ ir::rewrite::visitor! {
     ir::rewrite::Rewrite,
     // define all the arguments, this should never be changed and is only needed so the variables
     // can be used in pattern code
-    ir, types, inst, env, _dialects,
+    ir, types, inst, block, env, _dialects,
     _ctx: ();
 
     // specify that we want to use the Arith dialect in the rules

@@ -97,7 +97,7 @@ fn int_size_of_ref(r: Ref, ir: &IrModify, types: &Types) -> IntSize {
 ir::visitor! {
     InstructionSelector,
     Rewrite,
-    ir, types, inst, env, dialects,
+    ir, types, inst, block, env, dialects,
     ctx: IselCtx<'_, X86>;
 
     use builtin: ir::Builtin;

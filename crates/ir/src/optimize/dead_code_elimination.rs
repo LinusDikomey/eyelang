@@ -1,4 +1,6 @@
-use crate::{Argument, BUILTIN, Bitmap, Builtin, Ref, modify::IrModify, pipeline::FunctionPass};
+use crate::{
+    Argument, BUILTIN, Bitmap, BlockTarget, Builtin, Ref, modify::IrModify, pipeline::FunctionPass,
+};
 
 #[derive(Debug)]
 pub struct DeadCodeElimination;
@@ -32,12 +34,25 @@ impl FunctionPass for DeadCodeElimination {
                     if alive_insts.get(r.idx()) {
                         let args = ir.args_iter(inst, env);
                         for arg in args {
-                            if let Argument::Ref(arg) = arg
-                                && let Some(i) = arg.into_ref()
-                                && !alive_insts.get(i as usize)
-                            {
-                                changed = true;
-                                alive_insts.set(i as usize, true);
+                            match arg {
+                                Argument::Ref(r) => {
+                                    if let Some(i) = r.into_ref()
+                                        && !alive_insts.get(i as usize)
+                                    {
+                                        changed = true;
+                                        alive_insts.set(i as usize, true);
+                                    }
+                                }
+                                Argument::BlockTarget(BlockTarget(_, args)) => {
+                                    for arg in args.iter() {
+                                        let Some(i) = arg.into_ref() else { continue };
+                                        if !alive_insts.get(i as usize) {
+                                            changed = true;
+                                            alive_insts.set(i as usize, true);
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }

@@ -70,6 +70,8 @@ instructions! {
     GE  l: Ref r: Ref !pure;
 
     Xor l: Ref r: Ref !pure;
+    Shl l: Ref r: Ref !pure;
+    Shr l: Ref r: Ref !pure;
     Rol l: Ref r: Ref !pure;
     Ror l: Ref r: Ref !pure;
 
@@ -151,8 +153,11 @@ impl Arith {
                 .commutative()
                 .associative()
                 .identity(0),
-            Arith::Rol => ArithIntBinOp::new(|a, b| a.wrapping_shl(b as u32)).rhs_identity(0),
-            Arith::Ror => ArithIntBinOp::new(|a, b| a.wrapping_shr(b as u32)).rhs_identity(0),
+            Arith::Shl => ArithIntBinOp::new(|a, b| a.wrapping_shl(b as u32)).rhs_identity(0),
+            Arith::Shr => ArithIntBinOp::new(|a, b| a.wrapping_shr(b as u32)).rhs_identity(0),
+            // TODO: need to do rotate on the correct integer width
+            Arith::Rol => ArithIntBinOp::new(|a, b| a.rotate_left(b as u32)).rhs_identity(0),
+            Arith::Ror => ArithIntBinOp::new(|a, b| a.rotate_right(b as u32)).rhs_identity(0),
         })
     }
 }
@@ -188,11 +193,6 @@ impl ArithIntBinOp {
     fn identity(mut self, identity: u64) -> Self {
         self.lhs_identity = Some(identity);
         self.rhs_identity = Some(identity);
-        self
-    }
-
-    fn lhs_identity(mut self, identity: u64) -> Self {
-        self.lhs_identity = Some(identity);
         self
     }
 

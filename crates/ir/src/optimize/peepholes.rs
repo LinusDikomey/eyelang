@@ -1,8 +1,9 @@
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use crate::{
-    BUILTIN, BlockId, Builtin, Environment, FunctionIr, Instruction, Ref, Types,
-    dialect::{Arith, Cf, Mem, Tuple},
+    BUILTIN, BlockId, BlockTarget, Builtin, Environment, FunctionIr, Instruction, Primitive, Ref,
+    Type, Types,
+    dialect::{Arith, Cf, Mem},
     modify::IrModify,
     pipeline::FunctionPass,
     rewrite::{self, IntoVisit, LinearRewriteOrder, Rewrite},
@@ -50,6 +51,11 @@ impl FunctionPass for Peepholes {
 }
 struct PeepholeCtx {
     use_counts: UseCounts,
+}
+impl PeepholeCtx {
+    fn single_use(&self, r: Ref) -> bool {
+        self.use_counts[r] == 1
+    }
 }
 impl rewrite::RewriteCtx for PeepholeCtx {}
 
@@ -145,19 +151,111 @@ fn pre_peephole(
     None
 }
 
+fn exact_log2(x: u64) -> Option<u32> {
+    x.is_power_of_two().then(|| x.ilog2())
+}
+
+fn is_unsigned_int(ty: Type) -> bool {
+    let Type::Primitive(p) = ty else {
+        return false;
+    };
+    Primitive::try_from(p).unwrap().is_unsigned_int()
+}
+
+fn is_int(ty: Type) -> bool {
+    let Type::Primitive(p) = ty else {
+        return false;
+    };
+    Primitive::try_from(p).unwrap().is_int()
+}
+
+fn is_i1(ty: Type) -> bool {
+    let Type::Primitive(p) = ty else {
+        return false;
+    };
+    Primitive::try_from(p).unwrap() == Primitive::I1
+}
+
 rewrite::visitor! {
     Peephole,
     Rewrite,
-    ir, types, inst, env, _dialects,
-    _ctx: PeepholeCtx;
+    ir, types, inst, block, env, _dialects,
+    ctx: PeepholeCtx;
 
     use builtin: crate::Builtin;
     use arith: Arith;
-    use tuple: Tuple;
+    // use tuple: Tuple;
     use mem: Mem;
     use cf: Cf;
 
     patterns:
         (%r = arith.Add (builtin.Undef) __) => builtin.Undef(ir.get_ref_ty(r));
         (%r = arith.Add __ (builtin.Undef)) => builtin.Undef(ir.get_ref_ty(r));
+        (%r = arith.Sub (builtin.Undef) __) => builtin.Undef(ir.get_ref_ty(r));
+        (%r = arith.Sub __ (builtin.Undef)) => builtin.Undef(ir.get_ref_ty(r));
+
+        (arith.Add (arith.Sub a x) y) if x == y => a;
+        (arith.Sub(arith.Add a x) y) if x == y => a;
+
+        // Mul(x, 2^n) -> x << n
+        (%r = arith.Mul x (arith.Int(#c))) if is_int(types[ir.get_ref_ty(r)]) => {
+            let ty = ir.get_ref_ty(r);
+            let base = exact_log2(c)?;
+            let base = ir.add_before(env, r, arith.Int(base.into(), ty));
+            arith.Shl(x, base, ty)
+        };
+
+        // Div(x, 2^n) -> x >> n
+        (%r = arith.Div x (arith.Int(#c))) if is_unsigned_int(types[ir.get_ref_ty(r)]) => {
+            let ty = ir.get_ref_ty(r);
+            let base = exact_log2(c)?;
+            let base = ir.add_before(env, r, arith.Int(base.into(), ty));
+            arith.Shr(x, base, ty)
+        };
+
+        (arith.Not (arith.Not a)) => a;
+        (%r = arith.Not (arith.Int 0)) => arith.Int(1, ir.get_ref_ty(r));
+        (%r = arith.Not (arith.Int 1)) => arith.Int(0, ir.get_ref_ty(r));
+
+        (%r = arith.Not (%cmp = arith.LT a b)) if ctx.single_use(cmp) => {
+            arith.GE(a, b, ir.get_ref_ty(r))
+        };
+        (%r = arith.Not (%cmp = arith.LE a b)) if ctx.single_use(cmp) => {
+            arith.GT(a, b, ir.get_ref_ty(r))
+        };
+        (%r = arith.Not (%cmp = arith.GT a b)) if ctx.single_use(cmp) => {
+            arith.LE(a, b, ir.get_ref_ty(r))
+        };
+        (%r = arith.Not (%cmp = arith.GE a b)) if ctx.single_use(cmp) => {
+            arith.LT(a, b, ir.get_ref_ty(r))
+        };
+        (%r = arith.Not (%cmp = arith.Eq a b)) if ctx.single_use(cmp) => {
+            arith.NE(a, b, ir.get_ref_ty(r))
+        };
+        (%r = arith.Not (%cmp = arith.NE a b)) if ctx.single_use(cmp) => {
+            arith.Eq(a, b, ir.get_ref_ty(r))
+        };
+
+        // TODO: also load other types than I1
+        (%r = mem.Load (mem.Global (global g))) if env[g].readonly && is_i1(types[ir.get_ref_ty(r)]) => {
+            let v = &env[g].value;
+            if v.is_empty() {
+                builtin.Undef(ir.get_ref_ty(r)).into_visit(ir, env, block)?
+            } else {
+                let r = if v[0] != 0 { Ref::TRUE } else { Ref::FALSE };
+                Rewrite::Rename(r)
+            }
+        };
+
+        (%r = cf.Branch cond (@t t_args) (@f f_args)) => {
+            let (taken, taken_args) = if cond == Ref::TRUE {
+                (t, t_args)
+            } else if cond == Ref::FALSE {
+                (f, f_args)
+            } else {
+                return None;
+            };
+            let taken_args = taken_args.to_vec();
+            cf.Goto(BlockTarget(taken, Cow::Owned(taken_args)), ir.get_ref_ty(r))
+        };
 }

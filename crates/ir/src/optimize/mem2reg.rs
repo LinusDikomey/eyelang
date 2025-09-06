@@ -301,14 +301,14 @@ mod tests {
         let a = builder.append(mem.Decl(i32, ptr));
         let five = builder.append(arith.Int(5, i32));
         builder.append(mem.Store(a, five, unit));
-        builder.append(cf.Branch(Ref::TRUE, BlockTarget(b1, &[]), BlockTarget(b3, &[]), unit));
+        builder.append(cf.Branch(Ref::TRUE, BlockTarget::new(b1), BlockTarget::new(b3), unit));
 
         builder.begin_block(b1, []);
         let a_load = builder.append(mem.Load(a, i32));
         let one = builder.append(arith.Int(1, i32));
         let plus1 = builder.append(arith.Add(a_load, one, i32));
         builder.append(mem.Store(a, plus1, unit));
-        builder.append(cf.Goto(BlockTarget(b2, &[]), unit));
+        builder.append(cf.Goto(BlockTarget::new(b2), unit));
 
         builder.begin_block(b2, []);
         let a_load = builder.append(mem.Load(a, i32));
@@ -316,12 +316,12 @@ mod tests {
         builder.append(mem.Store(a, times2, unit));
 
         let cond = Ref::TRUE;
-        builder.append(cf.Branch(cond, BlockTarget(b1, &[]), BlockTarget(b4, &[]), unit));
+        builder.append(cf.Branch(cond, BlockTarget::new(b1), BlockTarget::new(b4), unit));
 
         builder.begin_block(b3, []);
         let two = builder.append(arith.Int(2, i32));
         builder.append(mem.Store(a, two, unit));
-        builder.append(cf.Goto(BlockTarget(b4, &[]), unit));
+        builder.append(cf.Goto(BlockTarget::new(b4), unit));
 
         builder.begin_block(b4, []);
         let ret = builder.append(mem.Load(a, i32));

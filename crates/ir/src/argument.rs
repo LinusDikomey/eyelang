@@ -2,7 +2,7 @@ use crate::{
     ArgsIter, BlockId, BlockTarget, FunctionId, GlobalId, MCReg, Parameter, Ref, TypeId, Usage,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Argument<'a> {
     Ref(Ref),
     BlockId(BlockId),

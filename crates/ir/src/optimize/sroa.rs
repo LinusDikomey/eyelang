@@ -136,7 +136,7 @@ impl FunctionPass for SROA {
                             }
                         }
                         Argument::BlockTarget(BlockTarget(_, args)) => {
-                            for &r in args {
+                            for &r in args.iter() {
                                 if let Some((decl, _)) =
                                     self.find_decl_offset_of_ptr(&ir, types, env, r)
                                 {

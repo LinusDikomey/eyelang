@@ -516,6 +516,10 @@ impl IrModify {
         };
     }
 
+    pub fn delete(&mut self, r: Ref) {
+        self.replace_with(r, Ref::UNIT);
+    }
+
     pub fn replace<'r>(
         &mut self,
         env: &Environment,

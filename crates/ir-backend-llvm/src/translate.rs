@@ -496,6 +496,30 @@ unsafe fn build_func(
                             NONE,
                         )
                     }
+                    I::Shl => {
+                        let (l, r) = bin_op();
+                        core::LLVMBuildShl(
+                            builder,
+                            get_ref(&instructions, l).unwrap(),
+                            get_ref(&instructions, r).unwrap(),
+                            NONE,
+                        )
+                    }
+                    I::Shr => {
+                        let (l, r) = bin_op();
+                        let op = if is_unsigned_int(types[inst.ty()]) {
+                            core::LLVMBuildLShr
+                        } else {
+                            debug_assert!(is_signed_int(types[inst.ty()]));
+                            core::LLVMBuildAShr
+                        };
+                        op(
+                            builder,
+                            get_ref(&instructions, l).unwrap(),
+                            get_ref(&instructions, r).unwrap(),
+                            NONE,
+                        )
+                    }
                     I::Rol | I::Ror => {
                         let (l, r) = bin_op();
                         let ((Some(l), l_ty), Some(r)) = (
@@ -593,19 +617,23 @@ unsafe fn build_func(
                 match inst.op() {
                     I::Goto => {
                         let target: BlockTarget = ir.typed_args(&inst);
+                        let target_block = target.0;
                         handle_successor(ir, &instructions, target);
-                        LLVMBuildBr(builder, blocks[target.0.idx()])
+                        LLVMBuildBr(builder, blocks[target_block.idx()])
                     }
                     I::Branch => {
-                        let (cond, on_true, on_false) = ir.typed_args(&inst);
+                        let (cond, on_true, on_false): (Ref, BlockTarget, BlockTarget) =
+                            ir.typed_args(&inst);
                         let cond = get_ref(&instructions, cond).unwrap();
+                        let on_true_block = on_true.0;
+                        let on_false_block = on_false.0;
                         handle_successor(ir, &instructions, on_true);
                         handle_successor(ir, &instructions, on_false);
                         LLVMBuildCondBr(
                             builder,
                             cond,
-                            blocks[on_true.0.idx()],
-                            blocks[on_false.0.idx()],
+                            blocks[on_true_block.idx()],
+                            blocks[on_false_block.idx()],
                         )
                     }
                     I::Ret => {

@@ -106,7 +106,7 @@ fn parse_args<'s>(
                     Argument::TypeId(ir.types.add(Type::Primitive(p.into())))
                 } else {
                     let id = *blocks.entry(s).or_insert_with(|| ir.create_block());
-                    Argument::BlockTarget(crate::BlockTarget(id, &[]))
+                    Argument::BlockTarget(crate::BlockTarget::new(id))
                 }
             }
             Token::ColonColon => {

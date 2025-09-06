@@ -35,7 +35,7 @@ impl UseCounts {
                         }
                     }
                     crate::Argument::BlockTarget(crate::BlockTarget(_block, args)) => {
-                        for r in args {
+                        for r in args.iter() {
                             if let Some(r) = r.into_ref() {
                                 use_counts[r as usize] += 1;
                             }

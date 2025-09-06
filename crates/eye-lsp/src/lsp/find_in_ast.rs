@@ -16,7 +16,9 @@ pub enum FoundType {
     VarRef,
     Literal,
     EnumLiteral,
+    #[allow(unused)] // TODO: remove unused
     Primitive(ast::Primitive),
+    #[allow(unused)] // TODO: remove unused
     Path(IdentPath),
     TypePlaceholder,
     Underscore,

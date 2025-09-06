@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     fmt, iter,
     marker::PhantomData,
     mem::transmute,
@@ -232,8 +233,13 @@ impl BlockId {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct BlockTarget<'a>(pub BlockId, pub &'a [Ref]);
+#[derive(Debug, Clone)]
+pub struct BlockTarget<'a>(pub BlockId, pub Cow<'a, [Ref]>);
+impl BlockTarget<'static> {
+    pub fn new(block: BlockId) -> Self {
+        Self(block, Cow::Borrowed(&[]))
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -947,7 +953,7 @@ impl<'a> Iterator for ArgsIter<'a> {
                 let args: &[u32] = &self.extra[arg_idx as usize..(arg_idx + arg_count) as usize];
                 // SAFETY: Ref is repr(transparent)
                 let args: &[Ref] = unsafe { std::mem::transmute(args) };
-                Argument::BlockTarget(BlockTarget(id, args))
+                Argument::BlockTarget(BlockTarget(id, Cow::Borrowed(args)))
             }
             Parameter::Int => Argument::Int(u64::from(arg()) | (u64::from(arg()) << 32)),
             Parameter::Float => {

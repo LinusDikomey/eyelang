@@ -26,7 +26,7 @@ fn main() {
     let counter = builder.append(arith.Int(10, int_ty));
     builder.append(mem.Store(variable, counter, unit_ty));
     let zero = builder.append(arith.Int(0, int_ty));
-    builder.append(cf.Goto(BlockTarget(loop_body, &[]), unit_ty));
+    builder.append(cf.Goto(BlockTarget::new(loop_body), unit_ty));
 
     builder.begin_block(loop_body, []);
     let loaded = builder.append(mem.Load(variable, int_ty));
@@ -38,8 +38,8 @@ fn main() {
     let is_zero = builder.append(arith.Eq(new_value, zero, i1_ty));
     builder.append(cf.Branch(
         is_zero,
-        BlockTarget(end, &[]),
-        BlockTarget(loop_body, &[]),
+        BlockTarget::new(end),
+        BlockTarget::new(loop_body),
         unit_ty,
     ));
 
