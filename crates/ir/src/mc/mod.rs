@@ -182,7 +182,7 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         self.use_counts[r] -= 1;
         if self.use_counts[r] == 0 && env[ir.get_inst(r).function].flags.pure() {
             // last use of pure instruction was remove, delete it
-            ir.replace_with(r, Ref::UNIT);
+            ir.replace_with(env, r, Ref::UNIT);
         }
     }
 
@@ -212,7 +212,8 @@ impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
             function: Mc::IncomingBlockArgs.id(),
         };
         let start = ir.get_original_block_start(block);
-        ir.add_before(env, start, (f, ((), args), self.unit));
+        let r = ir.add_before(env, start, (f, ((), args), self.unit));
+        eprintln!("Added IncomingBlockArgs: {r} before {start}");
     }
 }
 
@@ -223,6 +224,10 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         } else {
             0
         }
+    }
+
+    pub fn single_use(&self, r: Ref) -> bool {
+        self.use_counts[r] == 1
     }
 
     pub fn create_args_copy(

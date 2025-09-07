@@ -115,10 +115,19 @@ fn pre_peephole(
                 .and_then(|i| (i.inst == Arith::Int).then(|| ir.typed_args(&i)));
             match (l_int, r_int) {
                 (Some(l), Some(r)) => {
-                    return dialects
-                        .arith
-                        .Int((binop.fold)(l, r), inst.ty())
-                        .into_visit(ir, env, block);
+                    let folded = (binop.fold)(l, r);
+                    return if is_i1(ty) {
+                        Some(Rewrite::Rename(if folded != 0 {
+                            Ref::TRUE
+                        } else {
+                            Ref::FALSE
+                        }))
+                    } else {
+                        dialects
+                            .arith
+                            .Int(folded, inst.ty())
+                            .into_visit(ir, env, block)
+                    };
                 }
                 (Some(l), None) => {
                     if binop.commutative {

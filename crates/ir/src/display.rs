@@ -205,7 +205,22 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 }
                 cwrite!(f, ")")?;
             }
-            cwriteln!(f, ":")?;
+            cwrite!(f, ": preds [")?;
+            for (i, &pred) in ir.blocks[block.idx()].preds.iter().enumerate() {
+                if i != 0 {
+                    cwrite!(f, " ")?;
+                }
+                cwrite!(f, "{pred}")?;
+            }
+            cwrite!(f, "] succs [")?;
+            for (i, &succ) in ir.blocks[block.idx()].succs.iter().enumerate() {
+                if i != 0 {
+                    cwrite!(f, " ")?;
+                }
+
+                cwrite!(f, "{succ}")?;
+            }
+            cwriteln!(f, "]")?;
             for (r, inst) in ir.get_block(block) {
                 if inst.module() == builtins::BUILTIN.id()
                     && inst.function() == builtins::Builtin::Nothing.id()

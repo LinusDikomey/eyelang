@@ -139,18 +139,29 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
         ctx.begin_block(env, ir, block);
         for idx in strategy.iterate_block(ir, block) {
             let r = Ref(idx);
-            let Ok(&inst) = ir.try_get_inst(r) else {
-                // instruction was deleted, skip it
-                continue;
-            };
-            let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
-            match rewrite {
-                None => {}
-                Some(Rewrite::Replace(new_inst)) => {
-                    ir.replace_with_inst(r, new_inst);
-                }
-                Some(Rewrite::Rename(new_ref)) => {
-                    ir.replace_with(r, new_ref);
+            loop {
+                let Ok(&inst) = ir.try_get_inst(r) else {
+                    // instruction was deleted, skip it
+                    break;
+                };
+                let mut inst = inst;
+                crate::update_inst_refs(
+                    &mut inst,
+                    env,
+                    &mut ir.ir.extra,
+                    &ir.ir.blocks,
+                    |r| ir.renames.get(&r).copied().unwrap_or(r),
+                    std::convert::identity,
+                );
+                let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
+                match rewrite {
+                    None => break,
+                    Some(Rewrite::Replace(new_inst)) => {
+                        ir.replace_with_inst(env, r, new_inst);
+                    }
+                    Some(Rewrite::Rename(new_ref)) => {
+                        ir.replace_with(env, r, new_ref);
+                    }
                 }
             }
         }

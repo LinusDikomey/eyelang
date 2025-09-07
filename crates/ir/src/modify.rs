@@ -1,15 +1,16 @@
 use dmap::{DHashMap, DHashSet};
 
 use crate::{
-    Argument, BlockId, BlockInfo, BlockTarget, Builtin, Environment, FunctionId, FunctionIr,
-    INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs, TypeId,
-    TypedInstruction, argument, builder::write_args, mc::RegClass,
+    Argument, Bitmap, BlockGraph, BlockId, BlockInfo, BlockTarget, Builtin, Environment,
+    FunctionId, FunctionIr, INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs,
+    TypeId, TypedInstruction, argument, builder::write_args, decode_args, dialect::Cf,
+    mc::RegClass,
 };
 
 pub struct IrModify {
     pub(crate) ir: FunctionIr,
     additional: Vec<AdditionalInst>,
-    renames: DHashMap<Ref, Ref>,
+    pub renames: DHashMap<Ref, Ref>,
 }
 impl IrModify {
     pub fn new(ir: FunctionIr) -> Self {
@@ -30,6 +31,10 @@ impl IrModify {
 
     pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
         self.ir.block_ids()
+    }
+
+    pub fn renames(&self) -> &DHashMap<Ref, Ref> {
+        &self.renames
     }
 
     pub fn get_ref_ty(&self, r: Ref) -> TypeId {
@@ -309,8 +314,8 @@ impl IrModify {
                 })
                 .collect();
             for target in targets {
-                self.ir.blocks[block_id.idx()].succs.insert(target);
-                self.ir.blocks[target.idx()].preds.insert(target);
+                self.ir.blocks[block_id.idx()].succs.push(target);
+                self.ir.blocks[target.idx()].preds.push(target);
             }
         }
         let r = Ref(self.ir.insts.len() as u32);
@@ -319,6 +324,7 @@ impl IrModify {
     }
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
+        let cf = env.get_dialect_module_if_present::<Cf>();
         let Self {
             mut ir,
             additional,
@@ -327,142 +333,176 @@ impl IrModify {
         if additional.is_empty() && rename_map.is_empty() {
             return ir;
         }
+
+        let block_graph = BlockGraph::calculate(&ir, env);
+
         let inst_count = ir.insts.len() + additional.len();
+        // TODO: IrModify could keep track of number of deleted instructions sot that we can always
+        // preallocate perfectly here. Also could know if the ir should still be compressed with no
+        // renames/additional instructions
         let mut insts = Vec::with_capacity(inst_count);
         let new_refs = (ir.insts.len() as u32..).map(Ref);
-        let mut old_insts = ir.insts.into_iter();
+        let old_insts = ir.insts;
         let mut new_insts: Vec<_> = additional.into_iter().zip(new_refs).collect();
         new_insts.sort_by_key(|(inst, _r)| inst.before.0);
-        let mut new_insts = new_insts.into_iter().peekable();
-
-        let mut block_start_indices: DHashMap<u32, BlockId> = ir
-            .blocks
-            .iter()
-            .map(|info| info.idx)
-            .zip((0..).map(BlockId))
-            .collect();
-        debug_assert_eq!(
-            block_start_indices.len(),
-            ir.blocks.len(),
-            "blocks start at the same idx"
-        );
 
         let mut renames: Box<[Ref]> = (0..inst_count as u32).map(Ref).collect();
 
-        let mut current = Ref(0);
-        let mut current_block = BlockId(u32::MAX);
-        loop {
-            let mut is_new = false;
-            let Some((r, inst, before_idx)) = new_insts
-                .next_if(|(add, _)| add.before == current)
-                .map(|(add, r)| {
-                    is_new = true;
-                    (r, add.inst, add.before)
-                })
-                .or_else(|| {
-                    old_insts.next().map(|inst| {
-                        let r = current;
-                        current.0 += 1;
-                        (r, inst, r)
-                    })
-                })
-            else {
-                break;
-            };
-            if let Some(block) = block_start_indices.remove(&before_idx.0) {
-                let info = &mut ir.blocks[block.idx()];
-                current_block = block;
-                info.idx = insts.len() as u32;
-                tracing::debug!(target: "compress", "Starting block {block} at {}, info: {info:?}", insts.len());
-            }
-            if inst
-                .as_module(crate::BUILTIN)
-                .is_some_and(|inst| inst.op() == Builtin::Nothing)
-            {
-                renames[r.idx()] = Ref::UNIT;
-                ir.blocks[current_block.idx()].len -= 1;
+        let mut visited_blocks = Bitmap::new(ir.blocks.len());
+        let mut removed_blocks = DHashSet::default();
+
+        for &current_block in block_graph.postorder().iter().rev() {
+            if visited_blocks.get(current_block.idx()) {
                 continue;
             }
-            if is_new
-                && !inst
-                    .as_module(crate::BUILTIN)
-                    .is_some_and(|inst| inst.op() == Builtin::BlockArg)
-            {
-                ir.blocks[current_block.idx()].len += 1;
+
+            let mut arg_renames: Option<std::vec::IntoIter<Ref>> = None;
+            let mut appending_block = None;
+
+            let mut current_block = current_block;
+            'add_block_contents: loop {
+                visited_blocks.set(current_block.idx(), true);
+                let info = &mut ir.blocks[current_block.idx()];
+                let mut new_idx =
+                    match new_insts.binary_search_by_key(&info.idx, |(add, _)| add.before.0) {
+                        Ok(mut new_idx) => {
+                            while new_idx > 0 && new_insts[new_idx - 1].0.before.0 == info.idx {
+                                new_idx -= 1;
+                            }
+                            new_idx
+                        }
+                        Err(i) => i,
+                    };
+
+                let old_range = (info.idx..info.idx + info.arg_count + info.len).map(Ref);
+                info.idx = insts.len() as u32;
+                for current in old_range {
+                    'before: while let Some((inst, r)) = new_insts.get(new_idx)
+                        && inst.before == current
+                    {
+                        debug_assert!(
+                            !inst
+                                .inst
+                                .as_module(crate::BUILTIN)
+                                .is_some_and(|inst| inst.op() == Builtin::Nothing),
+                            "Nothing in additional shouldn't happen"
+                        );
+                        new_idx += 1;
+                        if inst
+                            .inst
+                            .as_module(crate::BUILTIN)
+                            .is_some_and(|inst| inst.op() == Builtin::BlockArg)
+                        {
+                            if let Some(renamed) =
+                                arg_renames.as_mut().and_then(|renames| renames.next())
+                            {
+                                renames[r.idx()] = renamed;
+                                continue 'before;
+                            }
+                        } else {
+                            ir.blocks[appending_block.unwrap_or(current_block).idx()].len += 1;
+                        }
+                        let new_r = Ref(insts.len() as _);
+                        renames[r.idx()] = new_r;
+                        insts.push(inst.inst);
+                    }
+
+                    let inst = &old_insts[current.idx()];
+                    if inst
+                        .as_module(crate::BUILTIN)
+                        .is_some_and(|inst| inst.op() == Builtin::Nothing)
+                    {
+                        renames[current.idx()] = Ref::UNIT;
+                        if appending_block.is_none() {
+                            ir.blocks[current_block.idx()].len -= 1;
+                        }
+                        continue;
+                    } else if let Some(cf) = cf
+                        && let Some(cf_inst) = inst.as_module(cf)
+                        && cf_inst.op() == Cf::Goto
+                    {
+                        let params = cf_inst.inst.params();
+                        let varargs = cf_inst.inst.varargs();
+                        let mut args_iter =
+                            decode_args(&inst.args, params, varargs, &ir.blocks, &ir.extra);
+                        let Some(Argument::BlockTarget(BlockTarget(target, args))) =
+                            args_iter.next()
+                        else {
+                            unreachable!()
+                        };
+                        debug_assert!(args_iter.next().is_none());
+                        let target_info = &mut ir.blocks[target.idx()];
+                        let compress_trivial_gotos = false;
+                        if compress_trivial_gotos && target_info.preds.len() == 1 {
+                            // Goto whose target has only a single predecessor:
+                            // combine into one block
+                            debug_assert_eq!(current_block, *target_info.preds.first().unwrap());
+                            debug_assert_eq!(args.len(), target_info.arg_count as usize);
+                            debug_assert!(!visited_blocks.get(target.idx()), "RPO is wrong");
+
+                            // successors of the next block become successors of the current block
+                            let succs = std::mem::take(&mut target_info.succs);
+                            let appending = appending_block.unwrap_or(current_block);
+                            let info = &mut ir.blocks[appending.idx()];
+                            debug_assert_eq!(info.succs.len(), 1);
+                            debug_assert_eq!(info.succs[0], target);
+                            info.succs = succs;
+
+                            removed_blocks.insert(target);
+
+                            // trivial goto is removed
+                            ir.blocks[appending_block.unwrap_or(current_block).idx()].len -= 1;
+
+                            // continue appending the successor to the current block
+                            arg_renames = Some(args.into_owned().into_iter());
+                            if appending_block.is_none() {
+                                appending_block = Some(current_block);
+                            }
+                            current_block = target;
+                            continue 'add_block_contents;
+                        }
+                    }
+                    let new_r = Ref(insts.len() as _);
+                    renames[current.idx()] = new_r;
+                    if let Some(appending) = appending_block {
+                        ir.blocks[appending.idx()].len += 1;
+                    }
+                    insts.push(*inst);
+                }
+                break 'add_block_contents;
             }
-            let new_r = Ref(insts.len() as _);
-            renames[r.idx()] = new_r;
-            tracing::debug!(target: "compress", "Renamed due to new position {r} -> {new_r}");
-            insts.push(inst);
         }
+        visited_blocks.visit_unset_bits(|i| {
+            removed_blocks.insert(BlockId(i as _));
+        });
 
         let renamed = |r: Ref| {
             let r = rename_map.get(&r).copied().unwrap_or(r);
             if r.is_ref() { renames[r.idx()] } else { r }
         };
 
+        let mut renamed_blocks = DHashMap::default();
+        for &removed in &removed_blocks {
+            while removed_blocks.contains(&BlockId(ir.blocks.len() as u32 - 1)) {
+                ir.blocks.pop();
+                continue;
+            }
+            if removed.idx() >= ir.blocks.len() {
+                continue;
+            }
+            ir.blocks.swap_remove(removed.idx());
+            renamed_blocks.insert(BlockId(ir.blocks.len() as u32), removed);
+        }
+
         for inst in &mut insts {
-            let func = &env[inst.function];
-            let slot_count: usize = func.params().iter().map(|p| p.slot_count()).sum();
-            if slot_count > INLINE_ARGS || func.varargs().is_some() {
-                let mut idx = inst.args[0] as usize;
-                let mut visit_param = |param| match param {
-                    Parameter::Ref | Parameter::RefOf(_) => {
-                        ir.extra[idx] = renamed(Ref(ir.extra[idx])).0;
-                        idx += 1;
-                    }
-                    Parameter::BlockTarget => {
-                        let target = BlockId(ir.extra[idx]);
-                        let arg_idx = ir.extra[idx + 1];
-                        idx += 2;
-                        let arg_count = ir.blocks[target.idx()].arg_count;
-                        for i in arg_idx..arg_idx + arg_count {
-                            ir.extra[i as usize] = renamed(Ref(ir.extra[i as usize])).0;
-                        }
-                    }
-                    Parameter::BlockId
-                    | Parameter::Int
-                    | Parameter::Float
-                    | Parameter::Int32
-                    | Parameter::TypeId
-                    | Parameter::FunctionId
-                    | Parameter::GlobalId
-                    | Parameter::MCReg(_) => idx += param.slot_count(),
-                };
-                for &param in func.params() {
-                    visit_param(param);
-                }
-                if let Some(param) = func.varargs {
-                    for _ in 0..inst.args[1] {
-                        visit_param(param);
-                    }
-                }
-            } else {
-                let mut idx = 0;
-                for param in func.params() {
-                    match param {
-                        Parameter::Ref | Parameter::RefOf(_) => {
-                            inst.args[idx] = renamed(Ref(inst.args[idx])).0;
-                            idx += 1;
-                        }
-                        Parameter::BlockTarget => {
-                            let target = BlockId(inst.args[idx]);
-                            let args_idx = inst.args[idx + 1];
-                            idx += 2;
-                            let arg_count = ir.blocks[target.idx()].arg_count;
-                            for i in args_idx..args_idx + arg_count {
-                                ir.extra[i as usize] = renamed(Ref(ir.extra[i as usize])).0;
-                            }
-                        }
-                        Parameter::BlockId
-                        | Parameter::Int
-                        | Parameter::Float
-                        | Parameter::Int32
-                        | Parameter::TypeId
-                        | Parameter::FunctionId
-                        | Parameter::GlobalId
-                        | Parameter::MCReg(_) => idx += param.slot_count(),
-                    }
+            crate::update_inst_refs(inst, env, &mut ir.extra, &ir.blocks, renamed, |block| {
+                renamed_blocks.get(&block).copied().unwrap_or(block)
+            });
+        }
+        if !renamed_blocks.is_empty() {
+            for block in &mut ir.blocks {
+                for b in block.succs.iter_mut().chain(block.preds.iter_mut()) {
+                    *b = renamed_blocks.get(b).copied().unwrap_or(*b);
                 }
             }
         }
@@ -493,8 +533,8 @@ impl IrModify {
             arg_count,
             idx,
             len: 0,
-            preds: dmap::new_set(),
-            succs: dmap::new_set(),
+            preds: Vec::new(),
+            succs: Vec::new(),
         });
         let arg_refs = Refs {
             idx,
@@ -503,7 +543,9 @@ impl IrModify {
         (id, arg_refs)
     }
 
-    pub fn replace_with(&mut self, r: Ref, new: Ref) {
+    pub fn replace_with(&mut self, env: &Environment, r: Ref, new: Ref) {
+        let block = self.inst_block(r);
+        self.on_inst_remove(env, r, block);
         self.renames.insert(r, new);
         let inst = if (r.0 as usize) < self.ir.insts.len() {
             &mut self.ir.insts[r.0 as usize]
@@ -516,8 +558,27 @@ impl IrModify {
         };
     }
 
-    pub fn delete(&mut self, r: Ref) {
-        self.replace_with(r, Ref::UNIT);
+    pub fn delete(&mut self, env: &Environment, r: Ref) {
+        self.replace_with(env, r, Ref::UNIT);
+    }
+
+    pub fn inst_block(&self, r: Ref) -> BlockId {
+        let r = if r.idx() < self.ir.insts.len() {
+            r
+        } else {
+            self.additional[r.idx()].before
+        };
+        // PERF: iterating blocks every time is bad, avoid this maybe with a BTreeMap in IrModify
+        BlockId(
+            self.ir
+                .blocks
+                .iter()
+                .position(|info| {
+                    // FIXME: arg_count does not work as the offset after adding block args
+                    (info.idx..info.idx + info.arg_count + info.len).contains(&r.0)
+                })
+                .expect("no block found") as _,
+        )
     }
 
     pub fn replace<'r>(
@@ -526,17 +587,7 @@ impl IrModify {
         r: Ref,
         (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
     ) {
-        // PERF: iterating blocks every time is bad, somehow avoid this
-        let block = BlockId(
-            self.ir
-                .blocks
-                .iter()
-                .position(|info| {
-                    let i = info.idx + info.arg_count;
-                    (i..i + info.len).contains(&r.0)
-                })
-                .expect("no block found") as _,
-        );
+        let block = self.inst_block(r);
         let def = &env[function];
         let args = write_args(
             &mut self.ir.extra,
@@ -546,14 +597,45 @@ impl IrModify {
             def.varargs,
             args,
         );
-        self.replace_with_inst(r, Instruction { function, args, ty });
+        self.replace_with_inst(env, r, Instruction { function, args, ty });
     }
 
-    pub fn replace_with_inst(&mut self, r: Ref, new_inst: Instruction) {
+    pub fn replace_with_inst(&mut self, env: &Environment, r: Ref, new_inst: Instruction) {
+        let block = self.inst_block(r);
+        self.on_inst_remove(env, r, block);
         if r.idx() < self.ir.insts.len() {
             self.ir.insts[r.idx()] = new_inst;
         } else {
             self.additional[r.idx() - self.ir.insts.len()].inst = new_inst;
+        }
+    }
+
+    fn on_inst_remove(&mut self, env: &Environment, r: Ref, block: BlockId) {
+        let mut succs = std::mem::take(&mut self.ir.blocks[block.idx()].succs);
+        let inst = self.get_inst(r);
+        let def = &env[inst.function];
+        let args = inst.args_inner(def.params(), def.varargs(), &self.ir.blocks, &self.ir.extra);
+        let mut removed = Vec::new();
+        for arg in args {
+            if let Argument::BlockTarget(BlockTarget(target, _)) = arg {
+                let i = succs
+                    .iter()
+                    .position(|&succ| succ == target)
+                    .expect("Successor was not present");
+                succs.swap_remove(i);
+                removed.push(target);
+            }
+        }
+        debug_assert!(self.ir.blocks[block.idx()].succs.is_empty());
+        self.ir.blocks[block.idx()].succs = succs;
+        for target in removed {
+            let info = &mut self.ir.blocks[target.idx()];
+            let i = info
+                .preds
+                .iter()
+                .position(|&pred| pred == block)
+                .expect("Predecessor was not present");
+            info.preds.swap_remove(i);
         }
     }
 
@@ -586,7 +668,7 @@ impl IrModify {
         &'a self,
         inst: &'a Instruction,
         env: &'a Environment,
-    ) -> crate::ArgsIter<'a> {
+    ) -> crate::ArgsIter<'a, 'a> {
         self.ir.args_iter(inst, env)
     }
 
@@ -618,7 +700,7 @@ impl IrModify {
         };
         let new_block_idx = info.idx + info.arg_count + split_offset;
         let succs = if is_end {
-            DHashSet::default()
+            Vec::new()
         } else {
             std::mem::take(&mut info.succs)
         };
@@ -627,7 +709,7 @@ impl IrModify {
             arg_count: 0,
             idx: new_block_idx,
             len: new_block_len,
-            preds: DHashSet::default(),
+            preds: Vec::new(),
             succs,
         });
         id

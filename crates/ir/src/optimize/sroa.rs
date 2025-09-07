@@ -306,18 +306,18 @@ impl FunctionPass for SROA {
                 }
             }
             for r in uses {
-                ir.replace_with(r, Ref::UNIT);
+                ir.replace_with(env, r, Ref::UNIT);
             }
             // replace aggregate loads with the final tuple values
             for (location, tuple) in load_element_tuples {
-                ir.replace_with(location, tuple);
+                ir.replace_with(env, location, tuple);
             }
             // delete all old stores that weren't replaced immediately
             for r in stores_to_delete {
-                ir.replace_with(r, Ref::UNIT);
+                ir.replace_with(env, r, Ref::UNIT);
             }
             // delete original Decl
-            ir.replace_with(decl, Ref::UNIT);
+            ir.replace_with(env, decl, Ref::UNIT);
         }
 
         (ir.finish_and_compress(env), Some(types))

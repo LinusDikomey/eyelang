@@ -65,7 +65,7 @@ impl Inline {
                 .expect("Function missing return type");
             return_ty.0 += old_types_offset;
             let (return_val, _) = ir.add_block_arg(env, after_call_block, return_ty);
-            ir.replace_with(call_ref, return_val);
+            ir.replace_with(env, call_ref, return_val);
 
             // reverse postorder ensures defs are visited before uses
             for &block in graph.postorder().iter().rev() {

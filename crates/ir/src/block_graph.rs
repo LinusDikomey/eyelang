@@ -1,7 +1,5 @@
 use std::{collections::HashSet, hash::Hash};
 
-use dmap::DHashSet;
-
 use crate::{Bitmap, BlockId};
 
 pub trait Block: Copy + Hash + Eq + core::fmt::Debug {
@@ -27,7 +25,11 @@ pub trait Blocks {
     type Env;
 
     fn block_count(&self) -> u32;
-    fn successors(&self, env: &Self::Env, block: Self::Block) -> &DHashSet<Self::Block>;
+    fn successors<'a>(
+        &'a self,
+        env: &'a Self::Env,
+        block: Self::Block,
+    ) -> impl Iterator<Item = Self::Block> + Clone + use<'a, Self>;
 }
 
 pub struct BlockGraph<B: Blocks> {
@@ -140,12 +142,12 @@ fn calculate_postorder_and_preds<B: Blocks>(
             Event::Enter => {
                 stack.push((Event::Exit, block));
                 let succs = ir.successors(env, block);
-                for &succ in succs.iter() {
+                for succ in succs.clone() {
                     preds[succ.idx()].insert(block);
                 }
                 // suggestion doesn't work because seen is borrowed twice
                 #[allow(clippy::filter_map_bool_then)]
-                stack.extend(succs.iter().filter_map(|&block| {
+                stack.extend(succs.filter_map(|block| {
                     (!seen.get(block.idx())).then(|| {
                         seen.set(block.idx(), true);
                         (Event::Enter, block)

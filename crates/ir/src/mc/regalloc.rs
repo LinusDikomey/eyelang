@@ -227,7 +227,8 @@ fn perform_regalloc<R: Register>(
                     .unwrap()
                     .id(),
                 function: crate::mc::Mc::IncomingBlockArgs.id(),
-            }
+            },
+            "Block does not begin with IncomingBlockArgs"
         );
         for arg in ir.args_iter(incoming, env) {
             let Argument::MCReg(r) = arg else {

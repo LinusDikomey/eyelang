@@ -78,8 +78,8 @@ impl<Env: HasEnvironment> Builder<Env> {
                 arg_count,
                 idx: 0,
                 len: 0,
-                preds: dmap::new_set(),
-                succs: dmap::new_set(),
+                preds: Vec::new(),
+                succs: Vec::new(),
             }],
             current_block: Some(BlockId::ENTRY),
         };
@@ -132,8 +132,8 @@ impl<Env: HasEnvironment> Builder<Env> {
             arg_count: 0,
             idx: 0,
             len: 0,
-            preds: dmap::new_set(),
-            succs: dmap::new_set(),
+            preds: Vec::new(),
+            succs: Vec::new(),
         });
         id
     }
@@ -187,8 +187,8 @@ impl<Env: HasEnvironment> Builder<Env> {
             arg_count,
             idx,
             len: 0,
-            preds: dmap::new_set(),
-            succs: dmap::new_set(),
+            preds: Vec::new(),
+            succs: Vec::new(),
         });
         self.current_block = Some(id);
         (id, args)
@@ -241,19 +241,18 @@ fn encode_arg(
     let (a, b) = match (arg, param) {
         (Argument::Ref(r), crate::Parameter::Ref | crate::Parameter::RefOf(_)) => (r.0, None),
         (Argument::BlockId(target), crate::Parameter::BlockId) => {
-            blocks[target.idx()].preds.insert(block);
-            blocks[block.idx()].succs.insert(target);
+            blocks[target.idx()].preds.push(block);
+            blocks[block.idx()].succs.push(target);
             (target.0, None)
         }
         (Argument::BlockId(target), crate::Parameter::BlockTarget) => {
-            blocks[target.idx()].preds.insert(block);
-            blocks[block.idx()].succs.insert(target);
-            // TODO: check block has the correct number of arguments
+            blocks[target.idx()].preds.push(block);
+            blocks[block.idx()].succs.push(target);
             (target.0, Some(0))
         }
         (Argument::BlockTarget(target), crate::Parameter::BlockTarget) => {
-            blocks[target.0.idx()].preds.insert(block);
-            blocks[block.idx()].succs.insert(target.0);
+            blocks[target.0.idx()].preds.push(block);
+            blocks[block.idx()].succs.push(target.0);
             let idx = extra.len() as u32;
             // TODO: check block has the correct number of arguments
             // (currently can't because it is set to 0 before start)

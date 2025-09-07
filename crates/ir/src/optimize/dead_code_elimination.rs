@@ -69,7 +69,7 @@ impl FunctionPass for DeadCodeElimination {
             }
             let dead_inst = Ref(dead_inst as u32);
             tracing::debug!(target: "passes::dce", function = name, "Dead instruction {dead_inst}");
-            ir.replace_with(dead_inst, Ref::UNIT);
+            ir.replace_with(env, dead_inst, Ref::UNIT);
         });
         (ir.finish_and_compress(env), None)
     }

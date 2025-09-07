@@ -170,13 +170,10 @@ ir::visitor! {
         x86.jmp(b, ctx.unit)
     };
     //(arith.LT a b) => { panic!(); Rewrite::Rename(Ref::UNIT)}; // FIXME: this is only to temporarily make the Branch below work
-    (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) => {
-        // FIXmE: should be condition on this pattern
-        assert_eq!(ctx.use_count(lt), 1);
+    (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(lt) => {
         // PERF: cloning the args here
         let b1_args = b1_args.to_vec();
         let b2_args = b2_args.to_vec();
-        ir.replace_with(lt, Ref::UNIT);
         match (ctx.regs.get(a), ctx.regs.get(b)) {
             (&[a], &[b]) => {
                 ir.replace(env, lt, x86.cmp_rr32(a, b, ctx.unit));
@@ -212,7 +209,7 @@ ir::visitor! {
                 ctx.copy(env, r, mc, ir, &[out, a]);
                 // TODO: figure out how to truncate
                 ir.add_before(env, r, x86.imul_ri16(out, x as _, ctx.unit));
-                ir.replace_with(r, Ref::UNIT);
+                ir.replace_with(env, r, Ref::UNIT);
             }
             Primitive::I16 => {
                 let a = ctx.regs.get_one(a);
@@ -289,7 +286,7 @@ ir::visitor! {
         if inst.module() == ctx.main_module {
             let abi = ctx.abi;
             abi.implement_call(r, ir, env, mc, x86, types, &ctx.regs, ctx.unit);
-        } else {
+        } else if inst.module() != dialects.x86.id() {
             todo!("unhandled instruction at {r}: {}", env.get_inst_name(ir.get_inst(r)));
         }
     };

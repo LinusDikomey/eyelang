@@ -60,6 +60,7 @@
           (rustToolchain pkgs)
           pkgs.python3
         ];
+        RUST_BACKTRACE = 1;
       };
     });
   };

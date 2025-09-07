@@ -31,7 +31,7 @@ pub fn write(
             continue;
         }
         *offset = Some((text.len() - start) as u32);
-        block_queue.extend(ir.successors(env, block).iter());
+        block_queue.extend(ir.successors(env, block));
 
         for (r, i) in ir.get_block(block) {
             if let Some(inst) = i.as_module(mc) {

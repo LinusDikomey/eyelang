@@ -322,8 +322,8 @@ pub struct ArgError {
     pub found: Parameter,
 }
 
-pub trait Args<'a>: Sized {
-    fn get(args: ArgsIter<'a>) -> Result<Self, ArgsError>;
+pub trait Args<'args>: Sized {
+    fn get<'a>(args: ArgsIter<'a, 'args>) -> Result<Self, ArgsError>;
 }
 
 macro_rules! count {
@@ -337,14 +337,14 @@ macro_rules! count {
 macro_rules! args_impl {
     ($($t: ident)*) => {
         #[allow(unused_parens, unused_assignments)]
-        impl<'a, $($t),*> Args<'a> for ($($t),*)
+        impl<'args, $($t),*> Args<'args> for ($($t),*)
         where
         $(
-            $t: TryFrom<Argument<'a>, Error = ArgError>,
+            $t: TryFrom<Argument<'args>, Error = ArgError>,
         )*
         {
-            fn get(
-                mut it: ArgsIter<'a>,
+            fn get<'a>(
+                mut it: ArgsIter<'a, 'args>,
             ) -> Result<Self, ArgsError> {
                 let expected_count = count!($($t)*);
                 let mut found_so_far = 0;

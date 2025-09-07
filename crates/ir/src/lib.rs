@@ -36,7 +36,6 @@ pub use bitmap::Bitmap;
 pub use block_graph::BlockGraph;
 pub use builtins::{BUILTIN, Builtin};
 pub use dialect::Primitive;
-use dmap::DHashSet;
 pub use environment::Environment;
 pub use layout::{Layout, offset_in_tuple, type_layout};
 
@@ -681,7 +680,11 @@ impl FunctionIr {
         }
     }
 
-    pub fn args_iter<'a>(&'a self, inst: &'a Instruction, env: &'a Environment) -> ArgsIter<'a> {
+    pub fn args_iter<'a>(
+        &'a self,
+        inst: &'a Instruction,
+        env: &'a Environment,
+    ) -> ArgsIter<'a, 'a> {
         let func = &env[inst.function];
         decode_args(
             &inst.args,
@@ -714,7 +717,7 @@ impl FunctionIr {
     pub fn typed_args_iter<'a, I: Inst + 'static>(
         &'a self,
         inst: &'a TypedInstruction<I>,
-    ) -> ArgsIter<'a> {
+    ) -> ArgsIter<'a, 'a> {
         inst.args_iter(&self.blocks, &self.extra)
     }
 
@@ -829,8 +832,12 @@ impl block_graph::Blocks for FunctionIr {
         self.block_count()
     }
 
-    fn successors(&self, _env: &Environment, block: BlockId) -> &DHashSet<BlockId> {
-        &self.blocks[block.idx()].succs
+    fn successors<'a>(
+        &'a self,
+        _env: &'a Environment,
+        block: BlockId,
+    ) -> impl Iterator<Item = BlockId> + Clone + use<'a> {
+        self.blocks[block.idx()].succs.iter().copied()
     }
 
     /*
@@ -849,8 +856,8 @@ pub struct BlockInfo {
     pub arg_count: u32,
     pub idx: u32,
     pub len: u32,
-    pub preds: DHashSet<BlockId>,
-    pub succs: DHashSet<BlockId>,
+    pub preds: Vec<BlockId>,
+    pub succs: Vec<BlockId>,
 }
 impl BlockInfo {
     pub fn all_refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
@@ -882,13 +889,13 @@ impl Instruction {
         self.ty
     }
 
-    pub fn args_inner<'a>(
-        &'a self,
+    pub fn args_inner<'a, 'args>(
+        &'args self,
         params: &'a [Parameter],
         varargs: Option<Parameter>,
         blocks: &'a [BlockInfo],
-        extra: &'a [u32],
-    ) -> impl Iterator<Item = Argument<'a>> + use<'a> {
+        extra: &'args [u32],
+    ) -> ArgsIter<'a, 'args> {
         decode_args(&self.args, params, varargs, blocks, extra)
     }
 
@@ -931,14 +938,14 @@ pub enum ArgumentMut<'a> {
 pub const INLINE_ARGS: usize = 2;
 
 #[derive(Clone)]
-pub struct ArgsIter<'a> {
+pub struct ArgsIter<'a, 'args> {
     inner: iter::Chain<iter::Copied<std::slice::Iter<'a, Parameter>>, iter::RepeatN<Parameter>>,
-    args: iter::Copied<std::slice::Iter<'a, u32>>,
+    args: iter::Copied<std::slice::Iter<'args, u32>>,
     blocks: &'a [BlockInfo],
-    extra: &'a [u32],
+    extra: &'args [u32],
 }
-impl<'a> Iterator for ArgsIter<'a> {
-    type Item = Argument<'a>;
+impl<'a, 'args> Iterator for ArgsIter<'a, 'args> {
+    type Item = Argument<'args>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut arg = || self.args.next().unwrap();
@@ -974,13 +981,90 @@ impl<'a> Iterator for ArgsIter<'a> {
     }
 }
 
-fn decode_args<'a>(
-    args: &'a [u32; INLINE_ARGS],
+pub fn update_inst_refs(
+    inst: &mut Instruction,
+    env: &Environment,
+    extra: &mut [u32],
+    blocks: &[BlockInfo],
+    mut update: impl FnMut(Ref) -> Ref,
+    mut update_block: impl FnMut(BlockId) -> BlockId,
+) {
+    let func = &env[inst.function];
+    let slot_count: usize = func.params().iter().map(|p| p.slot_count()).sum();
+    if slot_count > INLINE_ARGS || func.varargs().is_some() {
+        let mut idx = inst.args[0] as usize;
+        let mut visit_param = |param| match param {
+            Parameter::Ref | Parameter::RefOf(_) => {
+                extra[idx] = update(Ref(extra[idx])).0;
+                idx += 1;
+            }
+            Parameter::BlockTarget => {
+                let target = update_block(BlockId(extra[idx]));
+                extra[idx] = target.0;
+                let arg_idx = extra[idx + 1];
+                idx += 2;
+                let arg_count = blocks[target.idx()].arg_count;
+                for i in arg_idx..arg_idx + arg_count {
+                    extra[i as usize] = update(Ref(extra[i as usize])).0;
+                }
+            }
+            Parameter::BlockId => {
+                extra[idx] = update_block(BlockId(extra[idx])).0;
+                idx += 1;
+            }
+            Parameter::Int
+            | Parameter::Float
+            | Parameter::Int32
+            | Parameter::TypeId
+            | Parameter::FunctionId
+            | Parameter::GlobalId
+            | Parameter::MCReg(_) => idx += param.slot_count(),
+        };
+        for &param in func.params() {
+            visit_param(param);
+        }
+        if let Some(param) = func.varargs {
+            for _ in 0..inst.args[1] {
+                visit_param(param);
+            }
+        }
+    } else {
+        let mut idx = 0;
+        for param in func.params() {
+            match param {
+                Parameter::Ref | Parameter::RefOf(_) => {
+                    inst.args[idx] = update(Ref(inst.args[idx])).0;
+                    idx += 1;
+                }
+                Parameter::BlockTarget => {
+                    let target = BlockId(inst.args[idx]);
+                    let args_idx = inst.args[idx + 1];
+                    idx += 2;
+                    let arg_count = blocks[target.idx()].arg_count;
+                    for i in args_idx..args_idx + arg_count {
+                        extra[i as usize] = update(Ref(extra[i as usize])).0;
+                    }
+                }
+                Parameter::BlockId
+                | Parameter::Int
+                | Parameter::Float
+                | Parameter::Int32
+                | Parameter::TypeId
+                | Parameter::FunctionId
+                | Parameter::GlobalId
+                | Parameter::MCReg(_) => idx += param.slot_count(),
+            }
+        }
+    }
+}
+
+fn decode_args<'a, 'args>(
+    args: &'args [u32; INLINE_ARGS],
     params: &'a [Parameter],
     varargs: Option<Parameter>,
     blocks: &'a [BlockInfo],
-    extra: &'a [u32],
-) -> ArgsIter<'a> {
+    extra: &'args [u32],
+) -> ArgsIter<'a, 'args> {
     let mut count: usize = params.iter().map(|p| p.slot_count()).sum();
     let mut vararg_count = 0;
     let args = if count <= INLINE_ARGS && varargs.is_none() {
@@ -1028,7 +1112,11 @@ impl<I: Inst> TypedInstruction<I> {
         self.ty
     }
 
-    pub fn args_iter<'a>(&'a self, blocks: &'a [BlockInfo], extra: &'a [u32]) -> ArgsIter<'a> {
+    pub fn args_iter<'a, 'args>(
+        &'args self,
+        blocks: &'a [BlockInfo],
+        extra: &'args [u32],
+    ) -> ArgsIter<'a, 'args> {
         let params = self.inst.params();
         let varargs = self.inst.varargs();
         decode_args(&self.args, params, varargs, blocks, extra)

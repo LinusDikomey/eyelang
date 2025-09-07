@@ -188,7 +188,7 @@ impl FunctionPass for Mem2Reg {
                         if let Some(inst) = inst.as_module(self.mem) {
                             match inst.op() {
                                 Mem::Decl if variables.contains_key(&r) => {
-                                    ir.replace_with(r, Ref::UNIT);
+                                    ir.replace_with(env, r, Ref::UNIT);
                                 }
                                 Mem::Load => {
                                     // TODO: figure out loads of differing types
@@ -197,7 +197,7 @@ impl FunctionPass for Mem2Reg {
                                     };
                                     if variables.contains_key(&ptr) {
                                         if let Some(value) = decide_value(&vars_stack, ptr) {
-                                            ir.replace_with(r, value);
+                                            ir.replace_with(env, r, value);
                                         } else {
                                             ir.replace(env, r, BUILTIN.Undef(inst.ty()));
                                         }
@@ -210,7 +210,7 @@ impl FunctionPass for Mem2Reg {
                                         unreachable!()
                                     };
                                     if variables.contains_key(&ptr) {
-                                        ir.replace_with(r, Ref::UNIT);
+                                        ir.replace_with(env, r, Ref::UNIT);
                                         vars_stack.last_mut().unwrap().insert(ptr, value);
                                     }
                                 }
