@@ -1723,6 +1723,10 @@ impl Generics {
         }
         Ok(true)
     }
+
+    pub fn get_bounds(&self, i: u8) -> &[TraitBound] {
+        &self.generics[i as usize].1
+    }
 }
 
 #[derive(Debug)]

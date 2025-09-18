@@ -574,6 +574,7 @@ pub struct Impl<T: TreeToken = ()> {
 
 #[derive(Debug)]
 pub struct InherentImpl<T: TreeToken = ()> {
+    pub attributes: Box<[Attribute<T>]>,
     pub t_impl: T,
     pub implemented_trait: IdentPath,
     pub base: BaseImpl<T>,

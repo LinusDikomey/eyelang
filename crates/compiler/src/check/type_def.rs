@@ -95,24 +95,31 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
             &checked_trait.name,
         );
         if let Some(checked) = checked_impl {
+            // TODO: replace this with proper attribute system with resolval
+            let add_to_methods = !trait_impl
+                .attributes
+                .iter()
+                .any(|attr| &ast[attr.path.span()] == "hidden");
             debug_assert_eq!(
                 checked_trait.functions_by_name.len(),
                 checked.functions.len()
             );
-            for (name, &idx) in &checked_trait.functions_by_name {
-                let id = checked.functions[idx as usize];
-                let prev = methods.insert(name.clone().into_boxed_str(), id);
-                if prev.is_some() {
-                    // duplicate function, find the correct function in the impl functions for the span
-                    let span = trait_impl
-                        .base
-                        .functions
-                        .iter()
-                        .find_map(|m| (m.function == id).then_some(m.name))
-                        .unwrap();
-                    compiler
-                        .errors
-                        .emit(module, Error::DuplicateDefinition.at_span(span));
+            if add_to_methods {
+                for (name, &idx) in &checked_trait.functions_by_name {
+                    let id = checked.functions[idx as usize];
+                    let prev = methods.insert(name.clone().into_boxed_str(), id);
+                    if prev.is_some() {
+                        // duplicate function, find the correct function in the impl functions for the span
+                        let span = trait_impl
+                            .base
+                            .functions
+                            .iter()
+                            .find_map(|m| (m.function == id).then_some(m.name))
+                            .unwrap();
+                        compiler
+                            .errors
+                            .emit(module, Error::DuplicateDefinition.at_span(span));
+                    }
                 }
             }
             inherent_trait_impls

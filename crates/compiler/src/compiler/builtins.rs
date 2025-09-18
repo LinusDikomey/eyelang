@@ -19,6 +19,7 @@ pub struct Builtins {
     intrinsic: Option<(ModuleId, FunctionId)>,
     iterator: Option<(ModuleId, TraitId)>,
     option: Option<TypeId>,
+    fn_trait: Option<(ModuleId, TraitId)>,
 }
 impl Builtins {
     pub fn set_std(&mut self, std: ProjectId) {
@@ -203,4 +204,19 @@ pub fn get_option(compiler: &mut Compiler) -> TypeId {
     debug_assert_eq!(compiler.types[id.idx()].generic_count, 1);
     compiler.builtins.option = Some(id);
     id
+}
+
+pub fn get_fn_trait(compiler: &mut Compiler) -> (ModuleId, TraitId) {
+    if let Some(fn_trait) = compiler.builtins.fn_trait {
+        return fn_trait;
+    }
+    let std = compiler.builtins.std;
+    let root = compiler.get_project(std).root_module;
+    let fn_module = resolve_module(compiler, root, "call");
+    let Def::Trait(module, t) = compiler.resolve_in_module(fn_module, "Fn", ModuleSpan::MISSING)
+    else {
+        panic!("expected a trait for std.call.Fn");
+    };
+    compiler.builtins.fn_trait = Some((module, t));
+    (module, t)
 }

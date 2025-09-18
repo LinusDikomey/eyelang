@@ -477,7 +477,7 @@ impl<T: TreeToken> Parser<'_, T> {
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
             let attributes = p.parse_attributes(scope)?;
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics.types)?);
+                impls.push(p.parse_inherent_impl(attributes, impl_tok, scope, &generics.types)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -537,8 +537,9 @@ impl<T: TreeToken> Parser<'_, T> {
 
         let lbrace = self.toks.step_expect(TokenType::LBrace)?;
         let rbrace = self.parse_delimited(lbrace, TokenType::Comma, TokenType::RBrace, |p| {
+            let attributes = p.parse_attributes(scope)?;
             if let Some(impl_tok) = p.toks.step_if(TokenType::Keyword(Keyword::Impl)) {
-                impls.push(p.parse_inherent_impl(impl_tok, scope, &generics.types)?);
+                impls.push(p.parse_inherent_impl(attributes, impl_tok, scope, &generics.types)?);
                 return Ok(Delimit::No);
             }
             let ident = p.toks.step_expect(TokenType::Ident)?;
@@ -881,6 +882,7 @@ impl<T: TreeToken> Parser<'_, T> {
 
     fn parse_inherent_impl(
         &mut self,
+        attributes: Box<[Attribute<T>]>,
         t_impl: Token,
         outer_scope: ScopeId,
         type_generics: &[GenericDef<T>],
@@ -901,6 +903,7 @@ impl<T: TreeToken> Parser<'_, T> {
             self.parse_trait_impl_body(lbrace, scope, &impl_generics.types)?;
         self.ast.get_scope_mut(scope).span = TSpan::new(t_impl.start, rbrace.end);
         Ok(InherentImpl {
+            attributes,
             t_impl: t(t_impl),
             implemented_trait,
             base: ast::BaseImpl {

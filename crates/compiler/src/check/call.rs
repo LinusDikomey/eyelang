@@ -1,11 +1,12 @@
 use std::rc::Rc;
 
+use crate::check::traits;
 use crate::{
-    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent},
+    compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
-    hir::{Node, NodeIds},
+    hir::{LValue, Node, NodeIds},
     types::Type,
-    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo},
+    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
 use error::{Error, span::TSpan};
 use parser::ast::{Call, ExprId, ExprIds};
@@ -361,31 +362,115 @@ pub fn check_call(
                 }
             }
         }
-        TypeInfo::UnknownSatisfying(bounds) => {
-            let needed_bound = bounds.iter().next().map(|bound| {
-                let trait_id = ctx.hir.types.get_bound(bound).trait_id;
-                ctx.compiler
-                    .get_trait_name(trait_id.0, trait_id.1)
-                    .to_owned()
-            });
-            ctx.emit(
-                Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
+        called_type_info => {
+            // TODO: auto ref/deref on called value
+            let arg_types = ctx.hir.types.add_multiple_unknown(call.args.len() as _);
+            let fn_instance = ctx.hir.types.add_multiple_info_or_idx([
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Tuple(arg_types)),
+                expected.into(),
+            ]);
+            assert_eq!(
+                call.named_args.len(),
+                0,
+                "TODO: support named args in trait calls or error properly"
             );
-            ctx.invalidate(expected);
-            Node::Invalid
-        }
-        TypeInfo::Unknown => {
-            ctx.emit(
-                Error::TypeMustBeKnownHere { needed_bound: None }
-                    .at_span(ctx.span(call.called_expr)),
+
+            let fn_trait = builtins::get_fn_trait(ctx.compiler);
+            let fn_bound = Bound {
+                trait_id: fn_trait,
+                generics: fn_instance,
+                span: call_span,
+            };
+            let candidates = traits::get_impl_candidates(
+                ctx.compiler,
+                &fn_bound,
+                called_type_info,
+                &mut ctx.hir.types,
+                ctx.generics,
             );
-            ctx.invalidate(expected);
-            Node::Invalid
-        }
-        _ => {
-            ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-            Node::Invalid
-        }
+            match candidates {
+                traits::Candidates::Invalid => return Node::Invalid,
+                traits::Candidates::None => {
+                    // TODO: improve error
+                    ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
+                    ctx.invalidate(expected);
+                    return Node::Invalid;
+                }
+                traits::Candidates::Unique { instance } => {
+                    // TODO: are types in arg_types already specified here
+                }
+                traits::Candidates::Multiple => {}
+            }
+
+            let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
+            for ((arg, ty), node_id) in call
+                .args
+                .into_iter()
+                .zip(arg_types.iter())
+                .zip(arg_nodes.iter())
+            {
+                let node = expr::check(ctx, arg, scope, ty, return_ty, noreturn);
+                ctx.hir.modify_node(node_id, node);
+                if *noreturn {
+                    return Node::Invalid;
+                }
+            }
+            let called_ptr = match LValue::try_from_node(&called_node, &mut ctx.hir) {
+                Some(value) => Node::AddressOf {
+                    value: ctx.hir.add_lvalue(value),
+                    value_ty: called_ty,
+                },
+                None => {
+                    let variable = ctx.hir.add_var(called_ty);
+                    Node::Promote {
+                        value: ctx.hir.add(called_node),
+                        variable,
+                    }
+                }
+            };
+            let fn_args = ctx.hir.add_nodes([
+                called_ptr,
+                Node::TupleLiteral {
+                    elems: arg_nodes,
+                    elem_types: arg_types,
+                },
+            ]);
+            Node::TraitCall {
+                trait_id: fn_trait,
+                trait_generics: fn_instance,
+                method_index: 0,
+                self_ty: called_ty,
+                args: fn_args,
+                return_ty: expected,
+                noreturn: false,
+            }
+        } /*
+          TypeInfo::UnknownSatisfying(bounds) => {
+              let needed_bound = bounds.iter().next().map(|bound| {
+                  let trait_id = ctx.hir.types.get_bound(bound).trait_id;
+                  ctx.compiler
+                      .get_trait_name(trait_id.0, trait_id.1)
+                      .to_owned()
+              });
+              ctx.emit(
+                  Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
+              );
+              ctx.invalidate(expected);
+              Node::Invalid
+          }
+          TypeInfo::Unknown => {
+              ctx.emit(
+                  Error::TypeMustBeKnownHere { needed_bound: None }
+                      .at_span(ctx.span(call.called_expr)),
+              );
+              ctx.invalidate(expected);
+              Node::Invalid
+          }
+          _ => {
+              ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
+              Node::Invalid
+          }
+          */
     }
 }
 

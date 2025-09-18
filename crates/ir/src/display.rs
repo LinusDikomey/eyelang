@@ -272,7 +272,7 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                             }
                         }
                         Argument::Int(n) => cwrite!(f, " #y<{}>", n)?,
-                        Argument::Float(x) => cwrite!(f, "#y<{}>", x)?,
+                        Argument::Float(x) => cwrite!(f, " #y<{}>", x)?,
                         Argument::TypeId(ty) => {
                             let display = types.display_type(ty, &env.primitives);
                             write!(f, " {display}")?;
