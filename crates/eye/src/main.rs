@@ -329,7 +329,10 @@ fn enable_tracing(args: &args::Args) {
 
                     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
                         if field.name() == "function" {
-                            *self.matched = Some(self.allowed.contains(value))
+                            let name = value
+                                .split_once('[')
+                                .map_or(value, |(name, _generics)| name);
+                            *self.matched = Some(self.allowed.contains(name))
                         }
                     }
                 }

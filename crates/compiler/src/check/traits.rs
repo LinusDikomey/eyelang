@@ -193,8 +193,9 @@ pub fn get_impl_candidates(
         return Candidates::Invalid;
     };
     let checked_trait = Rc::clone(checked_trait);
+    let mut found = None;
     let resolved;
-    let mut found = match ty {
+    match ty {
         // could be a type with inherent impls
         TypeInfo::Unknown | TypeInfo::UnknownSatisfying(_) => return Candidates::Multiple,
         TypeInfo::TypeDef(id, _) => {
@@ -203,7 +204,6 @@ pub fn get_impl_candidates(
                 .inherent_trait_impls
                 .get(&bound.trait_id)
                 .map_or(&[] as &[Impl], |v| v.as_slice());
-            let mut found = None;
             for impl_ in impls_for_ty {
                 if is_candidate_valid(impl_, bound.generics, ty, types) {
                     if found.is_some() {
@@ -212,9 +212,39 @@ pub fn get_impl_candidates(
                     found = Some(impl_);
                 }
             }
-            found
         }
-        _ => None, // type doesn't have inherent impls
+        TypeInfo::Generic(i) => {
+            let mut compatible_bound = None;
+            for generic_bound in function_generics.get_bounds(i) {
+                if generic_bound.trait_id != bound.trait_id {
+                    continue;
+                }
+
+                debug_assert_eq!(generic_bound.generics.len(), bound.generics.count as usize);
+                let compatible = generic_bound
+                    .generics
+                    .iter()
+                    .zip(bound.generics.iter())
+                    .all(|(ty, idx)| types.compatible_with_type(types[idx], ty));
+                if compatible {
+                    if compatible_bound.is_some() {
+                        return Candidates::Multiple;
+                    }
+                    compatible_bound = Some(generic_bound);
+                }
+            }
+            if let Some(generic_bound) = compatible_bound {
+                for (ty, idx) in generic_bound.generics.iter().zip(bound.generics.iter()) {
+                    // type was checked to be compatible so should be safe to replace
+                    let info = types.generic_info_from_resolved(ty);
+                    types.replace_value(idx, info);
+                }
+                return Candidates::Unique {
+                    instance: ty.into(),
+                };
+            }
+        }
+        _ => {} // type doesn't have inherent impls
     };
     for impl_ in &checked_trait.impls {
         if is_candidate_valid(impl_, bound.generics, ty, types) {
