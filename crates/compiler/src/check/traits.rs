@@ -3,7 +3,7 @@ use std::rc::Rc;
 use dmap::DHashMap;
 use error::Error;
 use error::span::TSpan;
-use parser::ast::{self, Ast, Attribute, TraitId};
+use parser::ast::{self, Ast, TraitId};
 use parser::ast::{FunctionId, ModuleId};
 
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};

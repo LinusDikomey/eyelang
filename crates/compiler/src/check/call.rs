@@ -391,15 +391,11 @@ pub fn check_call(
             match candidates {
                 traits::Candidates::Invalid => return Node::Invalid,
                 traits::Candidates::None => {
-                    // TODO: improve error
                     ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
                     ctx.invalidate(expected);
                     return Node::Invalid;
                 }
-                traits::Candidates::Unique { instance } => {
-                    // TODO: are types in arg_types already specified here
-                }
-                traits::Candidates::Multiple => {}
+                traits::Candidates::Unique { .. } | traits::Candidates::Multiple => {}
             }
 
             let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
