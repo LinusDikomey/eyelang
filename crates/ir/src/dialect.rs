@@ -1,7 +1,6 @@
 use crate::{Type, instructions, primitives};
 
 primitives! {
-    Unit = 0
     I1 = 1
     I8 = 1
     I16 = 2

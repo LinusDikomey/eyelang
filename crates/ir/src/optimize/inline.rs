@@ -2,7 +2,7 @@ use std::{borrow::Cow, cmp::min, fmt};
 
 use crate::{
     Argument, Bitmap, BlockGraph, BlockId, Environment, Function, FunctionIr, LocalFunctionId,
-    Module, ModuleId, ModuleOf, Primitive, Ref, TypeId, dialect::Cf, modify::IrModify,
+    Module, ModuleId, ModuleOf, Ref, Type, TypeId, dialect::Cf, modify::IrModify,
     pipeline::ModulePass, rewrite::RenameTable,
 };
 
@@ -34,7 +34,7 @@ impl Inline {
             .types
             .clone();
         let mut ir = IrModify::new(ir);
-        let unit_ty = types.add(Primitive::Unit);
+        let unit_ty = types.add(Type::UNIT);
         for call_ref in ir.refs() {
             let call_inst = *ir.get_inst(call_ref);
             if call_inst.function.module != module || scc.contains(&call_inst.function()) {

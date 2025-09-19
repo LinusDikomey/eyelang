@@ -162,7 +162,6 @@ pub fn slot_count(ty: Type, types: &Types) -> u32 {
 
 pub fn primitive_slot_count(p: Primitive) -> u32 {
     match p {
-        Primitive::Unit => 0,
         Primitive::I128 | Primitive::U128 => 2,
         _ => 1,
     }

@@ -17,8 +17,10 @@ pub fn entry_point(
     builder.create_and_begin_block([]);
 
     let main_return = match main_return_ty {
-        Type::Tuple(elems) if elems.is_empty() => ir::dialect::Primitive::Unit,
-        &Type::Primitive(p) if p.is_int() => super::types::get_primitive(p),
+        Type::Tuple(elems) if elems.is_empty() => ir::Type::UNIT,
+        &Type::Primitive(p) if p.is_int() => {
+            ir::Type::Primitive(super::types::get_primitive(p).id())
+        }
         _ => unreachable!(),
     };
 
@@ -27,11 +29,13 @@ pub fn entry_point(
 
     let main_val = builder.append((eye_main, (), main_ret_ty));
     let exit_code = match main_return {
-        ir::dialect::Primitive::Unit => builder.append(arith.Int(0, i32_ty)),
-        ir::dialect::Primitive::I32 => main_val,
+        ir::Type::Tuple(_) => builder.append(arith.Int(0, i32_ty)),
+        ir::Type::Primitive(p) if ir::Primitive::try_from(p).unwrap() == ir::Primitive::I32 => {
+            main_val
+        }
         _ => builder.append(arith.CastInt(main_val, i32_ty)),
     };
-    let unit = builder.types.add(ir::dialect::Primitive::Unit);
+    let unit = builder.types.add(ir::Type::UNIT);
     builder.append(cf.Ret(exit_code, unit));
 
     builder.finish("main", i32_ty)

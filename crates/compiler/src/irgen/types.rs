@@ -69,7 +69,7 @@ pub fn get_multiple(
     types: &[Type],
     generics: Generics,
 ) -> Option<ir::TypeIds> {
-    let refs = ir_types.add_multiple(types.iter().map(|_| ir::Primitive::Unit.into()));
+    let refs = ir_types.add_multiple(types.iter().map(|_| ir::Type::UNIT));
     for (elem, ty) in types.iter().zip(refs.iter()) {
         let elem = get(compiler, ir_types, elem, generics)?;
         ir_types[ty] = elem;
@@ -86,8 +86,7 @@ pub fn get_def(
     let resolved = Rc::clone(compiler.get_resolved_type_def(def));
     Some(match &resolved.def {
         ResolvedTypeContent::Struct(def) => {
-            let elems =
-                ir_types.add_multiple((0..def.field_count()).map(|_| ir::Primitive::Unit.into()));
+            let elems = ir_types.add_multiple((0..def.field_count()).map(|_| ir::Type::UNIT));
             for ((_, field), r) in def.all_fields().zip(elems.iter()) {
                 let ty = get(compiler, ir_types, field, generics)?;
                 ir_types[r] = ty;
@@ -103,10 +102,9 @@ pub fn get_def(
                 if !args.is_empty() {
                     has_content = true;
                 }
-                let elems =
-                    ir_types.add_multiple((0..args.len() + 1).map(|_| ir::Primitive::Unit.into()));
+                let elems = ir_types.add_multiple((0..args.len() + 1).map(|_| ir::Type::UNIT));
                 let mut elem_iter = elems.iter();
-                ir_types[elem_iter.next().unwrap()] = ordinal_type.into();
+                ir_types[elem_iter.next().unwrap()] = ordinal_type;
                 for (arg, r) in args.iter().zip(elem_iter) {
                     let Some(elem) = get(compiler, ir_types, arg, generics) else {
                         continue 'variants;
@@ -120,7 +118,7 @@ pub fn get_def(
             if has_content {
                 type_from_layout(ir_types, accumulated_layout)
             } else {
-                ordinal_type.into()
+                ordinal_type
             }
         }
     })
@@ -176,8 +174,7 @@ pub fn get_from_info(
             type_from_layout(ir_types, accumulated_layout)
         }
         TypeInfo::Tuple(members) => {
-            let member_refs =
-                ir_types.add_multiple((0..members.count).map(|_| ir::Primitive::Unit.into()));
+            let member_refs = ir_types.add_multiple((0..members.count).map(|_| ir::Type::UNIT));
             for (ty, r) in members.iter().zip(member_refs.iter()) {
                 let ty = get_from_info(compiler, types, ir_types, types[ty], generics)?;
                 ir_types[r] = ty;
@@ -185,7 +182,7 @@ pub fn get_from_info(
             ir::Type::Tuple(member_refs)
         }
         TypeInfo::Generic(i) => return generics.get(i, compiler, ir_types),
-        TypeInfo::FunctionItem { .. } => ir::Primitive::Unit.into(),
+        TypeInfo::FunctionItem { .. } => ir::Type::UNIT,
         TypeInfo::Unknown
         | TypeInfo::UnknownSatisfying { .. }
         | TypeInfo::TypeItem { .. }
@@ -209,7 +206,7 @@ pub fn get_multiple_infos(
     ids: LocalTypeIds,
     generics: Generics,
 ) -> Option<ir::TypeIds> {
-    let refs = ir_types.add_multiple((0..ids.count).map(|_| ir::Primitive::Unit.into()));
+    let refs = ir_types.add_multiple((0..ids.count).map(|_| ir::Type::UNIT));
     for (ty, r) in ids.iter().zip(refs.iter()) {
         let ty = get_from_info(compiler, types, ir_types, types[ty], generics)?;
         ir_types[r] = ty;
@@ -217,13 +214,13 @@ pub fn get_multiple_infos(
     Some(refs)
 }
 
-pub fn int_from_variant_count(count: u32) -> ir::Primitive {
+pub fn int_from_variant_count(count: u32) -> ir::Type {
     match count {
-        0 | 1 => ir::Primitive::Unit,
-        2 => ir::Primitive::I1,
-        3..256 => ir::Primitive::U8,
-        256..=0xFF_FF => ir::Primitive::U16,
-        _ => ir::Primitive::U32,
+        0 | 1 => ir::Type::UNIT,
+        2 => ir::Primitive::I1.into(),
+        3..256 => ir::Primitive::U8.into(),
+        256..=0xFF_FF => ir::Primitive::U16.into(),
+        _ => ir::Primitive::U32.into(),
     }
 }
 
@@ -250,7 +247,7 @@ pub fn get_primitive(p: parser::ast::Primitive) -> ir::Primitive {
 pub fn type_from_layout(ir_types: &mut ir::Types, layout: ir::Layout) -> ir::Type {
     if layout.size == 0 {
         debug_assert_eq!(layout.align.get(), 1);
-        return ir::Primitive::Unit.into();
+        return ir::Type::UNIT;
     }
     let base_type = match layout.align.get() {
         1 => ir::Primitive::U8.into(),

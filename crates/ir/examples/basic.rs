@@ -1,6 +1,6 @@
 //! Example for using the ir crate. A function is constructed, printed, verified and evaluated.
 
-use ir::{BlockTarget, Environment, Primitive, builder::Builder};
+use ir::{BlockTarget, Environment, Primitive, Type, builder::Builder};
 
 fn main() {
     let mut env = Environment::new(Primitive::create_infos());
@@ -14,7 +14,7 @@ fn main() {
     let loop_body = builder.create_block();
     let end = builder.create_block();
 
-    let unit_ty = builder.types.add(Primitive::Unit);
+    let unit_ty = builder.types.add(Type::UNIT);
     let i1_ty = builder.types.add(Primitive::I1);
     let int_ty = builder.types.add(Primitive::I32);
     let ptr_ty = builder.types.add(Primitive::Ptr);
@@ -74,7 +74,7 @@ fn build_mul(env: &mut Environment) -> ir::Function {
     let cf = env.get_dialect_module::<ir::dialect::Cf>();
     let mut builder = Builder::new(env);
     let int_ty = builder.types.add(Primitive::I32);
-    let unit_ty = builder.types.add(Primitive::Unit);
+    let unit_ty = builder.types.add(Type::UNIT);
     let (_entry, params) = builder.create_and_begin_block([int_ty; 2]);
     let x = params.nth(0);
     let y = params.nth(1);

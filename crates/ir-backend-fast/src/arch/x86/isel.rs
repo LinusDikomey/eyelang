@@ -32,7 +32,6 @@ pub fn codegen(
             |regs, p| {
                 use Primitive as P;
                 match p {
-                    P::Unit => {}
                     P::I1 | P::I8 | P::U8 => regs[0] = body.new_reg(ir::mc::RegClass::GP8),
                     P::I16 | P::U16 => regs[0] = body.new_reg(ir::mc::RegClass::GP16),
                     P::I32 | P::U32 => regs[0] = body.new_reg(ir::mc::RegClass::GP32),
@@ -88,7 +87,7 @@ fn int_size_of_ref(r: Ref, ir: &IrModify, types: &Types) -> IntSize {
         Primitive::I32 | Primitive::U32 => IntSize::I32,
         Primitive::I64 | Primitive::U64 => IntSize::I64,
         Primitive::I128 | Primitive::U128 => IntSize::I128,
-        Primitive::Unit | Primitive::I1 | Primitive::F32 | Primitive::F64 | Primitive::Ptr => {
+        Primitive::I1 | Primitive::F32 | Primitive::F64 | Primitive::Ptr => {
             unreachable!()
         }
     }
@@ -201,7 +200,6 @@ ir::visitor! {
     (%r = arith.Mul a (arith.Int (#x))) => {
         let primitive = primitive_of_ref(r, ir, types);
         match primitive {
-            Primitive::Unit => unreachable!(),
             Primitive::I1 => todo!(),
             Primitive::I8 => {
                 let a = ctx.regs.get_one(a);
@@ -240,7 +238,6 @@ ir::visitor! {
         let ptr = ctx.regs.get_one(ptr);
         match types[ir.get_ref_ty(r)] {
             Type::Primitive(primitive_id) => match Primitive::try_from(primitive_id).unwrap() {
-                Primitive::Unit => {}
                 Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                     ir.replace(env, r, x86.mov_rm8(ctx.regs.get_one(r), ptr, 0, ctx.unit));
                 }
@@ -263,7 +260,6 @@ ir::visitor! {
         let ptr = ctx.regs.get_one(ptr);
         match types[ir.get_ref_ty(value)] {
             Type::Primitive(primitive_id) => match Primitive::try_from(primitive_id).unwrap() {
-                Primitive::Unit => {}
                 Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                     ir.replace(env, r, x86.mov_mr8(ptr, 0, ctx.regs.get_one(value), ctx.unit));
                 }
@@ -321,7 +317,7 @@ fn int_bin_op(
             Primitive::I128 | Primitive::U128 => todo!("128-bit add"),
             Primitive::F32 => todo!(),
             Primitive::F64 => todo!(),
-            Primitive::Unit | Primitive::Ptr => unreachable!(),
+            Primitive::Ptr => unreachable!(),
         };
         // encode_args
         let out = ctx.regs.get_one(r);

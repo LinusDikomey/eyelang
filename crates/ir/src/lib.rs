@@ -155,6 +155,10 @@ impl TypeIds {
         assert!(idx < self.count);
         TypeId(self.idx + idx)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -566,6 +570,9 @@ pub enum Type {
     Primitive(PrimitiveId),
     Array(TypeId, u32),
     Tuple(TypeIds),
+}
+impl Type {
+    pub const UNIT: Self = Self::Tuple(TypeIds::EMPTY);
 }
 impl<T> PartialEq<T> for Type
 where

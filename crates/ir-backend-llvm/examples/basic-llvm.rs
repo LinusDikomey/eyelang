@@ -30,7 +30,7 @@ struct Dialects {
 fn build_mul(env: &Environment, dialects: &Dialects) -> ir::Function {
     let Dialects { arith, cf, .. } = dialects;
     let mut builder = ir::builder::Builder::new(env);
-    let unit = builder.types.add(Primitive::Unit);
+    let unit = builder.types.add(ir::Type::UNIT);
     let int_ty = builder.types.add(Primitive::I32);
     let param_types = builder.types.add_multiple([Primitive::I32.into(); 2]);
     let (_, params) = builder.create_and_begin_block(param_types.iter());

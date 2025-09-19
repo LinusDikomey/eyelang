@@ -72,7 +72,6 @@ impl Abi<X86> for SystemV {
                         ir.add_before(env, before, ir::mc::parallel_copy(mc, args, unit));
                     };
                     match ty {
-                        Primitive::Unit => {}
                         Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                             copy(&[regs[0], MCReg::from_phys(abi_regs.next().unwrap()[3])]);
                         }
@@ -132,7 +131,6 @@ impl Abi<X86> for SystemV {
                 types,
                 |regs, p| {
                     match p {
-                        Primitive::Unit => {}
                         Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                             copies.extend([MCReg::from_phys(abi_regs.next().unwrap()[3]), regs[0]]);
                         }
@@ -164,7 +162,6 @@ impl Abi<X86> for SystemV {
         let mut copy = |args| ir.add_after(env, call_inst, ir::mc::parallel_copy(mc, args, unit));
         match return_ty {
             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                Primitive::Unit => {}
                 Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                     copy(&[regs.get_one(call_inst), MCReg::from_phys(RETURN_REGS[0][3])]);
                 }
@@ -214,7 +211,6 @@ impl Abi<X86> for SystemV {
         let mut copy = |args| ir.add_before(env, r, ir::mc::parallel_copy(mc, args, unit));
         match ty {
             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                Primitive::Unit => ir.replace(env, r, x86.ret0(unit)),
                 Primitive::I1 | Primitive::I8 | Primitive::U8 => {
                     copy(&[MCReg::from_phys(RETURN_REGS[0][3]), regs.get_one(value)]);
                     ir.replace(env, r, x86.ret64(unit));
@@ -246,6 +242,7 @@ impl Abi<X86> for SystemV {
                 Primitive::F32 | Primitive::F64 => todo!("abi: float return values"),
             },
             Type::Array(_, _) => todo!("abi: array return values"),
+            Type::Tuple(elems) if elems.is_empty() => ir.replace(env, r, x86.ret0(unit)),
             Type::Tuple(_) => todo!("abi: tuple return values"),
         }
     }

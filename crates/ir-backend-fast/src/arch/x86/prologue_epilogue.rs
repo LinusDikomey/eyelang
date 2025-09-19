@@ -45,9 +45,7 @@ impl FunctionPass<BackendState> for PrologueEpilogueInsertion {
                 start,
                 x86.mov_rr64(MCReg::from_phys(Reg::rbp), MCReg::from_phys(Reg::rsp), unit),
             );
-            if state.stack_size % 16 != 0 {
-                state.stack_size += 16 - (state.stack_size % 16);
-            }
+            state.stack_size = state.stack_size.next_multiple_of(16);
             ir.add_before(
                 env,
                 start,

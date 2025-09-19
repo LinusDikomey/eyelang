@@ -191,9 +191,7 @@ impl<'a, I: McInst> IselCtx<'a, I> {
     /// Assumes a stack growing down, subtract layout.size if the stack should grow up.
     pub fn alloc_stack(&mut self, layout: Layout) -> u32 {
         let align = layout.align.get() as u32;
-        if self.state.stack_size % align != 0 {
-            self.state.stack_size += align - (self.state.stack_size % align);
-        }
+        self.state.stack_size = self.state.stack_size.next_multiple_of(align);
         self.state.stack_size += layout.size as u32;
         self.state.stack_size
     }

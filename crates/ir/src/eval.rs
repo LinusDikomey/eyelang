@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     fmt,
     ops::{Add, Div, Mul, Rem, Sub},
 };
@@ -262,7 +261,7 @@ pub fn eval<E: EvalEnvironment>(
 
         let get_ref_and_ty = |values: &Values, r: Ref| -> (Val, Type) {
             match r {
-                Ref::UNIT => (Val::Unit, Type::Primitive(Primitive::Unit.id())),
+                Ref::UNIT => (Val::Unit, Type::UNIT),
                 Ref::FALSE => (Val::Int(0), Type::Primitive(Primitive::I1.id())),
                 Ref::TRUE => (Val::Int(1), Type::Primitive(Primitive::I1.id())),
                 _ => {
@@ -399,7 +398,6 @@ pub fn eval<E: EvalEnvironment>(
                             };
                             let p: Primitive = p.try_into().unwrap();
                             let res = match p {
-                                Primitive::Unit => Some(Ordering::Equal),
                                 Primitive::I1
                                 | Primitive::I8
                                 | Primitive::I16
@@ -1162,7 +1160,6 @@ impl Values {
                     ty,
                     types,
                     &mut move |slots, p| match p {
-                        Primitive::Unit => Ok(()),
                         Primitive::I8 | Primitive::U8 | Primitive::I1 => {
                             visit(PrimitiveVal::I8(slots[0] as u8))
                         }
@@ -1208,7 +1205,6 @@ impl Values {
     ) -> Result<(), Error> {
         match ty {
             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                Primitive::Unit => {}
                 Primitive::I8 | Primitive::U8 | Primitive::I1 => {
                     self.slots[*i as usize] = visit(PrimitiveSize::S8, offset)?;
                     *i += 1;
@@ -1325,7 +1321,6 @@ impl Values {
     fn load_inner(&self, i: &mut u32, ty: Type, types: &Types) -> Val {
         match ty {
             Type::Primitive(p) => match Primitive::try_from(p).unwrap() {
-                Primitive::Unit => Val::Unit,
                 Primitive::I1
                 | Primitive::I8
                 | Primitive::I16

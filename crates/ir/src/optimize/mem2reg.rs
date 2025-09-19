@@ -262,7 +262,7 @@ impl FunctionPass for Mem2Reg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockId, BlockTarget, Environment, Ref, pipeline::FunctionPass};
+    use crate::{BlockId, BlockTarget, Environment, Ref, Type, pipeline::FunctionPass};
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,
@@ -288,7 +288,7 @@ mod tests {
 
         let mut builder = crate::builder::Builder::new(&*env);
 
-        let unit = builder.types.add(crate::Primitive::Unit);
+        let unit = builder.types.add(Type::UNIT);
         let i32 = builder.types.add(crate::Primitive::I32);
         let ptr = builder.types.add(crate::Primitive::Ptr);
 

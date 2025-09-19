@@ -161,18 +161,17 @@ impl Attribs {
 /// Converts an ir type to it's corresponding llvm type. Returns `None` if the type was zero-sized
 unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTypeRef> {
     match ty {
-        Type::Primitive(id) => match Primitive::try_from(id).unwrap() {
-            Primitive::Unit => None,
-            Primitive::I1 => Some(core::LLVMInt1TypeInContext(ctx)),
-            Primitive::I8 | Primitive::U8 => Some(core::LLVMInt8TypeInContext(ctx)),
-            Primitive::I16 | Primitive::U16 => Some(core::LLVMInt16TypeInContext(ctx)),
-            Primitive::I32 | Primitive::U32 => Some(core::LLVMInt32TypeInContext(ctx)),
-            Primitive::I64 | Primitive::U64 => Some(core::LLVMInt64TypeInContext(ctx)),
-            Primitive::I128 | Primitive::U128 => Some(core::LLVMInt128TypeInContext(ctx)),
-            Primitive::F32 => Some(core::LLVMFloatTypeInContext(ctx)),
-            Primitive::F64 => Some(core::LLVMDoubleTypeInContext(ctx)),
-            Primitive::Ptr => Some(core::LLVMPointerTypeInContext(ctx, 0)),
-        },
+        Type::Primitive(id) => Some(match Primitive::try_from(id).unwrap() {
+            Primitive::I1 => core::LLVMInt1TypeInContext(ctx),
+            Primitive::I8 | Primitive::U8 => core::LLVMInt8TypeInContext(ctx),
+            Primitive::I16 | Primitive::U16 => core::LLVMInt16TypeInContext(ctx),
+            Primitive::I32 | Primitive::U32 => core::LLVMInt32TypeInContext(ctx),
+            Primitive::I64 | Primitive::U64 => core::LLVMInt64TypeInContext(ctx),
+            Primitive::I128 | Primitive::U128 => core::LLVMInt128TypeInContext(ctx),
+            Primitive::F32 => core::LLVMFloatTypeInContext(ctx),
+            Primitive::F64 => core::LLVMDoubleTypeInContext(ctx),
+            Primitive::Ptr => core::LLVMPointerTypeInContext(ctx, 0),
+        }),
         Type::Array(elem, size) => Some(core::LLVMArrayType2(
             llvm_ty(ctx, types[elem], types)?,
             size as u64,
@@ -251,7 +250,7 @@ unsafe fn build_func(
     let get_ref_and_type_ptr =
         |instructions: &[LLVMValueRef], r: Ref| -> (Option<LLVMValueRef>, Type) {
             match r {
-                Ref::UNIT => (None, Type::Primitive(Primitive::Unit.id())),
+                Ref::UNIT => (None, Type::UNIT),
                 Ref::TRUE => (
                     Some(LLVMConstInt(i1, 1, 0)),
                     Type::Primitive(Primitive::I1.id()),

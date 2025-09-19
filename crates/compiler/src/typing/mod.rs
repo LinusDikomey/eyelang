@@ -774,7 +774,7 @@ impl TypeTable {
                 if let Some(variant) = variants
                     .iter()
                     .copied()
-                    .find(|&variant| (&*self[variant].name == name))
+                    .find(|&variant| &*self[variant].name == name)
                 {
                     let arg_types = self[variant].args;
                     Ok((OrdinalType::Inferred(variant), arg_types))

@@ -39,11 +39,7 @@ pub fn declare_function(
         checked.params,
         types::Generics::function_instance(generics),
     )
-    .unwrap_or_else(|| {
-        types.add_multiple(
-            (0..checked.params.count).map(|_| ir::Type::Primitive(ir::Primitive::Unit.id())),
-        )
-    });
+    .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| ir::Type::UNIT)));
 
     let return_type = checked.types[checked.return_type];
     let return_type = types::get_from_info(
@@ -53,7 +49,7 @@ pub fn declare_function(
         return_type,
         types::Generics::function_instance(generics),
     )
-    .unwrap_or(ir::Primitive::Unit.into());
+    .unwrap_or(ir::Type::UNIT);
     let return_type = types.add(return_type);
 
     ir::Function::declare(name, types, params.iter(), checked.varargs, return_type)
@@ -136,7 +132,7 @@ pub fn lower_hir(
     params: ir::Refs,
     return_ty: ir::TypeId,
 ) -> (ir::FunctionIr, ir::Types) {
-    let unit_ty = builder.types.add(ir::Primitive::Unit);
+    let unit_ty = builder.types.add(ir::Type::UNIT);
     let ptr_ty = builder.types.add(ir::Primitive::Ptr);
     let i1_ty = builder.types.add(ir::Primitive::I1);
 
@@ -194,7 +190,7 @@ pub fn lower_hir(
 
     let val = lower(&mut ctx, hir.root_id());
     if let Ok(val) = val {
-        let unit = ctx.builder.types.add(ir::Primitive::Unit);
+        let unit = ctx.builder.types.add(ir::Type::UNIT);
         ctx.builder
             .append(ctx.builder.env.dialects.cf.Ret(val, unit));
     }
@@ -1291,7 +1287,7 @@ fn build_crash_point_inner(
     let msg = "program reached a compile error at runtime";
     let (msg, _str_ty) = lower_string_literal_inner(builder, ptr_ty, msg);
     let panic_function = builder.env.get_builtin_panic();
-    let unit = builder.types.add(ir::Primitive::Unit);
+    let unit = builder.types.add(ir::Type::UNIT);
     builder.append((panic_function, (msg), unit));
     let value = builder.append_undef(return_ty);
     builder.append(builder.env.dialects.cf.Ret(value, unit_ty));
