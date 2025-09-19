@@ -998,11 +998,7 @@ impl TypeTable {
                     }
                     self.type_to_string(compiler, self[member], s);
                 }
-                if members.iter().count() < 2 {
-                    s.push_str(",)");
-                } else {
-                    s.push(')');
-                }
+                s.push(')');
             }
             TypeInfo::Function {
                 params,

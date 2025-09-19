@@ -1611,7 +1611,6 @@ impl<T: TreeToken> Parser<'_, T> {
                             break;
                         }
                     }
-                    p.toks.step_if(TokenType::Ident);
                     T::opt(t(colon))
                 } else {
                     T::opt_none()

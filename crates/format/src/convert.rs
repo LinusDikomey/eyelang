@@ -51,20 +51,25 @@ impl<'a> Converter<'a> {
     }
 
     fn tok_with_char(&mut self, nodes: &mut Vec<Node>, span: TSpan, c: Option<char>) {
-        let ws = &self.cst.src()[self.pos as usize..span.start as usize];
-        debug_assert!(self.pos <= span.start);
         debug_assert!(span.start <= span.end);
-        self.pos = span.end;
-        let max_newlines = self
-            .allowed_newlines_before_next
-            .take()
-            .map_or(0, |x| x + 1);
-        self.emit_whitespace(nodes, ws, max_newlines);
+        self.whitespace_before(nodes, span.start);
         let mut text = self.cst.src()[span.start as usize..span.end as usize].to_owned();
         if let Some(c) = c {
             text.push(c);
         }
         nodes.push(Node::Text(text.into()));
+        self.pos = span.end;
+    }
+
+    fn whitespace_before(&mut self, nodes: &mut Vec<Node>, before: u32) {
+        let ws = &self.cst.src()[self.pos as usize..before as usize];
+        self.pos = before;
+        debug_assert!(self.pos <= before);
+        let max_newlines = self
+            .allowed_newlines_before_next
+            .take()
+            .map_or(0, |x| x + 1);
+        self.emit_whitespace(nodes, ws, max_newlines);
     }
 
     #[must_use]
@@ -167,11 +172,10 @@ impl<'a> Converter<'a> {
                     self.expr(&mut group, item);
                 }
                 let empty = group.is_empty();
-                block_nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
                 if !empty {
-                    block_nodes.push(Node::Text("\n".into()));
+                    group.push(Node::Text("\n".into()));
                 }
-                self.tok(&mut block_nodes, t_close);
+                self.close_group(&mut block_nodes, group, t_close);
                 nodes.push(Node::Group(block_nodes, R::Width(0)));
             }
             &Expr::Nested {
@@ -214,8 +218,7 @@ impl<'a> Converter<'a> {
                     self.expr(&mut group, elem);
                 }
                 group.push(Cond::Broken.then("\n"));
-                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-                self.tok(nodes, t_rbracket);
+                self.close_group(nodes, group, t_rbracket);
             }
             &Expr::Tuple {
                 span,
@@ -329,10 +332,11 @@ impl<'a> Converter<'a> {
                         impl_.base.t_brackets,
                         &impl_.base.trait_generics,
                     );
+                    group.push(" ".into());
                     self.impl_body(&mut group, &impl_.base);
+                    group.push("\n".into());
                 }
-                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-                self.tok(nodes, def.t_rbrace);
+                self.close_group(nodes, group, def.t_rbrace);
             }
             &Expr::Trait { id } => {
                 let def = &self.cst[id];
@@ -340,13 +344,14 @@ impl<'a> Converter<'a> {
                 self.generics(nodes, &def.generics);
                 nodes.push(" ".into());
                 self.tok(nodes, def.t_lbrace);
-                nodes.push("\n".into());
+                if !def.functions.is_empty() {
+                    nodes.push("\n".into());
+                }
                 let mut group = Vec::new();
                 for method in &def.functions {
                     self.method(&mut group, method);
                 }
-                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-                self.tok(nodes, def.t_rbrace);
+                self.close_group(nodes, group, def.t_rbrace);
                 if let Some((t_for, lbrace, rbrace)) = def.t_attached_impls {
                     nodes.push(" ".into());
                     self.tok_s(nodes, t_for);
@@ -358,7 +363,9 @@ impl<'a> Converter<'a> {
                     for impl_ in &def.impls {
                         self.impl_(&mut group, impl_);
                     }
+                    self.whitespace_before(&mut group, rbrace.start);
                     nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
+                    nodes.push("\n".into());
                     self.tok(nodes, rbrace);
                 }
             }
@@ -484,8 +491,7 @@ impl<'a> Converter<'a> {
                     self.expr(&mut group, val);
                     group.push(",\n".into());
                 }
-                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-                self.tok(nodes, t_rbrace);
+                self.close_group(nodes, group, t_rbrace);
             }
             &Expr::While {
                 t_while,
@@ -577,8 +583,7 @@ impl<'a> Converter<'a> {
                     self.expr(&mut group, arg);
                 }
                 group.push(Cond::Broken.then("\n"));
-                nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-                self.tok_s(nodes, t_rparen);
+                self.close_group(nodes, group, t_rparen);
             }
         }
     }
@@ -667,8 +672,7 @@ impl<'a> Converter<'a> {
         if !first {
             group.push(Cond::Broken.then("\n"));
         }
-        nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-        self.tok(nodes, r);
+        self.close_group(nodes, group, r);
     }
 
     fn emit_whitespace(&self, nodes: &mut Vec<Node>, ws: &str, max_newlines: u32) {
@@ -754,11 +758,13 @@ impl<'a> Converter<'a> {
                 }
                 if !first {
                     group.push(Cond::Flat.then(", "));
-                    group.push(Cond::Broken.then("\n"));
                 }
+                group.push(Cond::Broken.then("\n"));
                 first = false;
                 self.tok_span(&mut group, generic.name);
-                self.opt_tok_space(&mut group, generic.t_colon);
+                if let Some(t) = generic.t_colon {
+                    self.tok_s(&mut group, t);
+                }
                 let mut bounds_group = Vec::new();
                 let mut first_bound = true;
                 for bound in &generic.bounds {
@@ -775,8 +781,8 @@ impl<'a> Converter<'a> {
                     R::Width(0),
                 ))));
             }
-            nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-            self.tok(nodes, r);
+            group.push(Cond::Broken.then("\n"));
+            self.close_group(nodes, group, r);
         }
     }
 
@@ -798,16 +804,15 @@ impl<'a> Converter<'a> {
             group.push(self.ty(ty));
             first = false;
         }
-        nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-        self.tok(nodes, r);
+        self.close_group(nodes, group, r);
     }
 
     fn function(&mut self, nodes: &mut Vec<Node>, id: parser::ast::FunctionId) {
         let function = &self.cst[id];
         let mut group = Vec::new();
+        self.tok(&mut group, function.t_fn);
+        self.generics(&mut group, &function.generics);
         if let Some((l, r)) = function.t_parens {
-            self.tok(&mut group, function.t_fn);
-            self.generics(&mut group, &function.generics);
             self.tok(&mut group, l);
             let mut args = Vec::new();
             let mut first = true;
@@ -828,10 +833,8 @@ impl<'a> Converter<'a> {
                 }
                 self.tok(nodes, t);
             }
-            group.push(Node::Indent(Box::new(Node::Group(args, R::Width(0)))));
-            self.tok(&mut group, r);
-        } else {
-            self.tok(&mut group, function.t_fn);
+            self.whitespace_before(&mut args, r.start);
+            self.close_group(&mut group, args, r);
         }
         if let Some(arrow) = function.t_arrow {
             group.push(" ".into());
@@ -884,7 +887,14 @@ impl<'a> Converter<'a> {
         for method in &base.functions {
             self.method(&mut group, method);
         }
+        self.close_group(nodes, group, base.t_rbrace);
+    }
+
+    /// Ends an indented group while handling the whitespace before the closing token properly
+    /// so a comment before a closing token is still indented with the group
+    fn close_group(&mut self, nodes: &mut Vec<Node>, mut group: Vec<Node>, closing: Token) {
+        self.whitespace_before(&mut group, closing.start);
         nodes.push(Node::Indent(Box::new(Node::Group(group, R::Width(0)))));
-        self.tok(nodes, base.t_rbrace);
+        self.tok(nodes, closing);
     }
 }
