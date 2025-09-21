@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Compiler, Type, TypeId,
+    Compiler, Type, TypeOld,
     compiler::ResolvedTypeContent,
     typing::{LocalTypeIds, TypeInfo, TypeTable},
 };
@@ -9,11 +9,11 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub enum Generics<'a> {
     Empty,
-    Types(&'a [Type], &'a Generics<'a>),
+    Types(&'a [TypeOld], &'a Generics<'a>),
     Local(&'a TypeTable, LocalTypeIds, &'a Generics<'a>),
 }
 impl<'a> Generics<'a> {
-    pub fn function_instance(instance_generics: &'a [Type]) -> Self {
+    pub fn function_instance(instance_generics: &'a [TypeOld]) -> Self {
         Self::Types(instance_generics, &Self::Empty)
     }
     fn get(&self, i: u8, compiler: &mut Compiler, ir_types: &mut ir::Types) -> Option<ir::Type> {
@@ -34,22 +34,24 @@ impl<'a> Generics<'a> {
 pub fn get(
     compiler: &mut Compiler,
     ir_types: &mut ir::Types,
-    ty: &Type,
+    ty: &TypeOld,
     generics: Generics,
 ) -> Option<ir::Type> {
     Some(match ty {
-        &Type::Primitive(p) => get_primitive(p).into(),
-        &Type::Generic(i) => return generics.get(i, compiler, ir_types),
-        Type::Invalid => return None,
-        Type::Pointer(_) => ir::Primitive::Ptr.into(),
-        Type::Array(b) => {
+        &TypeOld::Primitive(p) => get_primitive(p).into(),
+        &TypeOld::Generic(i) => return generics.get(i, compiler, ir_types),
+        TypeOld::Invalid => return None,
+        TypeOld::Pointer(_) => ir::Primitive::Ptr.into(),
+        TypeOld::Array(b) => {
             let (elem, size) = &**b;
             let elem = get(compiler, ir_types, elem, generics)?;
             let elem = ir_types.add(elem);
             ir::Type::Array(elem, *size)
         }
-        Type::Tuple(elems) => ir::Type::Tuple(get_multiple(compiler, ir_types, elems, generics)?),
-        Type::DefId {
+        TypeOld::Tuple(elems) => {
+            ir::Type::Tuple(get_multiple(compiler, ir_types, elems, generics)?)
+        }
+        TypeOld::DefId {
             id,
             generics: def_generics,
         } => get_def(
@@ -58,15 +60,15 @@ pub fn get(
             *id,
             Generics::Types(def_generics, &generics),
         )?,
-        Type::LocalEnum(_) => todo!("local enums"),
-        Type::Function(_) => ir::Primitive::Ptr.into(),
+        TypeOld::LocalEnum(_) => todo!("local enums"),
+        TypeOld::Function(_) => ir::Primitive::Ptr.into(),
     })
 }
 
 pub fn get_multiple(
     compiler: &mut Compiler,
     ir_types: &mut ir::Types,
-    types: &[Type],
+    types: &[TypeOld],
     generics: Generics,
 ) -> Option<ir::TypeIds> {
     let refs = ir_types.add_multiple(types.iter().map(|_| ir::Type::UNIT));
@@ -80,11 +82,12 @@ pub fn get_multiple(
 pub fn get_def(
     compiler: &mut Compiler,
     ir_types: &mut ir::Types,
-    def: TypeId,
+    def: Type,
     generics: Generics,
 ) -> Option<ir::Type> {
     let resolved = Rc::clone(compiler.get_resolved_type_def(def));
     Some(match &resolved.def {
+        ResolvedTypeContent::Builtin(_) => todo!("translate builtin types"),
         ResolvedTypeContent::Struct(def) => {
             let elems = ir_types.add_multiple((0..def.field_count()).map(|_| ir::Type::UNIT));
             for ((_, field), r) in def.all_fields().zip(elems.iter()) {

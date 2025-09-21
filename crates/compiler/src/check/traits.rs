@@ -14,7 +14,7 @@ use crate::{
     compiler::{CheckedTrait, Generics},
     typing::Bound,
 };
-use crate::{InvalidTypeError, Type, TypeId};
+use crate::{InvalidTypeError, Type, TypeOld};
 
 pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
     let module = id.0;
@@ -71,7 +71,7 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
 pub fn check_impl(
     compiler: &mut Compiler,
     impl_: &ast::BaseImpl,
-    impl_ty: &Type,
+    impl_ty: &TypeOld,
     module: ModuleId,
     ast: &Ast,
     trait_generic_count: u8,
@@ -101,7 +101,7 @@ pub fn check_impl(
 
     let impl_tree = ImplTree::from_type(impl_ty);
     let mut function_ids = vec![ast::FunctionId::from_inner(u32::MAX); trait_functions.len()];
-    let base_generics: Vec<Type> = std::iter::once(impl_ty.clone())
+    let base_generics: Vec<TypeOld> = std::iter::once(impl_ty.clone())
         .chain(trait_generics.clone())
         .collect();
     let base_offset = base_generics.len() as u8;
@@ -175,7 +175,7 @@ pub enum Candidates {
 pub enum BaseType {
     Invalid,
     Primitive(ast::Primitive),
-    TypeId(TypeId),
+    TypeId(Type),
     Pointer,
     Tuple,
     Array { count: u32 },
@@ -290,45 +290,45 @@ pub enum ImplTree {
     Base(BaseType, Box<[ImplTree]>),
 }
 impl ImplTree {
-    pub fn from_type(ty: &Type) -> Self {
+    pub fn from_type(ty: &TypeOld) -> Self {
         match ty {
-            Type::Invalid => Self::Base(BaseType::Invalid, Box::new([])),
-            &Type::Primitive(p) => Self::Base(BaseType::Primitive(p), Box::new([])),
-            Type::DefId { id, generics } => Self::Base(
+            TypeOld::Invalid => Self::Base(BaseType::Invalid, Box::new([])),
+            &TypeOld::Primitive(p) => Self::Base(BaseType::Primitive(p), Box::new([])),
+            TypeOld::DefId { id, generics } => Self::Base(
                 BaseType::TypeId(*id),
                 generics.iter().map(Self::from_type).collect(),
             ),
-            Type::Pointer(pointee) => {
+            TypeOld::Pointer(pointee) => {
                 Self::Base(BaseType::Pointer, Box::new([Self::from_type(pointee)]))
             }
-            Type::Array(b) => Self::Base(
+            TypeOld::Array(b) => Self::Base(
                 BaseType::Array { count: b.1 },
                 Box::new([Self::from_type(&b.0)]),
             ),
-            Type::Tuple(elements) => Self::Base(
+            TypeOld::Tuple(elements) => Self::Base(
                 BaseType::Tuple,
                 elements.iter().map(Self::from_type).collect(),
             ),
-            &Type::Generic(generic) => Self::Any { generic },
-            Type::LocalEnum(_) => unreachable!(),
-            Type::Function(_) => todo!(),
+            &TypeOld::Generic(generic) => Self::Any { generic },
+            TypeOld::LocalEnum(_) => unreachable!(),
+            TypeOld::Function(_) => todo!(),
         }
     }
 
-    pub fn matches_type(&self, ty: &Type, impl_generics: &mut [Type]) -> bool {
+    pub fn matches_type(&self, ty: &TypeOld, impl_generics: &mut [TypeOld]) -> bool {
         match self {
             &Self::Any { generic } => {
                 impl_generics[generic as usize] = ty.clone();
                 return true;
             }
             Self::Base(base_type, args) => match ty {
-                Type::Invalid => return true,
-                Type::Primitive(p) => {
+                TypeOld::Invalid => return true,
+                TypeOld::Primitive(p) => {
                     if let BaseType::Primitive(base_p) = base_type {
                         return p == base_p;
                     }
                 }
-                Type::DefId { id, generics } => {
+                TypeOld::DefId { id, generics } => {
                     if let BaseType::TypeId(base_id) = base_type {
                         if id != base_id {
                             return false;
@@ -342,12 +342,12 @@ impl ImplTree {
                         return true;
                     }
                 }
-                Type::Pointer(pointee) => {
+                TypeOld::Pointer(pointee) => {
                     if let BaseType::Pointer = base_type {
                         return args[0].matches_type(pointee, impl_generics);
                     }
                 }
-                Type::Tuple(elems) => {
+                TypeOld::Tuple(elems) => {
                     let BaseType::Tuple = base_type else {
                         return false;
                     };
@@ -361,7 +361,7 @@ impl ImplTree {
                     }
                     return true;
                 }
-                Type::Array(b) => {
+                TypeOld::Array(b) => {
                     let (elem, count) = &**b;
                     let &BaseType::Array { count: base_count } = base_type else {
                         return false;
@@ -371,8 +371,8 @@ impl ImplTree {
                     }
                     args[0].matches_type(elem, impl_generics);
                 }
-                Type::Generic(_) | Type::LocalEnum(_) => return false,
-                Type::Function(_) => return false,
+                TypeOld::Generic(_) | TypeOld::LocalEnum(_) => return false,
+                TypeOld::Function(_) => return false,
             },
         }
         false
@@ -528,7 +528,7 @@ impl ImplTree {
 #[derive(Debug)]
 pub struct Impl {
     pub generics: Generics,
-    pub trait_generics: Vec<Type>,
+    pub trait_generics: Vec<TypeOld>,
     pub impl_ty: ImplTree,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,

@@ -16,7 +16,7 @@ pub use traits::trait_def;
 pub use type_def::type_def;
 
 use crate::{
-    Compiler, Type,
+    Compiler, TypeOld,
     compiler::{
         CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Resolvable, Signature, VarId,
         builtins,
@@ -247,7 +247,7 @@ impl Ctx<'_> {
     fn specify_resolved(
         &mut self,
         ty: LocalTypeId,
-        resolved: &Type,
+        resolved: &TypeOld,
         generics: LocalTypeIds,
         span: impl FnOnce(&Ast) -> TSpan,
     ) {
@@ -272,13 +272,13 @@ impl Ctx<'_> {
         self.hir.types.invalidate(ty);
     }
 
-    pub fn type_from_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+    pub fn type_from_resolved(&mut self, ty: &TypeOld, generics: LocalTypeIds) -> TypeInfoOrIdx {
         self.hir.types.from_generic_resolved(ty, generics)
     }
 
     pub fn types_from_resolved<'t>(
         &mut self,
-        types: impl ExactSizeIterator<Item = &'t Type>,
+        types: impl ExactSizeIterator<Item = &'t TypeOld>,
         generics: LocalTypeIds,
     ) -> LocalTypeIds {
         let hir_types = self.hir.types.add_multiple_unknown(types.len() as u32);
@@ -367,9 +367,9 @@ pub fn verify_main_signature(signature: &Signature) -> Result<(), Option<Compile
         return Err(Some(Error::MainGenerics.at_span(signature.span)));
     }
     match &signature.return_type {
-        Type::Invalid => Err(None),
-        Type::Tuple(elems) if elems.is_empty() => Ok(()),
-        Type::Primitive(p) if p.is_int() => Ok(()),
+        TypeOld::Invalid => Err(None),
+        TypeOld::Tuple(elems) if elems.is_empty() => Ok(()),
+        TypeOld::Primitive(p) if p.is_int() => Ok(()),
         ty => Err(Some(
             Error::InvalidMainReturnType(ty.to_string()).at_span(signature.span),
         )),

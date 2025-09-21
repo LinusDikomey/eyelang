@@ -1,53 +1,143 @@
+mod intern;
+
 use core::fmt;
 
 use parser::ast::Primitive;
 
-id::id!(TypeId);
+use crate::compiler::Generics;
+
+id::id!(Type);
+id::id!(BaseType);
+impl Default for BaseType {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
+macro_rules! builtin_types {
+    ($count: literal $($name: ident = $size: literal)* @generic: $($generic_name: ident = $generics: expr,)*) => {
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum BuiltinType {
+            $($name,)*
+            $($generic_name,)*
+        }
+        impl BuiltinType {
+            pub const COUNT: u32 = $count;
+            pub const VARIANTS: [Self; $count] = [
+                $(Self::$name,)*
+                $(Self::$generic_name,)*
+            ];
+
+            pub fn size(self) -> Option<u64> {
+                match self {
+                    $(Self::$name => Some($size),)*
+                    _ => None,
+                }
+            }
+
+            pub fn generics(self) -> Generics {
+                match self {
+                    $(Self::$generic_name => Generics::new($generics),)*
+                    _ => Generics::EMPTY,
+                }
+            }
+        }
+        #[allow(non_upper_case_globals)]
+        impl BaseType {
+            $( pub const $name: Self = Self(BuiltinType::$name as u32); )*
+            $( pub const $generic_name: Self = Self(BuiltinType::$generic_name as u32); )*
+        }
+        #[allow(non_upper_case_globals)]
+        impl Type {
+            $( pub const $name: Self = Self(BuiltinType::$name as u32); )*
+        }
+    };
+}
+
+builtin_types! {
+    17
+
+    Invalid = 0
+    I8 = 1
+    U8 = 1
+    I16 = 2
+    U16 = 2
+    I32 = 4
+    U32 = 4
+    I64 = 8
+    U64 = 8
+    I128 = 16
+    U128 = 16
+    F32 = 4
+    F64 = 8
+
+    @generic:
+    Tuple = vec![("elems".into(), vec![])],
+    Pointer = vec![("pointee".into(), vec![])],
+    Function = vec![
+        ("return_type".into(), vec![]),
+        ("args".into(), vec![]), // TODO: vararg generics or handle function separately
+    ],
+    Array = vec![
+        ("element".into(), vec![]),
+        ("count".into(), vec![]), // TODO: specify type of generic parameters
+    ],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TypeFull<'a> {
+    Instance(BaseType, &'a [Type]),
+    Generic(u8),
+    LocalEnum(&'a [(u32, Box<[Type]>)]),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Type {
+pub enum TypeOld {
     Primitive(Primitive),
     DefId {
-        id: TypeId,
-        generics: Box<[Type]>,
+        id: Type,
+        generics: Box<[TypeOld]>,
     },
-    Pointer(Box<Type>),
-    Array(Box<(Type, u32)>),
-    Tuple(Box<[Type]>),
+    Pointer(Box<TypeOld>),
+    Array(Box<(TypeOld, u32)>),
+    Tuple(Box<[TypeOld]>),
     /// A generic type that will be replaced by a concrete type in generic instantiations.
     Generic(u8),
     /// a local enum that will only be created from inference
-    LocalEnum(Box<[(u32, Box<[Type]>)]>),
+    LocalEnum(Box<[(u32, Box<[TypeOld]>)]>),
     Function(FunctionType),
     Invalid,
 }
-impl Type {
-    pub fn instantiate_generics(&self, generics: &[Type]) -> Self {
+impl TypeOld {
+    pub fn instantiate_generics(&self, generics: &[TypeOld]) -> Self {
         match self {
-            Type::Primitive(p) => Type::Primitive(*p),
-            Type::DefId {
+            TypeOld::Primitive(p) => TypeOld::Primitive(*p),
+            TypeOld::DefId {
                 id,
                 generics: ty_generics,
-            } => Type::DefId {
+            } => TypeOld::DefId {
                 id: *id,
                 generics: ty_generics
                     .iter()
                     .map(|ty| ty.instantiate_generics(generics))
                     .collect(),
             },
-            Type::Pointer(inner) => Type::Pointer(Box::new(inner.instantiate_generics(generics))),
-            Type::Array(b) => {
-                let (inner, count) = &**b;
-                Type::Array(Box::new((inner.instantiate_generics(generics), *count)))
+            TypeOld::Pointer(inner) => {
+                TypeOld::Pointer(Box::new(inner.instantiate_generics(generics)))
             }
-            Type::Tuple(types) => Type::Tuple(
+            TypeOld::Array(b) => {
+                let (inner, count) = &**b;
+                TypeOld::Array(Box::new((inner.instantiate_generics(generics), *count)))
+            }
+            TypeOld::Tuple(types) => TypeOld::Tuple(
                 types
                     .iter()
                     .map(|ty| ty.instantiate_generics(generics))
                     .collect(),
             ),
-            Type::Generic(idx) => generics[*idx as usize].clone(),
-            Type::LocalEnum(variants) => Type::LocalEnum(
+            TypeOld::Generic(idx) => generics[*idx as usize].clone(),
+            TypeOld::LocalEnum(variants) => TypeOld::LocalEnum(
                 variants
                     .iter()
                     .map(|(ordinal, variant)| {
@@ -61,7 +151,7 @@ impl Type {
                     })
                     .collect(),
             ),
-            Type::Function(f) => Type::Function(FunctionType {
+            TypeOld::Function(f) => TypeOld::Function(FunctionType {
                 params: f
                     .params
                     .iter()
@@ -69,11 +159,11 @@ impl Type {
                     .collect(),
                 return_type: Box::new(f.return_type.instantiate_generics(generics)),
             }),
-            Type::Invalid => Type::Invalid,
+            TypeOld::Invalid => TypeOld::Invalid,
         }
     }
 
-    pub fn instantiate_matches(&self, instance: &Type, generics: &mut [Type]) -> bool {
+    pub fn instantiate_matches(&self, instance: &TypeOld, generics: &mut [TypeOld]) -> bool {
         match self {
             &Self::Generic(i) => {
                 generics[i as usize] = instance.clone();
@@ -131,7 +221,7 @@ impl Type {
         }
     }
 
-    pub fn is_same_as(&self, other: &Type) -> Result<bool, InvalidTypeError> {
+    pub fn is_same_as(&self, other: &TypeOld) -> Result<bool, InvalidTypeError> {
         Ok(match (self, other) {
             (Self::Invalid, _) | (_, Self::Invalid) => return Err(InvalidTypeError),
             (Self::Primitive(a), Self::Primitive(b)) => a == b,
@@ -176,11 +266,11 @@ impl Type {
         })
     }
 }
-impl fmt::Display for Type {
+impl fmt::Display for TypeOld {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Primitive(p) => write!(f, "{}", <&str>::from(*p)),
-            Type::DefId { id, generics } => {
+            TypeOld::Primitive(p) => write!(f, "{}", <&str>::from(*p)),
+            TypeOld::DefId { id, generics } => {
                 write!(f, "TypeId({})", id.idx())?;
                 if !generics.is_empty() {
                     write!(f, "[")?;
@@ -194,12 +284,12 @@ impl fmt::Display for Type {
                 }
                 Ok(())
             }
-            Type::Pointer(pointee) => write!(f, "*{pointee}"),
-            Type::Array(b) => {
+            TypeOld::Pointer(pointee) => write!(f, "*{pointee}"),
+            TypeOld::Array(b) => {
                 let (elem, count) = &**b;
                 write!(f, "[{elem}; {count}]")
             }
-            Type::Tuple(elems) => {
+            TypeOld::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, elem) in elems.iter().enumerate() {
                     if i != 0 {
@@ -213,9 +303,9 @@ impl fmt::Display for Type {
                     write!(f, ")")
                 }
             }
-            Type::Generic(i) => write!(f, "<generic #{i}>"),
-            Type::LocalEnum(_) => write!(f, "LocalEnum: TODO: write"),
-            Type::Function(func) => {
+            TypeOld::Generic(i) => write!(f, "<generic #{i}>"),
+            TypeOld::LocalEnum(_) => write!(f, "LocalEnum: TODO: write"),
+            TypeOld::Function(func) => {
                 write!(f, "fn(")?;
                 for (i, param) in func.params.iter().enumerate() {
                     if i != 0 {
@@ -225,15 +315,15 @@ impl fmt::Display for Type {
                 }
                 write!(f, ") -> {}", func.return_type)
             }
-            Type::Invalid => write!(f, "<invalid>"),
+            TypeOld::Invalid => write!(f, "<invalid>"),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionType {
-    pub params: Box<[Type]>,
-    pub return_type: Box<Type>,
+    pub params: Box<[TypeOld]>,
+    pub return_type: Box<TypeOld>,
 }
 impl FunctionType {
     pub fn is_same_as(&self, b: &Self) -> Result<bool, InvalidTypeError> {

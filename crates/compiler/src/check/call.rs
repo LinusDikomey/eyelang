@@ -5,7 +5,7 @@ use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
     hir::{LValue, Node, NodeIds},
-    types::Type,
+    types::TypeOld,
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
 use error::{Error, span::TSpan};
@@ -48,7 +48,7 @@ pub fn check_call(
                             Node::Invalid
                         })
                     }
-                    ResolvedTypeContent::Enum(_) => {
+                    ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
                         ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
                         Node::Invalid
                     }
@@ -87,13 +87,13 @@ pub fn check_call(
                         return Node::Invalid;
                     }
                     // TODO: figure out noreturn checking, maybe after typecheck is done?
-                    let resolved_generics: Box<[Type]> = generics
+                    let resolved_generics: Box<[TypeOld]> = generics
                         .iter()
                         .map(|ty| {
                             ctx.hir
                                 .types
                                 .to_generic_resolved(ctx.hir.types[ty])
-                                .unwrap_or(Type::Invalid)
+                                .unwrap_or(TypeOld::Invalid)
                         })
                         .collect();
                     let call_noreturn = ctx
@@ -133,7 +133,7 @@ pub fn check_call(
                     &ctx.hir
                         .types
                         .to_generic_resolved(ctx.hir.types[return_type])
-                        .unwrap_or(Type::Invalid),
+                        .unwrap_or(TypeOld::Invalid),
                     &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
                 ),
                 Ok(true)
@@ -473,8 +473,8 @@ pub fn check_call(
 fn call_arg_types(
     arg_count: u32,
     ctx: &mut Ctx,
-    params: &[(Box<str>, Type)],
-    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
+    params: &[(Box<str>, TypeOld)],
+    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
     generics: LocalTypeIds,
     varargs: bool,
     extra_arg_slot: bool,
@@ -518,8 +518,8 @@ fn check_call_args(
     args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     generics: LocalTypeIds,
-    params: &[(Box<str>, Type)],
-    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
+    params: &[(Box<str>, TypeOld)],
+    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
     varargs: bool,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {
@@ -557,7 +557,7 @@ fn check_call_args_inner(
     args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     param_count: u32,
-    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
+    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
     arg_types: LocalTypeIds,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {

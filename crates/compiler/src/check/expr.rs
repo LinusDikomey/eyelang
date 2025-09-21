@@ -8,7 +8,7 @@ use crate::{
     },
     eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    types::{Type, TypeId},
+    types::{Type, TypeOld},
     typing::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 use parser::ast::{
@@ -1076,7 +1076,7 @@ fn check_member_access(
 /// or None if the function is not a valid instance method.
 fn check_is_instance_method(
     signature: &crate::compiler::Signature,
-    id: TypeId,
+    id: Type,
     generics: LocalTypeIds,
     ctx: &mut Ctx,
     span: impl Copy + FnOnce(&Ast) -> TSpan,
@@ -1088,7 +1088,7 @@ fn check_is_instance_method(
     let mut current_ty = self_param_ty;
     loop {
         match current_ty {
-            Type::DefId {
+            TypeOld::DefId {
                 id: self_id,
                 generics: signature_generics,
             } if id == *self_id => {
@@ -1110,7 +1110,7 @@ fn check_is_instance_method(
                 }
                 return Some((required_pointer_count, call_generics));
             }
-            Type::Pointer(inner) => {
+            TypeOld::Pointer(inner) => {
                 required_pointer_count += 1;
                 current_ty = inner;
             }
@@ -1237,8 +1237,8 @@ fn check_type_item_member_access(
     Node::Invalid
 }
 
-pub fn type_from_variant_count(count: u32) -> Type {
-    int_primitive_from_variant_count(count).map_or(Type::Tuple(Box::new([])), Type::Primitive)
+pub fn type_from_variant_count(count: u32) -> TypeOld {
+    int_primitive_from_variant_count(count).map_or(TypeOld::Tuple(Box::new([])), TypeOld::Primitive)
 }
 
 pub fn type_info_from_variant_count(count: u32) -> TypeInfo {

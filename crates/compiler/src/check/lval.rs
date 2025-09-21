@@ -94,7 +94,7 @@ pub fn check(
                                 field_ty,
                             )
                         }
-                        ResolvedTypeContent::Enum(_) => {
+                        ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
                             ctx.emit(Error::NonexistantMember(None).at_span(name_span));
                             (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
                         }

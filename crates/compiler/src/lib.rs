@@ -32,7 +32,7 @@ mod typing;
 pub use compiler::{Compiler, Def, ModuleSpan, ProjectError};
 pub use link::link;
 pub use modules::all_project_files_from_root;
-pub use types::{FunctionType, InvalidTypeError, Type, TypeId};
+pub use types::{FunctionType, InvalidTypeError, TypeOld, Type};
 
 id::id!(ProjectId);
 impl Default for ProjectId {

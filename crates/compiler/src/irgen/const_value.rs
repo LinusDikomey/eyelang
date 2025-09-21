@@ -3,7 +3,7 @@ use std::rc::Rc;
 use parser::ast::Primitive;
 
 use crate::{
-    Compiler, Type,
+    Compiler, TypeOld,
     check::expr::{int_primitive_from_variant_count, type_from_variant_count},
     compiler::ResolvedTypeContent,
     eval::{self, ConstValue},
@@ -16,11 +16,11 @@ pub struct UndefinedValue;
 
 pub fn translate(
     value: &eval::ConstValue,
-    ty: &Type,
+    ty: &TypeOld,
     compiler: &mut Compiler,
     b: &mut [u8],
 ) -> Result<(), UndefinedValue> {
-    if let Type::Invalid = ty {
+    if let TypeOld::Invalid = ty {
         return Err(UndefinedValue);
     }
     // TODO: currently assumes little-endian target arch
@@ -28,20 +28,20 @@ pub fn translate(
         eval::ConstValue::Undefined => return Err(UndefinedValue),
         eval::ConstValue::Unit => debug_assert!(b.is_empty()),
         &eval::ConstValue::Int(val) => match ty {
-            Type::Primitive(Primitive::I8 | Primitive::U8) => b.copy_from_slice(&[val as u8]),
-            Type::Primitive(Primitive::I16 | Primitive::U16) => {
+            TypeOld::Primitive(Primitive::I8 | Primitive::U8) => b.copy_from_slice(&[val as u8]),
+            TypeOld::Primitive(Primitive::I16 | Primitive::U16) => {
                 b.copy_from_slice(&(val as u16).to_le_bytes());
             }
-            Type::Primitive(Primitive::I32 | Primitive::U32) => {
+            TypeOld::Primitive(Primitive::I32 | Primitive::U32) => {
                 b.copy_from_slice(&(val as u32).to_le_bytes());
             }
-            Type::Primitive(Primitive::I64 | Primitive::U64) => {
+            TypeOld::Primitive(Primitive::I64 | Primitive::U64) => {
                 b.copy_from_slice(&u64::to_le_bytes(val));
             }
-            Type::Primitive(Primitive::I128 | Primitive::U128) => {
+            TypeOld::Primitive(Primitive::I128 | Primitive::U128) => {
                 b.copy_from_slice(&(val as u128).to_le_bytes());
             }
-            Type::DefId { id, generics } if *id == compiler.builtins.primitives.bool => {
+            TypeOld::DefId { id, generics } if *id == compiler.builtins.primitives.bool => {
                 debug_assert!(generics.is_empty());
                 debug_assert!(val < 2);
                 b.copy_from_slice(&[val as u8]);
@@ -49,15 +49,16 @@ pub fn translate(
             ty => unreachable!("unexpected type for integer ConstValue: {ty:?}"),
         },
         &eval::ConstValue::Float(val) => match ty {
-            Type::Primitive(Primitive::F32) => b.copy_from_slice(&(val as f32).to_le_bytes()),
-            Type::Primitive(Primitive::F64) => b.copy_from_slice(&val.to_le_bytes()),
+            TypeOld::Primitive(Primitive::F32) => b.copy_from_slice(&(val as f32).to_le_bytes()),
+            TypeOld::Primitive(Primitive::F64) => b.copy_from_slice(&val.to_le_bytes()),
             _ => unreachable!(),
         },
         eval::ConstValue::Aggregate(elems) => match ty {
-            Type::Array(_) => todo!(),
-            Type::DefId { id, generics } => {
+            TypeOld::Array(_) => todo!(),
+            TypeOld::DefId { id, generics } => {
                 let def = Rc::clone(compiler.get_resolved_type_def(*id));
                 match &def.def {
+                    ResolvedTypeContent::Builtin(_) => todo!(),
                     ResolvedTypeContent::Struct(struct_def) => {
                         let mut layout = Layout::EMPTY;
                         debug_assert_eq!(struct_def.field_count() as usize, elems.len());
@@ -104,13 +105,13 @@ pub fn translate(
                     }
                 }
             }
-            Type::Tuple(_) => todo!(),
-            Type::LocalEnum(_) => todo!(),
-            Type::Primitive(_)
-            | Type::Pointer(_)
-            | Type::Generic(_)
-            | Type::Function(_)
-            | Type::Invalid => unreachable!(),
+            TypeOld::Tuple(_) => todo!(),
+            TypeOld::LocalEnum(_) => todo!(),
+            TypeOld::Primitive(_)
+            | TypeOld::Pointer(_)
+            | TypeOld::Generic(_)
+            | TypeOld::Function(_)
+            | TypeOld::Invalid => unreachable!(),
         },
     }
     Ok(())

@@ -16,3 +16,5 @@ tracing.workspace = true
 pathdiff.workspace = true
 
 indexmap = "2.7.0"
+hashbrown = "0.16.0"
+fxhash = "0.2.1"

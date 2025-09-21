@@ -1,7 +1,7 @@
 use parser::ast::{FunctionId, ModuleId, TraitId};
 
 use crate::{
-    Compiler, ProjectId, Type, TypeId,
+    Compiler, ProjectId, Type, TypeOld,
     compiler::ModuleSpan,
     typing::{LocalTypeIds, TypeInfo},
 };
@@ -12,13 +12,13 @@ use super::Def;
 pub struct Builtins {
     pub std: ProjectId,
     pub primitives: Primitives,
-    str_type: Option<TypeId>,
+    str_type: Option<Type>,
     str_eq: Option<(ModuleId, FunctionId)>,
     prelude: Option<ModuleId>,
     panic: Option<(ModuleId, FunctionId)>,
     intrinsic: Option<(ModuleId, FunctionId)>,
     iterator: Option<(ModuleId, TraitId)>,
-    option: Option<TypeId>,
+    option: Option<Type>,
     fn_trait: Option<(ModuleId, TraitId)>,
 }
 impl Builtins {
@@ -28,7 +28,7 @@ impl Builtins {
 }
 
 pub struct Primitives {
-    pub bool: TypeId,
+    pub bool: Type,
 }
 impl Primitives {
     pub fn bool_info(&self) -> TypeInfo {
@@ -46,7 +46,7 @@ impl Primitives {
 impl Default for Primitives {
     fn default() -> Self {
         Self {
-            bool: TypeId::MISSING,
+            bool: Type::MISSING,
         }
     }
 }
@@ -59,17 +59,12 @@ fn resolve_module(compiler: &mut Compiler, module: ModuleId, name: &str) -> Modu
     id
 }
 
-fn resolve_type(
-    compiler: &mut Compiler,
-    module: ModuleId,
-    name: &str,
-    generic_count: u8,
-) -> TypeId {
+fn resolve_type(compiler: &mut Compiler, module: ModuleId, name: &str, generic_count: u8) -> Type {
     let def = compiler.resolve_in_module(module, name, ModuleSpan::MISSING);
     let Def::Type(ty) = def else {
         panic!("Missing builtin type {name}, found {def:?}");
     };
-    let Type::DefId { id, generics } = ty else {
+    let TypeOld::DefId { id, generics } = ty else {
         panic!(
             "Builtin type {name} has unexpected definition, expected a type def with {generic_count} generics but found {ty:?}"
         );
@@ -83,7 +78,7 @@ fn resolve_type(
     id
 }
 
-pub fn get_str(compiler: &mut Compiler) -> TypeId {
+pub fn get_str(compiler: &mut Compiler) -> Type {
     if let Some(str_type) = compiler.builtins.str_type {
         return str_type;
     }
@@ -104,7 +99,7 @@ pub fn get_str_eq(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
         return str_eq;
     }
     let string_module = get_string_module(compiler);
-    let Def::Type(Type::DefId {
+    let Def::Type(TypeOld::DefId {
         id: str_type,
         generics: _,
     }) = compiler.resolve_in_module(string_module, "str", ModuleSpan::MISSING)
@@ -187,7 +182,7 @@ pub fn get_iterator(compiler: &mut Compiler) -> (ModuleId, TraitId) {
     (module, id)
 }
 
-pub fn get_option(compiler: &mut Compiler) -> TypeId {
+pub fn get_option(compiler: &mut Compiler) -> Type {
     if let Some(option) = compiler.builtins.option {
         return option;
     }

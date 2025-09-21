@@ -7,7 +7,7 @@ use parser::ast::{
 };
 
 use crate::{
-    Compiler, Def, Type,
+    Compiler, Def, TypeOld,
     compiler::{Generics, ModuleSpan, ResolvedPrimitive},
     hir::HIRBuilder,
     irgen,
@@ -77,10 +77,10 @@ pub fn def_expr(
 
             match compiler.unresolved_primitive(ty, module, scope) {
                 ResolvedPrimitive::Primitive(p) if p.is_int() => {
-                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(p)))
+                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
                 }
                 ResolvedPrimitive::Infer => {
-                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(Primitive::I32)))
+                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(Primitive::I32)))
                 }
                 ResolvedPrimitive::Invalid => Def::Invalid,
                 _ => {
@@ -94,10 +94,10 @@ pub fn def_expr(
             let val = ConstValue::Float(lit.val);
             match compiler.unresolved_primitive(ty, module, scope) {
                 ResolvedPrimitive::Primitive(p) if p.is_float() => {
-                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(p)))
+                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
                 }
                 ResolvedPrimitive::Infer => {
-                    Def::ConstValue(compiler.add_const_value(val, Type::Primitive(Primitive::F32)))
+                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(Primitive::F32)))
                 }
                 ResolvedPrimitive::Invalid => Def::Invalid,
                 _ => {
@@ -121,8 +121,8 @@ pub fn def_expr(
         }
         Expr::ReturnUnit { .. } => {
             let ty = compiler.resolve_type(ty, module, scope);
-            if !matches!(&ty, Type::Tuple(elems) if elems.is_empty()) {
-                mismatched_type(compiler, Type::Tuple(Box::new([])).to_string());
+            if !matches!(&ty, TypeOld::Tuple(elems) if elems.is_empty()) {
+                mismatched_type(compiler, TypeOld::Tuple(Box::new([])).to_string());
                 return Def::Invalid;
             }
             Def::ConstValue(compiler.add_const_value(ConstValue::Unit, ty))
@@ -158,7 +158,7 @@ pub fn def_expr(
                 (assigned_id, generic_count)
             };
             if generic_count == 0 {
-                Def::Type(Type::DefId {
+                Def::Type(TypeOld::DefId {
                     id,
                     generics: Box::new([]),
                 })
@@ -183,7 +183,7 @@ pub fn def_expr(
                 mismatched_type(compiler, Primitive::Type.to_string());
                 return Def::Invalid;
             }
-            Def::Type(Type::Primitive(primitive))
+            Def::Type(TypeOld::Primitive(primitive))
         }
         _ => {
             tracing::debug!(target: "eval", "Running evaluator for definition of {name}:");
@@ -207,7 +207,7 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
-) -> Result<(ConstValue, Type), ir::eval::Error> {
+) -> Result<(ConstValue, TypeOld), ir::eval::Error> {
     let mut types = TypeTable::new();
     let expected = types.info_from_unresolved(ty, compiler, module, scope);
     let expected = types.add(expected);

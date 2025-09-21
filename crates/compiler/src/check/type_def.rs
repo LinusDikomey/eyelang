@@ -5,13 +5,13 @@ use error::Error;
 use parser::ast::{self, FunctionId, ModuleId, TraitId};
 
 use crate::{
-    Compiler, Def, Type, TypeId,
+    Compiler, Def, TypeOld, Type,
     compiler::{ResolvedEnumDef, ResolvedStructDef, ResolvedTypeContent, ResolvedTypeDef},
 };
 
 use super::traits;
 
-pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
+pub fn type_def(compiler: &mut Compiler, ty: Type) -> ResolvedTypeDef {
     let resolved_ty = &compiler.types[ty.idx()];
     let module = resolved_ty.module;
     let ast_id = resolved_ty.id;
@@ -61,9 +61,9 @@ pub fn type_def(compiler: &mut Compiler, ty: TypeId) -> ResolvedTypeDef {
 
     let mut inherent_trait_impls: DHashMap<(ModuleId, TraitId), Vec<traits::Impl>> = dmap::new();
 
-    let implemented_ty = Type::DefId {
+    let implemented_ty = TypeOld::DefId {
         id: ty,
-        generics: (0..generics.count()).map(Type::Generic).collect(),
+        generics: (0..generics.count()).map(TypeOld::Generic).collect(),
     };
     for trait_impl in &def.impls {
         let trait_def = compiler.resolve_path(module, def.scope, trait_impl.implemented_trait);

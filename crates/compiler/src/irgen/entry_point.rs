@@ -1,13 +1,13 @@
 use ir::{Environment, builder::Builder};
 
-use crate::{Type, compiler::Dialects};
+use crate::{TypeOld, compiler::Dialects};
 
 /// Create function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
 pub fn entry_point(
     eye_main: ir::FunctionId,
-    main_return_ty: &Type,
+    main_return_ty: &TypeOld,
     env: &Environment,
     dialects: &Dialects,
 ) -> ir::Function {
@@ -17,8 +17,8 @@ pub fn entry_point(
     builder.create_and_begin_block([]);
 
     let main_return = match main_return_ty {
-        Type::Tuple(elems) if elems.is_empty() => ir::Type::UNIT,
-        &Type::Primitive(p) if p.is_int() => {
+        TypeOld::Tuple(elems) if elems.is_empty() => ir::Type::UNIT,
+        &TypeOld::Primitive(p) if p.is_int() => {
             ir::Type::Primitive(super::types::get_primitive(p).id())
         }
         _ => unreachable!(),

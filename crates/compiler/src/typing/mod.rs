@@ -13,14 +13,14 @@ mod unify;
 use unify::unify;
 
 use crate::{
-    Compiler, InvalidTypeError, TypeId,
+    Compiler, InvalidTypeError, Type,
     check::{
         expr::{int_primitive_from_variant_count, type_info_from_variant_count},
         traits,
     },
     compiler::{Def, Generics, ModuleSpan, ResolvedTypeContent},
     layout::Layout,
-    types::{FunctionType, Type},
+    types::{BaseType, FunctionType, TypeOld},
 };
 
 id::id!(LocalTypeId);
@@ -138,9 +138,9 @@ impl TypeTable {
         variant_id
     }
 
-    pub fn to_resolved(&self, info: TypeInfo, generics: &[Type]) -> Type {
+    pub fn to_resolved(&self, info: TypeInfo, generics: &[TypeOld]) -> TypeOld {
         match info {
-            TypeInfo::Primitive(p) => Type::Primitive(p),
+            TypeInfo::Primitive(p) => TypeOld::Primitive(p),
             TypeInfo::Unknown
             | TypeInfo::Integer
             | TypeInfo::Float
@@ -150,28 +150,28 @@ impl TypeTable {
                 count: None,
             } => unreachable!("shouldn't convert unfinished type {info:?} to resolved"),
             TypeInfo::Pointer(pointee) => {
-                Type::Pointer(Box::new(self.to_resolved(self[pointee], generics)))
+                TypeOld::Pointer(Box::new(self.to_resolved(self[pointee], generics)))
             }
-            TypeInfo::TypeDef(id, inner_generics) => Type::DefId {
+            TypeInfo::TypeDef(id, inner_generics) => TypeOld::DefId {
                 id,
                 generics: inner_generics
                     .iter()
                     .map(|generic| self.to_resolved(self[generic], generics))
                     .collect(),
             },
-            TypeInfo::Invalid => Type::Invalid,
+            TypeInfo::Invalid => TypeOld::Invalid,
             TypeInfo::Generic(i) => generics[i as usize].clone(),
             TypeInfo::Array {
                 element,
                 count: Some(count),
-            } => Type::Array(Box::new((self.to_resolved(self[element], generics), count))),
-            TypeInfo::Tuple(elems) => Type::Tuple(
+            } => TypeOld::Array(Box::new((self.to_resolved(self[element], generics), count))),
+            TypeInfo::Tuple(elems) => TypeOld::Tuple(
                 elems
                     .iter()
                     .map(|elem| self.to_resolved(self[elem], generics))
                     .collect(),
             ),
-            TypeInfo::Enum(id) => Type::LocalEnum(
+            TypeInfo::Enum(id) => TypeOld::LocalEnum(
                 self.get_enum_variants(id)
                     .iter()
                     .map(|&variant| {
@@ -190,7 +190,7 @@ impl TypeTable {
         }
     }
 
-    pub fn to_generic_resolved(&self, info: TypeInfo) -> Result<Type, ()> {
+    pub fn to_generic_resolved(&self, info: TypeInfo) -> Result<TypeOld, ()> {
         Ok(match info {
             TypeInfo::Unknown
             | TypeInfo::UnknownSatisfying(_)
@@ -200,21 +200,23 @@ impl TypeTable {
                 element: _,
                 count: None,
             } => return Err(()),
-            TypeInfo::Primitive(primitive) => Type::Primitive(primitive),
-            TypeInfo::TypeDef(id, generics) => Type::DefId {
+            TypeInfo::Primitive(primitive) => TypeOld::Primitive(primitive),
+            TypeInfo::TypeDef(id, generics) => TypeOld::DefId {
                 id,
                 generics: generics
                     .iter()
                     .map(|id| self.to_generic_resolved(self[id]))
                     .collect::<Result<_, _>>()?,
             },
-            TypeInfo::Pointer(id) => Type::Pointer(Box::new(self.to_generic_resolved(self[id])?)),
+            TypeInfo::Pointer(id) => {
+                TypeOld::Pointer(Box::new(self.to_generic_resolved(self[id])?))
+            }
             TypeInfo::Array {
                 element,
                 count: Some(count),
-            } => Type::Array(Box::new((self.to_generic_resolved(self[element])?, count))),
+            } => TypeOld::Array(Box::new((self.to_generic_resolved(self[element])?, count))),
             TypeInfo::Enum(_) => todo!(),
-            TypeInfo::Tuple(ids) => Type::Tuple(
+            TypeInfo::Tuple(ids) => TypeOld::Tuple(
                 ids.iter()
                     .map(|id| self.to_generic_resolved(self[id]))
                     .collect::<Result<_, _>>()?,
@@ -222,7 +224,7 @@ impl TypeTable {
             TypeInfo::Function {
                 params,
                 return_type,
-            } => Type::Function(FunctionType {
+            } => TypeOld::Function(FunctionType {
                 params: params
                     .iter()
                     .map(|id| self.to_generic_resolved(self[id]))
@@ -236,8 +238,8 @@ impl TypeTable {
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
             | TypeInfo::EnumVariantItem { .. } => todo!(),
-            TypeInfo::Generic(i) => Type::Generic(i),
-            TypeInfo::Invalid => Type::Invalid,
+            TypeInfo::Generic(i) => TypeOld::Generic(i),
+            TypeInfo::Invalid => TypeOld::Invalid,
         })
     }
 
@@ -328,7 +330,7 @@ impl TypeTable {
         }
     }
 
-    pub fn generic_info_from_resolved(&mut self, ty: &Type) -> TypeInfo {
+    pub fn generic_info_from_resolved(&mut self, ty: &TypeOld) -> TypeInfo {
         let ty = self.from_generic_resolved_internal(ty, None);
         let TypeInfoOrIdx::TypeInfo(info) = ty else {
             // we can't get back a generic since we don't pass in any generics
@@ -337,7 +339,7 @@ impl TypeTable {
         info
     }
 
-    pub fn info_from_resolved(&mut self, ty: &Type) -> TypeInfo {
+    pub fn info_from_resolved(&mut self, ty: &TypeOld) -> TypeInfo {
         let ty = self.from_generic_resolved(ty, LocalTypeIds::EMPTY);
         let TypeInfoOrIdx::TypeInfo(info) = ty else {
             // we can't get back a generic since we don't pass in any generics
@@ -346,20 +348,20 @@ impl TypeTable {
         info
     }
 
-    pub fn from_generic_resolved(&mut self, ty: &Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+    pub fn from_generic_resolved(&mut self, ty: &TypeOld, generics: LocalTypeIds) -> TypeInfoOrIdx {
         self.from_generic_resolved_internal(ty, Some(generics))
     }
     /// Only produces an Index instead of a TypeInfo when the Type is Type::Generic
     /// generics: None will produce generic TypeInfos for generic functions
     fn from_generic_resolved_internal(
         &mut self,
-        ty: &Type,
+        ty: &TypeOld,
         generics: Option<LocalTypeIds>,
     ) -> TypeInfoOrIdx {
         let info = match ty {
-            Type::Invalid => TypeInfo::Invalid,
-            &Type::Primitive(p) => TypeInfo::Primitive(p),
-            Type::DefId {
+            TypeOld::Invalid => TypeInfo::Invalid,
+            &TypeOld::Primitive(p) => TypeInfo::Primitive(p),
+            TypeOld::DefId {
                 id,
                 generics: inner_generics,
             } => {
@@ -371,12 +373,12 @@ impl TypeTable {
                 }
                 TypeInfo::TypeDef(*id, generics_ids)
             }
-            Type::Pointer(pointee) => {
+            TypeOld::Pointer(pointee) => {
                 let pointee = self.from_generic_resolved_internal(pointee, generics);
                 let pointee = self.add_info_or_idx(pointee);
                 TypeInfo::Pointer(pointee)
             }
-            Type::Array(b) => {
+            TypeOld::Array(b) => {
                 let (elem_ty, count) = &**b;
                 let element = self.from_generic_resolved_internal(elem_ty, generics);
                 let element = self.add_info_or_idx(element);
@@ -385,15 +387,15 @@ impl TypeTable {
                     count: Some(*count),
                 }
             }
-            Type::Tuple(elements) => {
+            TypeOld::Tuple(elements) => {
                 TypeInfo::Tuple(self.multiple_from_generic_resolved_internal(elements, generics))
             }
-            &Type::Generic(i) => match generics {
+            &TypeOld::Generic(i) => match generics {
                 Some(generics) => return TypeInfoOrIdx::Idx(generics.nth(i.into()).unwrap()),
                 None => TypeInfo::Generic(i),
             },
-            Type::LocalEnum(_) => todo!("local enum infos"),
-            Type::Function(func) => {
+            TypeOld::LocalEnum(_) => todo!("local enum infos"),
+            TypeOld::Function(func) => {
                 let params = self.add_multiple_unknown(func.params.len() as _);
                 for (param, id) in func.params.iter().zip(params.iter()) {
                     self.types[id.idx()] = self.from_generic_resolved_internal(param, generics);
@@ -410,7 +412,7 @@ impl TypeTable {
 
     pub fn multiple_from_generic_resolved_internal(
         &mut self,
-        types: &[Type],
+        types: &[TypeOld],
         generics: Option<LocalTypeIds>,
     ) -> LocalTypeIds {
         let type_ids = self.add_multiple_unknown(types.len() as _);
@@ -551,8 +553,8 @@ impl TypeTable {
         }
     }
 
-    pub fn compatible_with_type(&self, info: TypeInfo, ty: &Type) -> bool {
-        if let Type::Generic(_) = ty {
+    pub fn compatible_with_type(&self, info: TypeInfo, ty: &TypeOld) -> bool {
+        if let TypeOld::Generic(_) = ty {
             return true;
         }
         #[allow(unused)]
@@ -562,21 +564,25 @@ impl TypeTable {
                 todo!("check bound compatibility")
             }
             TypeInfo::Primitive(p) => {
-                let &Type::Primitive(p2) = ty else {
+                let &TypeOld::Primitive(p2) = ty else {
                     return false;
                 };
                 p == p2
             }
             TypeInfo::Integer => {
-                let Type::Primitive(p) = ty else { return false };
+                let TypeOld::Primitive(p) = ty else {
+                    return false;
+                };
                 p.is_int()
             }
             TypeInfo::Float => {
-                let Type::Primitive(p) = ty else { return false };
+                let TypeOld::Primitive(p) = ty else {
+                    return false;
+                };
                 p.is_float()
             }
             TypeInfo::TypeDef(id, generics) => {
-                let Type::DefId {
+                let TypeOld::DefId {
                     id: ty_id,
                     generics: ty_generics,
                 } = ty
@@ -598,7 +604,7 @@ impl TypeTable {
             TypeInfo::Array { element, count } => todo!(),
             TypeInfo::Enum(_) => todo!(),
             TypeInfo::Tuple(elem_tys) => {
-                let Type::Tuple(elems) = ty else {
+                let TypeOld::Tuple(elems) = ty else {
                     return false;
                 };
                 if elem_tys.count as usize != elems.len() {
@@ -613,7 +619,7 @@ impl TypeTable {
                 params,
                 return_type,
             } => {
-                let Type::Function(func) = ty else {
+                let TypeOld::Function(func) = ty else {
                     return false;
                 };
                 if func.params.len() != params.count as usize {
@@ -650,7 +656,7 @@ impl TypeTable {
                 ordinal,
                 arg_types,
             } => todo!(),
-            TypeInfo::Generic(i) => matches!(ty, &Type::Generic(j) if i == j),
+            TypeInfo::Generic(i) => matches!(ty, &TypeOld::Generic(j) if i == j),
             TypeInfo::Invalid => todo!(),
         }
     }
@@ -741,7 +747,7 @@ impl TypeTable {
     pub fn specify_resolved(
         &mut self,
         id: LocalTypeId,
-        resolved: &Type,
+        resolved: &TypeOld,
         generics: LocalTypeIds,
         function_generics: &Generics,
         compiler: &mut Compiler,
@@ -865,7 +871,7 @@ impl TypeTable {
     pub fn try_specify_resolved(
         &mut self,
         id: LocalTypeId,
-        resolved: &Type,
+        resolved: &TypeOld,
         generics: LocalTypeIds,
         function_generics: &Generics,
         compiler: &mut Compiler,
@@ -1271,7 +1277,7 @@ pub enum TypeInfo {
     Primitive(Primitive),
     Integer,
     Float,
-    TypeDef(TypeId, LocalTypeIds),
+    TypeDef(Type, LocalTypeIds),
     Pointer(LocalTypeId),
     Array {
         element: LocalTypeId,
@@ -1307,7 +1313,7 @@ pub enum TypeInfo {
         method_index: u16,
     },
     EnumVariantItem {
-        enum_type: TypeId,
+        enum_type: Type,
         generics: LocalTypeIds,
         ordinal: u32,
         /// always includes the ordinal type as it's first type
@@ -1351,18 +1357,18 @@ pub enum OrdinalType {
 }
 
 pub fn resolved_layout(
-    ty: &Type,
+    ty: &TypeOld,
     compiler: &mut Compiler,
-    generics: &[Type],
+    generics: &[TypeOld],
 ) -> Result<Layout, InvalidTypeError> {
     Ok(match ty {
-        &Type::Primitive(p) => Layout::primitive(p),
-        Type::DefId {
+        &TypeOld::Primitive(p) => Layout::primitive(p),
+        TypeOld::DefId {
             id,
             generics: ty_generics,
         } => {
             let def = Rc::clone(compiler.get_resolved_type_def(*id));
-            let generics_storage: Box<[Type]>;
+            let generics_storage: Box<[TypeOld]>;
             let generics = if generics.is_empty() {
                 ty_generics
             } else {
@@ -1374,6 +1380,16 @@ pub fn resolved_layout(
                 &generics_storage
             };
             match &def.def {
+                ResolvedTypeContent::Builtin(builtin) => {
+                    if let Some(size) = builtin.size() {
+                        Layout {
+                            size,
+                            alignment: size.max(1),
+                        }
+                    } else {
+                        todo!("layout of generic builtins")
+                    }
+                }
                 ResolvedTypeContent::Struct(struct_def) => {
                     let mut layout = Layout::EMPTY;
                     for (_, ty) in struct_def.all_fields() {
@@ -1396,17 +1412,17 @@ pub fn resolved_layout(
                 }
             }
         }
-        Type::Pointer(_) | Type::Function(_) => Layout::PTR,
-        Type::Array(b) => Layout::array(resolved_layout(&b.0, compiler, generics)?, b.1),
-        Type::Tuple(fields) => {
+        TypeOld::Pointer(_) | TypeOld::Function(_) => Layout::PTR,
+        TypeOld::Array(b) => Layout::array(resolved_layout(&b.0, compiler, generics)?, b.1),
+        TypeOld::Tuple(fields) => {
             let mut layout = Layout::EMPTY;
             for field in fields {
                 layout.accumulate(resolved_layout(field, compiler, generics)?);
             }
             layout
         }
-        &Type::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
-        Type::LocalEnum(variants) => {
+        &TypeOld::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
+        TypeOld::LocalEnum(variants) => {
             let variant_ty = int_primitive_from_variant_count(variants.len() as _);
             let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Layout::primitive);
             let mut layout = Layout::EMPTY;
@@ -1419,6 +1435,6 @@ pub fn resolved_layout(
             }
             layout
         }
-        Type::Invalid => return Err(InvalidTypeError),
+        TypeOld::Invalid => return Err(InvalidTypeError),
     })
 }

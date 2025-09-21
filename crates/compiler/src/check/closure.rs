@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{eval::ConstValueId, types::Type};
+use crate::{eval::ConstValueId, types::TypeOld};
 use error::{Error, span::TSpan};
 use indexmap::IndexMap;
 
@@ -99,7 +99,7 @@ pub fn closure(
     let capture_count = captures.len() as _;
     let capture_nodes = ctx.hir.add_invalid_nodes(capture_count);
     let outside_capture_infos = ctx.hir.types.add_multiple_unknown(capture_count);
-    let capture_types: Box<[Type]> = captures
+    let capture_types: Box<[TypeOld]> = captures
         .into_iter()
         .zip(capture_nodes.iter())
         .zip(outside_capture_infos.iter())
@@ -118,7 +118,7 @@ pub fn closure(
                     ctx.emit(
                         Error::TypeMustBeKnownHere { needed_bound: None }.at_span(TSpan::EMPTY),
                     );
-                    Type::Invalid
+                    TypeOld::Invalid
                 })
         })
         .collect();
@@ -138,7 +138,7 @@ pub fn closure(
                 let mut ty = String::new();
                 types.type_to_string(ctx.compiler, types[id], &mut ty);
                 ctx.emit(Error::CantInferFromBody { ty }.at_span(span));
-                Type::Invalid
+                TypeOld::Invalid
             });
             (name, ty)
         });
@@ -147,7 +147,7 @@ pub fn closure(
         (other_params.collect(), param_types.skip(1))
     } else {
         hir.params.insert(0, captures_param);
-        let captures_parameter = Type::Tuple(capture_types.clone());
+        let captures_parameter = TypeOld::Tuple(capture_types.clone());
         let params_including_captures =
             std::iter::once((String::new().into_boxed_str(), captures_parameter))
                 .chain(other_params)
@@ -165,7 +165,7 @@ pub fn closure(
                 let mut ty = String::new();
                 types.type_to_string(ctx.compiler, types[id], &mut ty);
                 ctx.emit(Error::CantInferFromBody { ty }.at_span(name_span));
-                Type::Invalid
+                TypeOld::Invalid
             });
             // TODO: const value
             if default_val.is_some() {
@@ -181,7 +181,7 @@ pub fn closure(
             let mut ty = String::new();
             types.type_to_string(ctx.compiler, types[return_type], &mut ty);
             ctx.emit(Error::CantInferFromBody { ty }.at_span(function.return_type.span()));
-            Type::Invalid
+            TypeOld::Invalid
         });
     let generic_instance = generics.instantiate(&mut ctx.hir.types, closure_span);
     let symbols = &mut ctx.compiler.get_parsed_module(ctx.module).symbols;

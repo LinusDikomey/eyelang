@@ -16,7 +16,7 @@ use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
-use crate::{Compiler, Type};
+use crate::{Compiler, TypeOld};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
@@ -26,7 +26,7 @@ use crate::{
 pub fn declare_function(
     compiler: &mut Compiler,
     checked: &CheckedFunction,
-    generics: &[Type],
+    generics: &[TypeOld],
 ) -> ir::Function {
     let name = mangle_name(checked, generics);
     let mut types = ir::Types::new();
@@ -128,7 +128,7 @@ pub fn lower_hir(
     hir: &Hir,
     hir_types: &TypeTable,
     to_generate: &mut Vec<FunctionToGenerate>,
-    generics: &[Type],
+    generics: &[TypeOld],
     params: ir::Refs,
     return_ty: ir::TypeId,
 ) -> (ir::FunctionIr, ir::Types) {
@@ -201,8 +201,8 @@ struct Ctx<'a> {
     to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a Hir,
     types: &'a TypeTable,
-    generics: &'a [Type],
-    generic_types: &'a [Type],
+    generics: &'a [TypeOld],
+    generic_types: &'a [TypeOld],
     builder: ir::builder::Builder<&'a mut Compiler>,
     vars: &'a [(Ref, ir::TypeId)],
     control_flow_stack: Vec<ControlFlowEntry>,
@@ -218,12 +218,12 @@ impl Ctx<'_> {
         &mut self,
         module: ModuleId,
         id: ast::FunctionId,
-        generics: Vec<Type>,
+        generics: Vec<TypeOld>,
     ) -> Option<ir::FunctionId> {
         // check that none of the types is invalid, we never wan't to generate an instance for an
         // invalid type. The caller should build a crash point in that case.
         for ty in &generics {
-            if matches!(ty, Type::Invalid) {
+            if matches!(ty, TypeOld::Invalid) {
                 return None;
             }
         }
@@ -937,7 +937,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             // the to_resolved_calls and heap allocation for generics.
             // Only do this when tests exist to ensure TraitCall instantiation works
             let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generics);
-            let trait_generics: Box<[Type]> = trait_generics
+            let trait_generics: Box<[TypeOld]> = trait_generics
                 .iter()
                 .map(|ty| ctx.types.to_resolved(ctx.types[ty], ctx.generics))
                 .collect();
