@@ -3,6 +3,7 @@ use error::Error;
 use crate::{
     Compiler,
     hir::CastType,
+    types::BaseType,
     typing::{LocalTypeId, TypeInfo, TypeTable},
 };
 
@@ -14,56 +15,25 @@ pub fn check(
 ) -> (CastType, Option<Error>) {
     let mut error = None;
     let cast = match (types[from_ty], types[to_ty]) {
-        (TypeInfo::Invalid, _) | (_, TypeInfo::Invalid) => CastType::Invalid,
-        (TypeInfo::Primitive(a), TypeInfo::Primitive(b)) if a.is_int() && b.is_int() => {
-            let from = a.as_int().unwrap();
-            let to = b.as_int().unwrap();
-            if from == to {
-                error = Some(Error::TrivialCast);
-                CastType::Noop
-            } else {
-                CastType::Int { from, to }
+        (TypeInfo::Instance(BaseType::Invalid, _), _)
+        | (_, TypeInfo::Instance(BaseType::Invalid, _)) => CastType::Invalid,
+        (TypeInfo::Instance(a, a_generics), TypeInfo::Instance(b, b_generics))
+            if a_generics.is_empty() && b_generics.is_empty() =>
+        {
+            match (a.as_int(), a.as_float(), b.as_int(), b.as_float()) {
+                _ if a == b => {
+                    error = Some(Error::TrivialCast);
+                    CastType::Noop
+                }
+                _ if a == BaseType::Pointer && b == BaseType::Pointer => CastType::Noop,
+                (Some(from), _, Some(to), _) => CastType::Int { from, to },
+                (Some(from), _, _, Some(to)) => CastType::IntToFloat { from, to },
+                (_, Some(from), Some(to), _) => CastType::FloatToInt { from, to },
+                (_, Some(from), _, Some(to)) => CastType::Float { from, to },
+                (Some(from), _, _, _) if b == BaseType::Pointer => CastType::IntToPtr { from },
+                (_, _, Some(to), _) if a == BaseType::Pointer => CastType::PtrToInt { to },
+                _ => CastType::Invalid,
             }
-        }
-        (TypeInfo::Primitive(a), TypeInfo::Primitive(b)) if a.is_float() && b.is_float() => {
-            let from = a.as_float().unwrap();
-            let to = b.as_float().unwrap();
-            if from == to {
-                error = Some(Error::TrivialCast);
-                CastType::Noop
-            } else {
-                CastType::Float { from, to }
-            }
-        }
-        (TypeInfo::Primitive(a), TypeInfo::Primitive(b)) if a.is_int() && b.is_float() => {
-            CastType::IntToFloat {
-                from: a.as_int().unwrap(),
-                to: b.as_float().unwrap(),
-            }
-        }
-        (TypeInfo::Primitive(a), TypeInfo::Primitive(b)) if a.is_float() && b.is_int() => {
-            CastType::FloatToInt {
-                from: a.as_float().unwrap(),
-                to: b.as_int().unwrap(),
-            }
-        }
-        (TypeInfo::Primitive(a), TypeInfo::Pointer(_)) if a.is_int() => CastType::IntToPtr {
-            from: a.as_int().unwrap(),
-        },
-        (TypeInfo::Pointer(_), TypeInfo::Primitive(b)) if b.is_int() => CastType::PtrToInt {
-            to: b.as_int().unwrap(),
-        },
-        (TypeInfo::Enum { .. }, TypeInfo::Primitive(b)) if b.is_int() => {
-            // TODO: check enum is valid for casting
-            CastType::EnumToInt {
-                from: from_ty,
-                to: b.as_int().unwrap(),
-            }
-        }
-        (TypeInfo::Pointer(_), TypeInfo::Pointer(_)) => {
-            // TODO: check pointees are different, emit TrivialCast otherwise
-            // pointers are untyped in the ir
-            CastType::Noop
         }
         (a, b) => {
             let mut a_string = String::new();

@@ -2,8 +2,9 @@ pub mod builtins;
 mod display;
 
 use std::{
-    cell::RefCell,
+    cell::{OnceCell, RefCell},
     collections::VecDeque,
+    ops::Index,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -27,9 +28,10 @@ use crate::{
     InvalidTypeError, ProjectId, Type,
     check::{self, ProjectErrors, traits},
     eval::{self, ConstValue, ConstValueId},
+    helpers::IteratorExt,
     hir::Hir,
     irgen,
-    types::{BuiltinType, FunctionType, TypeOld},
+    types::{BaseType, BuiltinType, TypeFull, TypeOld, Types},
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
@@ -38,8 +40,8 @@ use builtins::Builtins;
 pub struct Compiler {
     projects: Vec<Project>,
     pub modules: Vec<Module>,
-    pub const_values: Vec<(ConstValue, TypeOld)>,
-    pub types: Vec<ResolvableTypeDef>,
+    pub const_values: Vec<(ConstValue, Type)>,
+    pub types: Types,
     pub ir: ir::Environment,
     pub ir_module: ir::ModuleId,
     pub dialects: Dialects,
@@ -84,7 +86,7 @@ impl Compiler {
             projects: Vec::new(),
             modules: Vec::new(),
             const_values: Vec::new(),
-            types: Vec::new(),
+            types: Types::new(),
             ir,
             ir_module,
             dialects,
@@ -134,29 +136,11 @@ impl Compiler {
         id: ast::TypeId,
         name: Box<str>,
         generic_count: u8,
-    ) -> Type {
-        Self::add_type_def_to_types(module, id, name, generic_count, &mut self.types)
+    ) -> BaseType {
+        self.types.add_base(module, id, name, generic_count)
     }
 
-    pub fn add_type_def_to_types(
-        module: ModuleId,
-        id: ast::TypeId,
-        name: Box<str>,
-        generic_count: u8,
-        types: &mut Vec<ResolvableTypeDef>,
-    ) -> Type {
-        let type_id = Type(types.len() as _);
-        types.push(ResolvableTypeDef {
-            generic_count,
-            module,
-            id,
-            name,
-            resolved: Resolvable::Unresolved,
-        });
-        type_id
-    }
-
-    pub fn add_const_value(&mut self, value: ConstValue, ty: TypeOld) -> ConstValueId {
+    pub fn add_const_value(&mut self, value: ConstValue, ty: Type) -> ConstValueId {
         let id = ConstValueId(self.const_values.len() as _);
         self.const_values.push((value, ty));
         id
@@ -174,15 +158,15 @@ impl Compiler {
         &self.get_parsed_module(module_id).ast
     }
 
-    pub fn get_parsed_module(&mut self, module_id: ModuleId) -> &mut ParsedModule {
+    pub fn get_parsed_module(&self, module_id: ModuleId) -> &ParsedModule {
         if self.modules[module_id.idx()].ast.is_some() {
             // borrowing bullshit
-            let Some(parsed) = &mut self.modules[module_id.idx()].ast else {
+            let Some(parsed) = &self.modules[module_id.idx()].ast else {
                 unreachable!()
             };
             parsed
         } else {
-            let module = &mut self.modules[module_id.idx()];
+            let module = &self.modules[module_id.idx()];
             let project = module.project;
             let root = module.root;
 
@@ -306,7 +290,7 @@ impl Compiler {
             ast::Definition::Use { path, .. } => self.resolve_path(module, scope, path),
             ast::Definition::Global(id) => Def::Global(module, id),
             ast::Definition::Module(id) => Def::Module(id),
-            ast::Definition::Generic(i) => Def::Type(TypeOld::Generic(i)),
+            ast::Definition::Generic(i) => Def::Type(self.types.intern(TypeFull::Generic(i))),
         };
         Some(def)
     }
@@ -319,28 +303,17 @@ impl Compiler {
         id: DefExprId,
     ) -> &Def {
         let parsed = self.get_parsed_module(module);
-        let def_expr = &mut parsed.symbols.def_exprs[id.idx()];
-        match def_expr {
-            Resolvable::Resolved(_) => {
-                // borrowing bullshit
-                let Resolvable::Resolved(def) =
-                    &self.get_parsed_module(module).symbols.def_exprs[id.idx()]
-                else {
-                    unreachable!()
-                };
-                return def;
-            }
-            Resolvable::Resolving => {
-                let ast = self.get_module_ast(module);
-                let (value, _) = ast[id];
-                let span = ast[value].span(ast);
-                self.errors
-                    .emit(module, Error::RecursiveDefinition.at_span(span));
-                return &Def::Invalid;
-            }
-            Resolvable::Unresolved => {
-                *def_expr = Resolvable::Resolving;
-            }
+        let def_expr = &parsed.symbols.def_exprs[id.idx()];
+        if let Some(def) = def_expr.get() {
+            return def;
+        }
+        if def_expr.resolving() {
+            let ast = self.get_module_ast(module);
+            let (value, _) = ast[id];
+            let span = ast[value].span(ast);
+            self.errors
+                .emit(module, Error::RecursiveDefinition.at_span(span));
+            return &Def::Invalid;
         }
         let ast = Rc::clone(&parsed.ast);
         let (value, ty) = &ast[id];
@@ -394,18 +367,13 @@ impl Compiler {
         )
     }
 
-    pub fn resolve_type(
-        &mut self,
-        ty: &UnresolvedType,
-        module: ModuleId,
-        scope: ScopeId,
-    ) -> TypeOld {
+    pub fn resolve_type(&mut self, ty: &UnresolvedType, module: ModuleId, scope: ScopeId) -> Type {
         match ty {
-            &UnresolvedType::Primitive { ty, .. } => TypeOld::Primitive(ty),
+            &UnresolvedType::Primitive { ty, .. } => ty.into(),
             UnresolvedType::Unresolved(path, generics) => {
                 match self.resolve_path(module, scope, *path) {
-                    Def::GenericType(id) => {
-                        let expected = self.get_resolved_type_generic_count(id);
+                    Def::BaseType(base) => {
+                        let expected = self.types.get_base(base).generic_count;
                         let found = generics.as_ref().map_or(0, |g| g.0.len() as u8);
                         if expected != found {
                             let span = generics.as_ref().map_or_else(|| path.span(), |g| g.1);
@@ -413,17 +381,15 @@ impl Compiler {
                                 module,
                                 Error::InvalidGenericCount { expected, found }.at_span(span),
                             );
-                            return TypeOld::Invalid;
+                            return Type::Invalid;
                         }
-                        TypeOld::DefId {
-                            id,
-                            generics: generics
-                                .as_ref()
-                                .map_or::<&[UnresolvedType], _>(&[], |g| &*g.0)
-                                .iter()
-                                .map(|ty| self.resolve_type(ty, module, scope))
-                                .collect(),
-                        }
+                        let generics: Box<[Type]> = generics
+                            .as_ref()
+                            .map_or::<&[UnresolvedType], _>(&[], |g| &*g.0)
+                            .iter()
+                            .map(|ty| self.resolve_type(ty, module, scope))
+                            .collect();
+                        self.types.intern(TypeFull::Instance(base, &generics))
                     }
                     Def::Type(ty) => {
                         if let &Some((_, span)) = generics {
@@ -432,17 +398,19 @@ impl Compiler {
                         }
                         ty
                     }
-                    Def::Invalid => TypeOld::Invalid,
+                    Def::Invalid => Type::Invalid,
                     _ => {
                         self.errors
                             .emit(module, Error::TypeExpected.at_span(ty.span()));
-                        TypeOld::Invalid
+                        Type::Invalid
                     }
                 }
             }
             UnresolvedType::Pointer(b) => {
                 let (pointee, _) = &**b;
-                TypeOld::Pointer(Box::new(self.resolve_type(pointee, module, scope)))
+                let pointee = self.resolve_type(pointee, module, scope);
+                self.types
+                    .intern(TypeFull::Instance(BaseType::Pointer, &[pointee]))
             }
             UnresolvedType::Array(b) => {
                 let (elem_ty, size, _) = &**b;
@@ -450,65 +418,34 @@ impl Compiler {
                 let Some(size) = *size else {
                     panic!("inferred array size is not allowed here")
                 };
-                TypeOld::Array(Box::new((elem_ty, size)))
+                let size_const = self.types.intern(TypeFull::Const(size.into()));
+                self.types
+                    .intern(TypeFull::Instance(BaseType::Array, &[elem_ty, size_const]))
             }
             UnresolvedType::Tuple(elems, _) => {
-                let elems = elems
+                let elems: Box<[_]> = elems
                     .iter()
                     .map(|elem| self.resolve_type(elem, module, scope))
                     .collect();
-                TypeOld::Tuple(elems)
+                self.types
+                    .intern(TypeFull::Instance(BaseType::Tuple, &elems))
             }
             UnresolvedType::Function {
                 span_and_return_type,
                 params,
-            } => TypeOld::Function(FunctionType {
-                params: params
-                    .iter()
-                    .map(|param| self.resolve_type(param, module, scope))
-                    .collect(),
-                return_type: Box::new(self.resolve_type(&span_and_return_type.1, module, scope)),
-            }),
+            } => {
+                let return_and_params: Box<[Type]> = std::iter::once(&span_and_return_type.1)
+                    .chain(params.iter())
+                    .map(|ty| self.resolve_type(ty, module, scope))
+                    .collect();
+                self.types
+                    .intern(TypeFull::Instance(BaseType::Function, &return_and_params))
+            }
             &UnresolvedType::Infer(span) => {
                 self.errors
                     .emit(module, Error::InferredTypeNotAllowedHere.at_span(span));
-                TypeOld::Invalid
+                Type::Invalid
             }
-        }
-    }
-
-    pub fn unresolved_primitive(
-        &mut self,
-        ty: &UnresolvedType,
-        module: ModuleId,
-        scope: ScopeId,
-    ) -> ResolvedPrimitive {
-        match ty {
-            &UnresolvedType::Primitive { ty, .. } => ResolvedPrimitive::Primitive(ty),
-            &UnresolvedType::Unresolved(path, None) => {
-                match self.resolve_path(module, scope, path) {
-                    Def::Invalid => ResolvedPrimitive::Invalid,
-                    Def::Type(TypeOld::Primitive(p)) => ResolvedPrimitive::Primitive(p),
-                    _ => ResolvedPrimitive::Other,
-                }
-            }
-            UnresolvedType::Infer(_) => ResolvedPrimitive::Infer,
-            _ => ResolvedPrimitive::Other,
-        }
-    }
-
-    pub fn unresolved_matches_primitive(
-        &mut self,
-        ty: &UnresolvedType,
-        primitive: Primitive,
-        module: ModuleId,
-        scope: ScopeId,
-    ) -> Result<bool, InvalidTypeError> {
-        match self.unresolved_primitive(ty, module, scope) {
-            ResolvedPrimitive::Infer => Ok(true),
-            ResolvedPrimitive::Primitive(p) => Ok(p == primitive),
-            ResolvedPrimitive::Other => Ok(false),
-            ResolvedPrimitive::Invalid => Err(InvalidTypeError),
         }
     }
 
@@ -575,26 +512,28 @@ impl Compiler {
                                 .emit(ty_module, Error::UnexpectedGenerics.at_span(*generics_span));
                             return Err(SignatureError);
                         }
-                        let TypeOld::Function(function_ty) = &ty else {
+                        let TypeFull::Instance(BaseType::Function, return_and_params) =
+                            self.types.lookup(ty)
+                        else {
                             let span = func_signature_span(self);
                             self.errors.emit(
                                 func_id.0,
                                 Error::MismatchedType {
-                                    expected: ty.to_string(),
+                                    expected: self.types.display(ty).to_string(),
                                     found: "a function".to_owned(),
                                 }
                                 .at_span(span),
                             );
                             return Err(SignatureError);
                         };
-                        match signature.fits_function_type(function_ty) {
+                        match signature.fits_function_type(return_and_params) {
                             Ok(true) => Ok(()),
                             Ok(false) => {
                                 let span = func_signature_span(self);
                                 self.errors.emit(
                                     func_id.0,
                                     Error::MismatchedType {
-                                        expected: ty.to_string(),
+                                        expected: self.types.display(ty).to_string(),
                                         found: "TODO: display function type".to_owned(),
                                     }
                                     .at_span(span),
@@ -709,7 +648,7 @@ impl Compiler {
                                 module,
                                 Error::EvalFailed(err).at_span(ast[default_value].span(ast)),
                             );
-                            (ConstValue::Undefined, TypeOld::Invalid)
+                            (ConstValue::Undefined, Type::Invalid)
                         }
                     }
                 }) {
@@ -781,18 +720,18 @@ impl Compiler {
     pub fn get_impl_method(
         &mut self,
         trait_id: (ModuleId, ast::TraitId),
-        ty: &TypeOld,
-        trait_generics: &[TypeOld],
+        ty: Type,
+        trait_generics: &[Type],
         method_index: u16,
-    ) -> Option<((ModuleId, FunctionId), Vec<TypeOld>)> {
+    ) -> Option<((ModuleId, FunctionId), Vec<Type>)> {
         let mut impl_generics = Vec::new();
-        let def = if let &TypeOld::DefId { id, .. } = ty {
-            Some(Rc::clone(self.get_resolved_type_def(id)))
+        // TODO: why aren't the generics of the type used here
+        let def = if let TypeFull::Instance(base, _generics) = self.types.lookup(ty) {
+            Some(Rc::clone(self.get_resolved_type_def(base)))
         } else {
             None
         };
-
-        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        let checked_trait = Rc::clone(self.get_checked_trait(trait_id.0, trait_id.1)?);
         let impls = def
             .iter()
             .flat_map(|def| {
@@ -803,20 +742,21 @@ impl Compiler {
             .chain(&checked_trait.impls);
         'impls: for impl_ in impls {
             impl_generics.clear();
-            impl_generics.resize(impl_.generics.count().into(), TypeOld::Invalid);
-            if !impl_.impl_ty.matches_type(ty, &mut impl_generics) {
+            impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
+            if !impl_
+                .impl_ty
+                .matches_type(&self.types, ty, &mut impl_generics)
+            {
                 continue 'impls;
             }
             debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
-            for (impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
-                if !impl_ty.instantiate_matches(ty, &mut impl_generics) {
+            for (&impl_ty, &ty) in impl_.trait_generics.iter().zip(trait_generics) {
+                if self.types.instantiate(impl_ty, &impl_generics) != ty {
                     continue 'impls;
                 }
             }
             debug_assert!(
-                impl_generics
-                    .iter()
-                    .all(|ty| !matches!(ty, TypeOld::Invalid)),
+                impl_generics.iter().all(|ty| !matches!(*ty, Type::Invalid)),
                 "impl generics were not properly instantiated"
             );
             return Some((
@@ -862,62 +802,45 @@ impl Compiler {
         &ast[ast[function].associated_name]
     }
 
-    pub fn get_type_name(&self, ty: Type) -> &str {
-        &self.types[ty.idx()].name
+    pub fn get_resolved_type_generic_count(&mut self, ty: BaseType) -> u8 {
+        self.types.get_base(ty).generic_count
     }
 
-    pub fn get_resolved_type_generic_count(&mut self, ty: Type) -> u8 {
-        self.types[ty.idx()].generic_count
-    }
-
-    pub fn get_resolved_type_def(&mut self, ty: Type) -> &Rc<ResolvedTypeDef> {
-        match &self.types[ty.idx()].resolved {
-            Resolvable::Resolved(_) => {
-                // borrowing bullshit
-                let Resolvable::Resolved(id) = &self.types[ty.idx()].resolved else {
-                    unreachable!()
-                };
-                id
-            }
+    pub fn get_resolved_type_def(&mut self, ty: BaseType) -> &Rc<ResolvedTypeDef> {
+        match &self.types.get_base(ty).resolved {
+            Resolvable::Resolved(id) => id,
             Resolvable::Resolving => todo!("handle recursive type definition"),
             Resolvable::Unresolved => {
                 let resolved = check::type_def(self, ty);
-                self.types[ty.idx()].resolved.put(Rc::new(resolved))
+                self.types.get_base(ty).resolved.put(Rc::new(resolved))
             }
         }
     }
 
-    pub fn uninhabited(
-        &mut self,
-        ty: &TypeOld,
-        generics: &[TypeOld],
-    ) -> Result<bool, InvalidTypeError> {
-        Ok(match ty {
-            TypeOld::Primitive(_) => false,
-            TypeOld::DefId {
-                id,
-                generics: inner_generics,
-            } => {
-                let inner_generics: Box<[TypeOld]> = inner_generics
-                    .iter()
-                    .map(|ty| ty.instantiate_generics(generics))
-                    .collect();
-                let def = Rc::clone(self.get_resolved_type_def(*id));
-                def.def.uninhabited(self, &inner_generics)?
+    pub fn is_uninhabited(&self, ty: Type, instance: &Instance) -> Result<bool, InvalidTypeError> {
+        Ok(match self.types.lookup(ty) {
+            TypeFull::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
+            TypeFull::Instance(BaseType::Tuple, items) => items
+                .iter()
+                .try_any(|&item| self.is_uninhabited(item, generics))?,
+            TypeFull::Instance(BaseType::Array, g) => {
+                let &[item, count] = g else { unreachable!() };
+                let TypeFull::Const(n) = self.types.lookup(count) else {
+                    unreachable!()
+                };
+                n != 0 && self.is_uninhabited(item, generics)?
             }
-            TypeOld::Pointer(_) => false,
-            TypeOld::Array(arr) => arr.1 != 0 && self.uninhabited(&arr.0, generics)?,
-            TypeOld::Tuple(fields) => fields.iter().try_fold(false, |b, field| {
-                Ok(b || self.uninhabited(field, generics)?)
-            })?,
-            TypeOld::Generic(_) => false, // TODO: does this cause problems anywhere? a generic type is not *known* to be uninhabited
-            TypeOld::LocalEnum(variants) => variants.iter().try_fold(true, |b, (_, args)| {
-                Ok(b && args
-                    .iter()
-                    .try_fold(false, |b, arg| Ok(b || self.uninhabited(arg, generics)?))?)
-            })?,
-            TypeOld::Function(_) => false,
-            TypeOld::Invalid => return Err(InvalidTypeError),
+            TypeFull::Instance(base, instance_generics) => {
+                todo!("get resolved type and check")
+            }
+            TypeFull::Generic(i) => self.is_uninhabited(generics[usize::from(i)], &[]),
+            TypeFull::LocalEnum(items) => {
+                items.is_empty()
+                    || items
+                        .iter()
+                        .try_all(|(_, args)| args.iter().try_any(|&arg| self.is_uninhabited(arg)))?
+            }
+            TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
         })
     }
 
@@ -1289,22 +1212,50 @@ pub enum ProjectError {
     NonexistentPath(PathBuf),
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub enum Resolvable<T> {
-    #[default]
-    Unresolved,
-    Resolving,
-    Resolved(T),
+pub struct Resolvable<T> {
+    resolving: OnceCell<()>,
+    resolved: OnceCell<T>,
 }
 impl<T> Resolvable<T> {
-    pub fn put(&mut self, resolved: T) -> &mut T {
-        debug_assert!(!matches!(self, Self::Resolved(_)), "put Resolved twice");
-        *self = Self::Resolved(resolved);
-        let Self::Resolved(resolved) = self else {
-            // SAFETY: was just set to resolved variant and we have unique access
-            unsafe { std::hint::unreachable_unchecked() }
-        };
-        resolved
+    pub fn new() -> Self {
+        Self {
+            resolving: OnceCell::new(),
+            resolved: OnceCell::new(),
+        }
+    }
+
+    pub fn resolved(value: T) -> Self {
+        Self {
+            resolving: OnceCell::new(),
+            resolved: OnceCell::from(value),
+        }
+    }
+
+    pub fn start_resolving(&self) {
+        debug_assert!(
+            self.resolved.get().is_none(),
+            "Started resolving but was already resolved"
+        );
+        self.resolving.set(()).expect("started resolving twice");
+    }
+
+    pub fn get(&self) -> Option<&T> {
+        self.resolved.get()
+    }
+
+    pub fn resolving(&self) -> bool {
+        self.resolving.get().is_some()
+    }
+
+    pub fn put(&self, value: T) -> &T {
+        debug_assert!(
+            self.resolving.get().is_some(),
+            "Resolving was not set before putting resolved"
+        );
+        self.resolved
+            .set(value)
+            .unwrap_or_else(|_| panic!("Value was put multiple times"));
+        self.resolved.get().unwrap()
     }
 }
 
@@ -1404,9 +1355,8 @@ impl LocalScope<'_> {
 pub enum Def {
     Invalid,
     Function(ModuleId, ast::FunctionId),
-    // a base type with generics not yet applied to it
-    GenericType(Type),
-    Type(TypeOld),
+    BaseType(BaseType),
+    Type(Type),
     Trait(ModuleId, ast::TraitId),
     ConstValue(ConstValueId),
     Module(ModuleId),
@@ -1424,7 +1374,7 @@ impl Def {
     ) -> Result<Def, Option<&'static str>> {
         match self {
             Def::Invalid => Ok(Def::Invalid),
-            Def::Function(_, _) | Def::Module(_) | Def::GenericType(_) => match ty {
+            Def::Function(_, _) | Def::Module(_) | Def::BaseType(_) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
                 _ => Err(Some("a function")),
             },
@@ -1457,7 +1407,7 @@ impl Def {
         match self {
             Self::Invalid => print!("<invalid>"),
             Self::Function(module, id) => print!("Function({}, {})", module.idx(), id.idx()),
-            Self::GenericType(id) => print!("GenericType({id:?})"),
+            Self::BaseType(id) => print!("GenericType({id:?})"),
             Self::Type(ty) => print!("Type({ty:?})"),
             Self::Trait(module, id) => print!("Trait({}, {})", module.idx(), id.idx()),
             Self::ConstValue(value) => {
@@ -1480,7 +1430,7 @@ impl Def {
                     span: ast[ast[id].scope].span,
                 })
             }
-            Self::GenericType(_) | Self::Type(_) => todo!("spans of types"),
+            Self::BaseType(_) | Self::Type(_) => todo!("spans of types"),
             &Self::Trait(module, id) => {
                 let ast = compiler.get_module_ast(module);
                 Some(ModuleSpan {
@@ -1539,14 +1489,14 @@ pub struct ParsedModule {
     pub instances: IrInstances,
 }
 
-type NamedParams = Box<[(Box<str>, TypeOld, Option<ConstValueId>)]>;
+type NamedParams = Box<[(Box<str>, Type, Option<ConstValueId>)]>;
 
 #[derive(Debug)]
 pub struct Signature {
-    pub params: Box<[(Box<str>, TypeOld)]>,
+    pub params: Box<[(Box<str>, Type)]>,
     pub named_params: NamedParams,
     pub varargs: bool,
-    pub return_type: TypeOld,
+    pub return_type: Type,
     pub generics: Generics,
     pub span: TSpan,
 }
@@ -1555,29 +1505,32 @@ impl Signature {
         self.params.len() + self.named_params.len()
     }
 
-    pub fn all_params(&self) -> impl Iterator<Item = (&str, &TypeOld)> {
+    pub fn all_params(&self) -> impl Iterator<Item = (&str, Type)> {
         self.params
             .iter()
-            .map(|(name, ty)| (&**name, ty))
-            .chain(self.named_params.iter().map(|(name, ty, _)| (&**name, ty)))
+            .map(|(name, ty)| (&**name, *ty))
+            .chain(self.named_params.iter().map(|(name, ty, _)| (&**name, *ty)))
     }
 
-    pub fn fits_function_type(&self, ty: &FunctionType) -> Result<bool, InvalidTypeError> {
+    pub fn fits_function_type(&self, return_and_params: &[Type]) -> Result<bool, InvalidTypeError> {
         if self.generics.count() != 0 {
             return Ok(false);
         }
         if self.varargs {
             return Ok(false);
         }
-        if self.params.len() != ty.params.len() {
+        if !self.named_params.is_empty() {
             return Ok(false);
         }
-        for ((_, arg), ty_arg) in self.all_params().zip(&ty.params) {
+        if self.params.len() != return_and_params.len() - 1 {
+            return Ok(false);
+        }
+        for ((_, arg), &ty_arg) in self.all_params().zip(&return_and_params[1..]) {
             if !arg.is_same_as(ty_arg)? {
                 return Ok(false);
             }
         }
-        if !self.return_type.is_same_as(&ty.return_type)? {
+        if !self.return_type.is_same_as(return_and_params[0])? {
             return Ok(false);
         }
         Ok(true)
@@ -1665,9 +1618,11 @@ impl Generics {
         }
         found.is_some_and(|found| {
             debug_assert_eq!(found.generics.len() as u8, bound.generics.count as u8);
-            for (id, ty) in bound.generics.iter().zip(found.generics.iter()) {
-                let info = types.generic_info_from_resolved(ty);
-                if types.try_specify(id, info, self, compiler).is_err() {
+            for (id, &ty) in bound.generics.iter().zip(found.generics.iter()) {
+                if types
+                    .try_specify(id, TypeInfo::Known(ty), self, compiler)
+                    .is_err()
+                {
                     return false;
                 }
             }
@@ -1678,27 +1633,21 @@ impl Generics {
     pub fn instantiate(&self, types: &mut TypeTable, span: TSpan) -> LocalTypeIds {
         let generics = types.add_multiple_unknown(self.generics.len() as _);
         for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
-            let info = if bounds.is_empty() {
-                TypeInfo::Unknown
-            } else {
-                let bound_ids = types.add_missing_bounds(bounds.len() as _);
-                for (bound, r) in bounds.iter().zip(bound_ids.iter()) {
-                    // TODO: generic trait bounds, assuming no generics for now
-                    let trait_generics = types.add_multiple_unknown(bound.generics.len() as _);
-                    for (ty, r) in bound.generics.iter().zip(trait_generics.iter()) {
-                        let ty = types.from_generic_resolved(ty, generics);
-                        types.replace(r, ty);
-                    }
-                    let bound = crate::typing::Bound {
-                        trait_id: bound.trait_id,
-                        generics: trait_generics,
-                        span,
-                    };
-                    types.replace_bound(r, bound);
+            let bound_ids = types.add_missing_bounds(bounds.len() as _);
+            for (bound, r) in bounds.iter().zip(bound_ids.iter()) {
+                // TODO: generic trait bounds, assuming no generics for now
+                let trait_generics = types.add_multiple_unknown(bound.generics.len() as _);
+                for (&ty, r) in bound.generics.iter().zip(trait_generics.iter()) {
+                    types.replace(r, TypeInfo::Known(ty));
                 }
-                TypeInfo::UnknownSatisfying(bound_ids)
-            };
-            types.replace(r, info);
+                let bound = crate::typing::Bound {
+                    trait_id: bound.trait_id,
+                    generics: trait_generics,
+                    span,
+                };
+                types.replace_bound(r, bound);
+            }
+            types.replace(r, TypeInfo::Unknown(bound_ids));
         }
         generics
     }
@@ -1747,7 +1696,7 @@ impl Generics {
 #[derive(Debug)]
 pub struct TraitBound {
     pub trait_id: (ModuleId, TraitId),
-    pub generics: Box<[TypeOld]>,
+    pub generics: Box<[Type]>,
 }
 
 #[derive(Debug)]
@@ -1784,11 +1733,13 @@ impl ResolvedTypeContent {
     ) -> Result<bool, InvalidTypeError> {
         Ok(match self {
             Self::Builtin(_) => false, // TODO: tuples with uninhabited fields may be uninhabited
-            Self::Struct(struct_def) => struct_def
-                .all_fields()
-                .try_fold(false, |s, (_, field_ty)| {
-                    Ok(s || compiler.uninhabited(field_ty, generics)?)
-                })?,
+            Self::Struct(struct_def) => {
+                struct_def
+                    .all_fields()
+                    .try_fold(false, |s, (_, field_ty)| {
+                        Ok(s || compiler.types.is_generic_uninhabited(field_ty, generics)?)
+                    })?
+            }
             Self::Enum(enum_def) => {
                 enum_def
                     .variants
@@ -1805,15 +1756,15 @@ impl ResolvedTypeContent {
 
 #[derive(Debug)]
 pub struct ResolvedStructDef {
-    pub fields: Box<[(Box<str>, TypeOld)]>,
+    pub fields: Box<[(Box<str>, Type)]>,
     pub named_fields: NamedParams,
 }
 impl ResolvedStructDef {
-    pub fn all_fields(&self) -> impl Iterator<Item = (&str, &TypeOld)> {
+    pub fn all_fields(&self) -> impl Iterator<Item = (&str, Type)> {
         self.fields
             .iter()
-            .map(|(name, ty)| (&**name, ty))
-            .chain(self.named_fields.iter().map(|(name, ty, _)| (&**name, ty)))
+            .map(|(name, ty)| (&**name, *ty))
+            .chain(self.named_fields.iter().map(|(name, ty, _)| (&**name, *ty)))
     }
 
     pub fn field_count(&self) -> u32 {
@@ -1837,7 +1788,7 @@ impl ResolvedStructDef {
             .add_multiple_unknown((self.fields.len() + self.named_fields.len()) as _);
         let mut indexed_field = None;
         for (((field_name, ty), index), r) in self.all_fields().zip(0..).zip(elem_types.iter()) {
-            let ty = ctx.type_from_resolved(ty, generics);
+            let ty = ctx.from_type_instance(ty, generics);
             if field_name == name {
                 indexed_field = Some((index, r));
             }
@@ -1856,10 +1807,10 @@ pub enum ResolvedPrimitive {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedEnumDef {
-    pub variants: Box<[(String, Box<[TypeOld]>)]>,
+    pub variants: Box<[(String, Box<[Type]>)]>,
 }
 impl ResolvedEnumDef {
-    pub fn get_by_name(&self, name: &str) -> Option<(u32, &[TypeOld])> {
+    pub fn get_by_name(&self, name: &str) -> Option<(u32, &[Type])> {
         self.variants
             .iter()
             .zip(0..)
@@ -1876,12 +1827,23 @@ pub struct ResolvableTypeDef {
     pub generic_count: u8,
     pub resolved: Resolvable<Rc<ResolvedTypeDef>>,
 }
+impl Default for ResolvableTypeDef {
+    fn default() -> Self {
+        Self {
+            module: ModuleId::from_inner(0),
+            id: ast::TypeId::from_inner(0),
+            name: "".into(),
+            generic_count: 0,
+            resolved: Resolvable::Unresolved,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ModuleSymbols {
     pub function_signatures: Box<[Resolvable<Rc<Signature>>]>,
     pub functions: Box<[Resolvable<Rc<CheckedFunction>>]>,
-    pub types: Box<[Option<Type>]>,
+    pub types: Box<[Option<BaseType>]>,
     pub globals: Box<[Resolvable<(ConstValue, TypeOld)>]>,
     pub traits: Box<[Resolvable<Rc<CheckedTrait>>]>,
     pub def_exprs: Box<[Resolvable<Def>]>,
@@ -1909,15 +1871,13 @@ impl ModuleSymbols {
     }
 }
 
-#[derive(Debug)]
 pub struct CheckedFunction {
     pub name: String,
-    pub types: TypeTable,
     pub params: LocalTypeIds,
     pub varargs: bool,
     pub return_type: LocalTypeId,
     pub generic_count: u8,
-    pub body: Option<Hir>,
+    pub body_or_types: BodyOrTypes,
 }
 impl CheckedFunction {
     pub fn display<'a>(&'a self, compiler: &'a Compiler) -> display::CheckedFunctionDisplay<'a> {
@@ -1925,6 +1885,29 @@ impl CheckedFunction {
             function: self,
             compiler,
         }
+    }
+
+    pub fn types(&self) -> &[Type] {
+        match &self.body_or_types {
+            BodyOrTypes::Body(hir) => hir.types(),
+            BodyOrTypes::Types(types) => types,
+        }
+    }
+}
+enum BodyOrTypes {
+    Body(Hir),
+    Types(Box<[Type]>),
+}
+impl Index<LocalTypeId> for CheckedFunction {
+    type Output = Type;
+    fn index(&self, index: LocalTypeId) -> &Self::Output {
+        &self.types()[index.idx()]
+    }
+}
+impl Index<LocalTypeIds> for CheckedFunction {
+    type Output = [Type];
+    fn index(&self, index: LocalTypeIds) -> &Self::Output {
+        &self.types()[index.idx as usize..index.idx as usize + index.count as usize]
     }
 }
 
@@ -1957,7 +1940,7 @@ pub struct FunctionToGenerate {
     pub generics: Vec<TypeOld>,
 }
 
-pub fn mangle_name(checked: &CheckedFunction, generics: &[TypeOld]) -> String {
+pub fn mangle_name(checked: &CheckedFunction, types: &Types, generics: &[Type]) -> String {
     let mut name = checked.name.clone();
     if name == "main" {
         name.clear();
@@ -1968,14 +1951,14 @@ pub fn mangle_name(checked: &CheckedFunction, generics: &[TypeOld]) -> String {
         name.reserve(1 + 2 * generics.len());
         name.push('[');
         let mut first = true;
-        for ty in generics {
+        for &ty in generics {
             if first {
                 first = false;
             } else {
                 name.push(',');
             }
             use std::fmt::Write;
-            write!(name, "{ty}").unwrap();
+            write!(name, "{}", types.display(ty)).unwrap();
         }
         name.push(']');
     }
@@ -1998,3 +1981,25 @@ pub fn function_name(
 }
 
 pub struct SignatureError;
+
+#[derive(Default, Clone, Copy)]
+pub struct Instance<'a> {
+    pub types: &'a [Type],
+    pub outer: Option<&'a Instance<'a>>,
+}
+impl<'a> Instance<'a> {
+    const EMPTY: Self = Self {
+        types: &[],
+        outer: None,
+    };
+
+    pub fn outer(&self) -> Instance<'_> {
+        self.outer.copied().unwrap_or(Self::EMPTY)
+    }
+}
+impl<'a> Index<u8> for Instance<'a> {
+    type Output = Type;
+    fn index(&self, index: u8) -> &Self::Output {
+        &self.types[index as usize]
+    }
+}

@@ -8,8 +8,8 @@ use crate::{
     },
     eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    types::{Type, TypeOld},
-    typing::{Bound, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    types::{BaseType, Type, TypeFull, TypeOld},
+    typing::{Bound, Bounds, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 use parser::ast::{
     Ast, Expr, ExprId, ExprIds, FloatLiteral, FunctionId, IntLiteral, ModuleId, Operator,
@@ -60,18 +60,16 @@ pub fn check(
                 }
             }
             if !*noreturn {
-                ctx.specify(expected, TypeInfo::Tuple(LocalTypeIds::EMPTY), |ast| {
-                    ast[expr].span(ast)
-                });
+                ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             }
             Node::Block(item_nodes)
         }
         &Expr::Nested { inner, .. } => check(ctx, inner, scope, expected, return_ty, noreturn),
         &Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ast.src()[span.range()]);
-            let info = lit
-                .ty
-                .map_or(TypeInfo::Integer, |int| TypeInfo::Primitive(int.into()));
+            let info = lit.ty.map_or(TypeInfo::Integer, |int| {
+                TypeInfo::Instance(Primitive::from(int).into(), LocalTypeIds::EMPTY)
+            });
             ctx.specify(expected, info, |_| span);
             Node::IntLiteral {
                 val: lit.val,
@@ -80,9 +78,9 @@ pub fn check(
         }
         &Expr::FloatLiteral { span, .. } => {
             let lit = FloatLiteral::parse(&ast.src()[span.range()]);
-            let info = lit
-                .ty
-                .map_or(TypeInfo::Float, |float| TypeInfo::Primitive(float.into()));
+            let info = lit.ty.map_or(TypeInfo::Float, |float| {
+                TypeInfo::Instance(Primitive::from(float).into(), LocalTypeIds::EMPTY)
+            });
             ctx.specify(expected, info, |_| span);
             Node::FloatLiteral {
                 val: lit.val,
@@ -94,22 +92,20 @@ pub fn check(
             let str_ty = builtins::get_str(ctx.compiler);
             ctx.specify(
                 expected,
-                TypeInfo::TypeDef(str_ty, LocalTypeIds::EMPTY),
+                TypeInfo::Instance(str_ty, LocalTypeIds::EMPTY),
                 |_| span,
             );
             Node::StringLiteral(str)
         }
         &Expr::Array { span, elements, .. } => {
-            // PERF: reuse existing Array TypeInfo @TypeInfoReuse
-            let elem_ty = ctx.hir.types.add_unknown();
-            ctx.specify(
-                expected,
-                TypeInfo::Array {
-                    element: elem_ty,
-                    count: Some(elements.count),
-                },
-                |_| span,
-            );
+            let elem_ty_and_count = ctx.specify_base(expected, BaseType::Array, 2, |_| span);
+            let elem_ty = elem_ty_and_count.nth(0).unwrap();
+            let count = elem_ty_and_count.nth(1).unwrap();
+            let const_count = ctx
+                .compiler
+                .types
+                .intern(TypeFull::Const(elements.count as u64));
+            ctx.specify(count, TypeInfo::Known(const_count), |_| span);
             let nodes = ctx.hir.add_invalid_nodes(elements.count);
             for (node, elem) in nodes.iter().zip(elements) {
                 let elem_node = check(ctx, elem, scope, elem_ty, return_ty, noreturn);
@@ -122,10 +118,7 @@ pub fn check(
             }
         }
         Expr::Tuple { span, elements, .. } => {
-            // PERF: special case the specify for tuples, reusing elem types could be worth it if
-            // a tuple type info was already present. @TypeInfoReuse
-            let elem_types = ctx.hir.types.add_multiple_unknown(elements.count);
-            ctx.specify(expected, TypeInfo::Tuple(elem_types), |_| *span);
+            let elem_types = ctx.specify_base(expected, BaseType::Tuple, elements.count, |_| *span);
             let elems = ctx.hir.add_invalid_nodes(elements.count);
             for ((value, ty), node_id) in elements
                 .into_iter()
@@ -148,24 +141,20 @@ pub fn check(
             node
         }
         &Expr::Primitive { primitive, .. } => {
-            // PERF @TypeInfoReuse
-            let ty = ctx.hir.types.add(TypeInfo::Primitive(primitive));
-            ctx.specify(expected, TypeInfo::TypeItem { ty }, |ast| {
+            ctx.specify(expected, TypeInfo::BaseTypeItem(primitive.into()), |ast| {
                 ast[expr].span(ast)
             });
             Node::Invalid
         }
         &Expr::Type { id } => {
             let generic_count = ctx.ast[id].generic_count();
-            let resolved_id =
+            let base =
                 ctx.compiler
                     .add_type_def(ctx.module, id, "<anonymous type>".into(), generic_count);
-            ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()] = Some(resolved_id);
-            let resolved = ctx.compiler.get_resolved_type_def(resolved_id);
+            ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()] = Some(base);
+            let resolved = ctx.compiler.get_resolved_type_def(base);
             let span = ctx.ast[expr].span(ast);
-            let generics = resolved.generics.instantiate(&mut ctx.hir.types, span);
-            let ty = ctx.hir.types.add(TypeInfo::TypeDef(resolved_id, generics));
-            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+            ctx.specify(expected, TypeInfo::BaseTypeItem(base), |_| span);
             Node::Invalid
         }
         &Expr::Trait { id } => {
@@ -188,11 +177,9 @@ pub fn check(
             val,
             ..
         } => {
-            ctx.specify(expected, TypeInfo::Tuple(LocalTypeIds::EMPTY), |ast| {
-                ast[expr].span(ast)
-            });
+            ctx.specify(expected, TypeInfo::UNIT, |ast| ast[expr].span(ast));
             let mut exhaustion = Exhaustion::None;
-            let ty = ctx.hir.types.info_from_unresolved(
+            let ty = ctx.hir.types.from_annotation(
                 annotated_ty,
                 ctx.compiler,
                 ctx.module,
@@ -230,12 +217,10 @@ pub fn check(
                     Node::Not(ctx.hir.add(value))
                 }
                 UnOp::Ref => {
-                    // PERF: could check if the expected type is already a pointer and avoid extra
-                    // unknown TypeInfo @TypeInfoReuse
-                    let pointee = ctx.hir.types.add(TypeInfo::Unknown);
-                    ctx.specify(expected, TypeInfo::Pointer(pointee), |ast| {
-                        ast[expr].span(ast)
-                    });
+                    let pointee = ctx
+                        .specify_base(expected, BaseType::Pointer, 1, |ast| ast[expr].span(ast))
+                        .nth(0)
+                        .unwrap();
                     let value = check(ctx, inner, scope, pointee, return_ty, noreturn);
                     if let Some(lval) = LValue::try_from_node(&value, &mut ctx.hir) {
                         Node::AddressOf {
@@ -252,7 +237,10 @@ pub fn check(
                     }
                 }
                 UnOp::Deref => {
-                    let ptr_ty = ctx.hir.types.add(TypeInfo::Pointer(expected));
+                    let ptr_ty = ctx
+                        .hir
+                        .types
+                        .add(TypeInfo::Instance(BaseType::Pointer, expected.into()));
                     let value = check(ctx, inner, scope, ptr_ty, return_ty, noreturn);
                     Node::Deref {
                         value: ctx.hir.add(value),
@@ -355,7 +343,7 @@ pub fn check(
             let from_ty = ctx.hir.types.add_unknown();
             let val = check(ctx, *value, scope, from_ty, return_ty, noreturn);
             let val = ctx.hir.add(val);
-            let new_type_info = ctx.hir.types.info_from_unresolved(
+            let new_type_info = ctx.hir.types.from_annotation(
                 new_ty,
                 ctx.compiler,
                 ctx.module,
@@ -384,10 +372,14 @@ pub fn check(
             ctx, left, name_span, expr, scope, expected, return_ty, noreturn,
         ),
         &Expr::Index { expr, idx, .. } => {
-            let array_ty = ctx.hir.types.add(TypeInfo::Array {
-                element: expected,
-                count: None,
-            });
+            let elem_and_count = ctx.hir.types.add_multiple_unknown(2);
+            ctx.hir
+                .types
+                .replace(elem_and_count.nth(0).unwrap(), expected);
+            let array_ty = ctx
+                .hir
+                .types
+                .add(TypeInfo::Instance(BaseType::Array, elem_and_count));
             let array = check(ctx, expr, scope, array_ty, return_ty, noreturn);
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
             let index = check(ctx, idx, scope, index_ty, return_ty, noreturn);
@@ -401,9 +393,10 @@ pub fn check(
             let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
             let tuple_value = check(ctx, left, scope, tuple_ty, return_ty, noreturn);
             let elem_types = match ctx.hir.types[tuple_ty] {
-                TypeInfo::Tuple(ids) => ids,
-                TypeInfo::Invalid => return Node::Invalid,
+                TypeInfo::Instance(BaseType::Tuple, ids) => ids,
+                TypeInfo::Instance(BaseType::Invalid, _) => return Node::Invalid,
                 _ => {
+                    // FIXME: emit invalid type error on a known but wrong type
                     // TODO: could add TupleCountMode and stuff again to unify with tuple with
                     // Size::AtLeast. Not doing that for now since it is very rare.
                     ctx.emit(
@@ -654,17 +647,17 @@ pub fn check(
         } => {
             let iterator_trait = builtins::get_iterator(ctx.compiler);
             let option_ty = builtins::get_option(ctx.compiler);
-            let some_variant_types = ctx
-                .hir
-                .types
-                .add_multiple([TypeInfo::Primitive(Primitive::U8), TypeInfo::Unknown]);
+            let some_variant_types = ctx.hir.types.add_multiple([
+                TypeInfo::from(Primitive::U8),
+                TypeInfo::Unknown(Bounds::EMPTY),
+            ]);
             let item_ty = some_variant_types.nth(1).unwrap();
             let bounds = ctx.hir.types.add_bounds([Bound {
                 trait_id: iterator_trait,
                 generics: item_ty.into(),
                 span: ctx.ast[iter].span(ctx.ast),
             }]);
-            let iter_ty = ctx.hir.types.add(TypeInfo::UnknownSatisfying(bounds));
+            let iter_ty = ctx.hir.types.add(TypeInfo::Unknown(bounds));
             let iter = check(ctx, iter, scope, iter_ty, return_ty, noreturn);
             let iter_var_id = ctx.hir.add_var(iter_ty);
             let decl_iter_var = Node::DeclareWithVal {
@@ -681,7 +674,7 @@ pub fn check(
             let option_item_ty = ctx
                 .hir
                 .types
-                .add(TypeInfo::TypeDef(option_ty, item_ty.into()));
+                .add(TypeInfo::Instance(option_ty, item_ty.into()));
             let iter_var_ref = Node::AddressOf {
                 value: ctx.hir.add_lvalue(LValue::Variable(iter_var_id)),
                 value_ty: iter_ty,
@@ -771,7 +764,7 @@ fn check_ident(
             Node::Capture(id)
         }
         LocalItem::Invalid => {
-            ctx.specify(expected, TypeInfo::Invalid, |_| span);
+            ctx.specify(expected, TypeInfo::INVALID, |_| span);
             ctx.invalidate(expected);
             Node::Invalid
         }
@@ -781,21 +774,17 @@ fn check_ident(
 fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> Node {
     match def {
         Def::Invalid => {
-            ctx.specify(expected, TypeInfo::Invalid, |_| span);
+            ctx.specify(expected, TypeInfo::INVALID, |_| span);
             Node::Invalid
         }
         Def::Function(module, id) => function_item(ctx, module, id, expected, span),
-        Def::GenericType(id) => {
-            let ty = ctx.compiler.get_resolved_type_def(id);
-            let generics = ty.generics.instantiate(&mut ctx.hir.types, span);
-            let ty = ctx.hir.types.add(TypeInfo::TypeDef(id, generics));
-            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+        Def::BaseType(id) => {
+            ctx.specify(expected, TypeInfo::BaseTypeItem(id), |_| span);
             Node::Invalid
         }
         Def::Type(ty) => {
-            let ty = ctx.hir.types.generic_info_from_resolved(&ty);
-            let ty = ctx.hir.types.add(ty);
-            ctx.specify(expected, TypeInfo::TypeItem { ty }, |_| span);
+            let ty = ctx.hir.types.add(TypeInfo::Known(ty));
+            ctx.specify(expected, TypeInfo::TypeItem(ty), |_| span);
             Node::Invalid
         }
         Def::Trait(module, id) => {
@@ -924,10 +913,20 @@ fn check_member_access(
     let left_node = check(ctx, left, scope, left_ty, return_ty, noreturn);
     let name = &ctx.ast.src()[name_span.range()];
     match ctx.hir.types[left_ty] {
-        TypeInfo::TypeItem { ty } => {
+        TypeInfo::BaseTypeItem(base) => {
+            let generic_count = ctx.compiler.types.get_base(base).generic_count;
+            if generic_count != 0 {
+                panic!(
+                    "TODO: let this error with type needs to be known here when getting size of generic base type"
+                );
+            }
+            let type_var = ctx
+                .hir
+                .types
+                .add(TypeInfo::Instance(base, LocalTypeIds::EMPTY));
             return check_type_item_member_access(
                 ctx,
-                ty,
+                type_var,
                 name,
                 name_span,
                 expected,
@@ -974,17 +973,17 @@ fn check_member_access(
     let mut pointer_count = 0;
     loop {
         match ctx.hir.types[current_ty] {
-            TypeInfo::Pointer(pointee) => {
+            TypeInfo::Instance(BaseType::Pointer, pointee) => {
                 pointer_count += 1;
-                current_ty = pointee;
+                current_ty = pointee.nth(0).unwrap();
             }
-            TypeInfo::TypeDef(id, generics) => {
-                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(id));
+            TypeInfo::Instance(base, generics) => {
+                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(base));
                 if let Some(&method) = resolved.methods.get(name) {
                     let module = resolved.module;
                     let signature = Rc::clone(ctx.compiler.get_signature(module, method));
                     let Some((required_pointer_count, call_generics)) =
-                        check_is_instance_method(&signature, id, generics, ctx, |ast| {
+                        check_is_instance_method(&signature, base, generics, ctx, |ast| {
                             ast[expr].span(ast)
                         })
                     else {
@@ -1076,7 +1075,7 @@ fn check_member_access(
 /// or None if the function is not a valid instance method.
 fn check_is_instance_method(
     signature: &crate::compiler::Signature,
-    id: Type,
+    id: BaseType,
     generics: LocalTypeIds,
     ctx: &mut Ctx,
     span: impl Copy + FnOnce(&Ast) -> TSpan,
@@ -1096,7 +1095,7 @@ fn check_is_instance_method(
                 // resolved
                 debug_assert_eq!(generics.count as usize, signature_generics.len());
                 for (ty, signature_ty) in generics.iter().zip(signature_generics) {
-                    ctx.hir.types.specify_resolved(
+                    ctx.hir.types.specify_type_instance(
                         ty,
                         signature_ty,
                         generics,
@@ -1152,7 +1151,7 @@ fn check_type_item_member_access(
     // first check if the member is a special type property
     if let Some(property) = hir::TypeProperty::from_name(name) {
         // TODO: usize type
-        ctx.specify(expected, TypeInfo::Primitive(Primitive::U64), span);
+        ctx.specify(expected, Primitive::U64, span);
         return Node::TypeProperty(ty, property);
     }
     match ctx.hir.types[ty] {
@@ -1199,7 +1198,7 @@ fn check_type_item_member_access(
                         .types
                         .replace(arg_type_iter.next().unwrap(), ordinal_ty);
                     for (r, ty) in arg_type_iter.zip(args.iter()) {
-                        let ty = ctx.type_from_resolved(ty, generics);
+                        let ty = ctx.from_type_instance(ty, generics);
                         ctx.hir.types.replace(r, ty);
                     }
                     ctx.specify(

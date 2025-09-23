@@ -13,6 +13,8 @@ pub mod compiler;
 pub mod error;
 /// compile-time code evaluation
 mod eval;
+/// various helpers
+mod helpers;
 /// high-level intermediate representation that knows type information and resolved identifiers
 mod hir;
 /// hir->ir lowering
@@ -23,6 +25,7 @@ mod layout;
 mod link;
 /// module file path discovery
 mod modules;
+mod segment_list;
 /// find the path of the std library
 pub mod std_path;
 mod types;
@@ -32,7 +35,7 @@ mod typing;
 pub use compiler::{Compiler, Def, ModuleSpan, ProjectError};
 pub use link::link;
 pub use modules::all_project_files_from_root;
-pub use types::{FunctionType, InvalidTypeError, TypeOld, Type};
+pub use types::{FunctionType, InvalidTypeError, Type, TypeOld};
 
 id::id!(ProjectId);
 impl Default for ProjectId {

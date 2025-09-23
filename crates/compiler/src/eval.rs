@@ -7,7 +7,7 @@ use parser::ast::{
 };
 
 use crate::{
-    Compiler, Def, TypeOld,
+    Compiler, Def, Type, TypeOld,
     compiler::{Generics, ModuleSpan, ResolvedPrimitive},
     hir::HIRBuilder,
     irgen,
@@ -79,9 +79,9 @@ pub fn def_expr(
                 ResolvedPrimitive::Primitive(p) if p.is_int() => {
                     Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
                 }
-                ResolvedPrimitive::Infer => {
-                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(Primitive::I32)))
-                }
+                ResolvedPrimitive::Infer => Def::ConstValue(
+                    compiler.add_const_value(val, TypeOld::Primitive(Primitive::I32)),
+                ),
                 ResolvedPrimitive::Invalid => Def::Invalid,
                 _ => {
                     mismatched_type(compiler, "an integer".to_owned());
@@ -96,9 +96,9 @@ pub fn def_expr(
                 ResolvedPrimitive::Primitive(p) if p.is_float() => {
                     Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
                 }
-                ResolvedPrimitive::Infer => {
-                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(Primitive::F32)))
-                }
+                ResolvedPrimitive::Infer => Def::ConstValue(
+                    compiler.add_const_value(val, TypeOld::Primitive(Primitive::F32)),
+                ),
                 ResolvedPrimitive::Invalid => Def::Invalid,
                 _ => {
                     mismatched_type(compiler, "a float".to_owned());
@@ -163,7 +163,7 @@ pub fn def_expr(
                     generics: Box::new([]),
                 })
             } else {
-                Def::GenericType(id)
+                Def::BaseType(id)
             }
         }
         &Expr::Trait { id } => {
@@ -207,12 +207,12 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
-) -> Result<(ConstValue, TypeOld), ir::eval::Error> {
+) -> Result<(ConstValue, Type), ir::eval::Error> {
     let mut types = TypeTable::new();
-    let expected = types.info_from_unresolved(ty, compiler, module, scope);
+    let expected = types.from_annotation(ty, compiler, module, scope);
     let expected = types.add(expected);
     let hir = HIRBuilder::new(types);
-    let (hir, types) = crate::check::check(
+    let hir = crate::check::check(
         compiler,
         ast,
         module,
@@ -224,7 +224,7 @@ pub fn value_expr(
         expected,
         crate::compiler::LocalScopeParent::None,
     );
-    let ty = types.to_resolved(types[expected], &[]);
+    let ty = hir[expected];
     if let crate::hir::Node::Invalid = hir[hir.root_id()] {
         return Ok((ConstValue::Undefined, ty));
     }

@@ -8,6 +8,8 @@ use parser::ast::{FunctionId, ModuleId};
 
 use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
 
+use crate::helpers::IteratorExt;
+use crate::types::{BaseType, TypeFull, Types};
 use crate::{
     Compiler,
     compiler::Signature,
@@ -71,7 +73,7 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
 pub fn check_impl(
     compiler: &mut Compiler,
     impl_: &ast::BaseImpl,
-    impl_ty: &TypeOld,
+    impl_ty: Type,
     module: ModuleId,
     ast: &Ast,
     trait_generic_count: u8,
@@ -171,17 +173,6 @@ pub enum Candidates {
     Unique { instance: TypeInfoOrIdx },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BaseType {
-    Invalid,
-    Primitive(ast::Primitive),
-    TypeId(Type),
-    Pointer,
-    Tuple,
-    Array { count: u32 },
-    Function,
-}
-
 pub fn get_impl_candidates(
     compiler: &mut Compiler,
     bound: &Bound,
@@ -196,10 +187,9 @@ pub fn get_impl_candidates(
     let mut found = None;
     let resolved;
     match ty {
-        // could be a type with inherent impls
-        TypeInfo::Unknown | TypeInfo::UnknownSatisfying(_) => return Candidates::Multiple,
-        TypeInfo::TypeDef(id, _) => {
-            resolved = Rc::clone(compiler.get_resolved_type_def(id));
+        TypeInfo::Unknown(_) => return Candidates::Multiple,
+        TypeInfo::Instance(base, _) => {
+            resolved = Rc::clone(compiler.get_resolved_type_def(base));
             let impls_for_ty = resolved
                 .inherent_trait_impls
                 .get(&bound.trait_id)
@@ -221,11 +211,16 @@ pub fn get_impl_candidates(
                 }
 
                 debug_assert_eq!(generic_bound.generics.len(), bound.generics.count as usize);
-                let compatible = generic_bound
+                let Ok(compatible) = generic_bound
                     .generics
                     .iter()
                     .zip(bound.generics.iter())
-                    .all(|(ty, idx)| types.compatible_with_type(types[idx], ty));
+                    .try_all(|(&ty, idx)| {
+                        types.compatible_with_type(&compiler.types, types[idx], ty)
+                    })
+                else {
+                    return Candidates::Invalid;
+                };
                 if compatible {
                     if compatible_bound.is_some() {
                         return Candidates::Multiple;
@@ -234,10 +229,9 @@ pub fn get_impl_candidates(
                 }
             }
             if let Some(generic_bound) = compatible_bound {
-                for (ty, idx) in generic_bound.generics.iter().zip(bound.generics.iter()) {
+                for (&ty, idx) in generic_bound.generics.iter().zip(bound.generics.iter()) {
                     // type was checked to be compatible so should be safe to replace
-                    let info = types.generic_info_from_resolved(ty);
-                    types.replace_value(idx, info);
+                    types.replace_value(idx, TypeInfo::Known(ty));
                 }
                 return Candidates::Unique {
                     instance: ty.into(),
@@ -270,18 +264,18 @@ pub fn get_impl_candidates(
 }
 
 fn is_candidate_valid(
+    types: &Types,
     impl_: &Impl,
     trait_generics: LocalTypeIds,
     ty: TypeInfo,
-    types: &TypeTable,
-) -> bool {
+    table: &TypeTable,
+) -> Result<bool, InvalidTypeError> {
     debug_assert_eq!(trait_generics.count, impl_.trait_generics.len() as u32);
-    for (idx, ty) in trait_generics.iter().zip(&impl_.trait_generics) {
-        if !types.compatible_with_type(types[idx], ty) {
-            return false;
-        }
-    }
-    impl_.impl_ty.matches_type_info(ty, types)
+    Ok(trait_generics
+        .iter()
+        .zip(&impl_.trait_generics)
+        .try_all(|(idx, &ty)| table.compatible_with_type(types, table[idx], ty))?
+        && impl_.impl_ty.matches_type_info(ty, table))
 }
 
 #[derive(Debug)]
@@ -290,175 +284,85 @@ pub enum ImplTree {
     Base(BaseType, Box<[ImplTree]>),
 }
 impl ImplTree {
-    pub fn from_type(ty: &TypeOld) -> Self {
-        match ty {
-            TypeOld::Invalid => Self::Base(BaseType::Invalid, Box::new([])),
-            &TypeOld::Primitive(p) => Self::Base(BaseType::Primitive(p), Box::new([])),
-            TypeOld::DefId { id, generics } => Self::Base(
-                BaseType::TypeId(*id),
-                generics.iter().map(Self::from_type).collect(),
+    pub fn from_type(types: &Types, ty: Type) -> Self {
+        match types.lookup(ty) {
+            TypeFull::Instance(base, generics) => Self::Base(
+                base,
+                generics
+                    .iter()
+                    .map(|&ty| Self::from_type(types, ty))
+                    .collect(),
             ),
-            TypeOld::Pointer(pointee) => {
-                Self::Base(BaseType::Pointer, Box::new([Self::from_type(pointee)]))
-            }
-            TypeOld::Array(b) => Self::Base(
-                BaseType::Array { count: b.1 },
-                Box::new([Self::from_type(&b.0)]),
-            ),
-            TypeOld::Tuple(elements) => Self::Base(
-                BaseType::Tuple,
-                elements.iter().map(Self::from_type).collect(),
-            ),
-            &TypeOld::Generic(generic) => Self::Any { generic },
-            TypeOld::LocalEnum(_) => unreachable!(),
-            TypeOld::Function(_) => todo!(),
+            TypeFull::Generic(i) => Self::Any { generic: i },
+            TypeFull::LocalEnum(_) => todo!("error on local enum in impl tree"),
+            TypeFull::Const(_) => todo!("error on consts in impl tree"),
         }
     }
 
-    pub fn matches_type(&self, ty: &TypeOld, impl_generics: &mut [TypeOld]) -> bool {
+    pub fn matches_type(&self, types: &Types, ty: Type, instance: &mut [Type]) -> bool {
         match self {
             &Self::Any { generic } => {
-                impl_generics[generic as usize] = ty.clone();
-                return true;
+                let impl_ty = &mut instance[generic as usize];
+                if *impl_ty != Type::Invalid && *impl_ty != ty {
+                    return false;
+                }
+                *impl_ty = ty;
+                true
             }
-            Self::Base(base_type, args) => match ty {
-                TypeOld::Invalid => return true,
-                TypeOld::Primitive(p) => {
-                    if let BaseType::Primitive(base_p) = base_type {
-                        return p == base_p;
-                    }
-                }
-                TypeOld::DefId { id, generics } => {
-                    if let BaseType::TypeId(base_id) = base_type {
-                        if id != base_id {
-                            return false;
-                        }
-                        debug_assert_eq!(generics.len(), args.len());
-                        for (generic, base_type) in generics.iter().zip(args.iter()) {
-                            if !base_type.matches_type(generic, impl_generics) {
-                                return false;
-                            }
-                        }
-                        return true;
-                    }
-                }
-                TypeOld::Pointer(pointee) => {
-                    if let BaseType::Pointer = base_type {
-                        return args[0].matches_type(pointee, impl_generics);
-                    }
-                }
-                TypeOld::Tuple(elems) => {
-                    let BaseType::Tuple = base_type else {
-                        return false;
-                    };
-                    if args.len() != elems.len() {
+            Self::Base(impl_base, impl_generics) => match types.lookup(ty) {
+                TypeFull::Instance(BaseType::Invalid, _) => return true,
+                TypeFull::Instance(base, generics) => {
+                    if base != *impl_base {
                         return false;
                     }
-                    for (elem, base_type) in elems.iter().zip(args) {
-                        if !base_type.matches_type(elem, impl_generics) {
+                    if generics.len() != impl_generics.len() {
+                        return false;
+                    }
+                    for (&generic, impl_generic) in generics.iter().zip(impl_generics.iter()) {
+                        if !impl_generic.matches_type(types, generic, instance) {
                             return false;
                         }
                     }
                     return true;
                 }
-                TypeOld::Array(b) => {
-                    let (elem, count) = &**b;
-                    let &BaseType::Array { count: base_count } = base_type else {
-                        return false;
-                    };
-                    if *count != base_count {
-                        return false;
-                    }
-                    args[0].matches_type(elem, impl_generics);
-                }
-                TypeOld::Generic(_) | TypeOld::LocalEnum(_) => return false,
-                TypeOld::Function(_) => return false,
+                TypeFull::Generic(_) | TypeFull::LocalEnum(_) | TypeFull::Const(_) => return false,
             },
         }
-        false
     }
 
-    pub fn matches_type_info(&self, ty: TypeInfo, types: &TypeTable) -> bool {
+    pub fn matches_type_info(&self, types: &Types, ty: TypeInfo, table: &TypeTable) -> bool {
         match self {
             Self::Any { .. } => true,
-            Self::Base(base_type, args) => {
+            Self::Base(impl_base, args) => {
                 // TODO: pass info about which type doesn't implement a trait on error
                 match ty {
-                    TypeInfo::Invalid | TypeInfo::Unknown => true,
-                    TypeInfo::UnknownSatisfying { .. } => todo!("handle multiple requirements"),
-                    TypeInfo::Primitive(p) => {
-                        let &BaseType::Primitive(base_p) = base_type else {
-                            return false;
-                        };
-                        p == base_p
+                    TypeInfo::Instance(BaseType::Invalid, _) => true,
+                    TypeInfo::Known(ty) => self.matches_type(types, ty, None)
+                    TypeInfo::Unknown(bounds) => {
+                        if !bounds.is_empty() {
+                            todo!("handle multiple requirements")
+                        }
+                        true
                     }
-                    TypeInfo::TypeDef(id, def_generics) => {
-                        let &BaseType::TypeId(base_id) = base_type else {
-                            return false;
-                        };
-                        if id != base_id {
+                    TypeInfo::Integer => impl_base.is_int(),
+                    TypeInfo::Float => impl_base.is_float(),
+                    TypeInfo::Instance(base, def_generics) => {
+                        if *impl_base != base {
                             return false;
                         }
-                        debug_assert_eq!(def_generics.count as usize, args.len());
+                        if def_generics.count as usize != args.len() {
+                            return false;
+                        }
                         for (arg, impl_tree) in def_generics.iter().zip(args) {
-                            if !impl_tree.matches_type_info(types[arg], types) {
+                            if !impl_tree.matches_type_info(table[arg], table) {
                                 return false;
                             }
                         }
                         true
-                    }
-                    TypeInfo::Pointer(pointee) => {
-                        if !matches!(base_type, BaseType::Pointer) {
-                            return false;
-                        }
-                        let [pointee_tree] = &**args else {
-                            unreachable!()
-                        };
-                        pointee_tree.matches_type_info(types[pointee], types)
-                    }
-                    TypeInfo::Tuple(elems) => {
-                        if !matches!(base_type, BaseType::Tuple)
-                            || args.len() != elems.count as usize
-                        {
-                            return false;
-                        }
-                        for (arg, impl_tree) in elems.iter().zip(args) {
-                            if !impl_tree.matches_type_info(types[arg], types) {
-                                return false;
-                            }
-                        }
-                        true
-                    }
-                    TypeInfo::Array { element, count } => {
-                        let &BaseType::Array { count: base_count } = base_type else {
-                            return false;
-                        };
-                        if count.is_some_and(|count| count != base_count) {
-                            return false;
-                        }
-                        let [elem_tree] = &**args else { unreachable!() };
-                        elem_tree.matches_type_info(types[element], types)
-                    }
-                    TypeInfo::Function {
-                        params,
-                        return_type,
-                    } => {
-                        if *base_type != BaseType::Function {
-                            return false;
-                        }
-                        let (return_type_tree, param_trees) = args.split_first().unwrap();
-                        param_trees.len() == params.count as usize
-                            && return_type_tree.matches_type_info(types[return_type], types)
-                            && param_trees
-                                .iter()
-                                .zip(params.iter())
-                                .all(|(tree, ty)| tree.matches_type_info(types[ty], types))
                     }
                     TypeInfo::Enum(_) => false, // TODO: auto impl some traits for local enums
-                    TypeInfo::Integer => matches!(base_type, BaseType::Primitive(p) if p.is_int()),
-                    TypeInfo::Float => matches!(base_type, BaseType::Primitive(p) if p.is_float()),
                     TypeInfo::Generic(_)
-                    | TypeInfo::TypeItem { .. }
+                    | TypeInfo::BaseTypeItem { .. }
                     | TypeInfo::TraitItem { .. }
                     | TypeInfo::FunctionItem { .. }
                     | TypeInfo::ModuleItem { .. }
@@ -528,7 +432,7 @@ impl ImplTree {
 #[derive(Debug)]
 pub struct Impl {
     pub generics: Generics,
-    pub trait_generics: Vec<TypeOld>,
+    pub trait_generics: Vec<Type>,
     pub impl_ty: ImplTree,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,
@@ -546,7 +450,7 @@ impl Impl {
         let impl_generics = self.generics.instantiate(types, span);
         debug_assert_eq!(trait_generics.count, self.trait_generics.len() as u32);
         for (idx, ty) in trait_generics.iter().zip(&self.trait_generics) {
-            types.specify_resolved(
+            types.specify_type_instance(
                 idx,
                 ty,
                 impl_generics,

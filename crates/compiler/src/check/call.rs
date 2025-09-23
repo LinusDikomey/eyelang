@@ -1,11 +1,12 @@
 use std::rc::Rc;
 
+use crate::Type;
 use crate::check::traits;
+use crate::types::BaseType;
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
     hir::{LValue, Node, NodeIds},
-    types::TypeOld,
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
 use error::{Error, span::TSpan};
@@ -26,41 +27,35 @@ pub fn check_call(
     let called_node = expr::check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     let call_span = TSpan::new(call.open_paren_start, call.end);
     match ctx.hir.types[called_ty] {
-        TypeInfo::Invalid => {
+        TypeInfo::Instance(BaseType::Invalid, _) => {
             ctx.invalidate(expected);
             Node::Invalid
         }
-        TypeInfo::TypeItem { ty: item_ty } => match ctx.hir.types[item_ty] {
-            TypeInfo::TypeDef(id, generics) => {
-                debug_assert_eq!(
-                    generics.count,
-                    ctx.compiler.get_resolved_type_generic_count(id) as u32
-                );
-                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(id));
-                match &resolved.def {
-                    ResolvedTypeContent::Struct(struct_def) => {
-                        ctx.unify(expected, item_ty, |ast| ast[expr].span(ast));
-                        check_struct_initializer(
-                            ctx, struct_def, generics, call, scope, return_ty, noreturn,
-                        )
-                        .unwrap_or_else(|_| {
-                            ctx.invalidate(expected);
-                            Node::Invalid
-                        })
-                    }
-                    ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
-                        ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+        TypeInfo::BaseTypeItem(base) => {
+            let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(base));
+            match &resolved.def {
+                ResolvedTypeContent::Struct(struct_def) => {
+                    let generics = ctx
+                        .hir
+                        .types
+                        .add_multiple_unknown(resolved.generics.count().into());
+                    ctx.specify(expected, TypeInfo::Instance(base, generics), |ast| {
+                        ast[expr].span(ast)
+                    });
+                    check_struct_initializer(
+                        ctx, struct_def, generics, call, scope, return_ty, noreturn,
+                    )
+                    .unwrap_or_else(|_| {
+                        ctx.invalidate(expected);
                         Node::Invalid
-                    }
+                    })
+                }
+                ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
+                    ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                    Node::Invalid
                 }
             }
-            TypeInfo::Invalid => Node::Invalid,
-            _ => {
-                ctx.invalidate(expected);
-                ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
-                Node::Invalid
-            }
-        },
+        }
         TypeInfo::FunctionItem {
             module,
             function,
@@ -87,27 +82,27 @@ pub fn check_call(
                         return Node::Invalid;
                     }
                     // TODO: figure out noreturn checking, maybe after typecheck is done?
-                    let resolved_generics: Box<[TypeOld]> = generics
-                        .iter()
-                        .map(|ty| {
-                            ctx.hir
-                                .types
-                                .to_generic_resolved(ctx.hir.types[ty])
-                                .unwrap_or(TypeOld::Invalid)
-                        })
-                        .collect();
-                    let call_noreturn = ctx
-                        .compiler
-                        .uninhabited(&signature.return_type, &resolved_generics);
-                    if let Ok(true) = call_noreturn {
+                    // let resolved_generics: Box<[TypeOld]> = generics
+                    //     .iter()
+                    //     .map(|ty| {
+                    //         ctx.hir
+                    //             .types
+                    //             .to_generic_resolved(ctx.hir.types[ty])
+                    //             .unwrap_or(TypeOld::Invalid)
+                    //     })
+                    //     .collect();
+                    // let call_noreturn = ctx
+                    //     .compiler
+                    //     .uninhabited(&signature.return_type, &resolved_generics);
+                    /*if let Ok(true) = call_noreturn {
                         *noreturn = true;
-                    } else {
-                        // only specify the return type if we are *not* noreturn, otherwise the type
-                        // can be anything since it is a "never" type
-                        ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
-                            ast[expr].span(ast)
-                        });
-                    }
+                    } else {*/
+                    // only specify the return type if we are *not* noreturn, otherwise the type
+                    // can be anything since it is a "never" type
+                    ctx.specify_resolved(expected, signature.return_type, generics, |ast| {
+                        ast[expr].span(ast)
+                    });
+                    // }
 
                     Node::Call {
                         function,
@@ -124,20 +119,21 @@ pub fn check_call(
                 }
             }
         }
-        TypeInfo::Function {
-            params,
-            return_type,
-        } => {
-            let call_noreturn = matches!(
-                ctx.compiler.uninhabited(
-                    &ctx.hir
-                        .types
-                        .to_generic_resolved(ctx.hir.types[return_type])
-                        .unwrap_or(TypeOld::Invalid),
-                    &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
-                ),
-                Ok(true)
-            );
+        TypeInfo::Instance(BaseType::Function, generics) => {
+            let return_type = generics.nth(0).unwrap();
+            let params = generics.skip(1);
+            // TODO: call noreturn checking
+            let call_noreturn = false;
+            // let call_noreturn = matches!(
+            //     ctx.compiler.uninhabited(
+            //         &ctx.hir
+            //             .types
+            //             .to_generic_resolved(ctx.hir.types[return_type])
+            //             .unwrap_or(TypeOld::Invalid),
+            //         &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
+            //     ),
+            //     Ok(true)
+            // );
             ctx.unify(expected, return_type, |_| call_span);
             match check_call_args_inner(
                 ctx,
@@ -185,7 +181,7 @@ pub fn check_call(
             // it was already checked that the first argument fits the self parameter correctly
             let signature_params = &signature.params[1..];
 
-            ctx.specify_resolved(expected, &signature.return_type, generics, |ast| {
+            ctx.specify_resolved(expected, signature.return_type, generics, |ast| {
                 ast[expr].span(ast)
             });
             match check_call_args(
@@ -208,10 +204,11 @@ pub fn check_call(
                     }
                     ctx.hir
                         .modify_node(args.iter().next().unwrap(), called_node);
-                    let self_type = ctx
-                        .hir
-                        .types
-                        .from_generic_resolved(&signature.params[0].1, generics);
+                    let self_type = ctx.hir.types.from_type_instance(
+                        &ctx.compiler.types,
+                        signature.params[0].1,
+                        generics,
+                    );
                     ctx.hir
                         .types
                         .replace(arg_types.iter().next().unwrap(), self_type);
@@ -247,7 +244,7 @@ pub fn check_call(
             ordinal: variant,
             arg_types,
         } => {
-            ctx.specify(expected, TypeInfo::TypeDef(enum_type, generics), |ast| {
+            ctx.specify(expected, TypeInfo::Instance(enum_type, generics), |ast| {
                 ast[expr].span(ast)
             });
             if call.args.count + 1 != arg_types.count {
@@ -307,7 +304,7 @@ pub fn check_call(
             };
             let self_ty = generics.iter().next().unwrap();
             assert!(
-                matches!(ctx.hir.types[self_ty], TypeInfo::Unknown),
+                matches!(ctx.hir.types[self_ty], TypeInfo::Unknown(bounds) if bounds.is_empty()),
                 "TODO: handle existing self bounds"
             );
             let self_bounds = ctx.hir.types.add_bounds([Bound {
@@ -317,8 +314,8 @@ pub fn check_call(
             }]);
             ctx.hir
                 .types
-                .replace(self_ty, TypeInfo::UnknownSatisfying(self_bounds));
-            ctx.specify_resolved(expected, &signature.return_type, generics, |_| span);
+                .replace(self_ty, TypeInfo::Unknown(self_bounds));
+            ctx.specify_resolved(expected, signature.return_type, generics, |_| span);
             match check_call_args(
                 ctx,
                 scope,
@@ -366,7 +363,7 @@ pub fn check_call(
             // TODO: auto ref/deref on called value
             let arg_types = ctx.hir.types.add_multiple_unknown(call.args.len() as _);
             let fn_instance = ctx.hir.types.add_multiple_info_or_idx([
-                TypeInfoOrIdx::TypeInfo(TypeInfo::Tuple(arg_types)),
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Instance(BaseType::Tuple, arg_types)),
                 expected.into(),
             ]);
             assert_eq!(
@@ -473,8 +470,8 @@ pub fn check_call(
 fn call_arg_types(
     arg_count: u32,
     ctx: &mut Ctx,
-    params: &[(Box<str>, TypeOld)],
-    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
+    params: &[(Box<str>, Type)],
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     generics: LocalTypeIds,
     varargs: bool,
     extra_arg_slot: bool,
@@ -497,13 +494,13 @@ fn call_arg_types(
         .hir
         .types
         .add_multiple_unknown(extra_arg_slot as u32 + arg_count + named_params.len() as u32);
-    for (ty, idx) in params
+    for (&ty, idx) in params
         .iter()
         .map(|(_, ty)| ty)
         .chain(named_params.iter().map(|(_, ty, _)| ty))
         .zip(arg_types.iter().skip(extra_arg_slot as usize))
     {
-        let ty = ctx.type_from_resolved(ty, generics);
+        let ty = ctx.from_type_instance(ty, generics);
         ctx.hir.types.replace(idx, ty);
     }
     Ok(arg_types)
@@ -518,8 +515,8 @@ fn check_call_args(
     args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     generics: LocalTypeIds,
-    params: &[(Box<str>, TypeOld)],
-    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
+    params: &[(Box<str>, Type)],
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     varargs: bool,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {
@@ -557,7 +554,7 @@ fn check_call_args_inner(
     args: ExprIds,
     named_args: &[(TSpan, ExprId)],
     param_count: u32,
-    named_params: &[(Box<str>, TypeOld, Option<ConstValueId>)],
+    named_params: &[(Box<str>, Type, Option<ConstValueId>)],
     arg_types: LocalTypeIds,
     extra_arg_slot: bool,
 ) -> Result<(NodeIds, LocalTypeIds), error::CompileError> {

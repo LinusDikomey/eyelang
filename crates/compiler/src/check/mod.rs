@@ -16,12 +16,13 @@ pub use traits::trait_def;
 pub use type_def::type_def;
 
 use crate::{
-    Compiler, TypeOld,
+    Compiler, Type, TypeOld,
     compiler::{
         CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Resolvable, Signature, VarId,
         builtins,
     },
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
+    types::BaseType,
     typing::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
@@ -66,12 +67,11 @@ pub(crate) fn function(
 
     let param_types = types.add_multiple_unknown(signature.total_arg_count() as u32);
     for ((_, param), r) in signature.all_params().zip(param_types.iter()) {
-        let i = TypeInfoOrIdx::TypeInfo(types.generic_info_from_resolved(param));
+        let i = TypeInfoOrIdx::TypeInfo(TypeInfo::Known(param));
         types.replace(r, i);
     }
 
-    let return_type = types.generic_info_from_resolved(&signature.return_type);
-    let return_type = types.add(return_type);
+    let return_type = types.add(TypeInfo::Known(signature.return_type));
 
     let generic_count = signature.generics.count();
     let varargs = signature.varargs;
@@ -83,7 +83,7 @@ pub(crate) fn function(
             .zip(param_types.iter())
             .map(|((name, _), id)| (name.into(), id));
 
-        let (hir, types) = check(
+        let hir = check(
             compiler,
             &ast,
             module,
@@ -125,7 +125,7 @@ pub fn check(
     expr: ExprId,
     expected: LocalTypeId,
     parent_scope: LocalScopeParent,
-) -> (Hir, TypeTable) {
+) -> Hir {
     let params = params.into_iter();
     let mut param_vars = Vec::with_capacity(params.size_hint().0);
     let variables = params
@@ -165,8 +165,7 @@ pub fn check(
         check_ctx.capture_elements_to_replace.is_empty(),
         "non-closure tried to capture something"
     );
-    let (hir, types) = check_ctx.finish(root, param_vars);
-    (hir, types)
+    check_ctx.finish(root, param_vars)
 }
 
 pub struct ProjectErrors {
@@ -244,19 +243,24 @@ impl Ctx<'_> {
             })
     }
 
-    fn specify_resolved(
+    fn specify_base(
         &mut self,
         ty: LocalTypeId,
-        resolved: &TypeOld,
-        generics: LocalTypeIds,
+        base: BaseType,
+        generic_count: u32,
         span: impl FnOnce(&Ast) -> TSpan,
-    ) {
-        // PERF:could special-case this function to avoid instantiating the Type
-        let func_return_ty = self.type_from_resolved(resolved, generics);
-        match func_return_ty {
-            TypeInfoOrIdx::TypeInfo(info) => self.specify(ty, info, span),
-            TypeInfoOrIdx::Idx(idx) => self.unify(ty, idx, span),
-        }
+    ) -> LocalTypeIds {
+        self.hir.types.specify_base(
+            ty,
+            base,
+            generic_count,
+            self.generics,
+            self.compiler,
+            || ModuleSpan {
+                module: self.module,
+                span: span(self.ast),
+            },
+        )
     }
 
     fn unify(&mut self, a: LocalTypeId, b: LocalTypeId, span: impl FnOnce(&Ast) -> TSpan) {
@@ -272,21 +276,10 @@ impl Ctx<'_> {
         self.hir.types.invalidate(ty);
     }
 
-    pub fn type_from_resolved(&mut self, ty: &TypeOld, generics: LocalTypeIds) -> TypeInfoOrIdx {
-        self.hir.types.from_generic_resolved(ty, generics)
-    }
-
-    pub fn types_from_resolved<'t>(
-        &mut self,
-        types: impl ExactSizeIterator<Item = &'t TypeOld>,
-        generics: LocalTypeIds,
-    ) -> LocalTypeIds {
-        let hir_types = self.hir.types.add_multiple_unknown(types.len() as u32);
-        for (r, ty) in hir_types.iter().zip(types) {
-            let ty = self.type_from_resolved(ty, generics);
-            self.hir.types.replace(r, ty);
-        }
-        hir_types
+    pub fn from_type_instance(&mut self, ty: Type, generics: LocalTypeIds) -> TypeInfoOrIdx {
+        self.hir
+            .types
+            .from_type_instance(&self.compiler.types, ty, generics)
     }
 
     fn auto_ref_deref(
@@ -306,7 +299,8 @@ impl Ctx<'_> {
                 value: self.hir.add_lvalue(lval),
                 value_ty,
             };
-            current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
+            current_ty =
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Instance(BaseType::Pointer, value_ty.into()));
             pointer_count += 1
         }
         while pointer_count < required_pointer_count {
@@ -316,15 +310,19 @@ impl Ctx<'_> {
                 value: self.hir.add(value),
                 variable,
             };
-            current_ty = TypeInfoOrIdx::TypeInfo(TypeInfo::Pointer(value_ty));
+            current_ty =
+                TypeInfoOrIdx::TypeInfo(TypeInfo::Instance(BaseType::Pointer, value_ty.into()));
             pointer_count += 1;
         }
         while pointer_count > required_pointer_count {
-            let TypeInfo::Pointer(pointee) = self.hir.types.get_info_or_idx(current_ty) else {
+            let TypeInfo::Instance(BaseType::Pointer, pointee) =
+                self.hir.types.get_info_or_idx(current_ty)
+            else {
                 // the deref was already checked so we know the type is wrapped in
                 // `pointer_count` pointers
                 unreachable!()
             };
+            let pointee = pointee.nth(0).unwrap();
             let prev_value = self.hir.add(value);
             value = Node::Deref {
                 value: prev_value,
@@ -336,10 +334,10 @@ impl Ctx<'_> {
         value
     }
 
-    pub(crate) fn finish(self, root: Node, params: Vec<VarId>) -> (Hir, TypeTable) {
-        let (mut hir, types) =
-            self.hir
-                .finish(root, self.compiler, self.generics, self.module, params);
+    pub(crate) fn finish(self, root: Node, params: Vec<VarId>) -> Hir {
+        let hir = self
+            .hir
+            .finish(root, self.compiler, self.generics, self.module, params);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
                 let error = Error::Inexhaustive.at_span(self.ast[pat].span(self.ast));
@@ -356,6 +354,20 @@ impl Ctx<'_> {
             }
         }
         (hir, types)
+    }
+
+    fn specify_resolved(
+        &self,
+        var: LocalTypeId,
+        ty: Type,
+        generics: LocalTypeIds,
+        span: impl Fn(&Ast) -> TSpan,
+    ) {
+        let info = if generics.is_empty() {
+            TypeInfo::Known(ty)
+        } else {
+        };
+        self.specify(var, info, span);
     }
 }
 

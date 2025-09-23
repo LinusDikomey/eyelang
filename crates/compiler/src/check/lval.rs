@@ -238,7 +238,7 @@ fn def_lvalue(ctx: &mut Ctx, expr: ExprId, def: Def) -> (LValue, LocalTypeId) {
         Def::Global(module, id) => {
             // PERF: cloning type
             let global_ty = ctx.compiler.get_checked_global(module, id).1.clone();
-            let ty = ctx.type_from_resolved(&global_ty, LocalTypeIds::EMPTY);
+            let ty = ctx.from_type_instance(&global_ty, LocalTypeIds::EMPTY);
             let ty = ctx.hir.types.add_info_or_idx(ty);
             (LValue::Global(module, id), ty)
         }

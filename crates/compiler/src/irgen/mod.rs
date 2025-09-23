@@ -12,11 +12,11 @@ use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
 use parser::ast::{self, ModuleId};
 
-use crate::compiler::{Dialects, FunctionToGenerate, builtins, mangle_name};
+use crate::compiler::{builtins, mangle_name, Dialects, FunctionToGenerate, Instance};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
-use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType, resolved_layout};
-use crate::{Compiler, TypeOld};
+use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
+use crate::{Compiler, Type, TypeOld};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
@@ -26,18 +26,17 @@ use crate::{
 pub fn declare_function(
     compiler: &mut Compiler,
     checked: &CheckedFunction,
-    generics: &[TypeOld],
+    generics: &[Type],
 ) -> ir::Function {
     let name = mangle_name(checked, generics);
     let mut types = ir::Types::new();
     // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
     // longer generate a valid signature
-    let params = types::get_multiple_infos(
+    let params = types::get_multiple(
         compiler,
-        &checked.types,
         &mut types,
-        checked.params,
-        types::Generics::function_instance(generics),
+        &checked[checked.params],
+        Instance { types: generics, outer: None },
     )
     .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| ir::Type::UNIT)));
 
@@ -126,7 +125,6 @@ macro_rules! crash_point {
 pub fn lower_hir(
     mut builder: ir::builder::Builder<&mut Compiler>,
     hir: &Hir,
-    hir_types: &TypeTable,
     to_generate: &mut Vec<FunctionToGenerate>,
     generics: &[TypeOld],
     params: ir::Refs,
@@ -140,7 +138,7 @@ pub fn lower_hir(
         .vars
         .iter()
         .map(|&var_ty| {
-            match types::get_from_info(
+            match types::get(
                 builder.env,
                 hir_types,
                 &mut builder.types,
@@ -176,7 +174,6 @@ pub fn lower_hir(
     let mut ctx = Ctx {
         to_generate,
         hir,
-        types: hir_types,
         generics,
         generic_types: generics,
         builder,
@@ -200,9 +197,7 @@ pub fn lower_hir(
 struct Ctx<'a> {
     to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a Hir,
-    types: &'a TypeTable,
-    generics: &'a [TypeOld],
-    generic_types: &'a [TypeOld],
+    generics: &'a [Type],
     builder: ir::builder::Builder<&'a mut Compiler>,
     vars: &'a [(Ref, ir::TypeId)],
     control_flow_stack: Vec<ControlFlowEntry>,
@@ -297,13 +292,12 @@ impl Ctx<'_> {
         }
     }
 
-    fn get_type(&mut self, ty: TypeInfo) -> Result<ir::Type> {
-        types::get_from_info(
+    fn get_type(&mut self, ty: LocalTypeId) -> Result<ir::Type> {
+        types::get(
             self.builder.env,
-            self.types,
             &mut self.builder.types,
-            ty,
-            types::Generics::function_instance(self.generics),
+            self.hir[ty],
+            Instance { types: &self.generics, outer: None },
         )
         .ok_or_else(|| {
             build_crash_point(self);
@@ -312,12 +306,11 @@ impl Ctx<'_> {
     }
 
     fn get_multiple_types(&mut self, ids: LocalTypeIds) -> Result<ir::TypeIds> {
-        types::get_multiple_infos(
+        types::get_multiple(
             self.builder.env,
-            self.types,
             &mut self.builder.types,
-            ids,
-            types::Generics::function_instance(self.generics),
+            &self.hir[ids],
+            Instance { types: &self.generics, outer: None },
         )
         .ok_or_else(|| {
             build_crash_point(self);
@@ -330,6 +323,13 @@ impl Ctx<'_> {
         self.builder
             .append(self.builder.env.dialects.cf.Ret(value, self.unit_ty));
         Err(NoReturn)
+    }
+
+    fn get_instantiated_ty(&mut self, self_ty: LocalTypeId) -> Type {
+        self.builder
+                .env
+                .types
+                .instantiate(self.hir[self_ty], self.generics)
     }
 }
 
@@ -936,10 +936,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             // PERF: could implement get_checked_trait_impl_from_final_types again to avoid
             // the to_resolved_calls and heap allocation for generics.
             // Only do this when tests exist to ensure TraitCall instantiation works
-            let self_ty = ctx.types.to_resolved(ctx.types[self_ty], ctx.generics);
+            let self_ ty = ctx.get_instantiated_ty(self_ty);
+            let self_ty = ctx.hir[self_ty];
             let trait_generics: Box<[TypeOld]> = trait_generics
                 .iter()
-                .map(|ty| ctx.types.to_resolved(ctx.types[ty], ctx.generics))
+                .map(|ty| ctx.types.to_resolved(ctx.hir[ty], ctx.generics))
                 .collect();
             let Some((function, impl_generics)) =
                 ctx.builder

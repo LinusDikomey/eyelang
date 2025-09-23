@@ -166,7 +166,7 @@ impl Lsp {
                 let kind = match def {
                     Def::Invalid => CompletionItemKind::Constant,
                     Def::Function(_, _) => CompletionItemKind::Function,
-                    Def::GenericType(_) => CompletionItemKind::TypeParameter,
+                    Def::BaseType(_) => CompletionItemKind::TypeParameter,
                     Def::Type(_) => CompletionItemKind::Struct, // there is no Type Kind onfortunately
                     Def::Trait(_, _) => CompletionItemKind::Interface,
                     Def::ConstValue(_) => CompletionItemKind::Constant,
@@ -227,7 +227,7 @@ impl Lsp {
                         let ast = self.compiler.get_module_ast(module);
                         (module, ast[ast[trait_id].scope].span)
                     }
-                    Def::GenericType(_) | Def::Type(_) | Def::ConstValue(_) => return None, // TODO
+                    Def::BaseType(_) | Def::Type(_) | Def::ConstValue(_) => return None, // TODO
                 }
             }
             _ => return None,

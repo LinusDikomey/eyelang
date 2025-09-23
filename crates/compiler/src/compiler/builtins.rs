@@ -1,8 +1,9 @@
 use parser::ast::{FunctionId, ModuleId, TraitId};
 
 use crate::{
-    Compiler, ProjectId, Type, TypeOld,
+    Compiler, ProjectId,
     compiler::ModuleSpan,
+    types::BaseType,
     typing::{LocalTypeIds, TypeInfo},
 };
 
@@ -12,13 +13,13 @@ use super::Def;
 pub struct Builtins {
     pub std: ProjectId,
     pub primitives: Primitives,
-    str_type: Option<Type>,
+    str_type: Option<BaseType>,
     str_eq: Option<(ModuleId, FunctionId)>,
     prelude: Option<ModuleId>,
     panic: Option<(ModuleId, FunctionId)>,
     intrinsic: Option<(ModuleId, FunctionId)>,
     iterator: Option<(ModuleId, TraitId)>,
-    option: Option<Type>,
+    option: Option<BaseType>,
     fn_trait: Option<(ModuleId, TraitId)>,
 }
 impl Builtins {
@@ -28,11 +29,11 @@ impl Builtins {
 }
 
 pub struct Primitives {
-    pub bool: Type,
+    pub bool: BaseType,
 }
 impl Primitives {
     pub fn bool_info(&self) -> TypeInfo {
-        TypeInfo::TypeDef(self.bool, LocalTypeIds::EMPTY)
+        TypeInfo::Instance(self.bool, LocalTypeIds::EMPTY)
     }
 
     pub fn resolve(compiler: &mut Compiler) -> Primitives {
@@ -46,7 +47,7 @@ impl Primitives {
 impl Default for Primitives {
     fn default() -> Self {
         Self {
-            bool: Type::MISSING,
+            bool: BaseType::MISSING,
         }
     }
 }
@@ -59,26 +60,25 @@ fn resolve_module(compiler: &mut Compiler, module: ModuleId, name: &str) -> Modu
     id
 }
 
-fn resolve_type(compiler: &mut Compiler, module: ModuleId, name: &str, generic_count: u8) -> Type {
+fn resolve_type(
+    compiler: &mut Compiler,
+    module: ModuleId,
+    name: &str,
+    generic_count: u8,
+) -> BaseType {
     let def = compiler.resolve_in_module(module, name, ModuleSpan::MISSING);
-    let Def::Type(ty) = def else {
+    let Def::BaseType(base) = def else {
         panic!("Missing builtin type {name}, found {def:?}");
     };
-    let TypeOld::DefId { id, generics } = ty else {
-        panic!(
-            "Builtin type {name} has unexpected definition, expected a type def with {generic_count} generics but found {ty:?}"
-        );
-    };
-    if generics.len() != generic_count as usize {
-        panic!(
-            "Builtin type {name} has unexpected generic count, expected {generic_count} but found {}",
-            generics.len()
-        );
-    }
-    id
+    assert_eq!(
+        generic_count,
+        compiler.get_resolved_type_generic_count(base),
+        "Compiler-builtin type {name} has unexpected generic count",
+    );
+    base
 }
 
-pub fn get_str(compiler: &mut Compiler) -> Type {
+pub fn get_str(compiler: &mut Compiler) -> BaseType {
     if let Some(str_type) = compiler.builtins.str_type {
         return str_type;
     }
@@ -99,10 +99,8 @@ pub fn get_str_eq(compiler: &mut Compiler) -> (ModuleId, FunctionId) {
         return str_eq;
     }
     let string_module = get_string_module(compiler);
-    let Def::Type(TypeOld::DefId {
-        id: str_type,
-        generics: _,
-    }) = compiler.resolve_in_module(string_module, "str", ModuleSpan::MISSING)
+    let Def::BaseType(str_type) =
+        compiler.resolve_in_module(string_module, "str", ModuleSpan::MISSING)
     else {
         panic!("missing std.string.str");
     };
@@ -182,7 +180,7 @@ pub fn get_iterator(compiler: &mut Compiler) -> (ModuleId, TraitId) {
     (module, id)
 }
 
-pub fn get_option(compiler: &mut Compiler) -> Type {
+pub fn get_option(compiler: &mut Compiler) -> BaseType {
     if let Some(option) = compiler.builtins.option {
         return option;
     }
@@ -193,10 +191,10 @@ pub fn get_option(compiler: &mut Compiler) -> Type {
         panic!("expected a module for std.option but found {def:?}");
     };
     let def = compiler.resolve_in_module(option_module, "Option", ModuleSpan::MISSING);
-    let Def::GenericType(id) = def else {
+    let Def::BaseType(id) = def else {
         panic!("expected a type for std.option.Option but found {def:?}");
     };
-    debug_assert_eq!(compiler.types[id.idx()].generic_count, 1);
+    debug_assert_eq!(compiler.get_resolved_type_generic_count(id), 1);
     compiler.builtins.option = Some(id);
     id
 }

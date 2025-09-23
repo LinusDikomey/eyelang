@@ -5,14 +5,15 @@ use error::Error;
 use parser::ast::{self, FunctionId, ModuleId, TraitId};
 
 use crate::{
-    Compiler, Def, TypeOld, Type,
+    Compiler, Def, Type,
     compiler::{ResolvedEnumDef, ResolvedStructDef, ResolvedTypeContent, ResolvedTypeDef},
+    types::{BaseType, TypeFull},
 };
 
 use super::traits;
 
-pub fn type_def(compiler: &mut Compiler, ty: Type) -> ResolvedTypeDef {
-    let resolved_ty = &compiler.types[ty.idx()];
+pub fn type_def(compiler: &mut Compiler, ty: BaseType) -> ResolvedTypeDef {
+    let resolved_ty = &compiler.types.get_base(ty);
     let module = resolved_ty.module;
     let ast_id = resolved_ty.id;
     let ast = Rc::clone(compiler.get_module_ast(module));
@@ -61,10 +62,12 @@ pub fn type_def(compiler: &mut Compiler, ty: Type) -> ResolvedTypeDef {
 
     let mut inherent_trait_impls: DHashMap<(ModuleId, TraitId), Vec<traits::Impl>> = dmap::new();
 
-    let implemented_ty = TypeOld::DefId {
-        id: ty,
-        generics: (0..generics.count()).map(TypeOld::Generic).collect(),
-    };
+    let implemented_generics: Box<[Type]> = (0..generics.count())
+        .map(|i| compiler.types.intern(TypeFull::Generic(i)))
+        .collect();
+    let implemented_ty = compiler
+        .types
+        .intern(TypeFull::Instance(ty, &implemented_generics));
     for trait_impl in &def.impls {
         let trait_def = compiler.resolve_path(module, def.scope, trait_impl.implemented_trait);
         let trait_id = match trait_def {
@@ -86,7 +89,7 @@ pub fn type_def(compiler: &mut Compiler, ty: Type) -> ResolvedTypeDef {
         let checked_impl = traits::check_impl(
             compiler,
             &trait_impl.base,
-            &implemented_ty,
+            implemented_ty,
             module,
             &ast,
             checked_trait.generics.count(),

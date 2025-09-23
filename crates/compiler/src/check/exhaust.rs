@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
 use dmap::DHashMap;
 
 use crate::{
-    Compiler,
-    types::TypeOld,
-    typing::{TypeInfo, TypeTable},
+    Compiler, InvalidTypeError, Type,
+    helpers::IteratorExt,
+    types::{BaseType, TypeFull, Types},
 };
 
 #[derive(Clone, Copy)]
@@ -49,65 +47,40 @@ impl Exhaustion {
     }
 
     /// Return value:
-    /// Some(true) means it's exhausted.
-    /// Some(false) means it's not exhausted.
-    /// None means a type is mismatched
+    /// Ok(true) means it's exhausted.
+    /// Ok(false) means it's not exhausted.
+    /// Err means a type is mismatched/invalid
     pub fn is_exhausted(
         &self,
-        ty: TypeInfo,
-        types: &TypeTable,
+        types: &Types,
+        ty: Type,
         compiler: &mut Compiler,
-    ) -> Option<bool> {
-        Some(match self {
-            Exhaustion::None => match ty {
-                TypeInfo::Enum(id) if types.get_enum_variants(id).is_empty() => true,
-                TypeInfo::TypeDef(id, generics) => {
-                    let generics: Box<[TypeOld]> = generics
-                        .iter()
-                        .map(|ty| types.to_generic_resolved(types[ty]).expect("TODO"))
-                        .collect();
-                    matches!(
-                        Rc::clone(compiler.get_resolved_type_def(id))
-                            .def
-                            .uninhabited(compiler, &generics),
-                        Ok(true) | Err(_)
-                    )
-                }
-                _ => false,
-            },
+    ) -> Result<bool, InvalidTypeError> {
+        Ok(match self {
+            Exhaustion::None => types.is_uninhabited(ty)?,
             Exhaustion::Full => true,
-            Exhaustion::UnsignedInt(ranges) => {
-                match ty {
-                    TypeInfo::Primitive(p) if p.is_int() => {
-                        let int = p.as_int().unwrap();
-                        if int.is_signed() {
-                            return Some(false);
-                        }
-
-                        ranges
+            Exhaustion::UnsignedInt(ranges) => match types.lookup(ty) {
+                TypeFull::Instance(base, _) if base.is_int() => {
+                    let int = base.as_int().unwrap();
+                    !int.is_signed()
+                        && ranges
                             .first()
                             .is_some_and(|r| r.start == 0 && r.end >= int.max())
-                    }
-                    TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
-                    _ => return None,
                 }
-            }
-            Exhaustion::SignedInt { neg, pos } => {
-                match ty {
-                    TypeInfo::Primitive(p) if p.is_int() => {
-                        let int = p.as_int().unwrap();
+                _ => return Err(InvalidTypeError),
+            },
+            Exhaustion::SignedInt { neg, pos } => match types.lookup(ty) {
+                TypeFull::Instance(base, _) if base.is_int() => {
+                    let int = base.as_int().unwrap();
 
-                        pos.first()
-                            .is_some_and(|r| r.start == 0 && r.end >= int.max())
-                            && neg
-                                .first()
-                                .is_some_and(|r| r.start == 0 && r.end >= int.min())
-                    }
-                    TypeInfo::Integer => false, // compile-time integer can't be exhausted with limited ranges
-
-                    _ => return None,
+                    pos.first()
+                        .is_some_and(|r| r.start == 0 && r.end >= int.max())
+                        && neg
+                            .first()
+                            .is_some_and(|r| r.start == 0 && r.end >= int.min())
                 }
-            }
+                _ => return Err(InvalidTypeError),
+            },
             Exhaustion::Enum(_) => {
                 todo!("check enums")
                 /*
@@ -146,24 +119,22 @@ impl Exhaustion {
             }
             &Exhaustion::Bool { true_, false_ } => true_ && false_,
             Exhaustion::Tuple(members) => {
-                let member_types = match ty {
-                    TypeInfo::Tuple(member_types) => {
-                        if member_types.count as usize != members.len() {
-                            return None;
+                let member_types = match types.lookup(ty) {
+                    TypeFull::Instance(BaseType::Tuple, member_types) => {
+                        if member_types.len() != members.len() {
+                            return Err(InvalidTypeError);
                         };
                         member_types.iter()
                     }
-                    _ => return None,
+                    _ => return Err(InvalidTypeError),
                 };
 
-                for (member, ty) in members.iter().zip(member_types) {
-                    if !member.is_exhausted(types[ty], types, compiler)? {
-                        return Some(false);
-                    }
-                }
-                true
+                members
+                    .iter()
+                    .zip(member_types)
+                    .try_all(|(member, &ty)| member.is_exhausted(types, ty, compiler))?
             }
-            Exhaustion::Invalid => return None,
+            Exhaustion::Invalid => return Err(InvalidTypeError),
         })
     }
 

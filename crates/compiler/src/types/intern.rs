@@ -1,97 +1,76 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    cell::RefCell,
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 use dmap::DHashMap;
 use fxhash::FxHasher;
 use hashbrown::HashTable;
-use parser::ast::ModuleId;
+use parser::ast::{self, ModuleId};
 
 use crate::{
     Type,
-    compiler::{Generics, ResolvedTypeDef},
+    compiler::{Generics, Resolvable, ResolvableTypeDef, ResolvedTypeDef},
+    segment_list::SegmentList,
     types::{BaseType, BuiltinType, TypeFull},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct InstanceId(u32);
 
-pub struct SegmentList<T> {
-    echelons: [Option<Box<[T]>>; 31],
-    e: u8,
-    i: u32,
-}
-impl<T: Default> SegmentList<T> {
-    pub fn new() -> Self {
-        let mut echelons = std::array::from_fn(|_| None);
-        echelons[0] = Some(Box::new([T::default()]) as _);
-        Self {
-            echelons,
-            e: 0,
-            i: 0,
-        }
-    }
-
-    pub fn get(&self, index: u32) -> &T {
-        let e = Self::get_echelon(index);
-        let i = index - ((1 << e) - 1);
-        &self.echelons[e as usize].as_ref().unwrap()[i as usize]
-    }
-
-    pub fn add(&mut self, value: T) -> u32 {
-        let cap = 1 << self.e;
-        if self.i == cap {
-            self.e += 1;
-            self.i = 0;
-            self.echelons[self.e as usize] =
-                Some((0..(1 << self.e)).map(|_| T::default()).collect());
-        }
-        let i = self.i;
-        self.echelons[self.e as usize].as_mut().unwrap()[i as usize] = value;
-        self.i += 1;
-        (1 << self.e) - 1 + i
-    }
-
-    fn get_echelon(index: u32) -> u8 {
-        (index + 1).ilog2() as u8
-    }
-}
-
 pub struct Types {
     tags: SegmentList<Tag>,
     indices: SegmentList<u32>,
-    map: HashTable<Type>,
+    map: RefCell<HashTable<Type>>,
 
     instances: SegmentList<(BaseType, Box<[Type]>)>,
     local_enums: SegmentList<Box<[(u32, Box<[Type]>)]>>,
-    bases: SegmentList<ResolvedTypeDef>,
+    bases: SegmentList<ResolvableTypeDef>,
     consts: SegmentList<u64>,
 }
 impl Types {
     pub fn new() -> Self {
-        let mut tags = SegmentList::new();
-        let mut indices = SegmentList::new();
-        let mut instances = SegmentList::new();
-        let mut bases = SegmentList::new();
+        let tags = SegmentList::new();
+        let indices = SegmentList::new();
+        let instances = SegmentList::new();
+        let bases = SegmentList::new();
 
-        for (ty, i) in BuiltinType::VARIANTS.into_iter().zip(0..) {
-            bases.add(ResolvedTypeDef {
-                def: crate::compiler::ResolvedTypeContent::Builtin(ty),
-                module: ModuleId::from_inner(0), // TODO: put something sensible here
-                methods: DHashMap::default(),
-                generics: Generics::EMPTY,
-                inherent_trait_impls: DHashMap::default(),
+        for (builtin, i) in BuiltinType::VARIANTS.into_iter().zip(0..) {
+            let module = ModuleId::from_inner(0); // TODO: put something sensible here
+            let generics = builtin.generics();
+            bases.add(ResolvableTypeDef {
+                module,
+                id: ast::TypeId::from_inner(0),
+                name: builtin.name().into(),
+                generic_count: generics.count(),
+                resolved: crate::compiler::Resolvable::resolved(Rc::new(ResolvedTypeDef {
+                    def: crate::compiler::ResolvedTypeContent::Builtin(builtin),
+                    module,
+                    methods: DHashMap::default(),
+                    generics: Generics::EMPTY,
+                    inherent_trait_impls: DHashMap::default(),
+                })),
             });
-            let generics = ty.generics();
             if generics.count() == 0 {
                 tags.add(Tag::Instance);
                 indices.add(i);
-                instances.add((BaseType(i), Box::new([]) as _));
+                instances.add((
+                    if builtin == BuiltinType::Unit {
+                        BaseType::Tuple
+                    } else {
+                        BaseType(i)
+                    },
+                    Box::new([]) as _,
+                ));
             }
         }
 
         Self {
             tags,
             indices,
-            map: HashTable::new(),
+            map: RefCell::new(HashTable::new()),
 
             instances,
             local_enums: SegmentList::new(),
@@ -100,41 +79,43 @@ impl Types {
         }
     }
 
-    pub fn intern(&mut self, ty: TypeFull) -> Type {
+    pub fn intern(&self, ty: TypeFull) -> Type {
         let hash = hash_full(&ty);
         eprintln!("Intering {ty:?} #{hash}");
-        self.map
-            .find(hash, |&existing| {
-                let existing_ty = self.lookup(existing);
-                eprintln!("  -> candidate {existing_ty:?}");
-                existing_ty == ty
-            })
-            .copied()
-            .unwrap_or_else(|| {
-                let (interned, idx) = match ty {
-                    TypeFull::Instance(base, generics) => {
-                        (Tag::Instance, self.instances.add((base, generics.into())))
-                    }
-                    TypeFull::Generic(i) => (Tag::Generic, i as u32),
-                    TypeFull::LocalEnum(variants) => {
-                        (Tag::LocalEnum, self.local_enums.add(variants.into()))
-                    }
-                };
-                let ty = Type(self.tags.add(interned));
-                let idx_idx = self.indices.add(idx);
-                debug_assert_eq!(ty.0, idx_idx);
-                eprintln!("  -> new: {ty:?} = {interned:?}");
-                self.map.insert_unique(hash, ty, |&ty| {
-                    hash_full(&Self::lookup_type(
-                        &self.tags,
-                        &self.indices,
-                        &self.instances,
-                        &self.local_enums,
-                        ty,
-                    ))
-                });
-                ty
-            })
+        let mut map = self.map.borrow_mut();
+        map.find(hash, |&existing| {
+            let existing_ty = self.lookup(existing);
+            eprintln!("  -> candidate {existing_ty:?}");
+            existing_ty == ty
+        })
+        .copied()
+        .unwrap_or_else(|| {
+            let (interned, idx) = match ty {
+                TypeFull::Instance(base, generics) => {
+                    (Tag::Instance, self.instances.add((base, generics.into())))
+                }
+                TypeFull::Generic(i) => (Tag::Generic, i as u32),
+                TypeFull::LocalEnum(variants) => {
+                    (Tag::LocalEnum, self.local_enums.add(variants.into()))
+                }
+                TypeFull::Const(value) => (Tag::Const, self.consts.add(value)),
+            };
+            let ty = Type(self.tags.add(interned));
+            let idx_idx = self.indices.add(idx);
+            debug_assert_eq!(ty.0, idx_idx);
+            eprintln!("  -> new: {ty:?} = {interned:?}");
+            map.insert_unique(hash, ty, |&ty| {
+                hash_full(&Self::lookup_type(
+                    &self.tags,
+                    &self.indices,
+                    &self.instances,
+                    &self.local_enums,
+                    &self.consts,
+                    ty,
+                ))
+            });
+            ty
+        })
     }
 
     pub fn lookup<'a>(&'a self, ty: Type) -> TypeFull<'a> {
@@ -143,6 +124,7 @@ impl Types {
             &self.indices,
             &self.instances,
             &self.local_enums,
+            &self.consts,
             ty,
         )
     }
@@ -152,6 +134,7 @@ impl Types {
         indices: &'a SegmentList<u32>,
         instances: &'a SegmentList<(BaseType, Box<[Type]>)>,
         local_enums: &'a SegmentList<Box<[(u32, Box<[Type]>)]>>,
+        consts: &'a SegmentList<u64>,
         ty: Type,
     ) -> TypeFull<'a> {
         let idx = *indices.get(ty.0);
@@ -162,23 +145,154 @@ impl Types {
             }
             Tag::Generic => TypeFull::Generic(idx as u8),
             Tag::LocalEnum => TypeFull::LocalEnum(local_enums.get(idx)),
+            Tag::Const => TypeFull::Const(*consts.get(idx)),
         }
     }
 
-    pub fn print(&self, ty: Type) {
-        // match *self.types.get(ty.0) {
-        //     InternedType::Nominal(s) => print!("{}", self.nominal.get(s.0)),
-        //     InternedType::Tuple(elems) => {
-        //         print!("(");
-        //         for (i, &elem) in self.aggregates.get(elems.0).iter().enumerate() {
-        //             if i != 0 {
-        //                 print!(", ");
-        //             }
-        //             self.print(elem);
-        //         }
-        //         print!(")");
-        //     }
-        // }
+    pub fn add_base(
+        &mut self,
+        module: ModuleId,
+        id: ast::TypeId,
+        name: Box<str>,
+        generic_count: u8,
+    ) -> BaseType {
+        BaseType(self.bases.add(ResolvableTypeDef {
+            generic_count,
+            module,
+            id,
+            name,
+            resolved: Resolvable::new(),
+        }))
+    }
+
+    pub fn get_base(&self, ty: BaseType) -> &ResolvableTypeDef {
+        self.bases.get(ty.0)
+    }
+
+    pub fn instantiate(&mut self, ty: Type, generics: &[Type]) -> Type {
+        // PERF: temporary Vec for storage of allocated types
+        match self.lookup(ty) {
+            TypeFull::Instance(base, instance_generics) => {
+                let instance_generics: Box<[Type]> = instance_generics.into();
+                let instance_generics: Box<[_]> = instance_generics
+                    .clone()
+                    .iter()
+                    .map(|&ty| self.instantiate(ty, generics))
+                    .collect();
+                self.intern(TypeFull::Instance(base, &instance_generics))
+            }
+            TypeFull::Generic(i) => generics[usize::from(i)],
+            TypeFull::LocalEnum(items) => {
+                let items: Box<[_]> = items.into();
+                let items: Box<[_]> = items
+                    .iter()
+                    .map(|(i, params)| {
+                        let params: Box<[_]> = params
+                            .iter()
+                            .map(|&ty| self.instantiate(ty, generics))
+                            .collect();
+                        (*i, params)
+                    })
+                    .collect();
+                self.intern(TypeFull::LocalEnum(&items))
+            }
+            TypeFull::Const(_) => ty,
+        }
+    }
+
+    pub fn display(&self, ty: Type) -> TypeDisplay {
+        TypeDisplay { types: self, ty }
+    }
+}
+
+pub struct TypeDisplay<'a> {
+    types: &'a Types,
+    ty: Type,
+}
+impl<'a> fmt::Display for TypeDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.types.lookup(self.ty) {
+            TypeFull::Instance(base, generics) => match base {
+                BaseType::Invalid => write!(f, "<invalid>"),
+                BaseType::Tuple => {
+                    write!(f, "(")?;
+                    let mut first = true;
+                    for &item in generics {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                        write!(f, "{}", self.types.display(item))?;
+                    }
+                    write!(f, ")")
+                }
+                BaseType::Array => write!(
+                    f,
+                    "[{}; {}]",
+                    self.types.display(generics[0]),
+                    self.types.display(generics[1])
+                ),
+                BaseType::Pointer => write!(f, "*{}", self.types.display(generics[0])),
+                BaseType::Function => {
+                    write!(f, "fn(")?;
+                    let mut first = true;
+                    for &arg in &generics[1..] {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                        write!(f, "{}", self.types.display(arg))?;
+                    }
+                    write!(f, ") -> {}", self.types.display(generics[0]))
+                }
+                _ => {
+                    let name = &self.types.get_base(base).name;
+                    write!(f, "{name}")?;
+                    if !generics.is_empty() {
+                        write!(f, "[")?;
+                        let mut first = true;
+                        for &generic in generics {
+                            if !first {
+                                write!(f, ", ")?;
+                            }
+                            first = false;
+                            write!(
+                                f,
+                                "{}",
+                                TypeDisplay {
+                                    types: self.types,
+                                    ty: generic
+                                }
+                            )?;
+                        }
+                        write!(f, "]")?;
+                    }
+                    Ok(())
+                }
+            },
+            TypeFull::Generic(_) => panic!("unhandled generic during type display"),
+            TypeFull::LocalEnum(variants) => {
+                write!(f, "enum {{")?;
+                for (i, params) in variants {
+                    write!(f, "{i}")?;
+                    if !params.is_empty() {
+                        write!(f, "(")?;
+                        let mut first = true;
+                        for &param in params {
+                            if first {
+                                first = false;
+                            } else {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{}", self.types.display(param))?;
+                        }
+                        write!(f, ")")?;
+                    }
+                }
+                write!(f, "}}")
+            }
+            TypeFull::Const(n) => write!(f, "{n}"),
+        }
     }
 }
 
@@ -193,6 +307,7 @@ pub enum Tag {
     Instance,
     Generic,
     LocalEnum,
+    Const,
 }
 impl Default for Tag {
     fn default() -> Self {

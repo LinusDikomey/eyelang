@@ -131,7 +131,7 @@ pub fn unify(
                 }
                 for (arg, declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
                     if types
-                        .try_specify_resolved(
+                        .try_specify_type_instance(
                             arg,
                             declared_arg,
                             generics,
@@ -295,7 +295,7 @@ pub fn unify(
             _ = (module, function, generics, params, return_type);
             func
         }
-        (TypeItem { ty: a_ty }, TypeItem { ty: b_ty }) => {
+        (BaseTypeItem { ty: a_ty }, BaseTypeItem { ty: b_ty }) => {
             if !types.try_unify(a_ty, b_ty, function_generics, compiler) {
                 return None;
             }

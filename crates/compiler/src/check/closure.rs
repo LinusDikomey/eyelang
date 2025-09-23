@@ -1,6 +1,10 @@
+#![allow(unused)] // TODO NOCHECKIN: remove this unused
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{eval::ConstValueId, types::TypeOld};
+use crate::{
+    eval::ConstValueId,
+    types::{BaseType, TypeOld},
+};
 use error::{Error, span::TSpan};
 use indexmap::IndexMap;
 
@@ -19,6 +23,8 @@ pub fn closure(
     closed_over: &mut LocalScope,
     closure_span: TSpan,
 ) -> (Node, TypeInfo) {
+    todo!("reimplement closures")
+    /*
     let function = &ctx.ast[id];
     let body = function
         .body
@@ -29,24 +35,25 @@ pub fn closure(
         function.scope,
         ctx.ast,
     );
-    let mut types = TypeTable::new();
 
     let name = crate::compiler::function_name(ctx.ast, function, ctx.module, id);
 
-    let param_types = types
+    let param_types = ctx
+        .hir
+        .types
         .add_multiple_unknown(1 + (function.params.len() + function.named_params.len()) as u32);
-    for ((_, param), r) in function.params.iter().zip(param_types.iter().skip(1)) {
-        let info = types.info_from_unresolved(param, ctx.compiler, ctx.module, function.scope);
-        let i = TypeInfoOrIdx::TypeInfo(info);
-        types.replace(r, i);
-    }
 
-    for ((_, ty, _), r) in function
-        .named_params
+    for (param_ty, r) in function
+        .params
         .iter()
-        .zip(param_types.iter().skip(1 + function.params.len()))
+        .map(|(_, ty)| ty)
+        .chain(function.named_params.iter().map(|(_, ty, _)| ty))
+        .zip(param_types.iter())
     {
-        let info = types.info_from_unresolved(ty, ctx.compiler, ctx.module, function.scope);
+        let info =
+            ctx.hir
+                .types
+                .info_from_unresolved(param_ty, ctx.compiler, ctx.module, function.scope);
         types.replace(r, TypeInfoOrIdx::TypeInfo(info));
     }
 
@@ -72,7 +79,7 @@ pub fn closure(
         .map(|name_span| ctx.ast.src()[name_span.range()].to_owned().into_boxed_str())
         .zip(param_types.iter().skip(1));
 
-    let mut hir = HIRBuilder::new(types);
+    let mut hir = HIRBuilder::new(ctx.hir.types);
 
     let captures_ty = param_types.nth(0).unwrap();
     let captures_param = hir.add_var(captures_ty);
@@ -98,32 +105,35 @@ pub fn closure(
     let captures = captures.into_inner();
     let capture_count = captures.len() as _;
     let capture_nodes = ctx.hir.add_invalid_nodes(capture_count);
-    let outside_capture_infos = ctx.hir.types.add_multiple_unknown(capture_count);
-    let capture_types: Box<[TypeOld]> = captures
-        .into_iter()
-        .zip(capture_nodes.iter())
-        .zip(outside_capture_infos.iter())
-        .map(|(((var, _), node), outside_id)| {
-            ctx.hir.modify_node(node, Node::Variable(var));
-            let idx = ctx.hir.get_var(var);
-            ctx.hir.types.replace(outside_id, TypeInfoOrIdx::Idx(idx));
-            // TODO: probably don't want a type with outer generics here or have to handle it
-            // properly by allowing the closure to inherit outer generics
-            ctx.hir
-                .types
-                .to_generic_resolved(ctx.hir.types[idx])
-                .unwrap_or_else(|()| {
-                    // TODO: span of the variable accesss (could put into captures)
-                    // only if we really need to fully know the captured type here
-                    ctx.emit(
-                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(TSpan::EMPTY),
-                    );
-                    TypeOld::Invalid
-                })
-        })
-        .collect();
-    let inside_capture_infos = types.multiple_from_generic_resolved_internal(&capture_types, None);
-    types.replace(captures_ty, TypeInfo::Tuple(inside_capture_infos));
+    // let outside_capture_infos = ctx.hir.types.add_multiple_unknown(capture_count);
+    // let capture_types: Box<[TypeOld]> = captures
+    //     .into_iter()
+    //     .zip(capture_nodes.iter())
+    //     .zip(outside_capture_infos.iter())
+    //     .map(|(((var, _), node), outside_id)| {
+    //         ctx.hir.modify_node(node, Node::Variable(var));
+    //         let idx = ctx.hir.get_var(var);
+    //         ctx.hir.types.replace(outside_id, TypeInfoOrIdx::Idx(idx));
+    //         // TODO: probably don't want a type with outer generics here or have to handle it
+    //         // properly by allowing the closure to inherit outer generics
+    //         ctx.hir
+    //             .types
+    //             .to_generic_resolved(ctx.hir.types[idx])
+    //             .unwrap_or_else(|()| {
+    //                 // TODO: span of the variable accesss (could put into captures)
+    //                 // only if we really need to fully know the captured type here
+    //                 ctx.emit(
+    //                     Error::TypeMustBeKnownHere { needed_bound: None }.at_span(TSpan::EMPTY),
+    //                 );
+    //                 TypeOld::Invalid
+    //             })
+    //     })
+    //     .collect();
+    // let inside_capture_infos = types.multiple_from_generic_resolved_internal(&capture_types, None);
+    types.replace(
+        captures_ty,
+        TypeInfo::Instance(BaseType::Tuple, inside_capture_infos),
+    );
     let mut s = String::new();
     types.type_to_string(ctx.compiler, types[captures_ty], &mut s);
 
@@ -228,4 +238,5 @@ pub fn closure(
             },
         )
     }
+    */
 }

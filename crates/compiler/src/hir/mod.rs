@@ -6,11 +6,14 @@ use id::id;
 use parser::ast::{AssignType, FloatType, FunctionId, GlobalId, IntType, ModuleId, TraitId};
 
 use crate::{
-    Compiler,
+    Compiler, Type,
     compiler::{CaptureId, Generics, VarId},
     eval::ConstValueId,
     typing::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
 };
+
+id!(NodeId);
+id!(CastId);
 
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
@@ -18,6 +21,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Hir {
     nodes: Vec<Node>,
+    types: Box<[Type]>,
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub vars: Vec<LocalTypeId>,
@@ -75,8 +79,11 @@ impl Hir {
             indent_count,
         }
     }
+
+    pub fn types(&self) -> &[Type] {
+        &self.types
+    }
 }
-id!(NodeId);
 impl Index<NodeId> for Hir {
     type Output = Node;
 
@@ -84,7 +91,18 @@ impl Index<NodeId> for Hir {
         &self.nodes[index.idx()]
     }
 }
-id!(CastId);
+impl Index<LocalTypeId> for Hir {
+    type Output = Type;
+    fn index(&self, index: LocalTypeId) -> &Self::Output {
+        &self.types[index.idx()]
+    }
+}
+impl Index<LocalTypeIds> for Hir {
+    type Output = [Type];
+    fn index(&self, index: LocalTypeIds) -> &Self::Output {
+        &self.types[index.idx as usize..index.idx as usize + index.count as usize]
+    }
+}
 impl Index<CastId> for Hir {
     type Output = Cast;
 
@@ -485,21 +503,19 @@ impl HIRBuilder {
         generics: &Generics,
         module: ModuleId,
         params: Vec<VarId>,
-    ) -> (Hir, TypeTable) {
+    ) -> Hir {
         self.nodes.push(root);
-        self.types.finish(compiler, generics, module);
-        (
-            Hir {
-                nodes: self.nodes,
-                lvalues: self.lvalues,
-                patterns: self.patterns,
-                vars: self.vars,
-                params,
-                casts: self.casts,
-                trait_calls: Vec::new(),
-            },
-            self.types,
-        )
+        let types = self.types.finish(compiler, generics, module);
+        Hir {
+            nodes: self.nodes,
+            types,
+            lvalues: self.lvalues,
+            patterns: self.patterns,
+            vars: self.vars,
+            params,
+            casts: self.casts,
+            trait_calls: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, node: Node) -> NodeId {
