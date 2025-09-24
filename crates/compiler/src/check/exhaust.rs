@@ -3,7 +3,7 @@ use dmap::DHashMap;
 use crate::{
     Compiler, InvalidTypeError, Type,
     helpers::IteratorExt,
-    types::{BaseType, TypeFull, Types},
+    types::{BaseType, TypeFull},
 };
 
 #[derive(Clone, Copy)]
@@ -50,12 +50,8 @@ impl Exhaustion {
     /// Ok(true) means it's exhausted.
     /// Ok(false) means it's not exhausted.
     /// Err means a type is mismatched/invalid
-    pub fn is_exhausted(
-        &self,
-        types: &Types,
-        ty: Type,
-        compiler: &mut Compiler,
-    ) -> Result<bool, InvalidTypeError> {
+    pub fn is_exhausted(&self, ty: Type, compiler: &Compiler) -> Result<bool, InvalidTypeError> {
+        let types = &compiler.types;
         Ok(match self {
             Exhaustion::None => types.is_uninhabited(ty)?,
             Exhaustion::Full => true,
@@ -132,7 +128,7 @@ impl Exhaustion {
                 members
                     .iter()
                     .zip(member_types)
-                    .try_all(|(member, &ty)| member.is_exhausted(types, ty, compiler))?
+                    .try_all(|(member, &ty)| member.is_exhausted(ty, compiler))?
             }
             Exhaustion::Invalid => return Err(InvalidTypeError),
         })

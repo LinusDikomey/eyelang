@@ -16,9 +16,12 @@ impl Layout {
         alignment: 8,
     };
 
-    pub fn array(elem: Layout, count: u32) -> Layout {
+    pub fn array(elem: Layout, count: u64) -> Layout {
         Layout {
-            size: elem.stride() * count as u64,
+            size: elem
+                .stride()
+                .checked_mul(count)
+                .expect("type size overflows u64"),
             alignment: elem.alignment,
         }
     }

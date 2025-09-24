@@ -1,8 +1,6 @@
-use std::rc::Rc;
-
 use crate::Type;
 use crate::check::traits;
-use crate::types::BaseType;
+use crate::types::{BaseType, BuiltinType, TypeFull};
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
@@ -26,42 +24,85 @@ pub fn check_call(
     let called_ty = ctx.hir.types.add_unknown();
     let called_node = expr::check(ctx, call.called_expr, scope, called_ty, return_ty, noreturn);
     let call_span = TSpan::new(call.open_paren_start, call.end);
+    let mut base_type_called = |ctx: &mut Ctx, base: BaseType, instance: LocalTypeIds| {
+        let resolved = ctx.compiler.get_base_type_def(base);
+        match &resolved.def {
+            ResolvedTypeContent::Struct(struct_def) => {
+                ctx.specify(expected, TypeInfo::Instance(base, instance), |ast| {
+                    ast[expr].span(ast)
+                });
+                check_struct_initializer(
+                    ctx, struct_def, instance, call, scope, return_ty, noreturn,
+                )
+                .unwrap_or_else(|_| {
+                    ctx.invalidate(expected);
+                    Node::Invalid
+                })
+            }
+            ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
+                ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                Node::Invalid
+            }
+        }
+    };
+
+    let mut s = String::new();
+    ctx.hir
+        .types
+        .type_to_string(ctx.compiler, ctx.hir.types[called_ty], &mut s);
     match ctx.hir.types[called_ty] {
         TypeInfo::Instance(BaseType::Invalid, _) => {
             ctx.invalidate(expected);
             Node::Invalid
         }
         TypeInfo::BaseTypeItem(base) => {
-            let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(base));
-            match &resolved.def {
-                ResolvedTypeContent::Struct(struct_def) => {
+            debug_assert!(
+                !matches!(
+                    ctx.compiler.get_base_type_def(base).def,
+                    ResolvedTypeContent::Builtin(BuiltinType::Tuple | BuiltinType::Function)
+                ),
+                "tuple/function base type should not be possible to obtain"
+            );
+            let generic_count = ctx.compiler.get_base_type_generic_count(base);
+            let base_generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
+            base_type_called(ctx, base, base_generics)
+        }
+        TypeInfo::TypeItem(ty) => match ctx.hir.types[ty] {
+            TypeInfo::Instance(BaseType::Invalid, _) => {
+                ctx.invalidate(expected);
+                Node::Invalid
+            }
+            TypeInfo::Unknown(bounds) => {
+                ctx.emit_unknown(bounds, ctx.span(call.called_expr));
+                ctx.invalidate(expected);
+                Node::Invalid
+            }
+            TypeInfo::Instance(base, instance_generics) => {
+                base_type_called(ctx, base, instance_generics)
+            }
+            TypeInfo::Known(ty) => {
+                if let TypeFull::Instance(base, generics) = ctx.compiler.types.lookup(ty) {
                     let generics = ctx
                         .hir
                         .types
-                        .add_multiple_unknown(resolved.generics.count().into());
-                    ctx.specify(expected, TypeInfo::Instance(base, generics), |ast| {
-                        ast[expr].span(ast)
-                    });
-                    check_struct_initializer(
-                        ctx, struct_def, generics, call, scope, return_ty, noreturn,
-                    )
-                    .unwrap_or_else(|_| {
-                        ctx.invalidate(expected);
-                        Node::Invalid
-                    })
-                }
-                ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
-                    ctx.emit(Error::FunctionOrStructTypeExpected.at_span(ctx.span(expr)));
+                        .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
+                    base_type_called(ctx, base, generics)
+                } else {
+                    ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
                     Node::Invalid
                 }
             }
-        }
+            _ => {
+                ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
+                Node::Invalid
+            }
+        },
         TypeInfo::FunctionItem {
             module,
             function,
             generics,
         } => {
-            let signature = Rc::clone(ctx.compiler.get_signature(module, function));
+            let signature = ctx.compiler.get_signature(module, function);
             let function = ctx.hir.add(Node::FunctionItem(module, function, generics));
             match check_call_args(
                 ctx,
@@ -177,7 +218,7 @@ pub fn check_call(
             function,
             generics,
         } => {
-            let signature = Rc::clone(ctx.compiler.get_signature(module, function));
+            let signature = ctx.compiler.get_signature(module, function);
             // it was already checked that the first argument fits the self parameter correctly
             let signature_params = &signature.params[1..];
 
@@ -287,7 +328,6 @@ pub fn check_call(
             let Some(checked_trait) = ctx.compiler.get_checked_trait(trait_module, trait_id) else {
                 return Node::Invalid;
             };
-            let checked_trait = Rc::clone(checked_trait);
             let signature = &checked_trait.functions[method_index as usize];
             let span = ctx.ast[expr].span(ctx.ast);
             let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
@@ -437,33 +477,7 @@ pub fn check_call(
                 return_ty: expected,
                 noreturn: false,
             }
-        } /*
-          TypeInfo::UnknownSatisfying(bounds) => {
-              let needed_bound = bounds.iter().next().map(|bound| {
-                  let trait_id = ctx.hir.types.get_bound(bound).trait_id;
-                  ctx.compiler
-                      .get_trait_name(trait_id.0, trait_id.1)
-                      .to_owned()
-              });
-              ctx.emit(
-                  Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(call.called_expr)),
-              );
-              ctx.invalidate(expected);
-              Node::Invalid
-          }
-          TypeInfo::Unknown => {
-              ctx.emit(
-                  Error::TypeMustBeKnownHere { needed_bound: None }
-                      .at_span(ctx.span(call.called_expr)),
-              );
-              ctx.invalidate(expected);
-              Node::Invalid
-          }
-          _ => {
-              ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-              Node::Invalid
-          }
-          */
+        }
     }
 }
 

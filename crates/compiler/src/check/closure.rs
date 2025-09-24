@@ -1,10 +1,7 @@
-#![allow(unused)] // TODO NOCHECKIN: remove this unused
+#![allow(unused)] // TODO: remove this unused after implementing closures again
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{
-    eval::ConstValueId,
-    types::{BaseType, TypeOld},
-};
+use crate::{eval::ConstValueId, types::BaseType};
 use error::{Error, span::TSpan};
 use indexmap::IndexMap;
 

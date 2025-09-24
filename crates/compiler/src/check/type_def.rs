@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use dmap::DHashMap;
 use error::Error;
 use parser::ast::{self, FunctionId, ModuleId, TraitId};
@@ -12,11 +10,11 @@ use crate::{
 
 use super::traits;
 
-pub fn type_def(compiler: &mut Compiler, ty: BaseType) -> ResolvedTypeDef {
+pub fn type_def(compiler: &Compiler, ty: BaseType) -> ResolvedTypeDef {
     let resolved_ty = &compiler.types.get_base(ty);
     let module = resolved_ty.module;
     let ast_id = resolved_ty.id;
-    let ast = Rc::clone(compiler.get_module_ast(module));
+    let ast = compiler.get_module_ast(module);
     let def = &ast[ast_id];
     let generics = compiler.resolve_generics(&def.generics.types, module, def.scope, &ast);
     let resolved_def = match &def.content {
@@ -39,14 +37,15 @@ pub fn type_def(compiler: &mut Compiler, ty: BaseType) -> ResolvedTypeDef {
         ast::TypeContent::Enum { variants } => {
             let variants = variants
                 .iter()
-                .map(|variant| {
-                    let variant_name = ast[variant.name_span].to_owned();
+                .zip(0..)
+                .map(|(variant, ordinal)| {
+                    let variant_name = ast[variant.name_span].into();
                     let args = variant
                         .args
                         .iter()
                         .map(|ty| compiler.resolve_type(ty, module, def.scope))
                         .collect();
-                    (variant_name, args)
+                    (variant_name, ordinal, args)
                 })
                 .collect();
 
@@ -85,7 +84,7 @@ pub fn type_def(compiler: &mut Compiler, ty: BaseType) -> ResolvedTypeDef {
             // can't check trait impl because the trait was invalid
             continue;
         };
-        let checked_trait = Rc::clone(checked_trait);
+        let checked_trait = checked_trait;
         let checked_impl = traits::check_impl(
             compiler,
             &trait_impl.base,

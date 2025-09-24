@@ -1,5 +1,3 @@
-use std::{num::NonZeroU64, rc::Rc};
-
 use error::Error;
 use ir::eval::Val;
 use parser::ast::{
@@ -7,10 +5,10 @@ use parser::ast::{
 };
 
 use crate::{
-    Compiler, Def, Type, TypeOld,
-    compiler::{Generics, ModuleSpan, ResolvedPrimitive},
+    Compiler, Def, Type,
+    compiler::{Generics, ModuleSpan},
     hir::HIRBuilder,
-    irgen,
+    types::TypeFull,
     typing::TypeTable,
 };
 
@@ -50,7 +48,7 @@ impl ConstValue {
 }
 
 pub fn def_expr(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     module: ModuleId,
     scope: ScopeId,
     ast: &Ast,
@@ -58,7 +56,7 @@ pub fn def_expr(
     name: &str,
     ty: &UnresolvedType,
 ) -> Def {
-    let mismatched_type = |compiler: &mut Compiler, found| {
+    let mismatched_type = |compiler: &Compiler, found| {
         let mut expected = String::new();
         ty.to_string(&mut expected, ast.src());
         compiler.errors.emit(
@@ -66,6 +64,7 @@ pub fn def_expr(
             Error::MismatchedType { expected, found }.at_span(ast[expr].span(ast)),
         );
     };
+
     // TODO: support untyped number constants again
     match &ast[expr] {
         &Expr::IntLiteral { span, .. } => {
@@ -75,36 +74,39 @@ pub fn def_expr(
             };
             let val = ConstValue::Int(val);
 
-            match compiler.unresolved_primitive(ty, module, scope) {
-                ResolvedPrimitive::Primitive(p) if p.is_int() => {
-                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
+            let ty = if matches!(ty, UnresolvedType::Infer(_)) {
+                Type::I32
+            } else {
+                let ty = compiler.resolve_type(ty, module, scope);
+                if !matches!(compiler.types.lookup(ty), TypeFull::Instance(base, _) if base.is_int())
+                {
+                    if ty != Type::Invalid {
+                        mismatched_type(compiler, "an integer".to_owned());
+                    }
+                    return Def::Invalid;
                 }
-                ResolvedPrimitive::Infer => Def::ConstValue(
-                    compiler.add_const_value(val, TypeOld::Primitive(Primitive::I32)),
-                ),
-                ResolvedPrimitive::Invalid => Def::Invalid,
-                _ => {
-                    mismatched_type(compiler, "an integer".to_owned());
-                    Def::Invalid
-                }
-            }
+                ty
+            };
+            Def::ConstValue(compiler.add_const_value(val, ty))
         }
         &Expr::FloatLiteral { span, .. } => {
             let lit = FloatLiteral::parse(&ast[span]);
             let val = ConstValue::Float(lit.val);
-            match compiler.unresolved_primitive(ty, module, scope) {
-                ResolvedPrimitive::Primitive(p) if p.is_float() => {
-                    Def::ConstValue(compiler.add_const_value(val, TypeOld::Primitive(p)))
+
+            let ty = if matches!(ty, UnresolvedType::Infer(_)) {
+                Type::F32
+            } else {
+                let ty = compiler.resolve_type(ty, module, scope);
+                if !matches!(compiler.types.lookup(ty), TypeFull::Instance(base, _) if base.is_float())
+                {
+                    if ty != Type::Invalid {
+                        mismatched_type(compiler, "a float".to_owned());
+                    }
+                    return Def::Invalid;
                 }
-                ResolvedPrimitive::Infer => Def::ConstValue(
-                    compiler.add_const_value(val, TypeOld::Primitive(Primitive::F32)),
-                ),
-                ResolvedPrimitive::Invalid => Def::Invalid,
-                _ => {
-                    mismatched_type(compiler, "a float".to_owned());
-                    Def::Invalid
-                }
-            }
+                ty
+            };
+            Def::ConstValue(compiler.add_const_value(val, ty))
         }
         &Expr::Ident { span, .. } => {
             let name = &ast[span];
@@ -112,17 +114,15 @@ pub fn def_expr(
             match def.check_with_type(module, scope, compiler, ty) {
                 Ok(def) => def,
                 Err(found) => {
-                    if let Some(found) = found {
-                        mismatched_type(compiler, found.to_owned());
-                    }
+                    mismatched_type(compiler, found.to_owned());
                     Def::Invalid
                 }
             }
         }
         Expr::ReturnUnit { .. } => {
             let ty = compiler.resolve_type(ty, module, scope);
-            if !matches!(&ty, TypeOld::Tuple(elems) if elems.is_empty()) {
-                mismatched_type(compiler, TypeOld::Tuple(Box::new([])).to_string());
+            if ty != Type::Unit {
+                mismatched_type(compiler, compiler.types.display(Type::Unit).to_string());
                 return Def::Invalid;
             }
             Def::ConstValue(compiler.add_const_value(ConstValue::Unit, ty))
@@ -139,8 +139,7 @@ pub fn def_expr(
             }
         }
         &Expr::Type { id } => {
-            let Ok(matches) =
-                compiler.unresolved_matches_primitive(ty, Primitive::Type, module, scope)
+            let Ok(matches) = compiler.annotation_matches_type(ty, Type::Type, module, scope)
             else {
                 return Def::Invalid;
             };
@@ -148,22 +147,16 @@ pub fn def_expr(
                 mismatched_type(compiler, Primitive::Type.to_string());
                 return Def::Invalid;
             }
-            let symbols = &mut compiler.get_parsed_module(module).symbols;
-            let (id, generic_count) = if let Some(id) = symbols.types[id.idx()] {
-                (id, compiler.get_resolved_type_generic_count(id))
-            } else {
+            let symbols = &compiler.get_parsed_module(module).symbols;
+            let base = *symbols.types[id.idx()].get_or_init(|| {
                 let generic_count = ast[id].generic_count();
-                let assigned_id = compiler.add_type_def(module, id, name.into(), generic_count);
-                compiler.get_parsed_module(module).symbols.types[id.idx()] = Some(assigned_id);
-                (assigned_id, generic_count)
-            };
+                compiler.add_type_def(module, id, name.into(), generic_count)
+            });
+            let generic_count = compiler.get_base_type_generic_count(base);
             if generic_count == 0 {
-                Def::Type(TypeOld::DefId {
-                    id,
-                    generics: Box::new([]),
-                })
+                Def::Type(compiler.types.intern(TypeFull::Instance(base, &[])))
             } else {
-                Def::BaseType(id)
+                Def::BaseType(base)
             }
         }
         &Expr::Trait { id } => {
@@ -174,8 +167,7 @@ pub fn def_expr(
             Def::Trait(module, id)
         }
         &Expr::Primitive { primitive, .. } => {
-            let Ok(matches) =
-                compiler.unresolved_matches_primitive(ty, Primitive::Type, module, scope)
+            let Ok(matches) = compiler.annotation_matches_type(ty, Type::Type, module, scope)
             else {
                 return Def::Invalid;
             };
@@ -183,7 +175,7 @@ pub fn def_expr(
                 mismatched_type(compiler, Primitive::Type.to_string());
                 return Def::Invalid;
             }
-            Def::Type(TypeOld::Primitive(primitive))
+            Def::Type(primitive.into())
         }
         _ => {
             tracing::debug!(target: "eval", "Running evaluator for definition of {name}:");
@@ -201,7 +193,7 @@ pub fn def_expr(
 }
 
 pub fn value_expr(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     module: ModuleId,
     scope: ScopeId,
     ast: &Ast,
@@ -229,6 +221,8 @@ pub fn value_expr(
         return Ok((ConstValue::Undefined, ty));
     }
 
+    todo!("irgen")
+    /*
     let mut to_generate = Vec::new();
     let mut builder = ir::builder::Builder::new(&mut *compiler);
     builder.create_and_begin_block([]);
@@ -271,6 +265,7 @@ pub fn value_expr(
     }
     let mut env = LazyEvalEnv { compiler };
     ir::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| (to_const_val(val), ty))
+    */
 }
 
 fn to_const_val(val: Val) -> ConstValue {
@@ -287,6 +282,7 @@ fn to_const_val(val: Val) -> ConstValue {
     }
 }
 
+/*
 struct LazyEvalEnv<'a> {
     compiler: &'a mut Compiler,
 }
@@ -338,3 +334,4 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
         })
     }
 }
+*/

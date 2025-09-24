@@ -38,14 +38,12 @@ impl Hir {
         &'a self,
         node: NodeId,
         compiler: &'a Compiler,
-        types: &'a TypeTable,
         indent_count: usize,
     ) -> display::HirDisplay<'a> {
         display::HirDisplay {
             node,
             hir: self,
             compiler,
-            types,
             indent_count,
         }
     }
@@ -54,13 +52,11 @@ impl Hir {
         &'a self,
         pattern: PatternId,
         compiler: &'a Compiler,
-        types: &'a TypeTable,
     ) -> display::PatternDisplay<'a> {
         display::PatternDisplay {
             pattern,
             hir: self,
             compiler,
-            types,
         }
     }
 
@@ -68,14 +64,12 @@ impl Hir {
         &'a self,
         lval: LValueId,
         compiler: &'a Compiler,
-        types: &'a TypeTable,
         indent_count: usize,
     ) -> display::LValueDisplay<'a> {
         display::LValueDisplay {
             lval,
             hir: self,
             compiler,
-            types,
             indent_count,
         }
     }
@@ -499,7 +493,7 @@ impl HIRBuilder {
     pub fn finish(
         mut self,
         root: Node,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         generics: &Generics,
         module: ModuleId,
         params: Vec<VarId>,

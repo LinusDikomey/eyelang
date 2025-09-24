@@ -3,12 +3,12 @@ use std::rc::Rc;
 use parser::ast::Primitive;
 
 use crate::{
-    Compiler, TypeOld,
+    Compiler, Type,
     check::expr::{int_primitive_from_variant_count, type_from_variant_count},
-    compiler::ResolvedTypeContent,
+    compiler::{Instance, ResolvedTypeContent},
     eval::{self, ConstValue},
     layout::Layout,
-    typing::resolved_layout,
+    types::{BaseType, TypeFull},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -16,11 +16,11 @@ pub struct UndefinedValue;
 
 pub fn translate(
     value: &eval::ConstValue,
-    ty: &TypeOld,
-    compiler: &mut Compiler,
+    ty: Type,
+    compiler: &Compiler,
     b: &mut [u8],
 ) -> Result<(), UndefinedValue> {
-    if let TypeOld::Invalid = ty {
+    if ty == Type::Invalid {
         return Err(UndefinedValue);
     }
     // TODO: currently assumes little-endian target arch
@@ -28,42 +28,49 @@ pub fn translate(
         eval::ConstValue::Undefined => return Err(UndefinedValue),
         eval::ConstValue::Unit => debug_assert!(b.is_empty()),
         &eval::ConstValue::Int(val) => match ty {
-            TypeOld::Primitive(Primitive::I8 | Primitive::U8) => b.copy_from_slice(&[val as u8]),
-            TypeOld::Primitive(Primitive::I16 | Primitive::U16) => {
+            Type::I8 | Type::U8 => b.copy_from_slice(&[val as u8]),
+            Type::I16 | Type::U16 => {
                 b.copy_from_slice(&(val as u16).to_le_bytes());
             }
-            TypeOld::Primitive(Primitive::I32 | Primitive::U32) => {
+            Type::I32 | Type::U32 => {
                 b.copy_from_slice(&(val as u32).to_le_bytes());
             }
-            TypeOld::Primitive(Primitive::I64 | Primitive::U64) => {
+            Type::I64 | Type::U64 => {
                 b.copy_from_slice(&u64::to_le_bytes(val));
             }
-            TypeOld::Primitive(Primitive::I128 | Primitive::U128) => {
+            Type::I128 | Type::U128 => {
                 b.copy_from_slice(&(val as u128).to_le_bytes());
             }
-            TypeOld::DefId { id, generics } if *id == compiler.builtins.primitives.bool => {
-                debug_assert!(generics.is_empty());
+            _ if ty == compiler.builtins.primitives.bool => {
                 debug_assert!(val < 2);
                 b.copy_from_slice(&[val as u8]);
             }
             ty => unreachable!("unexpected type for integer ConstValue: {ty:?}"),
         },
         &eval::ConstValue::Float(val) => match ty {
-            TypeOld::Primitive(Primitive::F32) => b.copy_from_slice(&(val as f32).to_le_bytes()),
-            TypeOld::Primitive(Primitive::F64) => b.copy_from_slice(&val.to_le_bytes()),
+            Type::F32 => b.copy_from_slice(&(val as f32).to_le_bytes()),
+            Type::F64 => b.copy_from_slice(&val.to_le_bytes()),
             _ => unreachable!(),
         },
-        eval::ConstValue::Aggregate(elems) => match ty {
-            TypeOld::Array(_) => todo!(),
-            TypeOld::DefId { id, generics } => {
-                let def = Rc::clone(compiler.get_resolved_type_def(*id));
+        eval::ConstValue::Aggregate(elems) => match compiler.types.lookup(ty) {
+            TypeFull::Instance(BaseType::Invalid, _) => return Err(UndefinedValue),
+            TypeFull::Instance(BaseType::Array, _) => todo!(),
+            TypeFull::Instance(base, generics) => {
+                let def = compiler.get_base_type_def(base);
                 match &def.def {
                     ResolvedTypeContent::Builtin(_) => todo!(),
                     ResolvedTypeContent::Struct(struct_def) => {
                         let mut layout = Layout::EMPTY;
                         debug_assert_eq!(struct_def.field_count() as usize, elems.len());
                         for (val, (_, ty)) in elems.iter().zip(struct_def.all_fields()) {
-                            let field_layout = resolved_layout(ty, compiler, generics)
+                            let field_layout = compiler
+                                .resolved_layout(
+                                    ty,
+                                    Instance {
+                                        types: generics,
+                                        outer: None,
+                                    },
+                                )
                                 .map_err(|_| UndefinedValue)?;
                             let offset = layout.accumulate(field_layout) as usize;
                             translate(
@@ -84,15 +91,22 @@ pub fn translate(
                         let ty = type_from_variant_count(enum_def.variants.len() as _);
                         translate(
                             &elems[0],
-                            &ty,
+                            ty,
                             compiler,
                             &mut b[..variant_layout.size as usize],
                         )?;
-                        let arg_types = &enum_def.variants[active_variant as usize].1;
+                        let arg_types = &enum_def.variants[active_variant as usize].2;
                         debug_assert_eq!(elems[1..].len(), arg_types.len());
                         let mut layout = variant_layout;
-                        for (arg, arg_ty) in elems[1..].iter().zip(arg_types) {
-                            let arg_layout = resolved_layout(arg_ty, compiler, generics)
+                        for (arg, &arg_ty) in elems[1..].iter().zip(arg_types) {
+                            let arg_layout = compiler
+                                .resolved_layout(
+                                    arg_ty,
+                                    Instance {
+                                        types: generics,
+                                        outer: None,
+                                    },
+                                )
                                 .map_err(|_| UndefinedValue)?;
                             let offset = layout.accumulate(arg_layout) as usize;
                             translate(
@@ -105,13 +119,7 @@ pub fn translate(
                     }
                 }
             }
-            TypeOld::Tuple(_) => todo!(),
-            TypeOld::LocalEnum(_) => todo!(),
-            TypeOld::Primitive(_)
-            | TypeOld::Pointer(_)
-            | TypeOld::Generic(_)
-            | TypeOld::Function(_)
-            | TypeOld::Invalid => unreachable!(),
+            TypeFull::Generic(_) | TypeFull::Const(_) => unreachable!(),
         },
     }
     Ok(())

@@ -1,23 +1,17 @@
 use error::Error;
 
 use crate::{
-    Compiler,
+    Compiler, Type,
     hir::CastType,
-    types::BaseType,
-    typing::{LocalTypeId, TypeInfo, TypeTable},
+    types::{BaseType, TypeFull},
 };
 
-pub fn check(
-    from_ty: LocalTypeId,
-    to_ty: LocalTypeId,
-    compiler: &mut Compiler,
-    types: &TypeTable,
-) -> (CastType, Option<Error>) {
+pub fn check(from_ty: Type, to_ty: Type, compiler: &Compiler) -> (CastType, Option<Error>) {
     let mut error = None;
-    let cast = match (types[from_ty], types[to_ty]) {
-        (TypeInfo::Instance(BaseType::Invalid, _), _)
-        | (_, TypeInfo::Instance(BaseType::Invalid, _)) => CastType::Invalid,
-        (TypeInfo::Instance(a, a_generics), TypeInfo::Instance(b, b_generics))
+    let cast = match (compiler.types.lookup(from_ty), compiler.types.lookup(to_ty)) {
+        (TypeFull::Instance(BaseType::Invalid, _), _)
+        | (_, TypeFull::Instance(BaseType::Invalid, _)) => CastType::Invalid,
+        (TypeFull::Instance(a, a_generics), TypeFull::Instance(b, b_generics))
             if a_generics.is_empty() && b_generics.is_empty() =>
         {
             match (a.as_int(), a.as_float(), b.as_int(), b.as_float()) {
@@ -35,14 +29,10 @@ pub fn check(
                 _ => CastType::Invalid,
             }
         }
-        (a, b) => {
-            let mut a_string = String::new();
-            let mut b_string = String::new();
-            types.type_to_string(compiler, a, &mut a_string);
-            types.type_to_string(compiler, b, &mut b_string);
+        _ => {
             error = Some(Error::InvalidCast {
-                from: a_string,
-                to: b_string,
+                from: compiler.types.display(from_ty).to_string(),
+                to: compiler.types.display(to_ty).to_string(),
             });
             CastType::Invalid
         }

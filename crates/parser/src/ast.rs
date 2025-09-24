@@ -40,6 +40,9 @@ ids! {
     ModuleId
 }
 
+impl TypeId {
+    pub const MISSING: Self = Self(u32::MAX);
+}
 impl ModuleId {
     pub const MISSING: Self = Self(u32::MAX);
 }

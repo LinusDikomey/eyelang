@@ -3,6 +3,7 @@ use std::{
     rc::Rc,
 };
 
+use dmap::DHashMap;
 use error::Error;
 use error::span::TSpan;
 use parser::ast::{self, ModuleId, Primitive, TraitId, UnresolvedType};
@@ -15,12 +16,16 @@ use unify::unify;
 use crate::{
     Compiler, InvalidTypeError, Type,
     check::{
-        expr::{int_primitive_from_variant_count, type_info_from_variant_count},
+        expr::{type_from_variant_count, type_info_from_variant_count},
         traits,
     },
-    compiler::{Def, Generics, ModuleSpan, ResolvedTypeContent},
+    compiler::{
+        Def, Generics, Instance, ModuleSpan, ResolvableTypeDef, ResolvedEnumDef,
+        ResolvedTypeContent, ResolvedTypeDef,
+    },
+    helpers::IteratorExt,
     layout::Layout,
-    types::{BaseType, TypeFull, TypeOld, Types},
+    types::{BaseType, TypeFull, Types},
 };
 
 id::id!(LocalTypeId);
@@ -127,7 +132,7 @@ impl TypeTable {
             // arg (as unit for now since only one variant is present)
             self.types[args.idx as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::UNIT);
         }
-        let ordinal = variants.len() as u32;
+        let ordinal = variants.len() as u64;
         let variant_id = VariantId(self.variants.len() as _);
         self.variants.push(InferredEnumVariant {
             name,
@@ -254,7 +259,7 @@ impl TypeTable {
     pub fn from_annotation(
         &mut self,
         ty: &UnresolvedType,
-        compiler: &mut crate::Compiler,
+        compiler: &crate::Compiler,
         module: ModuleId,
         scope: ast::ScopeId,
     ) -> TypeInfo {
@@ -266,7 +271,7 @@ impl TypeTable {
                     Def::Invalid => TypeInfo::INVALID,
                     Def::BaseType(id) => {
                         // TODO: decide if types without generic annotations should be allowed
-                        let required_generics = compiler.get_resolved_type_generic_count(id);
+                        let required_generics = compiler.get_base_type_generic_count(id);
                         let Some((generics, generics_span)) = generics else {
                             compiler.errors.emit(
                                 module,
@@ -290,7 +295,7 @@ impl TypeTable {
                             );
                             return TypeInfo::INVALID;
                         }
-                        let required_ty = compiler.get_resolved_type_def(id);
+                        let required_ty = compiler.get_base_type_def(id);
                         let generic_types = required_ty.generics.instantiate(self, ty.span());
                         for (ty, r) in generics.iter().zip(generic_types.iter()) {
                             let info = self.from_annotation(ty, compiler, module, scope);
@@ -412,7 +417,7 @@ impl TypeTable {
         mut a: LocalTypeId,
         mut b: LocalTypeId,
         generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
     ) {
         let a_ty = loop {
@@ -452,7 +457,7 @@ impl TypeTable {
         mut a: LocalTypeId,
         mut b: LocalTypeId,
         generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
     ) -> bool {
         let original_b = b;
         let a_ty = loop {
@@ -482,7 +487,7 @@ impl TypeTable {
         a: LocalTypeId,
         info: TypeInfo,
         function_generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
     ) {
         if let Err((a, b)) = self.try_specify(a, info, function_generics, compiler) {
@@ -498,7 +503,7 @@ impl TypeTable {
         base: BaseType,
         generic_count: u32,
         function_generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
     ) -> LocalTypeIds {
         let (idx, info) = self.find_shorten(ty);
@@ -517,16 +522,15 @@ impl TypeTable {
 
     pub fn specify_type_instance(
         &mut self,
-        types: &Types,
         id: LocalTypeId,
         ty: Type,
         generics: LocalTypeIds,
         function_generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
     ) {
         if let Err((a, b)) =
-            self.try_specify_type_instance(types, id, ty, generics, function_generics, compiler)
+            self.try_specify_type_instance(id, ty, generics, function_generics, compiler)
         {
             self.mismatched_type_error(compiler, a, b, span());
         }
@@ -534,11 +538,10 @@ impl TypeTable {
 
     pub fn specify_enum_literal(
         &mut self,
-        types: &Types,
         expected: LocalTypeId,
         name: &str,
         arg_count: u32,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
     ) -> Result<(OrdinalType, LocalTypeIds), Option<Error>> {
         // Do the type checking manually instead of using `specify`.
         // This allows skipping construction of unneeded enum variant representations.
@@ -571,13 +574,15 @@ impl TypeTable {
                 Ok((OrdinalType::Inferred(variant), arg_types))
             }
             TypeInfo::Instance(id, generics) => {
-                let resolved_ty = Rc::clone(compiler.get_resolved_type_def(id));
+                let resolved_ty = compiler.get_base_type_def(id);
                 if let ResolvedTypeContent::Enum(enum_) = &resolved_ty.def {
-                    let variant = enum_.variants.iter().zip(0..).find_map(
-                        |((variant_name, arg_types), i)| {
-                            (variant_name == name).then_some((i, arg_types))
-                        },
-                    );
+                    let variant =
+                        enum_
+                            .variants
+                            .iter()
+                            .find_map(|(variant_name, ordinal, arg_types)| {
+                                (&**variant_name == name).then_some((*ordinal, &**arg_types))
+                            });
                     if let Some((variant_index, arg_types)) = variant {
                         if arg_types.len() != arg_count as usize {
                             Err(Some(Error::InvalidArgCount {
@@ -594,7 +599,7 @@ impl TypeTable {
                                 type_info_from_variant_count(enum_.variants.len() as u32),
                             );
                             for (r, &ty) in arg_type_iter.zip(arg_types.iter()) {
-                                let ty = self.from_type_instance(types, ty, generics);
+                                let ty = self.from_type_instance(&compiler.types, ty, generics);
                                 self.replace(r, ty);
                             }
 
@@ -625,7 +630,7 @@ impl TypeTable {
 
     fn mismatched_type_error(
         &self,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         a: TypeInfo,
         b: TypeInfo,
         span: ModuleSpan,
@@ -643,15 +648,14 @@ impl TypeTable {
 
     pub fn try_specify_type_instance(
         &mut self,
-        types: &Types,
         id: LocalTypeId,
         ty: Type,
         generics: LocalTypeIds,
         function_generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         // PERF:could special-case this function to avoid instantiating the Type
-        let resolved_info = self.from_type_instance(types, ty, generics);
+        let resolved_info = self.from_type_instance(&compiler.types, ty, generics);
         match resolved_info {
             TypeInfoOrIdx::TypeInfo(info) => {
                 self.try_specify(id, info, function_generics, compiler)
@@ -685,7 +689,6 @@ impl TypeTable {
                 TypeInfo::Instance(base, generics).into()
             }
             TypeFull::Generic(i) => generics.nth(u32::from(i)).unwrap().into(),
-            TypeFull::LocalEnum(_) => unreachable!("local enums don't have generics?"), // TODO: this might not be unreachable actually
             TypeFull::Const(_) => unreachable!("consts don't have generics"),
         }
     }
@@ -695,7 +698,7 @@ impl TypeTable {
         mut a: LocalTypeId,
         info: TypeInfo,
         function_generics: &Generics,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
         let a_ty = loop {
             match self.types[a.idx()] {
@@ -869,7 +872,7 @@ impl TypeTable {
 
     fn intern_var(
         &mut self,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         module: ModuleId,
         var: LocalTypeId,
         buf: &mut Vec<Type>,
@@ -933,15 +936,32 @@ impl TypeTable {
                 let mut variants = Vec::new();
                 for variant_idx in 0..self.enums[id.idx()].variants.len() {
                     let variant = &self.variants[self.enums[id.idx()].variants[variant_idx].idx()];
+                    let name = variant.name.clone();
                     let ordinal = variant.ordinal;
                     let mut params = variant
                         .args
                         .iter()
                         .map(|param| self.intern_var(compiler, module, param, buf))
                         .collect();
-                    variants.push((ordinal, params));
+                    variants.push((name, ordinal.into(), params));
                 }
-                compiler.types.intern(TypeFull::LocalEnum(&variants))
+                // TODO: better, unique names for local_enum types
+                let base = compiler.types.add_resolved_base(
+                    module,
+                    ast::TypeId::MISSING,
+                    "local_enum".into(),
+                    0,
+                    ResolvedTypeDef {
+                        def: ResolvedTypeContent::Enum(ResolvedEnumDef {
+                            variants: variants.into_boxed_slice(),
+                        }),
+                        module,
+                        methods: DHashMap::default(),
+                        generics: Generics::EMPTY,
+                        inherent_trait_impls: DHashMap::default(),
+                    },
+                );
+                compiler.types.intern(TypeFull::Instance(base, &[]))
             }
             TypeInfo::BaseTypeItem(_)
             | TypeInfo::TypeItem(_)
@@ -959,7 +979,7 @@ impl TypeTable {
 
     pub fn finish(
         mut self,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         function_generics: &Generics,
         module: ModuleId,
     ) -> Box<[Type]> {
@@ -982,7 +1002,6 @@ impl TypeTable {
                 else {
                     continue;
                 };
-                let checked_trait = Rc::clone(checked_trait);
                 // TODO: probably should retry impl candidates in a loop as long as one bound has
                 // multiple candidates but progress is made
                 match traits::get_impl_candidates(
@@ -1061,6 +1080,91 @@ impl TypeTable {
         (0..self.types.len() as u32)
             .map(|i| self.intern_var(compiler, module, LocalTypeId(i), &mut buf))
             .collect()
+    }
+
+    fn unify_with_generic_type(
+        &mut self,
+        var: LocalTypeId,
+        ty: Type,
+        compiler: &Compiler,
+        function_generics: &Generics,
+    ) -> Result<bool, InvalidTypeError> {
+        let (idx, info) = self.find_shorten(var);
+        match self.specify_generic_type(info, ty, compiler, function_generics) {
+            Ok(true) => {
+                debug_assert!(matches!(
+                    self.types[idx.0 as usize],
+                    TypeInfoOrIdx::TypeInfo(_),
+                ));
+                self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(info);
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(InvalidTypeError) => {
+                self.types[idx.0 as usize] =
+                    TypeInfoOrIdx::TypeInfo(TypeInfo::Known(Type::Invalid));
+                Err(InvalidTypeError)
+            }
+        }
+    }
+
+    fn specify_generic_type(
+        &mut self,
+        info: TypeInfo,
+        ty: Type,
+        compiler: &Compiler,
+        function_generics: &Generics,
+    ) -> Result<bool, InvalidTypeError> {
+        if let TypeInfo::Known(other_ty) = info {
+            return Ok(ty == other_ty);
+        }
+        Ok(match compiler.types.lookup(ty) {
+            TypeFull::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
+            TypeFull::Instance(base, instance) => match info {
+                TypeInfo::Unknown(bounds) => {
+                    for bound in bounds.iter() {
+                        let bound = *self.get_bound(bound);
+                        if !self.unify_bound_with_type(ty, bound, compiler, function_generics)? {
+                            return Ok(false);
+                        }
+                    }
+                    true
+                }
+                TypeInfo::Integer if base.is_int() => true,
+                TypeInfo::Float if base.is_float() => true,
+                TypeInfo::Enum(_id) => todo!("unify inferred enums with known"),
+                TypeInfo::Instance(info_base, info_instance)
+                    if base == info_base && instance.len() as u32 == info_instance.count =>
+                {
+                    instance
+                        .iter()
+                        .zip(info_instance.iter())
+                        .try_all(|(&ty, info)| {
+                            self.specify_generic_type(self[info], ty, compiler, function_generics)
+                        })?
+                }
+                _ => false,
+            },
+            TypeFull::Generic(i) => match info {
+                TypeInfo::Unknown(_) => true,
+                TypeInfo::Generic(j) if i == j => true,
+                _ => false,
+            },
+            TypeFull::Const(_) => match info {
+                TypeInfo::UnknownConst => true,
+                _ => false,
+            },
+        })
+    }
+
+    fn unify_bound_with_type(
+        &mut self,
+        _ty: Type,
+        _bound: Bound,
+        _compiler: &Compiler,
+        _generics: &Generics,
+    ) -> Result<bool, InvalidTypeError> {
+        todo!("unify bounds with types")
     }
 }
 
@@ -1178,7 +1282,7 @@ pub enum TypeInfo {
     EnumVariantItem {
         enum_type: BaseType,
         generics: LocalTypeIds,
-        ordinal: u32,
+        ordinal: u64,
         /// always includes the ordinal type as it's first type
         arg_types: LocalTypeIds,
     },
@@ -1212,95 +1316,118 @@ pub struct InferredEnum {
 #[derive(Debug)]
 pub struct InferredEnumVariant {
     pub name: Box<str>,
-    pub ordinal: u32,
+    pub ordinal: u64,
     pub args: LocalTypeIds,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum OrdinalType {
     Inferred(VariantId),
-    Known(u32),
+    Known(u64),
 }
 
-// pub fn resolved_layout(
-//     ty: &TypeOld,
-//     compiler: &mut Compiler,
-//     generics: &[TypeOld],
-// ) -> Result<Layout, InvalidTypeError> {
-//     Ok(match ty {
-//         &TypeOld::Primitive(p) => Layout::primitive(p),
-//         TypeOld::DefId {
-//             id,
-//             generics: ty_generics,
-//         } => {
-//             let def = Rc::clone(compiler.get_resolved_type_def(*id));
-//             let generics_storage: Box<[TypeOld]>;
-//             let generics = if generics.is_empty() {
-//                 ty_generics
-//             } else {
-//                 // PERF: allocating generics here
-//                 generics_storage = ty_generics
-//                     .iter()
-//                     .map(|generic| generic.instantiate_generics(generics))
-//                     .collect();
-//                 &generics_storage
-//             };
-//             match &def.def {
-//                 ResolvedTypeContent::Builtin(builtin) => {
-//                     if let Some(size) = builtin.size() {
-//                         Layout {
-//                             size,
-//                             alignment: size.max(1),
-//                         }
-//                     } else {
-//                         todo!("layout of generic builtins")
-//                     }
-//                 }
-//                 ResolvedTypeContent::Struct(struct_def) => {
-//                     let mut layout = Layout::EMPTY;
-//                     for (_, ty) in struct_def.all_fields() {
-//                         layout.accumulate(resolved_layout(ty, compiler, generics)?);
-//                     }
-//                     layout
-//                 }
-//                 ResolvedTypeContent::Enum(enum_def) => {
-//                     let variant_ty = int_primitive_from_variant_count(enum_def.variants.len() as _);
-//                     let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Layout::primitive);
-//                     let mut layout = Layout::EMPTY;
-//                     for (_, args) in &enum_def.variants {
-//                         let mut variant_layout = variant_ty_layout;
-//                         for arg in args {
-//                             variant_layout.accumulate(resolved_layout(arg, compiler, generics)?);
-//                         }
-//                         layout.add_variant(variant_layout);
-//                     }
-//                     layout
-//                 }
-//             }
-//         }
-//         TypeOld::Pointer(_) | TypeOld::Function(_) => Layout::PTR,
-//         TypeOld::Array(b) => Layout::array(resolved_layout(&b.0, compiler, generics)?, b.1),
-//         TypeOld::Tuple(fields) => {
-//             let mut layout = Layout::EMPTY;
-//             for field in fields {
-//                 layout.accumulate(resolved_layout(field, compiler, generics)?);
-//             }
-//             layout
-//         }
-//         &TypeOld::Generic(i) => resolved_layout(&generics[i as usize], compiler, &[])?,
-//         TypeOld::LocalEnum(variants) => {
-//             let variant_ty = int_primitive_from_variant_count(variants.len() as _);
-//             let variant_ty_layout = variant_ty.map_or(Layout::EMPTY, Layout::primitive);
-//             let mut layout = Layout::EMPTY;
-//             for (_, args) in variants {
-//                 let mut variant_layout = variant_ty_layout;
-//                 for arg in args {
-//                     variant_layout.accumulate(resolved_layout(arg, compiler, generics)?);
-//                 }
-//                 layout.add_variant(variant_layout);
-//             }
-//             layout
-//         }
-//         TypeOld::Invalid => return Err(InvalidTypeError),
-//     })
-// }
+impl Compiler {
+    pub fn resolved_layout(
+        &self,
+        ty: Type,
+        generics: Instance,
+    ) -> Result<Layout, InvalidTypeError> {
+        Ok(match ty {
+            Type::Invalid => return Err(InvalidTypeError),
+            Type::Unit => Layout::EMPTY,
+            Type::I8 | Type::U8 => Layout {
+                size: 1,
+                alignment: 1,
+            },
+            Type::I16 | Type::U16 => Layout {
+                size: 2,
+                alignment: 2,
+            },
+            Type::I32 | Type::U32 | Type::F32 => Layout {
+                size: 4,
+                alignment: 4,
+            },
+            Type::I64 | Type::U64 | Type::F64 => Layout {
+                size: 8,
+                alignment: 8,
+            },
+            Type::I128 | Type::U128 => Layout {
+                size: 8,
+                alignment: 8,
+            },
+            Type::Type => Layout::EMPTY,
+            ty => match self.types.lookup(ty) {
+                TypeFull::Instance(BaseType::Tuple, elems) => {
+                    let mut layout = Layout::EMPTY;
+                    for &elem in elems {
+                        layout.accumulate(self.resolved_layout(elem, generics)?);
+                    }
+                    layout
+                }
+                TypeFull::Instance(BaseType::Array, array) => {
+                    let elem = array[0];
+                    let TypeFull::Const(n) = self.types.lookup(array[1]) else {
+                        debug_assert_eq!(array[1], Type::Invalid);
+                        return Err(InvalidTypeError);
+                    };
+                    Layout::array(self.resolved_layout(elem, generics)?, n)
+                }
+                TypeFull::Instance(BaseType::Pointer | BaseType::Function, _) => Layout::PTR,
+                TypeFull::Instance(base, type_generics) => {
+                    let def = self.get_base_type_def(base);
+                    match &def.def {
+                        ResolvedTypeContent::Builtin(_) => unreachable!(),
+                        ResolvedTypeContent::Struct(def) => {
+                            let mut layout = Layout::EMPTY;
+                            for (_, field) in def.all_fields() {
+                                layout.accumulate(self.resolved_layout(
+                                    field,
+                                    Instance {
+                                        types: type_generics,
+                                        outer: Some(&generics),
+                                    },
+                                )?);
+                            }
+                            layout
+                        }
+                        ResolvedTypeContent::Enum(def) => {
+                            let instance = Instance {
+                                types: type_generics,
+                                outer: Some(&generics),
+                            };
+                            let variant_count = def
+                                .variants
+                                .iter()
+                                .filter(|(_, _, args)| {
+                                    args.iter().all(|&arg| {
+                                        !self.is_uninhabited(arg, &instance).is_ok_and(|b| b)
+                                    })
+                                })
+                                .count() as u32;
+                            let ordinal_layout = self.resolved_layout(
+                                type_from_variant_count(variant_count),
+                                Instance::EMPTY,
+                            )?;
+                            let mut layout = ordinal_layout;
+                            for (_, _, args) in &def.variants {
+                                if args.iter().any(|&arg| {
+                                    self.is_uninhabited(arg, &instance).is_ok_and(|b| b)
+                                }) {
+                                    continue;
+                                }
+                                let mut variant_layout = ordinal_layout;
+                                for &arg in args {
+                                    variant_layout.accumulate(self.resolved_layout(arg, generics)?);
+                                }
+                                layout.add_variant(variant_layout);
+                            }
+                            layout
+                        }
+                    }
+                }
+                TypeFull::Generic(i) => self.resolved_layout(generics[i], generics.outer())?,
+                TypeFull::Const(_) => Layout::EMPTY,
+            },
+        })
+    }
+}

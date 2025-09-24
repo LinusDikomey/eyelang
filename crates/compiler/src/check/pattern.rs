@@ -5,10 +5,11 @@ use crate::{
     check::exhaust,
     compiler::{VarId, builtins},
     hir::Pattern,
+    types::BaseType,
     typing::{LocalTypeId, LocalTypeIds, TypeInfo},
 };
 
-use parser::ast::{Expr, ExprId, IntLiteral, Operator, UnOp};
+use parser::ast::{Expr, ExprId, IntLiteral, Operator, Primitive, UnOp};
 
 use super::{Ctx, exhaust::Exhaustion};
 
@@ -23,9 +24,9 @@ pub fn check(
         &Expr::Nested { inner, .. } => check(ctx, variables, exhaustion, inner, expected),
         Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
-            let ty = lit
-                .ty
-                .map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+            let ty = lit.ty.map_or(TypeInfo::Integer, |ty| {
+                TypeInfo::Known(Primitive::from(ty).into())
+            });
             ctx.specify(expected, ty, |ast| ast[pat].span(ast));
             exhaustion.exhaust_int(exhaust::SignedInt(lit.val, false));
             Pattern::Int(false, lit.val, expected)
@@ -33,11 +34,7 @@ pub fn check(
         &Expr::StringLiteral { span, .. } => {
             let str = super::get_string_literal(ctx.ast.src(), span);
             let str_type = builtins::get_str(ctx.compiler);
-            ctx.specify(
-                expected,
-                TypeInfo::TypeDef(str_type, LocalTypeIds::EMPTY),
-                |_| span,
-            );
+            ctx.specify(expected, TypeInfo::Known(str_type), |_| span);
             Pattern::String(str)
         }
         &Expr::UnOp {
@@ -48,9 +45,9 @@ pub fn check(
             match ctx.ast[inner] {
                 Expr::IntLiteral { span, .. } => {
                     let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
-                    let ty = lit
-                        .ty
-                        .map_or(TypeInfo::Integer, |ty| TypeInfo::Primitive(ty.into()));
+                    let ty = lit.ty.map_or(TypeInfo::Integer, |ty| {
+                        TypeInfo::Known(Primitive::from(ty).into())
+                    });
                     // TODO: constrain negation with traits when they are available
                     ctx.specify(expected, ty, |ast| ast[pat].span(ast));
                     exhaustion.exhaust_int(exhaust::SignedInt(lit.val, true));
@@ -181,7 +178,11 @@ pub fn check(
         &Expr::Tuple { span, elements, .. } => {
             let member_types = ctx.hir.types.add_multiple_unknown(elements.count);
             // PERF: could add .specify_tuple to avoid adding more types than necessary
-            ctx.specify(expected, TypeInfo::Tuple(member_types), |_| span);
+            ctx.specify(
+                expected,
+                TypeInfo::Instance(BaseType::Tuple, member_types),
+                |_| span,
+            );
             let do_exhaust_checks = match exhaustion {
                 Exhaustion::Full | Exhaustion::Invalid => false,
                 Exhaustion::None => {

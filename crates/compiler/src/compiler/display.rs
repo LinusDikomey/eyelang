@@ -2,7 +2,10 @@ use std::fmt;
 
 use color_format::{cwrite, cwriteln};
 
-use crate::{Compiler, compiler::CheckedFunction};
+use crate::{
+    Compiler,
+    compiler::{BodyOrTypes, CheckedFunction},
+};
 
 pub struct CheckedFunctionDisplay<'a> {
     pub function: &'a CheckedFunction,
@@ -27,7 +30,11 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
             if i != 0 {
                 cwrite!(f, ", ")?;
             }
-            cwrite!(f, "(var {i}): {}", function.types.display(compiler, param))?;
+            cwrite!(
+                f,
+                "(var {i}): {}",
+                self.compiler.types.display(function[param])
+            )?;
         }
         if function.varargs {
             if function.params.count != 0 {
@@ -39,18 +46,14 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
             f,
             ") -{} {}",
             ">",
-            function.types.display(compiler, function.return_type)
+            self.compiler.types.display(function[function.return_type]),
         )?; // TODO: problem in color-format: can't escape >
         cwrite!(f, "\n  ")?;
-        match &function.body {
-            Some(body) => {
-                cwrite!(
-                    f,
-                    "{}",
-                    body.display(body.root_id(), compiler, &function.types, 1)
-                )?;
+        match &function.body_or_types {
+            BodyOrTypes::Body(body) => {
+                cwrite!(f, "{}", body.display(body.root_id(), compiler, 1))?;
             }
-            None => {
+            BodyOrTypes::Types(_) => {
                 cwriteln!(f, "  #m<<extern{}>", ">")?;
             }
         }

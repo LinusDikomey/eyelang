@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub fn get(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     ir_types: &mut ir::Types,
     ty: Type,
     instance: Instance,
@@ -17,10 +17,11 @@ pub fn get(
         TypeFull::Instance(base, type_generics) => {
             // PERF: cloning generics
             let type_generics: Box<[Type]> = type_generics.into();
-            let resolved = Rc::clone(compiler.get_resolved_type_def(base));
+            let resolved = compiler.get_base_type_def(base);
             match &resolved.def {
                 ResolvedTypeContent::Builtin(builtin) => match builtin {
                     BuiltinType::Invalid => return None,
+                    BuiltinType::Unit => ir::Type::UNIT,
                     BuiltinType::I8 => ir::Type::Primitive(ir::Primitive::I8.into()),
                     BuiltinType::U8 => ir::Type::Primitive(ir::Primitive::U8.into()),
                     BuiltinType::I16 => ir::Type::Primitive(ir::Primitive::I16.into()),
@@ -80,7 +81,7 @@ pub fn get(
                     // TODO: reduce number of variants if reduced by never types in variants
                     let ordinal_type = int_from_variant_count(def.variants.len() as u32);
                     let mut has_content = false;
-                    'variants: for (_variant_name, args) in &*def.variants {
+                    'variants: for (_variant_name, _ordinal, args) in &*def.variants {
                         if !args.is_empty() {
                             has_content = true;
                         }
@@ -105,7 +106,7 @@ pub fn get(
                         let variant_layout = ir::type_layout(
                             ir::Type::Tuple(elems),
                             ir_types,
-                            compiler.ir.primitives(),
+                            todo!("irgen"), // compiler.ir.primitives(),
                         );
                         accumulated_layout.accumulate_variant(variant_layout);
                     }
@@ -118,13 +119,12 @@ pub fn get(
             }
         }
         TypeFull::Generic(i) => get(compiler, ir_types, instance[i], instance.outer())?,
-        TypeFull::LocalEnum(_) => todo!("convert local enum types"),
         TypeFull::Const(_) => ir::Type::UNIT,
     })
 }
 
 pub fn get_multiple(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     ir_types: &mut ir::Types,
     types: &[Type],
     instance: Instance,

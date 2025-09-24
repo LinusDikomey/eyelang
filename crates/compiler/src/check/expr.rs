@@ -1,14 +1,13 @@
-use std::rc::Rc;
-
 use error::{Error, span::TSpan};
 
 use crate::{
+    Type,
     compiler::{
         Def, LocalItem, LocalScope, LocalScopeParent, ModuleSpan, ResolvedTypeContent, builtins,
     },
     eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    types::{BaseType, Type, TypeFull, TypeOld},
+    types::{BaseType, TypeFull},
     typing::{Bound, Bounds, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
 };
 use parser::ast::{
@@ -90,11 +89,7 @@ pub fn check(
         &Expr::StringLiteral { span, .. } => {
             let str = super::get_string_literal(ctx.ast.src(), span);
             let str_ty = builtins::get_str(ctx.compiler);
-            ctx.specify(
-                expected,
-                TypeInfo::Instance(str_ty, LocalTypeIds::EMPTY),
-                |_| span,
-            );
+            ctx.specify(expected, TypeInfo::Known(str_ty), |_| span);
             Node::StringLiteral(str)
         }
         &Expr::Array { span, elements, .. } => {
@@ -151,8 +146,9 @@ pub fn check(
             let base =
                 ctx.compiler
                     .add_type_def(ctx.module, id, "<anonymous type>".into(), generic_count);
-            ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()] = Some(base);
-            let resolved = ctx.compiler.get_resolved_type_def(base);
+            ctx.compiler.get_parsed_module(ctx.module).symbols.types[id.idx()]
+                .set(base)
+                .expect("Type defined multiple times");
             let span = ctx.ast[expr].span(ast);
             ctx.specify(expected, TypeInfo::BaseTypeItem(base), |_| span);
             Node::Invalid
@@ -799,8 +795,8 @@ fn def_to_node(ctx: &mut Ctx, def: Def, expected: LocalTypeId, span: TSpan) -> N
         Def::Global(module, id) => {
             let (_, ty) = ctx.compiler.get_checked_global(module, id);
             // PERF: cloning type
-            let ty = ty.clone();
-            ctx.specify_resolved(expected, &ty, LocalTypeIds::EMPTY, |_| span);
+            let ty = *ty;
+            ctx.specify_resolved(expected, ty, LocalTypeIds::EMPTY, |_| span);
             Node::Global(module, id, expected)
         }
     }
@@ -814,8 +810,8 @@ fn const_value_to_node(
 ) -> Node {
     let (_, ty) = &ctx.compiler.const_values[const_val.idx()];
     // PERF: clone of Type
-    let ty = ty.clone();
-    ctx.specify_resolved(expected, &ty, LocalTypeIds::EMPTY, |_| span);
+    let ty = *ty;
+    ctx.specify_resolved(expected, ty, LocalTypeIds::EMPTY, |_| span);
     Node::Const {
         id: const_val,
         ty: expected,
@@ -885,7 +881,7 @@ fn function_item(
     expected: LocalTypeId,
     span: TSpan,
 ) -> Node {
-    let signature = Rc::clone(ctx.compiler.get_signature(function_module, function));
+    let signature = ctx.compiler.get_signature(function_module, function);
     let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
     ctx.specify(
         expected,
@@ -977,13 +973,17 @@ fn check_member_access(
                 pointer_count += 1;
                 current_ty = pointee.nth(0).unwrap();
             }
+            TypeInfo::Instance(BaseType::Invalid, _) => {
+                ctx.invalidate(expected);
+                return Node::Invalid;
+            }
             TypeInfo::Instance(base, generics) => {
-                let resolved = Rc::clone(ctx.compiler.get_resolved_type_def(base));
+                let resolved = ctx.compiler.get_base_type_def(base);
                 if let Some(&method) = resolved.methods.get(name) {
                     let module = resolved.module;
-                    let signature = Rc::clone(ctx.compiler.get_signature(module, method));
+                    let signature = ctx.compiler.get_signature(module, method);
                     let Some((required_pointer_count, call_generics)) =
-                        check_is_instance_method(&signature, base, generics, ctx, |ast| {
+                        check_is_instance_method(signature, base, generics, ctx, |ast| {
                             ast[expr].span(ast)
                         })
                     else {
@@ -1015,11 +1015,14 @@ fn check_member_access(
                         let mut dereffed_node = left_node;
                         let mut current_ty = left_ty;
                         for _ in 0..pointer_count {
-                            let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
+                            let TypeInfo::Instance(BaseType::Pointer, pointee) =
+                                ctx.hir.types[current_ty]
+                            else {
                                 // the deref was already checked so we know the type is wrapped in
                                 // `pointer_count` pointers
                                 unreachable!()
                             };
+                            let pointee = pointee.nth(0).unwrap();
                             let value = ctx.hir.add(dereffed_node);
                             dereffed_node = Node::Deref {
                                 value,
@@ -1039,7 +1042,7 @@ fn check_member_access(
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
-            TypeInfo::UnknownSatisfying(bounds) => {
+            TypeInfo::Unknown(bounds) => {
                 let needed_bound = bounds.iter().next().map(|bound| {
                     let trait_id = ctx.hir.types.get_bound(bound).trait_id;
                     ctx.compiler
@@ -1047,15 +1050,6 @@ fn check_member_access(
                         .to_owned()
                 });
                 ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
-                ctx.invalidate(expected);
-                return Node::Invalid;
-            }
-            TypeInfo::Unknown => {
-                ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)));
-                ctx.invalidate(expected);
-                return Node::Invalid;
-            }
-            TypeInfo::Invalid => {
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1070,7 +1064,7 @@ fn check_member_access(
     }
 }
 
-/// checks if the provided method signature is valid as an instance medhot of the provided type.
+/// checks if the provided method signature is valid as an instance method of the provided type.
 /// Returns the number of pointer indirections of the self type and the call's generics
 /// or None if the function is not a valid instance method.
 fn check_is_instance_method(
@@ -1086,15 +1080,16 @@ fn check_is_instance_method(
     let mut required_pointer_count = 0;
     let mut current_ty = self_param_ty;
     loop {
-        match current_ty {
-            TypeOld::DefId {
-                id: self_id,
-                generics: signature_generics,
-            } if id == *self_id => {
+        match ctx.compiler.types.lookup(current_ty) {
+            TypeFull::Instance(BaseType::Pointer, pointee) => {
+                required_pointer_count += 1;
+                current_ty = pointee[0];
+            }
+            TypeFull::Instance(base, signature_generics) if id == base => {
                 // generics count should always matched because the type is already checked and
                 // resolved
                 debug_assert_eq!(generics.count as usize, signature_generics.len());
-                for (ty, signature_ty) in generics.iter().zip(signature_generics) {
+                for (ty, &signature_ty) in generics.iter().zip(signature_generics) {
                     ctx.hir.types.specify_type_instance(
                         ty,
                         signature_ty,
@@ -1108,10 +1103,6 @@ fn check_is_instance_method(
                     );
                 }
                 return Some((required_pointer_count, call_generics));
-            }
-            TypeOld::Pointer(inner) => {
-                required_pointer_count += 1;
-                current_ty = inner;
             }
             _ => {
                 return None;
@@ -1155,9 +1146,9 @@ fn check_type_item_member_access(
         return Node::TypeProperty(ty, property);
     }
     match ctx.hir.types[ty] {
-        TypeInfo::Invalid => return Node::Invalid,
-        TypeInfo::TypeDef(id, generics) => {
-            let ty = Rc::clone(ctx.compiler.get_resolved_type_def(id));
+        TypeInfo::Instance(BaseType::Invalid, _) => return Node::Invalid,
+        TypeInfo::Instance(id, generics) => {
+            let ty = ctx.compiler.get_base_type_def(id);
             if let Some(&method) = ty.methods.get(name) {
                 let module = ty.module;
                 let signature = ctx.compiler.get_signature(module, method);
@@ -1179,11 +1170,11 @@ fn check_type_item_member_access(
                 return Node::FunctionItem(module, method, call_generics);
             }
             if let ResolvedTypeContent::Enum(def) = &ty.def
-                && let Some((ordinal, args)) = def.get_by_name(name)
+                && let Some((_, ordinal, args)) = def.get_by_name(name)
             {
                 let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
                 let node = if args.is_empty() {
-                    ctx.specify(expected, TypeInfo::TypeDef(id, generics), span);
+                    ctx.specify(expected, TypeInfo::Instance(id, generics), span);
                     let ordinal_ty = ctx.hir.types.add(ordinal_ty);
                     let elem_types = ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
                     let elems = ctx.hir.add_nodes([Node::IntLiteral {
@@ -1197,7 +1188,7 @@ fn check_type_item_member_access(
                     ctx.hir
                         .types
                         .replace(arg_type_iter.next().unwrap(), ordinal_ty);
-                    for (r, ty) in arg_type_iter.zip(args.iter()) {
+                    for (r, &ty) in arg_type_iter.zip(args.iter()) {
                         let ty = ctx.from_type_instance(ty, generics);
                         ctx.hir.types.replace(r, ty);
                     }
@@ -1217,16 +1208,12 @@ fn check_type_item_member_access(
             }
         }
         TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
-        TypeInfo::UnknownSatisfying(bounds) => {
+        TypeInfo::Unknown(bounds) => {
             let needed_bound = bounds.iter().next().map(|bound| {
                 let id = ctx.hir.types.get_bound(bound).trait_id;
                 ctx.compiler.get_trait_name(id.0, id.1).to_owned()
             });
             ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
-            return Node::Invalid;
-        }
-        TypeInfo::Unknown => {
-            ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)));
             return Node::Invalid;
         }
         _ => {}
@@ -1236,12 +1223,14 @@ fn check_type_item_member_access(
     Node::Invalid
 }
 
-pub fn type_from_variant_count(count: u32) -> TypeOld {
-    int_primitive_from_variant_count(count).map_or(TypeOld::Tuple(Box::new([])), TypeOld::Primitive)
+pub fn type_from_variant_count(count: u32) -> Type {
+    int_primitive_from_variant_count(count).map_or(Type::Unit, Type::from)
 }
 
 pub fn type_info_from_variant_count(count: u32) -> TypeInfo {
-    int_primitive_from_variant_count(count).map_or(TypeInfo::UNIT, TypeInfo::Primitive)
+    int_primitive_from_variant_count(count).map_or(TypeInfo::UNIT, |p| {
+        TypeInfo::Instance(p.into(), LocalTypeIds::EMPTY)
+    })
 }
 
 pub fn int_primitive_from_variant_count(count: u32) -> Option<Primitive> {

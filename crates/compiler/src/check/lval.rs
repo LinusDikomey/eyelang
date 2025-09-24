@@ -1,11 +1,10 @@
-use std::rc::Rc;
-
 use error::{Error, span::TSpan};
 
 use crate::{
     compiler::{Def, LocalItem, LocalScope, ModuleSpan, ResolvedTypeContent},
     hir::{LValue, Node},
-    typing::{LocalTypeId, LocalTypeIds, TypeInfo},
+    types::BaseType,
+    typing::{Bounds, LocalTypeId, LocalTypeIds, TypeInfo},
 };
 use parser::ast::{Ast, Expr, ExprId, UnOp};
 
@@ -22,7 +21,7 @@ pub fn check(
         Expr::Ident { span, .. } => {
             match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
                 LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
-                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
                 }
                 LocalItem::Var(id) => {
                     let var_ty = ctx.hir.get_var(id);
@@ -38,7 +37,10 @@ pub fn check(
             ..
         } => {
             let pointee = ctx.hir.types.add_unknown();
-            let pointer = ctx.hir.types.add(TypeInfo::Pointer(pointee));
+            let pointer = ctx
+                .hir
+                .types
+                .add(TypeInfo::Instance(BaseType::Pointer, pointee.into()));
             let node = expr::check(ctx, inner, scope, pointer, return_ty, noreturn);
             (LValue::Deref(ctx.hir.add(node)), pointee)
         }
@@ -64,12 +66,12 @@ pub fn check(
             let Some((dereffed_left_ty, pointer_count)) =
                 auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
             else {
-                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
             };
 
             match dereffed_left_ty {
-                TypeInfo::TypeDef(id, generics) => {
-                    let ty = Rc::clone(ctx.compiler.get_resolved_type_def(id));
+                TypeInfo::Instance(id, generics) => {
+                    let ty = ctx.compiler.get_base_type_def(id);
                     // TODO differentiate between nonexistant member and 'can't assign to
                     // member' in the case of methods, enum variants etc.
                     match &ty.def {
@@ -78,7 +80,7 @@ pub fn check(
                                 struct_.get_indexed_field(ctx, generics, name);
                             let Some((index, field_ty)) = indexed_field else {
                                 ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
                             };
 
                             let left_lval =
@@ -96,14 +98,14 @@ pub fn check(
                         }
                         ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
                             ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                            (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
                         }
                     }
                 }
                 _ => {
                     // TODO(error): better error why the type doesn't have named members
                     ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
                 }
             }
         }
@@ -113,13 +115,13 @@ pub fn check(
             let Some((dereffed_ty, pointer_count)) =
                 auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
             else {
-                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
             };
             match dereffed_ty {
-                TypeInfo::Tuple(elem_types) => {
+                TypeInfo::Instance(BaseType::Tuple, elem_types) => {
                     let Some(elem_ty) = elem_types.nth(idx) else {
                         ctx.emit(Error::NonexistantMember(None).at_span(ctx.span(expr)));
-                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid));
+                        return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
                     };
                     let lval = dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
                         ast[left].span(ast)
@@ -137,21 +139,17 @@ pub fn check(
                     // TODO(error): use span of the idx, not of the whole expr
                     // TODO(error): better error why the type doesn't have tuple members
                     ctx.emit(Error::NonexistantMember(None).at_span(ctx.span(expr)));
-                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
                 }
             }
         }
         Expr::Index { expr, idx, .. } => {
-            let element_type = ctx.hir.types.add_unknown();
-            let (array, array_ty) = check(ctx, expr, scope, return_ty, noreturn);
-            ctx.specify(
-                array_ty,
-                TypeInfo::Array {
-                    element: element_type,
-                    count: None,
-                },
-                |ast| ast[expr].span(ast),
-            );
+            let array_generics = ctx
+                .hir
+                .types
+                .add_multiple([TypeInfo::Unknown(Bounds::EMPTY), TypeInfo::UnknownConst]);
+            let element_type = array_generics.nth(0).unwrap();
+            let (array, _array_ty) = check(ctx, expr, scope, return_ty, noreturn);
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
             let index = expr::check(ctx, idx, scope, index_ty, return_ty, noreturn);
             (
@@ -165,7 +163,7 @@ pub fn check(
         }
         _ => {
             ctx.emit(Error::CantAssignTo.at_span(ctx.span(expr)));
-            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+            (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
         }
     }
 }
@@ -179,15 +177,12 @@ fn auto_deref(
     let mut current_ty = ty;
     loop {
         match ctx.hir.types[current_ty] {
-            TypeInfo::Pointer(pointee) => {
-                current_ty = pointee;
+            TypeInfo::Instance(BaseType::Invalid, _) => return None,
+            TypeInfo::Instance(BaseType::Pointer, pointee) => {
+                current_ty = pointee.nth(0).unwrap();
                 pointer_count += 1;
             }
-            TypeInfo::Unknown => {
-                ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(span(ctx.ast)));
-                return None;
-            }
-            TypeInfo::UnknownSatisfying(bounds) => {
+            TypeInfo::Unknown(bounds) => {
                 let needed_bound = bounds.iter().next().map(|bound| {
                     let id = ctx.hir.types.get_bound(bound).trait_id;
                     ctx.compiler.get_trait_name(id.0, id.1).to_owned()
@@ -195,7 +190,6 @@ fn auto_deref(
                 ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(span(ctx.ast)));
                 return None;
             }
-            TypeInfo::Invalid => return None,
             ty => return Some((ty, pointer_count)),
         }
     }
@@ -219,9 +213,10 @@ fn dereffed_to_lvalue(
         let mut current_ty = ty;
         // perform additional derefs and keep the last one as an LValue
         while pointer_count > 1 {
-            let TypeInfo::Pointer(pointee) = ctx.hir.types[current_ty] else {
+            let TypeInfo::Instance(BaseType::Pointer, pointee) = ctx.hir.types[current_ty] else {
                 unreachable!()
             };
+            let pointee = pointee.nth(0).unwrap();
             current_val = Node::Deref {
                 value: ctx.hir.add(current_val),
                 deref_ty: pointee,
@@ -238,14 +233,14 @@ fn def_lvalue(ctx: &mut Ctx, expr: ExprId, def: Def) -> (LValue, LocalTypeId) {
         Def::Global(module, id) => {
             // PERF: cloning type
             let global_ty = ctx.compiler.get_checked_global(module, id).1.clone();
-            let ty = ctx.from_type_instance(&global_ty, LocalTypeIds::EMPTY);
+            let ty = ctx.from_type_instance(global_ty, LocalTypeIds::EMPTY);
             let ty = ctx.hir.types.add_info_or_idx(ty);
             (LValue::Global(module, id), ty)
         }
-        Def::Invalid => (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid)),
+        Def::Invalid => (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID)),
         _ => {
             ctx.emit(Error::CantAssignTo.at_span(ctx.span(expr)));
-            (LValue::Invalid, ctx.hir.types.add(TypeInfo::Invalid))
+            (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
         }
     }
 }

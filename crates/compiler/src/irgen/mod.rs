@@ -12,23 +12,23 @@ use ir::builder::Builder;
 use ir::{BlockId, BlockTarget, Ref};
 use parser::ast::{self, ModuleId};
 
-use crate::compiler::{builtins, mangle_name, Dialects, FunctionToGenerate, Instance};
+use crate::compiler::{Dialects, FunctionToGenerate, Instance, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::irgen::types::get_primitive;
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
-use crate::{Compiler, Type, TypeOld};
+use crate::{Compiler, Type};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
-    typing::{TypeInfo, TypeTable},
+    typing::TypeInfo,
 };
 
 pub fn declare_function(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     checked: &CheckedFunction,
     generics: &[Type],
 ) -> ir::Function {
-    let name = mangle_name(checked, generics);
+    let name = mangle_name(checked, &compiler.types, generics);
     let mut types = ir::Types::new();
     // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
     // longer generate a valid signature
@@ -36,17 +36,22 @@ pub fn declare_function(
         compiler,
         &mut types,
         &checked[checked.params],
-        Instance { types: generics, outer: None },
+        Instance {
+            types: generics,
+            outer: None,
+        },
     )
     .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| ir::Type::UNIT)));
 
-    let return_type = checked.types[checked.return_type];
-    let return_type = types::get_from_info(
+    let return_type = checked[checked.return_type];
+    let return_type = types::get(
         compiler,
-        &checked.types,
         &mut types,
-        return_type,
-        types::Generics::function_instance(generics),
+        checked[checked.return_type],
+        Instance {
+            types: generics,
+            outer: None,
+        },
     )
     .unwrap_or(ir::Type::UNIT);
     let return_type = types.add(return_type);
@@ -123,13 +128,15 @@ macro_rules! crash_point {
 }
 
 pub fn lower_hir(
-    mut builder: ir::builder::Builder<&mut Compiler>,
-    hir: &Hir,
-    to_generate: &mut Vec<FunctionToGenerate>,
-    generics: &[TypeOld],
-    params: ir::Refs,
-    return_ty: ir::TypeId,
+    mut _builder: ir::builder::Builder<&mut Compiler>,
+    _hir: &Hir,
+    _to_generate: &mut Vec<FunctionToGenerate>,
+    _generics: &[Type],
+    _params: ir::Refs,
+    _return_ty: ir::TypeId,
 ) -> (ir::FunctionIr, ir::Types) {
+    todo!("irgen")
+    /*
     let unit_ty = builder.types.add(ir::Type::UNIT);
     let ptr_ty = builder.types.add(ir::Primitive::Ptr);
     let i1_ty = builder.types.add(ir::Primitive::I1);
@@ -140,10 +147,9 @@ pub fn lower_hir(
         .map(|&var_ty| {
             match types::get(
                 builder.env,
-                hir_types,
                 &mut builder.types,
-                hir_types[var_ty],
-                types::Generics::function_instance(generics),
+                hir[var_ty],
+                Instance { types: generics, outer: None },
             ) {
                 Some(ty) => {
                     let ty = builder.types.add(ty);
@@ -192,13 +198,15 @@ pub fn lower_hir(
             .append(ctx.builder.env.dialects.cf.Ret(val, unit));
     }
     ctx.builder.finish_body()
+    */
 }
 
 struct Ctx<'a> {
+    compiler: &'a Compiler,
     to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a Hir,
     generics: &'a [Type],
-    builder: ir::builder::Builder<&'a mut Compiler>,
+    builder: ir::builder::Builder<&'a mut ir::Environment>,
     vars: &'a [(Ref, ir::TypeId)],
     control_flow_stack: Vec<ControlFlowEntry>,
     return_ty: ir::TypeId,
@@ -208,13 +216,16 @@ struct Ctx<'a> {
     ptr_ty: ir::TypeId,
     i1_ty: ir::TypeId,
 }
+/*
 impl Ctx<'_> {
     fn get_ir_id(
         &mut self,
         module: ModuleId,
         id: ast::FunctionId,
-        generics: Vec<TypeOld>,
+        generics: Box<[Type]>,
     ) -> Option<ir::FunctionId> {
+        todo!("irgen")
+        /*
         // check that none of the types is invalid, we never wan't to generate an instance for an
         // invalid type. The caller should build a crash point in that case.
         for ty in &generics {
@@ -259,9 +270,12 @@ impl Ctx<'_> {
             generics,
         });
         Some(ir_id)
+        */
     }
 
     fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> Option<ir::GlobalId> {
+        todo!("irgen")
+        /*
         let parsed = self.builder.env.get_parsed_module(module);
         if let Some(global) = parsed.instances.globals[id.idx()] {
             Some(global)
@@ -269,12 +283,9 @@ impl Ctx<'_> {
             let parsed = self.builder.env.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
             let (value, ty) = self.builder.env.get_checked_global(module, id);
-            // PERF: cloning value, ty
-            let value = value.clone();
-            let ty = ty.clone();
-            let layout = resolved_layout(&ty, self.builder.env, &[]).ok()?;
+            let layout = self.compiler.resolved_layout(*ty, Instance::EMPTY).ok()?;
             let mut storage = vec![0; layout.size as usize].into_boxed_slice();
-            if const_value::translate(&value, &ty, self.builder.env, &mut storage).is_err() {
+            if const_value::translate(value, *ty, self.builder.env, &mut storage).is_err() {
                 // FIXME: this tries to translate invalid globals again every time they are
                 // requested since we never store to the instances. Maybe create the notion of
                 // invalid globals in ir? Or get layout of the value and return zeroes.
@@ -290,6 +301,7 @@ impl Ctx<'_> {
                 Some(global_id);
             Some(global_id)
         }
+        */
     }
 
     fn get_type(&mut self, ty: LocalTypeId) -> Result<ir::Type> {
@@ -332,6 +344,7 @@ impl Ctx<'_> {
                 .instantiate(self.hir[self_ty], self.generics)
     }
 }
+*/
 
 #[derive(Debug, Clone, Copy)]
 struct ControlFlowEntry {
@@ -339,6 +352,12 @@ struct ControlFlowEntry {
     loop_after: BlockId,
 }
 
+enum ValueOrPlace {
+    Value(Ref),
+    Place { ptr: Ref, value_ty: ir::TypeId },
+}
+
+/*
 fn lower(ctx: &mut Ctx, node: NodeId) -> Result<Ref> {
     Ok(match lower_expr(ctx, node)? {
         ValueOrPlace::Value(r) => r,
@@ -346,11 +365,6 @@ fn lower(ctx: &mut Ctx, node: NodeId) -> Result<Ref> {
             .builder
             .append(ctx.builder.env.dialects.mem.Load(ptr, value_ty)),
     })
-}
-
-enum ValueOrPlace {
-    Value(Ref),
-    Place { ptr: Ref, value_ty: ir::TypeId },
 }
 
 fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
@@ -1365,3 +1379,4 @@ fn lower_if_else_branches(
         }
     }
 }
+*/

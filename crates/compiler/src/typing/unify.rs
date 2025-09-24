@@ -1,10 +1,11 @@
 use std::rc::Rc;
 
 use crate::{
-    Compiler,
-    check::expr::int_primitive_from_variant_count,
+    Compiler, InvalidTypeError, Type,
+    check::expr::{int_primitive_from_variant_count, type_from_variant_count},
     compiler::{Generics, ResolvedTypeContent},
-    typing::{TypeInfoOrIdx, traits},
+    types::BaseType,
+    typing::{Bounds, LocalTypeIds, TypeInfoOrIdx, traits},
 };
 
 use super::{LocalTypeId, TypeInfo, TypeTable};
@@ -14,31 +15,43 @@ pub fn unify(
     b: TypeInfo,
     types: &mut TypeTable,
     function_generics: &Generics,
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     unified_id: LocalTypeId,
 ) -> Option<TypeInfo> {
     use TypeInfo::*;
     Some(match (a, b) {
-        (t, Unknown) | (Unknown, t) => t,
-        (UnknownSatisfying(bounds), Generic(generic_id))
-        | (Generic(generic_id), UnknownSatisfying(bounds)) => {
+        (Instance(BaseType::Invalid, _), _) | (_, Instance(BaseType::Invalid, _)) => {
+            TypeInfo::INVALID
+        }
+        (Unknown(bounds), Generic(generic_id)) | (Generic(generic_id), Unknown(bounds)) => {
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
-                if !function_generics.unify_generic_bound(generic_id, &bound, types, compiler) {
+                if !function_generics.check_bound_satisfied(generic_id, &bound, types, compiler) {
                     // TODO: more specific error message with missing trait bound
                     return None;
                 }
             }
             Generic(generic_id)
         }
-        (UnknownSatisfying(a), UnknownSatisfying(b)) => {
-            // TODO: this might not work and it might be much better to unify duplicate traits
-            // PERF: avoid the vec and allocate into new bounds instead
-            let mut bounds = types.get_bounds(a).to_vec();
-            bounds.extend_from_slice(types.get_bounds(b));
-            UnknownSatisfying(types.add_bounds(bounds))
+        (Unknown(a), Unknown(b)) => {
+            if a.is_empty() && b.is_empty() {
+                Unknown(Bounds::EMPTY)
+            } else {
+                // TODO: this might not work and it might be much better to unify duplicate traits
+                // PERF: avoid the vec and allocate into new bounds instead
+                let mut bounds = types.get_bounds(a).to_vec();
+                bounds.extend_from_slice(types.get_bounds(b));
+                Unknown(types.add_bounds(bounds))
+            }
         }
-        (t, UnknownSatisfying(bounds)) | (UnknownSatisfying(bounds), t) => {
+        (info, Known(ty)) | (Known(ty), info) => {
+            match types.specify_generic_type(info, ty, compiler, function_generics) {
+                Ok(true) => Known(ty),
+                Ok(false) => return None,
+                Err(InvalidTypeError) => Known(Type::Invalid),
+            }
+        }
+        (t, Unknown(bounds)) | (Unknown(bounds), t) => {
             let mut chosen_ty = t;
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
@@ -53,7 +66,7 @@ pub fn unify(
                 );
                 match candidates {
                     traits::Candidates::None => return None, // TODO: better errors
-                    traits::Candidates::Invalid => return Some(TypeInfo::Invalid),
+                    traits::Candidates::Invalid => return Some(TypeInfo::INVALID),
                     traits::Candidates::Multiple => {
                         // TODO: might emit multiple checks since this path happens when a single
                         // bound is not fulfilled but will check all bounds again
@@ -82,14 +95,18 @@ pub fn unify(
             }
             chosen_ty
         }
-        (Primitive(p_a), Primitive(p_b)) if p_a == p_b => a,
-        (Invalid, _) | (_, Invalid) => Invalid,
         (Integer, Integer) => Integer,
         (Float, Float) => Float,
-        (Primitive(t), Integer) | (Integer, Primitive(t)) if t.is_int() => Primitive(t),
-        (Primitive(t), Float) | (Float, Primitive(t)) if t.is_float() => Primitive(t),
-        (TypeDef(id_a, generics_a), TypeDef(id_b, generics_b)) if id_a == id_b => {
-            debug_assert_eq!(generics_a.count, generics_b.count);
+        (Instance(t, _), Integer) | (Integer, Instance(t, _)) if t.is_int() => {
+            Instance(t, LocalTypeIds::EMPTY)
+        }
+        (Instance(t, _), Float) | (Float, Instance(t, _)) if t.is_float() => {
+            Instance(t, LocalTypeIds::EMPTY)
+        }
+        (Instance(id_a, generics_a), Instance(id_b, generics_b)) if id_a == id_b => {
+            if generics_a.count != generics_b.count {
+                return None;
+            }
             for (a, b) in generics_a.iter().zip(generics_b.iter()) {
                 if !types.try_unify(a, b, function_generics, compiler) {
                     return None;
@@ -97,8 +114,8 @@ pub fn unify(
             }
             a
         }
-        (TypeDef(id, generics), Enum(enum_id)) | (Enum(enum_id), TypeDef(id, generics)) => {
-            let resolved = Rc::clone(compiler.get_resolved_type_def(id));
+        (Instance(id, generics), Enum(enum_id)) | (Enum(enum_id), Instance(id, generics)) => {
+            let resolved = compiler.get_base_type_def(id);
             let ResolvedTypeContent::Enum(def) = &resolved.def else {
                 return None;
             };
@@ -109,10 +126,8 @@ pub fn unify(
                     types.types[ordinal_type.idx()],
                     TypeInfoOrIdx::TypeInfo(_)
                 ));
-                types.types[ordinal_type.idx()] = TypeInfoOrIdx::TypeInfo(
-                    int_primitive_from_variant_count(def.variants.len() as u32)
-                        .map_or(TypeInfo::UNIT, TypeInfo::Primitive),
-                );
+                types.types[ordinal_type.idx()] =
+                    Known(type_from_variant_count(def.variants.len() as _)).into();
             }
             // iterate by index because we need to borrow types mutably during the loop
             for variant_index in 0..variants.variants.len() {
@@ -120,7 +135,8 @@ pub fn unify(
                 let variant = &mut types.variants[variant.idx()];
                 // TODO: make it possible to return specific errors here so it's more clear when an
                 // enum doesn't match a definition
-                let Some((declared_ordinal, declared_args)) = def.get_by_name(&variant.name) else {
+                let Some((_, declared_ordinal, declared_args)) = def.get_by_name(&variant.name)
+                else {
                     eprintln!("enum variant {} not found", variant.name);
                     return None;
                 };
@@ -129,7 +145,7 @@ pub fn unify(
                 if variant.args.count != declared_args.len() as u32 + 1 {
                     return None;
                 }
-                for (arg, declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
+                for (arg, &declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
                     if types
                         .try_specify_type_instance(
                             arg,
@@ -144,7 +160,7 @@ pub fn unify(
                     }
                 }
             }
-            TypeInfo::TypeDef(id, generics)
+            TypeInfo::Instance(id, generics)
         }
         (Enum(a), Enum(b)) => {
             // always merge into a_variants which becomes the longer variant list to try to avoid
@@ -202,100 +218,28 @@ pub fn unify(
             }
             TypeInfo::Enum(a)
         }
-        (Pointer(a), Pointer(b)) => {
-            if !types.try_unify(a, b, function_generics, compiler) {
-                return None;
-            }
-            Pointer(a)
-        }
-        (
-            Array {
-                element: a,
-                count: c_a,
-            },
-            Array {
-                element: b,
-                count: c_b,
-            },
-        ) => {
-            if !types.try_unify(a, b, function_generics, compiler) {
-                return None;
-            }
-            let count = match (c_a, c_b) {
-                (Some(c), None) | (None, Some(c)) => Some(c),
-                (None, None) => None,
-                (Some(a), Some(b)) => {
-                    if a == b {
-                        Some(a)
-                    } else {
-                        return None;
-                    }
-                }
-            };
-            Array { element: a, count }
-        }
-        (Tuple(a), Tuple(b)) => {
-            // TODO: reintroduce tuple count mode
-            if a.count != b.count {
-                return None;
-            }
-            for (a, b) in a.iter().zip(b.iter()) {
-                if !types.try_unify(a, b, function_generics, compiler) {
-                    return None;
-                }
-            }
-            Tuple(a)
-        }
-        (
-            Function {
-                params: a_params,
-                return_type: a_ret,
-            },
-            Function {
-                params: b_params,
-                return_type: b_ret,
-            },
-        ) => {
-            if a_params.count != b_params.count {
-                return None;
-            }
-            if !a_params
-                .iter()
-                .zip(b_params.iter())
-                .all(|(a, b)| types.try_unify(a, b, function_generics, compiler))
-                && types.try_unify(a_ret, b_ret, function_generics, compiler)
-            {
-                return None;
-            }
-            a
-        }
         (
             FunctionItem {
                 module,
                 function,
                 generics,
             },
-            func @ Function {
-                params,
-                return_type,
-            },
+            func @ Instance(BaseType::Function, return_and_params),
         )
         | (
-            func @ Function {
-                params,
-                return_type,
-            },
+            func @ Instance(BaseType::Function, return_and_params),
             FunctionItem {
                 module,
                 function,
                 generics,
             },
         ) => {
-            // TODO: make sure the function item is actually of the correct type
-            _ = (module, function, generics, params, return_type);
-            func
+            _ = (module, function, generics, return_and_params, func);
+            todo!("check function items")
+            // func
         }
-        (BaseTypeItem { ty: a_ty }, BaseTypeItem { ty: b_ty }) => {
+        (BaseTypeItem(a_ty), BaseTypeItem(b_ty)) if a_ty == b_ty => a,
+        (TypeItem(a_ty), TypeItem(b_ty)) => {
             if !types.try_unify(a_ty, b_ty, function_generics, compiler) {
                 return None;
             }

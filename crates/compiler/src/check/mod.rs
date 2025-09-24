@@ -8,60 +8,37 @@ mod pattern;
 pub mod traits;
 mod type_def;
 
-use std::rc::Rc;
+use std::cell::RefCell;
 
+use dmap::DHashMap;
 use error::{CompileError, Error, Errors, span::TSpan};
 use parser::ast::{Ast, ExprId, ModuleId, ScopeId};
 pub use traits::trait_def;
 pub use type_def::type_def;
 
 use crate::{
-    Compiler, Type, TypeOld,
+    Compiler, Type,
     compiler::{
-        CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Resolvable, Signature, VarId,
+        BodyOrTypes, CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Signature, VarId,
         builtins,
     },
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
-    types::BaseType,
+    types::{BaseType, TypeFull},
     typing::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use self::exhaust::Exhaustion;
 
 pub(crate) fn function(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     module: ModuleId,
     id: parser::ast::FunctionId,
 ) -> crate::compiler::CheckedFunction {
-    let resolving = &mut compiler.modules[module.idx()]
-        .ast
-        .as_mut()
-        .unwrap()
-        .symbols
-        .functions[id.idx()];
-    *resolving = Resolvable::Resolving;
-    let ast = compiler.modules[module.idx()]
-        .ast
-        .as_ref()
-        .unwrap()
-        .ast
-        .clone();
+    let ast = &compiler.modules[module.idx()].ast.get().unwrap().ast;
 
     let function = &ast[id];
 
-    compiler.get_signature(module, id);
-    // signature is resolved above
-    let Resolvable::Resolved(signature) = &compiler.modules[module.idx()]
-        .ast
-        .as_ref()
-        .unwrap()
-        .symbols
-        .function_signatures[id.idx()]
-    else {
-        unreachable!()
-    };
-
-    let signature = Rc::clone(signature);
+    let signature = compiler.get_signature(module, id);
 
     let mut types = TypeTable::new();
 
@@ -76,7 +53,7 @@ pub(crate) fn function(
     let generic_count = signature.generics.count();
     let varargs = signature.varargs;
 
-    let (body, types) = if let Some(body) = function.body {
+    let body_or_types = if let Some(body) = function.body {
         let hir = HIRBuilder::new(types);
         let params = signature
             .all_params()
@@ -95,9 +72,10 @@ pub(crate) fn function(
             return_type,
             LocalScopeParent::None,
         );
-        (Some(hir), types)
+        BodyOrTypes::Body(hir)
     } else {
-        (None, types)
+        let types = types.finish(compiler, &signature.generics, module);
+        BodyOrTypes::Types(types)
     };
 
     // TODO: factor potential closed_over_scope into name
@@ -105,17 +83,16 @@ pub(crate) fn function(
 
     CheckedFunction {
         name,
-        types,
         params: param_types,
         varargs,
         return_type,
         generic_count,
-        body,
+        body_or_types,
     }
 }
 
 pub fn check(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     ast: &Ast,
     module: ModuleId,
     generics: &Generics,
@@ -169,18 +146,22 @@ pub fn check(
 }
 
 pub struct ProjectErrors {
-    pub by_file: dmap::DHashMap<ModuleId, Errors>,
+    pub by_file: RefCell<dmap::DHashMap<ModuleId, Errors>>,
     crash_on_error: bool,
 }
 impl ProjectErrors {
     #[track_caller]
-    pub fn emit(&mut self, module: ModuleId, error: CompileError) {
+    pub fn emit(&self, module: ModuleId, error: CompileError) {
         if self.crash_on_error {
             panic!(
                 "Error encountered and --crash-on-error is enabled. The error is: {error:?} in {module:?}"
             );
         }
-        self.by_file.entry(module).or_default().emit_err(error);
+        self.by_file
+            .borrow_mut()
+            .entry(module)
+            .or_default()
+            .emit_err(error);
     }
 
     pub fn enable_crash_on_error(&mut self) {
@@ -189,19 +170,19 @@ impl ProjectErrors {
 
     pub fn new() -> Self {
         Self {
-            by_file: dmap::new(),
+            by_file: RefCell::new(DHashMap::default()),
             crash_on_error: false,
         }
     }
 
-    pub fn add_module(&mut self, module: ModuleId, errors: Errors) {
-        let previous = self.by_file.insert(module, errors);
+    pub fn add_module(&self, module: ModuleId, errors: Errors) {
+        let previous = self.by_file.borrow_mut().insert(module, errors);
         debug_assert!(previous.is_none(), "Duplicate module inserted into errors");
     }
 }
 
 pub struct Ctx<'a> {
-    pub compiler: &'a mut Compiler,
+    pub compiler: &'a Compiler,
     pub ast: &'a Ast,
     pub module: ModuleId,
     pub generics: &'a Generics,
@@ -335,17 +316,17 @@ impl Ctx<'_> {
     }
 
     pub(crate) fn finish(self, root: Node, params: Vec<VarId>) -> Hir {
-        let hir = self
+        let mut hir = self
             .hir
             .finish(root, self.compiler, self.generics, self.module, params);
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
-            if let Some(false) = exhaustion.is_exhausted(types[ty], &types, self.compiler) {
+            if let Ok(false) = exhaustion.is_exhausted(hir[ty], self.compiler) {
                 let error = Error::Inexhaustive.at_span(self.ast[pat].span(self.ast));
                 self.compiler.errors.emit(self.module, error);
             }
         }
         for (from_ty, to_ty, cast_expr, cast_id) in self.deferred_casts {
-            let (cast, err) = cast::check(from_ty, to_ty, self.compiler, &types);
+            let (cast, err) = cast::check(hir[from_ty], hir[to_ty], self.compiler);
             hir[cast_id].cast_ty = cast;
             if let Some(err) = err {
                 self.compiler
@@ -353,37 +334,67 @@ impl Ctx<'_> {
                     .emit(self.module, err.at_span(self.ast[cast_expr].span(self.ast)));
             }
         }
-        (hir, types)
+        hir
     }
 
     fn specify_resolved(
-        &self,
+        &mut self,
         var: LocalTypeId,
         ty: Type,
         generics: LocalTypeIds,
         span: impl Fn(&Ast) -> TSpan,
     ) {
         let info = if generics.is_empty() {
-            TypeInfo::Known(ty)
+            TypeInfoOrIdx::TypeInfo(TypeInfo::Known(ty))
         } else {
+            self.from_type_instance(ty, generics)
         };
-        self.specify(var, info, span);
+        match info {
+            TypeInfoOrIdx::TypeInfo(info) => self.specify(var, info, span),
+            TypeInfoOrIdx::Idx(other) => self.unify(var, other, span),
+        }
+    }
+
+    fn emit_unknown(&self, bounds: crate::typing::Bounds, span: TSpan) {
+        let needed_bound = (!bounds.is_empty()).then(|| {
+            let mut s = String::new();
+            let mut first = true;
+            for bound in bounds.iter() {
+                let bound = self.hir.types.get_bound(bound);
+                if first {
+                    first = false;
+                } else {
+                    s.push_str(" + ");
+                }
+                s.push_str(
+                    self.compiler
+                        .get_trait_name(bound.trait_id.0, bound.trait_id.1),
+                );
+            }
+            s
+        });
+        let err = Error::TypeMustBeKnownHere { needed_bound };
+        self.compiler.errors.emit(self.module, err.at_span(span));
     }
 }
 
-pub fn verify_main_signature(signature: &Signature) -> Result<(), Option<CompileError>> {
+pub fn verify_main_signature(
+    compiler: &Compiler,
+    signature: &Signature,
+) -> Result<(), Option<CompileError>> {
     if !signature.params.is_empty() || signature.varargs {
         return Err(Some(Error::MainArgs.at_span(signature.span)));
     }
     if signature.generics.count() != 0 {
         return Err(Some(Error::MainGenerics.at_span(signature.span)));
     }
-    match &signature.return_type {
-        TypeOld::Invalid => Err(None),
-        TypeOld::Tuple(elems) if elems.is_empty() => Ok(()),
-        TypeOld::Primitive(p) if p.is_int() => Ok(()),
-        ty => Err(Some(
-            Error::InvalidMainReturnType(ty.to_string()).at_span(signature.span),
+    match compiler.types.lookup(signature.return_type) {
+        TypeFull::Instance(BaseType::Invalid, _) => Err(None),
+        TypeFull::Instance(BaseType::Tuple, elems) if elems.is_empty() => Ok(()),
+        TypeFull::Instance(b, _) if b.is_int() => Ok(()),
+        _ => Err(Some(
+            Error::InvalidMainReturnType(compiler.types.display(signature.return_type).to_string())
+                .at_span(signature.span),
         )),
     }
 }

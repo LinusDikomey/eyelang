@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use dmap::DHashMap;
 use error::Error;
 use error::span::TSpan;
@@ -16,9 +14,9 @@ use crate::{
     compiler::{CheckedTrait, Generics},
     typing::Bound,
 };
-use crate::{InvalidTypeError, Type, TypeOld};
+use crate::{InvalidTypeError, Type};
 
-pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId)) -> CheckedTrait {
+pub fn trait_def(compiler: &Compiler, ast: &Ast, id: (ModuleId, TraitId)) -> CheckedTrait {
     let module = id.0;
     let def = &ast[id.1];
     // don't include self type in generics, it is handled seperately
@@ -47,7 +45,7 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
             check_impl(
                 compiler,
                 &impl_.base,
-                &impl_ty,
+                impl_ty,
                 module,
                 &ast,
                 generics.count(),
@@ -71,7 +69,7 @@ pub fn trait_def(compiler: &mut Compiler, ast: Rc<Ast>, id: (ModuleId, TraitId))
 }
 
 pub fn check_impl(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     impl_: &ast::BaseImpl,
     impl_ty: Type,
     module: ModuleId,
@@ -101,9 +99,8 @@ pub fn check_impl(
         return None;
     }
 
-    let impl_tree = ImplTree::from_type(impl_ty);
     let mut function_ids = vec![ast::FunctionId::from_inner(u32::MAX); trait_functions.len()];
-    let base_generics: Vec<TypeOld> = std::iter::once(impl_ty.clone())
+    let base_generics: Box<[Type]> = std::iter::once(impl_ty.clone())
         .chain(trait_generics.clone())
         .collect();
     let base_offset = base_generics.len() as u8;
@@ -130,6 +127,7 @@ pub fn check_impl(
         let signature = compiler.get_signature(module, method.function);
         let trait_signature = &trait_functions[function_idx as usize];
         let compatible = signature.compatible_with(
+            &compiler.types,
             trait_signature,
             impl_generics.count(),
             base_offset,
@@ -159,7 +157,7 @@ pub fn check_impl(
     Some(Impl {
         generics: impl_generics,
         trait_generics,
-        impl_ty: impl_tree,
+        impl_ty,
         impl_module: module,
         functions: function_ids,
     })
@@ -174,7 +172,7 @@ pub enum Candidates {
 }
 
 pub fn get_impl_candidates(
-    compiler: &mut Compiler,
+    compiler: &Compiler,
     bound: &Bound,
     ty: TypeInfo,
     types: &mut TypeTable,
@@ -183,23 +181,26 @@ pub fn get_impl_candidates(
     let Some(checked_trait) = compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1) else {
         return Candidates::Invalid;
     };
-    let checked_trait = Rc::clone(checked_trait);
     let mut found = None;
     let resolved;
     match ty {
         TypeInfo::Unknown(_) => return Candidates::Multiple,
         TypeInfo::Instance(base, _) => {
-            resolved = Rc::clone(compiler.get_resolved_type_def(base));
+            resolved = compiler.get_base_type_def(base);
             let impls_for_ty = resolved
                 .inherent_trait_impls
                 .get(&bound.trait_id)
                 .map_or(&[] as &[Impl], |v| v.as_slice());
             for impl_ in impls_for_ty {
-                if is_candidate_valid(impl_, bound.generics, ty, types) {
-                    if found.is_some() {
-                        return Candidates::Multiple;
+                match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
+                    Ok(true) => {
+                        if found.is_some() {
+                            return Candidates::Multiple;
+                        }
+                        found = Some(impl_);
                     }
-                    found = Some(impl_);
+                    Ok(false) => {}
+                    Err(InvalidTypeError) => return Candidates::Invalid,
                 }
             }
         }
@@ -241,11 +242,15 @@ pub fn get_impl_candidates(
         _ => {} // type doesn't have inherent impls
     };
     for impl_ in &checked_trait.impls {
-        if is_candidate_valid(impl_, bound.generics, ty, types) {
-            if found.is_some() {
-                return Candidates::Multiple;
+        match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
+            Ok(true) => {
+                if found.is_some() {
+                    return Candidates::Multiple;
+                }
+                found = Some(impl_);
             }
-            found = Some(impl_);
+            Ok(false) => {}
+            Err(InvalidTypeError) => return Candidates::Invalid,
         }
     }
     if let Some(found) = found {
@@ -267,7 +272,7 @@ fn is_candidate_valid(
     types: &Types,
     impl_: &Impl,
     trait_generics: LocalTypeIds,
-    ty: TypeInfo,
+    info: TypeInfo,
     table: &TypeTable,
 ) -> Result<bool, InvalidTypeError> {
     debug_assert_eq!(trait_generics.count, impl_.trait_generics.len() as u32);
@@ -275,165 +280,120 @@ fn is_candidate_valid(
         .iter()
         .zip(&impl_.trait_generics)
         .try_all(|(idx, &ty)| table.compatible_with_type(types, table[idx], ty))?
-        && impl_.impl_ty.matches_type_info(ty, table))
+        && matches_type_info(impl_.impl_ty, info, types, table))
 }
 
-#[derive(Debug)]
-pub enum ImplTree {
-    Any { generic: u8 },
-    Base(BaseType, Box<[ImplTree]>),
-}
-impl ImplTree {
-    pub fn from_type(types: &Types, ty: Type) -> Self {
-        match types.lookup(ty) {
-            TypeFull::Instance(base, generics) => Self::Base(
-                base,
-                generics
-                    .iter()
-                    .map(|&ty| Self::from_type(types, ty))
-                    .collect(),
-            ),
-            TypeFull::Generic(i) => Self::Any { generic: i },
-            TypeFull::LocalEnum(_) => todo!("error on local enum in impl tree"),
-            TypeFull::Const(_) => todo!("error on consts in impl tree"),
+pub fn match_instance(
+    implemented_ty: Type,
+    ty: Type,
+    types: &Types,
+    instance: &mut [Type],
+) -> bool {
+    match types.lookup(implemented_ty) {
+        TypeFull::Generic(i) => {
+            let instance_ty = &mut instance[usize::from(i)];
+            if *instance_ty != Type::Invalid && *instance_ty != ty {
+                return false;
+            }
+            *instance_ty = ty;
+            true
         }
-    }
-
-    pub fn matches_type(&self, types: &Types, ty: Type, instance: &mut [Type]) -> bool {
-        match self {
-            &Self::Any { generic } => {
-                let impl_ty = &mut instance[generic as usize];
-                if *impl_ty != Type::Invalid && *impl_ty != ty {
+        TypeFull::Instance(implemented_base, implemented_generics) => match types.lookup(ty) {
+            TypeFull::Instance(BaseType::Invalid, _) => return true,
+            TypeFull::Instance(base, generics) => {
+                if base != implemented_base {
                     return false;
                 }
-                *impl_ty = ty;
-                true
-            }
-            Self::Base(impl_base, impl_generics) => match types.lookup(ty) {
-                TypeFull::Instance(BaseType::Invalid, _) => return true,
-                TypeFull::Instance(base, generics) => {
-                    if base != *impl_base {
+                if generics.len() != implemented_generics.len() {
+                    return false;
+                }
+                for (&generic, &implemented_generic) in
+                    generics.iter().zip(implemented_generics.iter())
+                {
+                    if !match_instance(implemented_generic, generic, types, instance) {
                         return false;
                     }
-                    if generics.len() != impl_generics.len() {
+                }
+                return true;
+            }
+            TypeFull::Generic(_) | TypeFull::Const(_) => return false,
+        },
+        TypeFull::Const(implemented_n) => {
+            let TypeFull::Const(n) = types.lookup(ty) else {
+                return false;
+            };
+            implemented_n == n
+        }
+    }
+}
+
+fn matches_type_info(
+    _implemented_ty: Type,
+    _info: TypeInfo,
+    _types: &Types,
+    _table: &TypeTable,
+    // instance: LocalTypeIds,
+) -> bool {
+    // TODO: the problem is that we want to update the instance like in the method above
+    // so that generics mentioned multiple times unify correctly. This is however a destructive
+    // action (unification on input types) which will invalidate all the mismatched types on match
+    // failure (which is just supposed to be a check). So maybe a method like can_unify(a, b) is needed
+    // that doesn't modify the type table at all
+    todo!("match impls again")
+    /*
+    match types.lookup(implemented_ty) {
+        TypeFull::Generic(i) => {
+            table.unify(, instance.nth(i.into()).unwrap(), generics, compiler, span);
+        }
+        Self::Base(impl_base, args) => {
+            // TODO: pass info about which type doesn't implement a trait on error
+            match implemented_ty {
+                TypeInfo::Instance(BaseType::Invalid, _) => true,
+                TypeInfo::Known(ty) => self.matches_type(types, ty, &mut []),
+                TypeInfo::Unknown(bounds) => {
+                    if !bounds.is_empty() {
+                        todo!("handle multiple requirements")
+                    }
+                    true
+                }
+                TypeInfo::UnknownConst => todo!("error"),
+                TypeInfo::Integer => impl_base.is_int(),
+                TypeInfo::Float => impl_base.is_float(),
+                TypeInfo::Instance(base, def_generics) => {
+                    if *impl_base != base {
                         return false;
                     }
-                    for (&generic, impl_generic) in generics.iter().zip(impl_generics.iter()) {
-                        if !impl_generic.matches_type(types, generic, instance) {
+                    if def_generics.count as usize != args.len() {
+                        return false;
+                    }
+                    for (arg, impl_tree) in def_generics.iter().zip(args) {
+                        if !impl_tree.matches_type_info(types, table[arg], table) {
                             return false;
                         }
                     }
-                    return true;
+                    true
                 }
-                TypeFull::Generic(_) | TypeFull::LocalEnum(_) | TypeFull::Const(_) => return false,
-            },
-        }
-    }
-
-    pub fn matches_type_info(&self, types: &Types, ty: TypeInfo, table: &TypeTable) -> bool {
-        match self {
-            Self::Any { .. } => true,
-            Self::Base(impl_base, args) => {
-                // TODO: pass info about which type doesn't implement a trait on error
-                match ty {
-                    TypeInfo::Instance(BaseType::Invalid, _) => true,
-                    TypeInfo::Known(ty) => self.matches_type(types, ty, None)
-                    TypeInfo::Unknown(bounds) => {
-                        if !bounds.is_empty() {
-                            todo!("handle multiple requirements")
-                        }
-                        true
-                    }
-                    TypeInfo::Integer => impl_base.is_int(),
-                    TypeInfo::Float => impl_base.is_float(),
-                    TypeInfo::Instance(base, def_generics) => {
-                        if *impl_base != base {
-                            return false;
-                        }
-                        if def_generics.count as usize != args.len() {
-                            return false;
-                        }
-                        for (arg, impl_tree) in def_generics.iter().zip(args) {
-                            if !impl_tree.matches_type_info(table[arg], table) {
-                                return false;
-                            }
-                        }
-                        true
-                    }
-                    TypeInfo::Enum(_) => false, // TODO: auto impl some traits for local enums
-                    TypeInfo::Generic(_)
-                    | TypeInfo::BaseTypeItem { .. }
-                    | TypeInfo::TraitItem { .. }
-                    | TypeInfo::FunctionItem { .. }
-                    | TypeInfo::ModuleItem { .. }
-                    | TypeInfo::MethodItem { .. }
-                    | TypeInfo::TraitMethodItem { .. }
-                    | TypeInfo::EnumVariantItem { .. } => false,
-                }
+                TypeInfo::Enum(_) => false, // TODO: auto impl some traits for local enums
+                TypeInfo::Generic(_)
+                | TypeInfo::BaseTypeItem { .. }
+                | TypeInfo::TypeItem(_)
+                | TypeInfo::TraitItem { .. }
+                | TypeInfo::FunctionItem { .. }
+                | TypeInfo::ModuleItem { .. }
+                | TypeInfo::MethodItem { .. }
+                | TypeInfo::TraitMethodItem { .. }
+                | TypeInfo::EnumVariantItem { .. } => false,
             }
         }
     }
-
-    pub fn instantiate(&self, impl_generics: LocalTypeIds, types: &mut TypeTable) -> TypeInfoOrIdx {
-        match self {
-            &Self::Any { generic } => {
-                TypeInfoOrIdx::Idx(impl_generics.nth(generic.into()).unwrap())
-            }
-            Self::Base(base, args) => TypeInfoOrIdx::TypeInfo(match *base {
-                BaseType::Invalid => TypeInfo::Invalid,
-                BaseType::Primitive(p) => TypeInfo::Primitive(p),
-                BaseType::TypeId(id) => {
-                    let generic_infos = types.add_multiple_unknown(args.len() as _);
-                    for (tree, r) in args.iter().zip(generic_infos.iter()) {
-                        let info_or_idx = tree.instantiate(impl_generics, types);
-                        types.replace(r, info_or_idx);
-                    }
-                    TypeInfo::TypeDef(id, generic_infos)
-                }
-                BaseType::Pointer => {
-                    let pointee = args[0].instantiate(impl_generics, types);
-                    TypeInfo::Pointer(types.add_info_or_idx(pointee))
-                }
-                BaseType::Tuple => {
-                    let elems = types.add_multiple_unknown(args.len() as _);
-                    for (arg, r) in args.iter().zip(elems.iter()) {
-                        let info = arg.instantiate(impl_generics, types);
-                        types.replace(r, info);
-                    }
-                    TypeInfo::Tuple(elems)
-                }
-                BaseType::Array { count } => {
-                    let [elem_ty] = &**args else { unreachable!() };
-                    let elem = elem_ty.instantiate(impl_generics, types);
-
-                    TypeInfo::Array {
-                        element: types.add_info_or_idx(elem),
-                        count: Some(count),
-                    }
-                }
-                BaseType::Function => {
-                    let (return_type_tree, param_trees) = args.split_first().unwrap();
-                    let params = types.add_multiple_unknown(args.len() as _);
-                    for (param, r) in param_trees.iter().zip(params.iter()) {
-                        let info = param.instantiate(impl_generics, types);
-                        types.replace(r, info);
-                    }
-                    let return_type = return_type_tree.instantiate(impl_generics, types);
-                    TypeInfo::Function {
-                        params,
-                        return_type: types.add_info_or_idx(return_type),
-                    }
-                }
-            }),
-        }
-    }
+    */
 }
 
 #[derive(Debug)]
 pub struct Impl {
     pub generics: Generics,
     pub trait_generics: Vec<Type>,
-    pub impl_ty: ImplTree,
+    pub impl_ty: Type,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,
 }
@@ -444,12 +404,12 @@ impl Impl {
         trait_generics: LocalTypeIds,
         function_generics: &Generics,
         types: &mut TypeTable,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         span: TSpan,
     ) -> TypeInfoOrIdx {
         let impl_generics = self.generics.instantiate(types, span);
         debug_assert_eq!(trait_generics.count, self.trait_generics.len() as u32);
-        for (idx, ty) in trait_generics.iter().zip(&self.trait_generics) {
+        for (idx, &ty) in trait_generics.iter().zip(&self.trait_generics) {
             types.specify_type_instance(
                 idx,
                 ty,
@@ -461,6 +421,6 @@ impl Impl {
                 || unreachable!(),
             );
         }
-        self.impl_ty.instantiate(impl_generics, types)
+        types.from_type_instance(&compiler.types, self.impl_ty, impl_generics)
     }
 }

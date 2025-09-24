@@ -20,7 +20,7 @@ impl HasEnvironment for &mut Environment {
     }
 }
 
-pub struct Builder<Env: HasEnvironment> {
+pub struct Builder<Env> {
     pub env: Env,
     pub types: Types,
     insts: Vec<Instruction>,

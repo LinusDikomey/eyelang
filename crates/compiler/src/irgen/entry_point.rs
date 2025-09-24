@@ -1,13 +1,13 @@
 use ir::{Environment, builder::Builder};
 
-use crate::{TypeOld, compiler::Dialects};
+use crate::{Type, compiler::Dialects};
 
 /// Create function wrapping and calling main to handle exit codes properly.
 /// This will return the main functions exit code casted to i32 if it is an integer.
 /// If the main returns unit, it will always return 0.
 pub fn entry_point(
     eye_main: ir::FunctionId,
-    main_return_ty: &TypeOld,
+    main_return_ty: Type,
     env: &Environment,
     dialects: &Dialects,
 ) -> ir::Function {
@@ -17,10 +17,17 @@ pub fn entry_point(
     builder.create_and_begin_block([]);
 
     let main_return = match main_return_ty {
-        TypeOld::Tuple(elems) if elems.is_empty() => ir::Type::UNIT,
-        &TypeOld::Primitive(p) if p.is_int() => {
-            ir::Type::Primitive(super::types::get_primitive(p).id())
-        }
+        Type::Unit => ir::Type::UNIT,
+        Type::I8 => ir::Type::Primitive(ir::Primitive::I8.into()),
+        Type::U8 => ir::Type::Primitive(ir::Primitive::U8.into()),
+        Type::I16 => ir::Type::Primitive(ir::Primitive::I16.into()),
+        Type::U16 => ir::Type::Primitive(ir::Primitive::U16.into()),
+        Type::I32 => ir::Type::Primitive(ir::Primitive::I32.into()),
+        Type::U32 => ir::Type::Primitive(ir::Primitive::U32.into()),
+        Type::I64 => ir::Type::Primitive(ir::Primitive::I64.into()),
+        Type::U64 => ir::Type::Primitive(ir::Primitive::U64.into()),
+        Type::I128 => ir::Type::Primitive(ir::Primitive::I128.into()),
+        Type::U128 => ir::Type::Primitive(ir::Primitive::U128.into()),
         _ => unreachable!(),
     };
 

@@ -6,7 +6,6 @@ use std::{
     collections::VecDeque,
     ops::Index,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 use dmap::DHashMap;
@@ -30,28 +29,23 @@ use crate::{
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
     hir::Hir,
-    irgen,
-    types::{BaseType, BuiltinType, TypeFull, TypeOld, Types},
+    segment_list::SegmentList,
+    types::{BaseType, BuiltinType, TypeFull, Types},
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
 use builtins::Builtins;
 
 pub struct Compiler {
-    projects: Vec<Project>,
-    pub modules: Vec<Module>,
-    pub const_values: Vec<(ConstValue, Type)>,
+    projects: SegmentList<Project>,
+    pub modules: SegmentList<Module>,
+    pub const_values: SegmentList<(ConstValue, Type)>,
     pub types: Types,
-    pub ir: ir::Environment,
-    pub ir_module: ir::ModuleId,
-    pub dialects: Dialects,
+    // pub ir: ir::Environment,
+    // pub ir_module: ir::ModuleId,
+    // pub dialects: Dialects,
     pub errors: ProjectErrors,
     pub builtins: Builtins,
-}
-impl ir::builder::HasEnvironment for &mut Compiler {
-    fn env(&self) -> &ir::Environment {
-        &self.ir
-    }
 }
 
 pub struct ModuleSpan {
@@ -74,28 +68,33 @@ pub struct Dialects {
 }
 impl Compiler {
     pub fn new() -> Self {
-        let mut ir = ir::Environment::new(ir::dialect::Primitive::create_infos());
-        let dialects = Dialects {
-            arith: ir.get_dialect_module(),
-            tuple: ir.get_dialect_module(),
-            mem: ir.get_dialect_module(),
-            cf: ir.get_dialect_module(),
-        };
-        let ir_module = ir.create_module("main");
+        // let mut ir = ir::Environment::new(ir::dialect::Primitive::create_infos());
+        // let dialects = Dialects {
+        //     arith: ir.get_dialect_module(),
+        //     tuple: ir.get_dialect_module(),
+        //     mem: ir.get_dialect_module(),
+        //     cf: ir.get_dialect_module(),
+        // };
+        // let ir_module = ir.create_module("main");
         Self {
-            projects: Vec::new(),
-            modules: Vec::new(),
-            const_values: Vec::new(),
+            projects: SegmentList::new(),
+            modules: SegmentList::new(),
+            const_values: SegmentList::new(),
             types: Types::new(),
-            ir,
-            ir_module,
-            dialects,
+            // ir,
+            // ir_module,
+            // dialects,
             errors: ProjectErrors::new(),
             builtins: Builtins::default(),
         }
     }
 
-    pub fn add_project(&mut self, name: String, root: PathBuf) -> Result<ProjectId, ProjectError> {
+    pub fn add_project(
+        &mut self,
+        name: String,
+        root: PathBuf,
+        dependencies: Vec<ProjectId>,
+    ) -> Result<ProjectId, ProjectError> {
         let root = root.canonicalize().unwrap_or(root);
         if !root
             .try_exists()
@@ -108,30 +107,30 @@ impl Compiler {
                 return Ok(ProjectId(i));
             }
         }
-        let project_id = ProjectId(self.projects.len() as _);
-        let root_module_id = ModuleId::from_inner(self.modules.len() as _);
-        self.modules.push(Module::at_path(
+        let next_module_id = ModuleId::from_inner(self.modules.len());
+        let project_id = ProjectId(self.projects.add(Project {
+            name,
+            root: root.clone(),
+            root_module: next_module_id,
+            dependencies,
+        }));
+
+        let root_module = ModuleId::from_inner(self.modules.add(Module::at_path(
             root.clone(),
             project_id,
-            root_module_id,
+            next_module_id,
             None,
-        ));
-        self.projects.push(Project {
-            name,
-            root,
-            root_module: root_module_id,
-            dependencies: Vec::new(),
-        });
+        )));
+        assert_eq!(
+            next_module_id, root_module,
+            "Other module added while adding new project"
+        );
 
         Ok(project_id)
     }
 
-    pub fn add_dependency(&mut self, project: ProjectId, dependency: ProjectId) {
-        self.projects[project.idx()].dependencies.push(dependency);
-    }
-
     pub fn add_type_def(
-        &mut self,
+        &self,
         module: ModuleId,
         id: ast::TypeId,
         name: Box<str>,
@@ -140,10 +139,8 @@ impl Compiler {
         self.types.add_base(module, id, name, generic_count)
     }
 
-    pub fn add_const_value(&mut self, value: ConstValue, ty: Type) -> ConstValueId {
-        let id = ConstValueId(self.const_values.len() as _);
-        self.const_values.push((value, ty));
-        id
+    pub fn add_const_value(&self, value: ConstValue, ty: Type) -> ConstValueId {
+        ConstValueId(self.const_values.add((value, ty)))
     }
 
     pub fn get_project(&self, id: ProjectId) -> &Project {
@@ -154,18 +151,12 @@ impl Compiler {
         self.modules[module.idx()].root
     }
 
-    pub fn get_module_ast(&mut self, module_id: ModuleId) -> &Rc<Ast> {
+    pub fn get_module_ast(&self, module_id: ModuleId) -> &Ast {
         &self.get_parsed_module(module_id).ast
     }
 
     pub fn get_parsed_module(&self, module_id: ModuleId) -> &ParsedModule {
-        if self.modules[module_id.idx()].ast.is_some() {
-            // borrowing bullshit
-            let Some(parsed) = &self.modules[module_id.idx()].ast else {
-                unreachable!()
-            };
-            parsed
-        } else {
+        self.modules[module_id.idx()].ast.get_or_init(|| {
             let module = &self.modules[module_id.idx()];
             let project = module.project;
             let root = module.root;
@@ -191,14 +182,18 @@ impl Compiler {
                 let (file, child_module_paths) =
                     crate::modules::module_and_children(&module.path, module_id == module.root);
                 for (name, path) in child_module_paths {
-                    let id = ModuleId::from_inner(self.modules.len() as _);
-                    self.modules
-                        .push(Module::at_path(path, project, root, Some(module_id)));
+                    let id = ModuleId::from_inner(self.modules.add(Module::at_path(
+                        path,
+                        project,
+                        root,
+                        Some(module_id),
+                    )));
                     definitions.insert(name, ast::Definition::Module(id));
                     child_modules.push(id);
                 }
                 let s = std::fs::read_to_string(&file);
-                self.modules[module_id.idx()].path = file;
+                // TODO is this path needed?
+                // self.modules[module_id.idx()].path = file;
                 s
             };
             let source = match contents {
@@ -214,19 +209,14 @@ impl Compiler {
             let ast = parser::parse(source, &mut errors, definitions);
             self.errors.add_module(module_id, errors);
             let checked = ModuleSymbols::empty(&ast);
-            let module = &mut self.modules[module_id.idx()];
             let instances = IrInstances::new(ast.function_count(), ast.global_count());
-            module.ast = Some(ParsedModule {
-                ast: Rc::new(ast),
+            ParsedModule {
+                ast,
                 child_modules,
                 symbols: checked,
                 instances,
-            });
-            let Some(parsed) = module.ast.as_mut() else {
-                unreachable!()
-            };
-            parsed
-        }
+            }
+        })
     }
 
     pub fn project_ids(&self) -> impl use<> + ExactSizeIterator<Item = ProjectId> {
@@ -237,18 +227,13 @@ impl Compiler {
         (0..self.modules.len() as u32).map(ModuleId::from_inner)
     }
 
-    pub fn resolve_in_module(
-        &mut self,
-        module: ModuleId,
-        name: &str,
-        name_span: ModuleSpan,
-    ) -> Def {
+    pub fn resolve_in_module(&self, module: ModuleId, name: &str, name_span: ModuleSpan) -> Def {
         let scope = self.get_module_ast(module).top_level_scope_id();
         self.resolve_in_scope(module, scope, name, name_span)
     }
 
     pub fn resolve_in_scope(
-        &mut self,
+        &self,
         module: ModuleId,
         mut scope: ScopeId,
         name: &str,
@@ -267,11 +252,10 @@ impl Compiler {
             }
         };
         def.unwrap_or_else(|| {
-            if let Some(builtin_module) = builtins::get_prelude(self) {
-                let builtin_scope = self.get_module_ast(builtin_module).top_level_scope_id();
-                if let Some(def) = self.get_scope_def(builtin_module, builtin_scope, name) {
-                    return def;
-                }
+            let builtin_module = builtins::get_prelude(self);
+            let builtin_scope = self.get_module_ast(builtin_module).top_level_scope_id();
+            if let Some(def) = self.get_scope_def(builtin_module, builtin_scope, name) {
+                return def;
             }
             self.errors.emit(
                 name_span.module,
@@ -281,7 +265,7 @@ impl Compiler {
         })
     }
 
-    pub fn get_scope_def(&mut self, module: ModuleId, scope: ScopeId, name: &str) -> Option<Def> {
+    pub fn get_scope_def(&self, module: ModuleId, scope: ScopeId, name: &str) -> Option<Def> {
         let ast = self.get_module_ast(module);
         let &def = ast[scope].definitions.get(name)?;
         let def = match def {
@@ -296,34 +280,33 @@ impl Compiler {
     }
 
     pub fn get_def_expr(
-        &mut self,
+        &self,
         module: ModuleId,
         scope: ScopeId,
         name: &str,
         id: DefExprId,
     ) -> &Def {
         let parsed = self.get_parsed_module(module);
-        let def_expr = &parsed.symbols.def_exprs[id.idx()];
-        if let Some(def) = def_expr.get() {
-            return def;
-        }
-        if def_expr.resolving() {
-            let ast = self.get_module_ast(module);
-            let (value, _) = ast[id];
-            let span = ast[value].span(ast);
-            self.errors
-                .emit(module, Error::RecursiveDefinition.at_span(span));
-            return &Def::Invalid;
-        }
-        let ast = Rc::clone(&parsed.ast);
-        let (value, ty) = &ast[id];
-        let value = *value;
-        let def = eval::def_expr(self, module, scope, &ast, value, name, ty);
-        self.get_parsed_module(module).symbols.def_exprs[id.idx()].put(def)
+        parsed.symbols.def_exprs[id.idx()].get_or_resolve_with(
+            || {
+                let ast = self.get_module_ast(module);
+                let (value, _) = ast[id];
+                let span = ast[value].span(ast);
+                self.errors
+                    .emit(module, Error::RecursiveDefinition.at_span(span));
+                Def::Invalid
+            },
+            || {
+                let ast = &parsed.ast;
+                let (value, ty) = &ast[id];
+                let value = *value;
+                eval::def_expr(self, module, scope, ast, value, name, ty)
+            },
+        )
     }
 
-    pub fn resolve_path(&mut self, module: ModuleId, mut scope: ScopeId, path: IdentPath) -> Def {
-        let ast = self.get_module_ast(module).clone();
+    pub fn resolve_path(&self, module: ModuleId, mut scope: ScopeId, path: IdentPath) -> Def {
+        let ast = self.get_module_ast(module);
         let (root, segments, last) = path.segments(ast.src());
         let mut current_module = module;
         if root.is_some() {
@@ -367,7 +350,7 @@ impl Compiler {
         )
     }
 
-    pub fn resolve_type(&mut self, ty: &UnresolvedType, module: ModuleId, scope: ScopeId) -> Type {
+    pub fn resolve_type(&self, ty: &UnresolvedType, module: ModuleId, scope: ScopeId) -> Type {
         match ty {
             &UnresolvedType::Primitive { ty, .. } => ty.into(),
             UnresolvedType::Unresolved(path, generics) => {
@@ -449,43 +432,39 @@ impl Compiler {
         }
     }
 
-    pub fn get_signature(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<Signature> {
-        let parsed = self.modules[module.idx()].ast.as_mut().unwrap();
-        let signature = &mut parsed.symbols.function_signatures[id.idx()];
-        match signature {
-            Resolvable::Resolved(_) => {
-                // borrowing bullshit
-                let Resolvable::Resolved(signature) = &self.modules[module.idx()]
-                    .ast
-                    .as_ref()
-                    .unwrap()
-                    .symbols
-                    .function_signatures[id.idx()]
-                else {
-                    unreachable!()
-                };
-                signature
-            }
-            Resolvable::Resolving => panic!("function signature depends on itself recursively"),
-            Resolvable::Unresolved => {
-                *signature = Resolvable::Resolving;
-                let ast = parsed.ast.clone();
-                let function = &ast[id];
-                // TODO: don't always allow inferring function
-                let signature = self.check_signature(function, module, &ast);
-                self.modules[module.idx()]
-                    .ast
-                    .as_mut()
-                    .unwrap()
-                    .symbols
-                    .function_signatures[id.idx()]
-                .put(Rc::new(signature))
-            }
+    pub fn annotation_matches_type(
+        &self,
+        annotation: &UnresolvedType,
+        ty: Type,
+        module: ModuleId,
+        scope: ScopeId,
+    ) -> Result<bool, InvalidTypeError> {
+        match annotation {
+            UnresolvedType::Infer(_) => Ok(true),
+            _ => match self.resolve_type(annotation, module, scope) {
+                Type::Invalid => Err(InvalidTypeError),
+                resolved => Ok(resolved == ty),
+            },
         }
     }
 
+    pub fn get_signature(&self, module: ModuleId, id: ast::FunctionId) -> &Signature {
+        let parsed = self.modules[module.idx()].ast.get().unwrap();
+        &mut parsed.symbols.function_signatures[id.idx()].get_or_resolve_with(
+            || {
+                // TODO: error
+                panic!("function signature depends on itself recursively")
+            },
+            || {
+                let function = &parsed.ast[id];
+                // TODO: don't always allow inferring function
+                self.check_signature(function, module, &parsed.ast)
+            },
+        )
+    }
+
     pub fn check_signature_with_type(
-        &mut self,
+        &self,
         func_id: (ModuleId, ast::FunctionId),
         ty: &UnresolvedType,
         scope: ScopeId,
@@ -493,7 +472,7 @@ impl Compiler {
     ) -> Result<(), SignatureError> {
         let signature = self.get_signature(func_id.0, func_id.1);
         let func_signature_span =
-            |compiler: &mut Self| compiler.get_module_ast(func_id.0)[func_id.1].signature_span;
+            |compiler: &Self| compiler.get_module_ast(func_id.0)[func_id.1].signature_span;
         match ty {
             UnresolvedType::Infer(_) => Ok(()),
             UnresolvedType::Function {
@@ -501,7 +480,6 @@ impl Compiler {
                 params: _,
             } => todo!("check partial function type annotation"),
             UnresolvedType::Unresolved(path, generics) => {
-                let signature = Rc::clone(signature);
                 match self.resolve_path(ty_module, scope, *path) {
                     Def::Invalid => Err(SignatureError),
                     Def::Type(ty) => {
@@ -568,7 +546,7 @@ impl Compiler {
     }
 
     pub fn resolve_generics(
-        &mut self,
+        &self,
         generics: &[GenericDef<()>],
         module: ModuleId,
         scope: ScopeId,
@@ -617,7 +595,7 @@ impl Compiler {
     }
 
     pub fn check_signature(
-        &mut self,
+        &self,
         function: &ast::Function,
         module: ModuleId,
         ast: &Ast,
@@ -670,12 +648,12 @@ impl Compiler {
     }
 
     pub fn get_trait_name(&self, module: ModuleId, id: ast::TraitId) -> &str {
-        let parsed = self.modules[module.idx()].ast.as_ref().unwrap();
+        let parsed = self.modules[module.idx()].ast.get().unwrap();
         let trait_def = &parsed.ast[id];
         &parsed.ast.src()[trait_def.associated_name.range()]
     }
 
-    pub fn get_trait_generic_count(&mut self, trait_id: (ModuleId, TraitId)) -> u8 {
+    pub fn get_trait_generic_count(&self, trait_id: (ModuleId, TraitId)) -> u8 {
         // subtract the self generic
         (self.get_parsed_module(trait_id.0).ast[trait_id.1]
             .generics
@@ -687,38 +665,23 @@ impl Compiler {
     }
 
     /// returns None when the trait can't be resolved, an error was already emitted in that case
-    pub fn get_checked_trait(
-        &mut self,
-        module: ModuleId,
-        id: ast::TraitId,
-    ) -> Option<&Rc<CheckedTrait>> {
+    pub fn get_checked_trait(&self, module: ModuleId, id: ast::TraitId) -> Option<&CheckedTrait> {
         let parsed = self.get_parsed_module(module);
-        match &parsed.symbols.traits[id.idx()] {
-            Resolvable::Resolved(_) => {
-                // borrowing bullshit
-                let Resolvable::Resolved(checked) =
-                    &self.get_parsed_module(module).symbols.traits[id.idx()]
-                else {
-                    unreachable!()
-                };
-                Some(checked)
-            }
-            Resolvable::Resolving => {
-                let span = parsed.ast[id].span(parsed.ast.scopes());
-                self.errors
-                    .emit(module, Error::RecursiveDefinition.at_span(span));
-                None
-            }
-            Resolvable::Unresolved => {
-                let ast = Rc::clone(&parsed.ast);
-                let checked = check::trait_def(self, ast, (module, id));
-                Some(self.get_parsed_module(module).symbols.traits[id.idx()].put(Rc::new(checked)))
-            }
-        }
+        parsed.symbols.traits[id.idx()]
+            .get_or_resolve_with(
+                || {
+                    let span = parsed.ast[id].span(parsed.ast.scopes());
+                    self.errors
+                        .emit(module, Error::RecursiveDefinition.at_span(span));
+                    None
+                },
+                || Some(check::trait_def(self, &parsed.ast, (module, id))),
+            )
+            .as_ref()
     }
 
     pub fn get_impl_method(
-        &mut self,
+        &self,
         trait_id: (ModuleId, ast::TraitId),
         ty: Type,
         trait_generics: &[Type],
@@ -727,11 +690,11 @@ impl Compiler {
         let mut impl_generics = Vec::new();
         // TODO: why aren't the generics of the type used here
         let def = if let TypeFull::Instance(base, _generics) = self.types.lookup(ty) {
-            Some(Rc::clone(self.get_resolved_type_def(base)))
+            Some(self.get_base_type_def(base))
         } else {
             None
         };
-        let checked_trait = Rc::clone(self.get_checked_trait(trait_id.0, trait_id.1)?);
+        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
         let impls = def
             .iter()
             .flat_map(|def| {
@@ -743,10 +706,7 @@ impl Compiler {
         'impls: for impl_ in impls {
             impl_generics.clear();
             impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
-            if !impl_
-                .impl_ty
-                .matches_type(&self.types, ty, &mut impl_generics)
-            {
+            if !traits::match_instance(impl_.impl_ty, ty, &self.types, &mut impl_generics) {
                 continue 'impls;
             }
             debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
@@ -767,54 +727,28 @@ impl Compiler {
         None
     }
 
-    pub fn get_hir(&mut self, module: ModuleId, id: ast::FunctionId) -> &Rc<CheckedFunction> {
-        let checked = &self.modules[module.idx()].ast.as_ref().unwrap().symbols;
-        match &checked.functions[id.idx()] {
-            Resolvable::Resolved(_) => {
-                // borrowing bullshit
-                let Resolvable::Resolved(checked) = &self.modules[module.idx()]
-                    .ast
-                    .as_ref()
-                    .unwrap()
-                    .symbols
-                    .functions[id.idx()]
-                else {
-                    unreachable!()
-                };
-                checked
-            }
-            Resolvable::Resolving => panic!("checked function depends on itself recursively"),
-            Resolvable::Unresolved => {
-                let checked = check::function(self, module, id);
-                self.modules[module.idx()]
-                    .ast
-                    .as_mut()
-                    .unwrap()
-                    .symbols
-                    .functions[id.idx()]
-                .put(Rc::new(checked))
-            }
-        }
+    pub fn get_hir(&self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
+        let checked = &self.modules[module.idx()].ast.get().unwrap().symbols;
+        &checked.functions[id.idx()].get_or_resolve_with(
+            || panic!("checked function depends on itself recursively"),
+            || check::function(self, module, id),
+        )
     }
 
     pub fn get_function_name(&self, module: ModuleId, function: ast::FunctionId) -> &str {
-        let ast = &self.modules[module.idx()].ast.as_ref().unwrap().ast;
+        let ast = &self.modules[module.idx()].ast.get().unwrap().ast;
         &ast[ast[function].associated_name]
     }
 
-    pub fn get_resolved_type_generic_count(&mut self, ty: BaseType) -> u8 {
+    pub fn get_base_type_generic_count(&self, ty: BaseType) -> u8 {
         self.types.get_base(ty).generic_count
     }
 
-    pub fn get_resolved_type_def(&mut self, ty: BaseType) -> &Rc<ResolvedTypeDef> {
-        match &self.types.get_base(ty).resolved {
-            Resolvable::Resolved(id) => id,
-            Resolvable::Resolving => todo!("handle recursive type definition"),
-            Resolvable::Unresolved => {
-                let resolved = check::type_def(self, ty);
-                self.types.get_base(ty).resolved.put(Rc::new(resolved))
-            }
-        }
+    pub fn get_base_type_def(&self, ty: BaseType) -> &ResolvedTypeDef {
+        self.types.get_base(ty).resolved.get_or_resolve_with(
+            || todo!("handle recursive type definition"),
+            || check::type_def(self, ty),
+        )
     }
 
     pub fn is_uninhabited(&self, ty: Type, instance: &Instance) -> Result<bool, InvalidTypeError> {
@@ -822,49 +756,33 @@ impl Compiler {
             TypeFull::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
             TypeFull::Instance(BaseType::Tuple, items) => items
                 .iter()
-                .try_any(|&item| self.is_uninhabited(item, generics))?,
+                .try_any(|&item| self.is_uninhabited(item, instance))?,
             TypeFull::Instance(BaseType::Array, g) => {
                 let &[item, count] = g else { unreachable!() };
                 let TypeFull::Const(n) = self.types.lookup(count) else {
                     unreachable!()
                 };
-                n != 0 && self.is_uninhabited(item, generics)?
+                n != 0 && self.is_uninhabited(item, instance)?
             }
-            TypeFull::Instance(base, instance_generics) => {
+            TypeFull::Instance(_base, _instance_generics) => {
                 todo!("get resolved type and check")
             }
-            TypeFull::Generic(i) => self.is_uninhabited(generics[usize::from(i)], &[]),
-            TypeFull::LocalEnum(items) => {
-                items.is_empty()
-                    || items
-                        .iter()
-                        .try_all(|(_, args)| args.iter().try_any(|&arg| self.is_uninhabited(arg)))?
-            }
+            TypeFull::Generic(i) => self.is_uninhabited(instance[i], &instance.outer())?,
             TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
         })
     }
 
-    pub fn get_checked_global(&mut self, module: ModuleId, id: GlobalId) -> &(ConstValue, TypeOld) {
+    pub fn get_checked_global(&self, module: ModuleId, id: GlobalId) -> &(ConstValue, Type) {
         let parsed = self.get_parsed_module(module);
-        let ast = parsed.ast.clone();
-        match &parsed.symbols.globals[id.idx()] {
-            Resolvable::Resolved(_) => {
-                let Resolvable::Resolved(global) =
-                    &self.get_parsed_module(module).symbols.globals[id.idx()]
-                else {
-                    unreachable!()
-                };
-                global
-            }
-            Resolvable::Resolving => {
+        let ast = &parsed.ast;
+        &parsed.symbols.globals[id.idx()].get_or_resolve_with(
+            || {
                 let span = ast[id].span;
                 self.errors
                     .emit(module, Error::RecursiveDefinition.at_span(span));
-                self.get_parsed_module(module).symbols.globals[id.idx()]
-                    .put((ConstValue::Undefined, TypeOld::Invalid))
-            }
-            Resolvable::Unresolved => {
-                parsed.symbols.globals[id.idx()] = Resolvable::Resolving;
+                (ConstValue::Undefined, Type::Invalid)
+            },
+            || {
                 let global = &ast[id];
                 let (const_value, ty) = match eval::def_expr(
                     self,
@@ -876,32 +794,26 @@ impl Compiler {
                     &global.ty,
                 ) {
                     Def::ConstValue(id) => self.const_values[id.idx()].clone(),
-                    Def::Invalid => (ConstValue::Undefined, TypeOld::Invalid),
+                    Def::Invalid => (ConstValue::Undefined, Type::Invalid),
                     def => {
                         if !matches!(def, Def::Invalid) {
                             let error = Error::ExpectedValue.at_span(ast[global.val].span(&ast));
                             self.errors.emit(module, error);
                         }
-                        (ConstValue::Undefined, TypeOld::Invalid)
+                        (ConstValue::Undefined, Type::Invalid)
                     }
                 };
-                self.modules[module.idx()]
-                    .ast
-                    .as_mut()
-                    .unwrap()
-                    .symbols
-                    .globals[id.idx()]
-                .put((const_value, ty))
-            }
-        }
+                (const_value, ty)
+            },
+        )
     }
 
-    pub fn get_builtin_panic(&mut self) -> ir::FunctionId {
+    pub fn get_builtin_panic(&self) -> ir::FunctionId {
         let (panic_mod, panic_function) = builtins::get_panic(self);
-        self.get_ir_function_id(panic_mod, panic_function, Vec::new())
+        self.get_ir_function_id(panic_mod, panic_function, Box::new([]))
     }
 
-    pub fn check_complete_project(&mut self, project: ProjectId) {
+    pub fn check_complete_project(&self, project: ProjectId) {
         let root = self.projects[project.idx()].root_module;
         let mut modules_to_check = VecDeque::from([root]);
         while let Some(module) = modules_to_check.pop_front() {
@@ -933,23 +845,12 @@ impl Compiler {
             }
 
             for id in ast.type_ids() {
-                let parsed = self.modules[module.idx()].ast.as_mut().unwrap();
-                let id = match &mut parsed.symbols.types[id.idx()] {
-                    Some(id) => *id,
-                    ty @ None => {
-                        let generic_count = parsed.ast[id].generic_count();
-                        let id = Self::add_type_def_to_types(
-                            module,
-                            id,
-                            "<anonymous type>".into(),
-                            generic_count,
-                            &mut self.types,
-                        );
-                        *ty = Some(id);
-                        id
-                    }
-                };
-                let resolved = Rc::clone(self.get_resolved_type_def(id));
+                let parsed = self.modules[module.idx()].ast.get().unwrap();
+                let id = *parsed.symbols.types[id.idx()].get_or_init(|| {
+                    let generic_count = parsed.ast[id].generic_count();
+                    self.add_type_def(module, id, "<anonymous type>".into(), generic_count)
+                });
+                let resolved = self.get_base_type_def(id);
                 for &method in resolved.methods.values() {
                     self.get_hir(module, method);
                 }
@@ -968,7 +869,6 @@ impl Compiler {
 
             for id in ast.trait_ids() {
                 if let Some(checked) = self.get_checked_trait(module, id) {
-                    let checked = Rc::clone(checked);
                     for impl_ in &checked.impls {
                         for &id in &impl_.functions {
                             self.get_hir(module, id);
@@ -980,15 +880,17 @@ impl Compiler {
     }
 
     pub fn get_ir_function_id(
-        &mut self,
-        module: ModuleId,
-        function: ast::FunctionId,
-        generics: Vec<TypeOld>,
+        &self,
+        _module: ModuleId,
+        _function: ast::FunctionId,
+        _generics: Box<[Type]>,
     ) -> ir::FunctionId {
+        todo!("re-add ir generation")
+        /*
         self.get_parsed_module(module);
         if let Some(&id) = self.modules[module.idx()]
             .ast
-            .as_mut()
+            .get()
             .unwrap()
             .instances
             .functions[function.idx()]
@@ -998,7 +900,7 @@ impl Compiler {
         }
 
         let mut to_generate = vec![];
-        let checked = Rc::clone(self.get_hir(module, function));
+        let checked = self.get_hir(module, function);
         let func = irgen::declare_function(self, &checked, &generics);
         let id = self.ir.add_function(self.ir_module, func);
         to_generate.push(FunctionToGenerate {
@@ -1046,6 +948,7 @@ impl Compiler {
             }
         }
         id
+        */
     }
 
     pub fn print_project_hir(&mut self, project: ProjectId) {
@@ -1054,16 +957,7 @@ impl Compiler {
         while let Some(module) = module_queue.pop_front() {
             let functions = self.get_module_ast(module).function_ids();
             for function in functions {
-                self.get_hir(module, function);
-                let Resolvable::Resolved(hir) = &self.modules[module.idx()]
-                    .ast
-                    .as_ref()
-                    .unwrap()
-                    .symbols
-                    .functions[function.idx()]
-                else {
-                    unreachable!()
-                };
+                let hir = self.get_hir(module, function);
                 tracing::debug!(target: "hir", function = hir.name, "\n{}", hir.display(self));
             }
             module_queue.extend(self.get_parsed_module(module).child_modules.iter().copied())
@@ -1072,7 +966,9 @@ impl Compiler {
 
     /// Emit project ir starting from a root function (for example the main function) while
     /// generating all functions recursively that are called by that function
-    pub fn emit_ir_from_root(&mut self, root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
+    pub fn emit_ir_from_root(&self, _root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
+        todo!("emit ir again")
+        /*
         let mut functions_to_emit = VecDeque::from([(root.0, root.1, vec![])]);
         let mut finished_functions = Vec::new();
         while let Some((module, function, generics)) = functions_to_emit.pop_front() {
@@ -1081,14 +977,15 @@ impl Compiler {
         }
 
         finished_functions
+        */
     }
 
     /// Emit the ir for all non-generic top-level functions in a project and functions called by them.
-    pub fn emit_whole_project_ir(&mut self, project: ProjectId) {
+    pub fn emit_whole_project_ir(&self, project: ProjectId) {
         let project = self.get_project(project);
         let mut module_queue = VecDeque::from([project.root_module]);
         while let Some(module) = module_queue.pop_front() {
-            let ast = Rc::clone(self.get_module_ast(module));
+            let ast = self.get_module_ast(module);
             let functions = ast.function_ids();
             for function in functions {
                 if ast[function].generics.types.is_empty() {
@@ -1099,25 +996,29 @@ impl Compiler {
     }
 
     pub fn verify_main_and_add_entry_point(
-        &mut self,
+        &self,
         main: (ModuleId, FunctionId),
     ) -> Result<ir::FunctionId, Option<CompileError>> {
-        let main_ir_id = self.get_ir_function_id(main.0, main.1, vec![]);
+        //let main_ir_id = self.get_ir_function_id(main.0, main.1, Box::new([]));
         let main_signature = self.get_signature(main.0, main.1);
-        check::verify_main_signature(main_signature).map(|()| {
-            let main_signature = Rc::clone(self.get_signature(main.0, main.1));
+        check::verify_main_signature(self, main_signature).map(|()| {
+            todo!("irgen: re-add entry point")
+            /*
+            let main_signature = self.get_signature(main.0, main.1);
             let entry_point = irgen::entry_point(
                 main_ir_id,
-                &main_signature.return_type,
+                main_signature.return_type,
                 &self.ir,
                 &self.dialects,
             );
             self.ir.add_function(self.ir_module, entry_point)
+            */
         })
     }
 
-    pub fn get_ir_function(&self, id: ir::FunctionId) -> &ir::Function {
-        &self.ir[id]
+    pub fn get_ir_function(&self, _id: ir::FunctionId) -> &ir::Function {
+        todo!("irgen")
+        // &self.ir[id]
     }
 
     /// prints all errors, consuming them and returns true if any fatal errors were present
@@ -1141,22 +1042,19 @@ impl Compiler {
                 );
             }
         };
-        let err_count: usize = errors
-            .by_file
-            .values()
-            .map(|errors| errors.error_count())
-            .sum();
+        let by_file = errors.by_file.into_inner();
+        let err_count: usize = by_file.values().map(|errors| errors.error_count()).sum();
         if err_count != 0 {
             cprintln!(
                 "#r<Finished with #u;r!<{}> error{}>",
                 err_count,
                 if err_count == 1 { "" } else { "s" }
             );
-            for (module, errors) in errors.by_file {
+            for (module, errors) in by_file {
                 if errors.error_count() == 0 {
                     continue;
                 }
-                let ast = Rc::clone(self.get_module_ast(module));
+                let ast = self.get_module_ast(module);
                 let mut path: &Path = &self.modules[module.idx()].path;
                 let relative = working_directory
                     .as_ref()
@@ -1170,21 +1068,17 @@ impl Compiler {
             }
             return true;
         }
-        let warning_count: usize = errors
-            .by_file
-            .values()
-            .map(|errors| errors.warning_count())
-            .sum();
+        let warning_count: usize = by_file.values().map(|errors| errors.warning_count()).sum();
         if warning_count != 0 {
             cprintln!(
                 "#r<Finished with #u;r!<{warning_count}> warning{}>",
                 if warning_count == 1 { "" } else { "s" }
             );
-            for (module, errors) in errors.by_file {
+            for (module, errors) in by_file {
                 if errors.warning_count() == 0 {
                     continue;
                 }
-                let ast = Rc::clone(self.get_module_ast(module));
+                let ast = self.get_module_ast(module);
                 let mut path: &Path = &self.modules[module.idx()].path;
                 let relative = working_directory
                     .as_ref()
@@ -1229,6 +1123,24 @@ impl<T> Resolvable<T> {
             resolving: OnceCell::new(),
             resolved: OnceCell::from(value),
         }
+    }
+
+    pub fn get_or_resolve_with(
+        &self,
+        already_resolving: impl FnOnce() -> T,
+        resolve: impl FnOnce() -> T,
+    ) -> &T {
+        if let Some(value) = self.resolved.get() {
+            return value;
+        }
+        if self.resolving.set(()).is_err() {
+            _ = self.resolved.set(already_resolving());
+        } else {
+            self.resolved.set(resolve()).unwrap_or_else(|_| {
+                panic!("Resolvable was already resolved despite resolving not being set")
+            });
+        }
+        self.resolved.get().unwrap()
     }
 
     pub fn start_resolving(&self) {
@@ -1285,7 +1197,7 @@ pub enum LocalItem {
     Invalid,
 }
 impl LocalScope<'_> {
-    pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &mut Compiler) -> LocalItem {
+    pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &Compiler) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
         } else if let Some(def) = self
@@ -1369,23 +1281,23 @@ impl Def {
         self,
         module: ModuleId,
         scope: ScopeId,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
         ty: &UnresolvedType,
-    ) -> Result<Def, Option<&'static str>> {
+    ) -> Result<Def, &'static str> {
         match self {
             Def::Invalid => Ok(Def::Invalid),
             Def::Function(_, _) | Def::Module(_) | Def::BaseType(_) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
-                _ => Err(Some("a function")),
+                _ => Err("a function"),
             },
-            Def::Type(_) => compiler
-                .unresolved_matches_primitive(ty, Primitive::Type, module, scope)
-                .map_or(Ok(Def::Invalid), |matches| {
-                    matches.then_some(self).ok_or(Some("type"))
-                }),
+            Def::Type(_) => match compiler.resolve_type(ty, module, scope) {
+                Type::Invalid => return Ok(Def::Invalid),
+                Type::Type => Ok(self),
+                _ => Err("type"),
+            },
             Def::Trait(_, _) => match ty {
                 UnresolvedType::Infer(_) => Ok(self),
-                _ => Err(Some("a trait")),
+                _ => Err("a trait"),
             },
             Def::ConstValue(_const_val_id) => {
                 todo!("check const value with type")
@@ -1413,7 +1325,7 @@ impl Def {
             Self::ConstValue(value) => {
                 let (val, ty) = &compiler.const_values[value.idx()];
                 val.dump();
-                print!(": {ty}");
+                print!(": {}", compiler.types.display(*ty));
             }
             Self::Module(id) => print!("Module({})", id.idx()),
             Self::Global(module, id) => print!("Global({}, {})", module.idx(), id.idx()),
@@ -1461,7 +1373,7 @@ pub struct Project {
 pub struct Module {
     pub path: PathBuf,
     pub project: ProjectId,
-    pub ast: Option<ParsedModule>,
+    pub ast: OnceCell<ParsedModule>,
     pub root: ModuleId,
     pub parent: Option<ModuleId>,
 }
@@ -1475,7 +1387,7 @@ impl Module {
         Self {
             path,
             project,
-            ast: None,
+            ast: OnceCell::new(),
             root,
             parent,
         }
@@ -1483,7 +1395,7 @@ impl Module {
 }
 
 pub struct ParsedModule {
-    pub ast: Rc<Ast>,
+    pub ast: Ast,
     pub child_modules: Vec<ModuleId>,
     pub symbols: ModuleSymbols,
     pub instances: IrInstances,
@@ -1540,12 +1452,14 @@ impl Signature {
     /// The signature is allowed to have looser trait bound requirements than the base.
     pub fn compatible_with(
         &self,
+        types: &Types,
         base: &Signature,
         generics_offset: u8,
         base_generics_offset: u8,
-        base_generics: &[TypeOld],
+        base_generics: &[Type],
     ) -> Result<Option<ImplIncompatibility>, InvalidTypeError> {
         if !self.generics.compatible_with(
+            types,
             &base.generics,
             generics_offset,
             base_generics_offset,
@@ -1568,13 +1482,13 @@ impl Signature {
         }
         // TODO: should the default value also be compared?
         for (((_, arg), (_, base_arg)), i) in self.all_params().zip(base.all_params()).zip(0..) {
-            if !arg.is_same_as(&base_arg.instantiate_generics(base_generics))? {
+            if !arg.is_same_as(types.instantiate(base_arg, base_generics))? {
                 return Ok(Some(ImplIncompatibility::Arg(i)));
             }
         }
         if !self
             .return_type
-            .is_same_as(&base.return_type.instantiate_generics(base_generics))?
+            .is_same_as(types.instantiate(base.return_type, base_generics))?
         {
             return Ok(Some(ImplIncompatibility::ReturnType));
         }
@@ -1599,12 +1513,12 @@ impl Generics {
         self.generics.len() as u8
     }
 
-    pub fn unify_generic_bound(
+    pub fn check_bound_satisfied(
         &self,
         generic: u8,
         bound: &Bound,
         types: &mut TypeTable,
-        compiler: &mut Compiler,
+        compiler: &Compiler,
     ) -> bool {
         let mut found = None;
         for generic_bound in self.generics[generic as usize].1.iter() {
@@ -1654,10 +1568,11 @@ impl Generics {
 
     pub fn compatible_with(
         &self,
+        types: &Types,
         base: &Self,
         offset: u8,
         base_offset: u8,
-        base_generics: &[TypeOld],
+        base_generics: &[Type],
     ) -> Result<bool, InvalidTypeError> {
         if self.generics.len() as u8 - offset != base.generics.len() as u8 - base_offset {
             return Ok(false);
@@ -1673,8 +1588,8 @@ impl Generics {
                     if base_bound.trait_id != bound.trait_id {
                         continue;
                     }
-                    for (a, b) in base_bound.generics.iter().zip(&bound.generics) {
-                        if !a.is_same_as(&b.instantiate_generics(base_generics))? {
+                    for (&a, &b) in base_bound.generics.iter().zip(&bound.generics) {
+                        if !a.is_same_as(types.instantiate(b, base_generics))? {
                             continue 'base_bounds;
                         }
                     }
@@ -1726,32 +1641,33 @@ pub enum ResolvedTypeContent {
     Enum(ResolvedEnumDef),
 }
 impl ResolvedTypeContent {
-    pub fn uninhabited(
-        &self,
-        compiler: &mut Compiler,
-        generics: &[TypeOld],
-    ) -> Result<bool, InvalidTypeError> {
-        Ok(match self {
-            Self::Builtin(_) => false, // TODO: tuples with uninhabited fields may be uninhabited
-            Self::Struct(struct_def) => {
-                struct_def
-                    .all_fields()
-                    .try_fold(false, |s, (_, field_ty)| {
-                        Ok(s || compiler.types.is_generic_uninhabited(field_ty, generics)?)
-                    })?
-            }
-            Self::Enum(enum_def) => {
-                enum_def
-                    .variants
-                    .iter()
-                    .try_fold(true, |s, (_, variant_param_types)| {
-                        Ok(s && variant_param_types.iter().try_fold(false, |s, ty| {
-                            Ok(s || compiler.uninhabited(ty, generics)?)
-                        })?)
-                    })?
-            }
-        })
-    }
+    // TODO: cleanup
+    // pub fn uninhabited(
+    //     &self,
+    //     compiler: &mut Compiler,
+    //     generics: &[TypeOld],
+    // ) -> Result<bool, InvalidTypeError> {
+    //     Ok(match self {
+    //         Self::Builtin(_) => false, // TODO: tuples with uninhabited fields may be uninhabited
+    //         Self::Struct(struct_def) => {
+    //             struct_def
+    //                 .all_fields()
+    //                 .try_fold(false, |s, (_, field_ty)| {
+    //                     Ok(s || compiler.types.is_generic_uninhabited(field_ty, generics)?)
+    //                 })?
+    //         }
+    //         Self::Enum(enum_def) => {
+    //             enum_def
+    //                 .variants
+    //                 .iter()
+    //                 .try_fold(true, |s, (_, variant_param_types)| {
+    //                     Ok(s && variant_param_types.iter().try_fold(false, |s, ty| {
+    //                         Ok(s || compiler.uninhabited(ty, generics)?)
+    //                     })?)
+    //                 })?
+    //         }
+    //     })
+    // }
 }
 
 #[derive(Debug)]
@@ -1807,15 +1723,15 @@ pub enum ResolvedPrimitive {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedEnumDef {
-    pub variants: Box<[(String, Box<[Type]>)]>,
+    // TODO: pull variant out into struct
+    pub variants: Box<[(Box<str>, u64, Box<[Type]>)]>,
 }
 impl ResolvedEnumDef {
-    pub fn get_by_name(&self, name: &str) -> Option<(u32, &[Type])> {
+    pub fn get_by_name(&self, name: &str) -> Option<(&str, u64, &[Type])> {
         self.variants
             .iter()
-            .zip(0..)
-            .find_map(|((variant_name, args), ordinal)| {
-                (variant_name == name).then_some((ordinal, &**args))
+            .find_map(|(variant_name, ordinal, args)| {
+                (&**variant_name == name).then_some((&**variant_name, *ordinal, &**args))
             })
     }
 }
@@ -1825,7 +1741,7 @@ pub struct ResolvableTypeDef {
     pub id: ast::TypeId,
     pub name: Box<str>,
     pub generic_count: u8,
-    pub resolved: Resolvable<Rc<ResolvedTypeDef>>,
+    pub resolved: Resolvable<ResolvedTypeDef>,
 }
 impl Default for ResolvableTypeDef {
     fn default() -> Self {
@@ -1834,38 +1750,33 @@ impl Default for ResolvableTypeDef {
             id: ast::TypeId::from_inner(0),
             name: "".into(),
             generic_count: 0,
-            resolved: Resolvable::Unresolved,
+            resolved: Resolvable::new(),
         }
     }
 }
 
-#[derive(Debug)]
 pub struct ModuleSymbols {
-    pub function_signatures: Box<[Resolvable<Rc<Signature>>]>,
-    pub functions: Box<[Resolvable<Rc<CheckedFunction>>]>,
-    pub types: Box<[Option<BaseType>]>,
-    pub globals: Box<[Resolvable<(ConstValue, TypeOld)>]>,
-    pub traits: Box<[Resolvable<Rc<CheckedTrait>>]>,
+    pub function_signatures: Box<[Resolvable<Signature>]>,
+    pub functions: Box<[Resolvable<CheckedFunction>]>,
+    pub types: Box<[OnceCell<BaseType>]>,
+    pub globals: Box<[Resolvable<(ConstValue, Type)>]>,
+    pub traits: Box<[Resolvable<Option<CheckedTrait>>]>,
     pub def_exprs: Box<[Resolvable<Def>]>,
 }
 impl ModuleSymbols {
     fn empty(ast: &Ast) -> Self {
         Self {
             function_signatures: (0..ast.function_count())
-                .map(|_| Resolvable::Unresolved)
+                .map(|_| Resolvable::new())
                 .collect(),
             functions: (0..ast.function_count())
-                .map(|_| Resolvable::Unresolved)
+                .map(|_| Resolvable::new())
                 .collect(),
-            types: vec![None; ast.type_count()].into_boxed_slice(),
-            globals: (0..ast.global_count())
-                .map(|_| Resolvable::Unresolved)
-                .collect(),
-            traits: (0..ast.trait_count())
-                .map(|_| Resolvable::Unresolved)
-                .collect(),
+            types: vec![OnceCell::new(); ast.type_count()].into_boxed_slice(),
+            globals: (0..ast.global_count()).map(|_| Resolvable::new()).collect(),
+            traits: (0..ast.trait_count()).map(|_| Resolvable::new()).collect(),
             def_exprs: (0..ast.def_expr_count())
-                .map(|_| Resolvable::Unresolved)
+                .map(|_| Resolvable::new())
                 .collect(),
         }
     }
@@ -1894,7 +1805,7 @@ impl CheckedFunction {
         }
     }
 }
-enum BodyOrTypes {
+pub enum BodyOrTypes {
     Body(Hir),
     Types(Box<[Type]>),
 }
@@ -1921,7 +1832,7 @@ pub struct CheckedTrait {
 }
 
 pub struct IrInstances {
-    pub functions: Vec<DHashMap<Vec<TypeOld>, ir::FunctionId>>,
+    pub functions: Vec<DHashMap<Box<[Type]>, ir::FunctionId>>,
     pub globals: Vec<Option<ir::GlobalId>>,
 }
 impl IrInstances {
@@ -1937,7 +1848,7 @@ pub struct FunctionToGenerate {
     pub ir_id: ir::FunctionId,
     pub module: ModuleId,
     pub ast_function_id: ast::FunctionId,
-    pub generics: Vec<TypeOld>,
+    pub generics: Box<[Type]>,
 }
 
 pub fn mangle_name(checked: &CheckedFunction, types: &Types, generics: &[Type]) -> String {
@@ -1988,7 +1899,7 @@ pub struct Instance<'a> {
     pub outer: Option<&'a Instance<'a>>,
 }
 impl<'a> Instance<'a> {
-    const EMPTY: Self = Self {
+    pub const EMPTY: Self = Self {
         types: &[],
         outer: None,
     };
