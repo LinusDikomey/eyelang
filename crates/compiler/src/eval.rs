@@ -1,5 +1,4 @@
 use error::Error;
-use ir::eval::Val;
 use parser::ast::{
     Ast, Expr, ExprId, FloatLiteral, IntLiteral, ModuleId, Primitive, ScopeId, UnresolvedType,
 };
@@ -221,7 +220,7 @@ pub fn value_expr(
         return Ok((ConstValue::Undefined, ty));
     }
 
-    todo!("irgen")
+    todo!("consteval irgen")
     /*
     let mut to_generate = Vec::new();
     let mut builder = ir::builder::Builder::new(&mut *compiler);
@@ -268,6 +267,7 @@ pub fn value_expr(
     */
 }
 
+/*
 fn to_const_val(val: Val) -> ConstValue {
     match val {
         Val::Invalid => ConstValue::Undefined,
@@ -282,7 +282,6 @@ fn to_const_val(val: Val) -> ConstValue {
     }
 }
 
-/*
 struct LazyEvalEnv<'a> {
     compiler: &'a mut Compiler,
 }

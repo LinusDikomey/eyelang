@@ -8,17 +8,14 @@ use crate::{
 
 pub fn check(from_ty: Type, to_ty: Type, compiler: &Compiler) -> (CastType, Option<Error>) {
     let mut error = None;
+    if from_ty == to_ty {
+        return (CastType::Noop, Some(Error::TrivialCast));
+    }
     let cast = match (compiler.types.lookup(from_ty), compiler.types.lookup(to_ty)) {
         (TypeFull::Instance(BaseType::Invalid, _), _)
         | (_, TypeFull::Instance(BaseType::Invalid, _)) => CastType::Invalid,
-        (TypeFull::Instance(a, a_generics), TypeFull::Instance(b, b_generics))
-            if a_generics.is_empty() && b_generics.is_empty() =>
-        {
+        (TypeFull::Instance(a, _), TypeFull::Instance(b, _)) => {
             match (a.as_int(), a.as_float(), b.as_int(), b.as_float()) {
-                _ if a == b => {
-                    error = Some(Error::TrivialCast);
-                    CastType::Noop
-                }
                 _ if a == BaseType::Pointer && b == BaseType::Pointer => CastType::Noop,
                 (Some(from), _, Some(to), _) => CastType::Int { from, to },
                 (Some(from), _, _, Some(to)) => CastType::IntToFloat { from, to },

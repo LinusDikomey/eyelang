@@ -10,7 +10,10 @@ use std::{
 use args::Backend;
 pub use compiler::Compiler;
 
-use compiler::{Def, ModuleSpan};
+use compiler::{
+    Def, ModuleSpan,
+    compiler::{Dialects, Instances},
+};
 
 use error::{Error, span::TSpan};
 
@@ -140,14 +143,28 @@ fn main() -> Result<(), MainError> {
     }
 
     if tracing::enabled!(target: "ir", tracing::Level::DEBUG) {
-        // TODO: right now, backends just codegen all functions that are emitted so this causes
-        // functions to be emitted unnecessarily. Could maybe be solved by collecting a list of ir
-        // function ids required for compiling main and passing it to the backend.
-        compiler.emit_whole_project_ir(project);
-        todo!("irgen")
-        // for func in compiler.ir.get_module(compiler.ir_module).functions() {
-        //     tracing::debug!(target: "ir", function = func.name, "\n{}", func.display(&compiler.ir));
-        // }
+        let mut env = ir::Environment::new(ir::Primitive::create_infos());
+        let dialects = Dialects {
+            arith: env.get_dialect_module(),
+            tuple: env.get_dialect_module(),
+            mem: env.get_dialect_module(),
+            cf: env.get_dialect_module(),
+            main: env.create_module("main"),
+        };
+        let mut instances = Instances::new();
+        compiler.emit_whole_project_ir(&mut env, &dialects, &mut instances, project);
+        if args.debug_functions.is_empty() {
+            tracing::debug!(target: "ir", "{}", env.display_module(dialects.main));
+        } else {
+            // display functions separately if there was a filter on the output functions so that
+            // they will be filtered
+            for func in env.get_module(dialects.main).functions() {
+                tracing::debug!(
+                    target: "ir", function = func.name, "\n{}",
+                    func.display(&env),
+                );
+            }
+        }
     }
     if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
@@ -156,97 +173,115 @@ fn main() -> Result<(), MainError> {
     match args.cmd {
         args::Cmd::Check => {}
         args::Cmd::Build | args::Cmd::Run => {
+            let mut env = ir::Environment::new(ir::Primitive::create_infos());
+            let dialects = Dialects {
+                arith: env.get_dialect_module(),
+                tuple: env.get_dialect_module(),
+                mem: env.get_dialect_module(),
+                cf: env.get_dialect_module(),
+                main: env.create_module("main"),
+            };
+            let mut instances = Instances::new();
             if let Some(main) = main {
-                compiler.emit_ir_from_root(main);
+                let Some(main_ir_id) =
+                    compiler.emit_ir_from_root(&mut env, &dialects, &mut instances, main)
+                else {
+                    if args.run_with_errors {
+                        eprintln!("Failed to run due to main function failing to generate");
+                    }
+                    return Err(MainError::ErrorsFound);
+                };
                 // verification was already done so the error can be ignored here
-                _ = compiler.verify_main_and_add_entry_point(main);
+                _ = compiler.verify_main_and_add_entry_point(&mut env, &dialects, main, main_ir_id);
             } else {
-                compiler.emit_whole_project_ir(project);
+                compiler.emit_whole_project_ir(&mut env, &dialects, &mut instances, project);
             }
-            todo!("irgen")
-            // #[cfg(debug_assertions)]
-            // ir::verify::module(&compiler.ir, compiler.ir_module);
 
-            // if args.optimize {
-            //     let pipeline = ir::optimize::optimizing_pipeline(&mut compiler.ir);
-            //     pipeline.process_module(&mut compiler.ir, compiler.ir_module);
+            if compiler.print_errors() && !args.run_with_errors {
+                // compiler errors might have originated from generating dependencies
+                return Err(MainError::ErrorsFound);
+            }
+            // Done with front-end, drop compiler so all the memory gets freed while in backend
+            drop(compiler);
 
-            //     #[cfg(debug_assertions)]
-            //     ir::verify::module(&compiler.ir, compiler.ir_module);
-            // }
+            #[cfg(debug_assertions)]
+            ir::verify::module(&env, dialects.main);
 
-            // if compiler.print_errors() && !args.run_with_errors {
-            //     return Err(MainError::ErrorsFound);
-            // }
-            // std::fs::create_dir_all(Path::new("eyebuild")).unwrap();
-            // let obj_file = format!("eyebuild/{name}.o");
-            // match args.backend {
-            //     Backend::C => todo!("reimplement C backend"),
-            //     #[cfg(feature = "fast-backend")]
-            //     Backend::Fast => {
-            //         let backend = ir_backend_fast::Backend::new();
-            //         backend
-            //             .emit_module(
-            //                 &mut compiler.ir,
-            //                 compiler.ir_module,
-            //                 args.target.as_deref(),
-            //                 Path::new(&obj_file),
-            //             )
-            //             .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
-            //     }
-            //     #[cfg(feature = "llvm-backend")]
-            //     Backend::Llvm => {
-            //         let backend = ir_backend_llvm::Backend::new();
-            //         let target = args.target.as_ref().map(|target| {
-            //             std::ffi::CString::new(target.as_bytes()).expect("invalid target string")
-            //         });
-            //         backend
-            //             .emit_module(
-            //                 &mut compiler.ir,
-            //                 compiler.ir_module,
-            //                 target.as_deref(),
-            //                 Path::new(&obj_file),
-            //             )
-            //             .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
-            //     }
-            // }
-            // if args.timings {
-            //     eprintln!("Compiling took {:?}", start_time.elapsed());
-            // }
-            // if args.emit_obj || args.lib {
-            //     return Ok(());
-            // }
-            // #[cfg(not(target_os = "windows"))]
-            // let exe_file_extension = "";
-            // #[cfg(target_os = "windows")]
-            // let exe_file_extension = ".exe";
-            // let exe_file = format!("eyebuild/{name}{exe_file_extension}");
-            // if let Err(err) =
-            //     compiler::link(&obj_file, &exe_file, args.link_cmd.as_deref(), &args.link)
-            // {
-            //     return Err(MainError::LinkingFailed(err));
-            // }
-            // if matches!(args.cmd, args::Cmd::Run) {
-            //     println!("Running {name}...");
-            //     // make sure to clean up compiler resources before running
-            //     drop(compiler);
-            //     let mut command = std::process::Command::new(exe_file);
+            if args.optimize {
+                let pipeline = ir::optimize::optimizing_pipeline(&mut env);
+                pipeline.process_module(&mut env, dialects.main);
 
-            //     #[cfg(target_family = "unix")]
-            //     {
-            //         let err = std::os::unix::process::CommandExt::exec(&mut command);
-            //         return Err(MainError::RunningProgramFailed(err));
-            //     }
-            //     #[cfg(not(target_family = "unix"))]
-            //     {
-            //         let exit_code = command
-            //             .status()
-            //             .map_err(MainError::RunningProgramFailed)?
-            //             .code()
-            //             .unwrap_or(0);
-            //         std::process::exit(exit_code);
-            //     }
-            // }
+                #[cfg(debug_assertions)]
+                ir::verify::module(&env, dialects.main);
+            }
+
+            std::fs::create_dir_all(Path::new("eyebuild")).unwrap();
+            let obj_file = format!("eyebuild/{name}.o");
+            match args.backend {
+                Backend::C => todo!("reimplement C backend"),
+                #[cfg(feature = "fast-backend")]
+                Backend::Fast => {
+                    let backend = ir_backend_fast::Backend::new();
+                    backend
+                        .emit_module(
+                            &mut env,
+                            dialects.main,
+                            args.target.as_deref(),
+                            Path::new(&obj_file),
+                        )
+                        .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
+                }
+                #[cfg(feature = "llvm-backend")]
+                Backend::Llvm => {
+                    let backend = ir_backend_llvm::Backend::new();
+                    let target = args.target.as_ref().map(|target| {
+                        std::ffi::CString::new(target.as_bytes()).expect("invalid target string")
+                    });
+                    backend
+                        .emit_module(
+                            &mut env,
+                            dialects.main,
+                            target.as_deref(),
+                            Path::new(&obj_file),
+                        )
+                        .map_err(|err| MainError::BackendFailed(format!("{err:?}")))?;
+                }
+            }
+            if args.timings {
+                eprintln!("Compiling took {:?}", start_time.elapsed());
+            }
+            if args.emit_obj || args.lib {
+                return Ok(());
+            }
+            #[cfg(not(target_os = "windows"))]
+            let exe_file_extension = "";
+            #[cfg(target_os = "windows")]
+            let exe_file_extension = ".exe";
+            let exe_file = format!("eyebuild/{name}{exe_file_extension}");
+            if let Err(err) =
+                compiler::link(&obj_file, &exe_file, args.link_cmd.as_deref(), &args.link)
+            {
+                return Err(MainError::LinkingFailed(err));
+            }
+            if matches!(args.cmd, args::Cmd::Run) {
+                println!("Running {name}...");
+                let mut command = std::process::Command::new(exe_file);
+
+                #[cfg(target_family = "unix")]
+                {
+                    let err = std::os::unix::process::CommandExt::exec(&mut command);
+                    return Err(MainError::RunningProgramFailed(err));
+                }
+                #[cfg(not(target_family = "unix"))]
+                {
+                    let exit_code = command
+                        .status()
+                        .map_err(MainError::RunningProgramFailed)?
+                        .code()
+                        .unwrap_or(0);
+                    std::process::exit(exit_code);
+                }
+            }
         }
         args::Cmd::ListTargets | args::Cmd::Fmt(_) | args::Cmd::FmtStdin => unreachable!(),
         #[cfg(feature = "lsp")]

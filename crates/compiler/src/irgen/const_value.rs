@@ -1,7 +1,3 @@
-use std::rc::Rc;
-
-use parser::ast::Primitive;
-
 use crate::{
     Compiler, Type,
     check::expr::{int_primitive_from_variant_count, type_from_variant_count},

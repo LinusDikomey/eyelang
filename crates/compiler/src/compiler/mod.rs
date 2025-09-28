@@ -14,7 +14,7 @@ use error::{
     span::{IdentPath, TSpan},
 };
 use indexmap::IndexMap;
-use ir::ModuleOf;
+use ir::{Environment, ModuleOf};
 use parser::{
     self,
     ast::{
@@ -22,6 +22,7 @@ use parser::{
         TraitId, UnresolvedType,
     },
 };
+use segment_list::SegmentList;
 
 use crate::{
     InvalidTypeError, ProjectId, Type,
@@ -29,7 +30,7 @@ use crate::{
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
     hir::Hir,
-    segment_list::SegmentList,
+    irgen,
     types::{BaseType, BuiltinType, TypeFull, Types},
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
@@ -65,6 +66,7 @@ pub struct Dialects {
     pub tuple: ModuleOf<ir::dialect::Tuple>,
     pub mem: ModuleOf<ir::dialect::Mem>,
     pub cf: ModuleOf<ir::dialect::Cf>,
+    pub main: ir::ModuleId,
 }
 impl Compiler {
     pub fn new() -> Self {
@@ -191,10 +193,10 @@ impl Compiler {
                     definitions.insert(name, ast::Definition::Module(id));
                     child_modules.push(id);
                 }
-                let s = std::fs::read_to_string(&file);
+
                 // TODO is this path needed?
                 // self.modules[module_id.idx()].path = file;
-                s
+                std::fs::read_to_string(&file)
             };
             let source = match contents {
                 Ok(source) => source.into_boxed_str(),
@@ -209,22 +211,20 @@ impl Compiler {
             let ast = parser::parse(source, &mut errors, definitions);
             self.errors.add_module(module_id, errors);
             let checked = ModuleSymbols::empty(&ast);
-            let instances = IrInstances::new(ast.function_count(), ast.global_count());
             ParsedModule {
                 ast,
                 child_modules,
                 symbols: checked,
-                instances,
             }
         })
     }
 
     pub fn project_ids(&self) -> impl use<> + ExactSizeIterator<Item = ProjectId> {
-        (0..self.projects.len() as u32).map(ProjectId)
+        (0..self.projects.len()).map(ProjectId)
     }
 
     pub fn module_ids(&self) -> impl use<> + ExactSizeIterator<Item = ModuleId> {
-        (0..self.modules.len() as u32).map(ModuleId::from_inner)
+        (0..self.modules.len()).map(ModuleId::from_inner)
     }
 
     pub fn resolve_in_module(&self, module: ModuleId, name: &str, name_span: ModuleSpan) -> Def {
@@ -450,7 +450,7 @@ impl Compiler {
 
     pub fn get_signature(&self, module: ModuleId, id: ast::FunctionId) -> &Signature {
         let parsed = self.modules[module.idx()].ast.get().unwrap();
-        &mut parsed.symbols.function_signatures[id.idx()].get_or_resolve_with(
+        parsed.symbols.function_signatures[id.idx()].get_or_resolve_with(
             || {
                 // TODO: error
                 panic!("function signature depends on itself recursively")
@@ -630,7 +630,7 @@ impl Compiler {
                         }
                     }
                 }) {
-                    Some((value, ty)) => (ty.clone(), Some(self.add_const_value(value, ty))),
+                    Some((value, ty)) => (ty, Some(self.add_const_value(value, ty))),
                     None => (self.resolve_type(ty, module, scope), None),
                 };
                 (name, ty, default_value)
@@ -686,7 +686,7 @@ impl Compiler {
         ty: Type,
         trait_generics: &[Type],
         method_index: u16,
-    ) -> Option<((ModuleId, FunctionId), Vec<Type>)> {
+    ) -> Option<((ModuleId, FunctionId), Box<[Type]>)> {
         let mut impl_generics = Vec::new();
         // TODO: why aren't the generics of the type used here
         let def = if let TypeFull::Instance(base, _generics) = self.types.lookup(ty) {
@@ -721,7 +721,7 @@ impl Compiler {
             );
             return Some((
                 (impl_.impl_module, impl_.functions[method_index as usize]),
-                impl_generics,
+                impl_generics.into_boxed_slice(),
             ));
         }
         None
@@ -729,7 +729,7 @@ impl Compiler {
 
     pub fn get_hir(&self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
         let checked = &self.modules[module.idx()].ast.get().unwrap().symbols;
-        &checked.functions[id.idx()].get_or_resolve_with(
+        checked.functions[id.idx()].get_or_resolve_with(
             || panic!("checked function depends on itself recursively"),
             || check::function(self, module, id),
         )
@@ -775,7 +775,7 @@ impl Compiler {
     pub fn get_checked_global(&self, module: ModuleId, id: GlobalId) -> &(ConstValue, Type) {
         let parsed = self.get_parsed_module(module);
         let ast = &parsed.ast;
-        &parsed.symbols.globals[id.idx()].get_or_resolve_with(
+        parsed.symbols.globals[id.idx()].get_or_resolve_with(
             || {
                 let span = ast[id].span;
                 self.errors
@@ -788,7 +788,7 @@ impl Compiler {
                     self,
                     module,
                     global.scope,
-                    &ast,
+                    ast,
                     global.val,
                     &global.name,
                     &global.ty,
@@ -797,7 +797,7 @@ impl Compiler {
                     Def::Invalid => (ConstValue::Undefined, Type::Invalid),
                     def => {
                         if !matches!(def, Def::Invalid) {
-                            let error = Error::ExpectedValue.at_span(ast[global.val].span(&ast));
+                            let error = Error::ExpectedValue.at_span(ast[global.val].span(ast));
                             self.errors.emit(module, error);
                         }
                         (ConstValue::Undefined, Type::Invalid)
@@ -808,16 +808,11 @@ impl Compiler {
         )
     }
 
-    pub fn get_builtin_panic(&self) -> ir::FunctionId {
-        let (panic_mod, panic_function) = builtins::get_panic(self);
-        self.get_ir_function_id(panic_mod, panic_function, Box::new([]))
-    }
-
     pub fn check_complete_project(&self, project: ProjectId) {
         let root = self.projects[project.idx()].root_module;
         let mut modules_to_check = VecDeque::from([root]);
         while let Some(module) = modules_to_check.pop_front() {
-            let ast = self.get_module_ast(module).clone();
+            let ast = self.get_module_ast(module);
             for scope in ast.scope_ids() {
                 for (name, def) in &ast[scope].definitions {
                     match *def {
@@ -881,74 +876,70 @@ impl Compiler {
 
     pub fn get_ir_function_id(
         &self,
-        _module: ModuleId,
-        _function: ast::FunctionId,
-        _generics: Box<[Type]>,
-    ) -> ir::FunctionId {
-        todo!("re-add ir generation")
-        /*
-        self.get_parsed_module(module);
-        if let Some(&id) = self.modules[module.idx()]
-            .ast
-            .get()
-            .unwrap()
-            .instances
-            .functions[function.idx()]
-        .get(&generics)
-        {
-            return id;
-        }
-
-        let mut to_generate = vec![];
-        let checked = self.get_hir(module, function);
-        let func = irgen::declare_function(self, &checked, &generics);
-        let id = self.ir.add_function(self.ir_module, func);
-        to_generate.push(FunctionToGenerate {
-            ir_id: id,
-            module,
-            ast_function_id: function,
-            generics: generics.clone(),
-        });
-        let prev = self.modules[module.idx()]
-            .ast
-            .as_mut()
-            .unwrap()
-            .instances
-            .functions[function.idx()]
-        .insert(generics, id);
-        debug_assert!(prev.is_none());
-
-        while let Some(f) = to_generate.pop() {
-            self.get_hir(f.module, f.ast_function_id);
-            // got checked function above
-            let symbols = &self.modules[f.module.idx()].ast.as_mut().unwrap().symbols;
-            let Resolvable::Resolved(checked) = &symbols.functions[f.ast_function_id.idx()] else {
-                unreachable!()
-            };
-            let checked = Rc::clone(checked);
-            assert_eq!(
-                checked.generic_count as usize,
-                f.generics.len(),
-                "a function instance queued for ir generation has an invalid generic count"
-            );
-
-            if let Some(body) = &checked.body {
-                let return_type = self.ir[f.ir_id].return_type().unwrap();
-                let (builder, params) = ir::builder::Builder::begin_function(&mut *self, f.ir_id);
-                let res = irgen::lower_hir(
-                    builder,
-                    body,
-                    &checked.types,
-                    &mut to_generate,
-                    &f.generics,
-                    params,
-                    return_type,
-                );
-                self.ir.attach_body(f.ir_id, res);
+        ir: &mut ir::Environment,
+        dialects: &Dialects,
+        instances: &mut Instances,
+        to_generate: &mut Vec<FunctionToGenerate>,
+        module: ModuleId,
+        id: ast::FunctionId,
+        generics: Box<[Type]>,
+    ) -> Option<ir::FunctionId> {
+        // TODO: this check is probably not sufficient for error handling
+        // check that none of the types is invalid, we never wan't to generate an instance for an
+        // invalid type. The caller should build a crash point in that case.
+        for &ty in &generics {
+            if ty == Type::Invalid {
+                return None;
             }
         }
-        id
-        */
+        Some(
+            instances.get_or_create_function(module, id, generics, |generics| {
+                let checked = self.get_hir(module, id);
+                let func = irgen::declare_function(self, ir, checked, generics);
+                let ir_id = ir.add_function(dialects.main, func);
+                to_generate.push(FunctionToGenerate {
+                    ir_id,
+                    module,
+                    ast_function_id: id,
+                    generics: generics.into(),
+                });
+                ir_id
+            }),
+        )
+    }
+
+    pub fn generate_ir_body(
+        &self,
+        ir: &mut ir::Environment,
+        dialects: &Dialects,
+        instances: &mut Instances,
+        to_generate: &mut Vec<FunctionToGenerate>,
+        f: FunctionToGenerate,
+    ) {
+        let checked = self.get_hir(f.module, f.ast_function_id);
+        assert_eq!(
+            checked.generic_count as usize,
+            f.generics.len(),
+            "a function instance queued for ir generation has an invalid generic count"
+        );
+
+        if let BodyOrTypes::Body(body) = &checked.body_or_types {
+            let return_type = ir[f.ir_id].return_type().unwrap();
+            let (builder, params) = ir::builder::Builder::begin_function(&mut *ir, f.ir_id);
+            let (body, types) = irgen::lower_hir(
+                self,
+                dialects,
+                instances,
+                builder,
+                body,
+                to_generate,
+                &f.generics,
+                params,
+                return_type,
+            );
+            ir[f.ir_id].attach_body(body);
+            ir[f.ir_id].overwrite_types(types);
+        }
     }
 
     pub fn print_project_hir(&mut self, project: ProjectId) {
@@ -966,59 +957,75 @@ impl Compiler {
 
     /// Emit project ir starting from a root function (for example the main function) while
     /// generating all functions recursively that are called by that function
-    pub fn emit_ir_from_root(&self, _root: (ModuleId, FunctionId)) -> Vec<ir::FunctionId> {
-        todo!("emit ir again")
-        /*
-        let mut functions_to_emit = VecDeque::from([(root.0, root.1, vec![])]);
-        let mut finished_functions = Vec::new();
-        while let Some((module, function, generics)) = functions_to_emit.pop_front() {
-            let id = self.get_ir_function_id(module, function, generics);
-            finished_functions.push(id);
+    pub fn emit_ir_from_root(
+        &self,
+        ir: &mut ir::Environment,
+        dialects: &Dialects,
+        instances: &mut Instances,
+        root: (ModuleId, FunctionId),
+    ) -> Option<ir::FunctionId> {
+        let mut to_generate = Vec::new();
+        let id = self.get_ir_function_id(
+            ir,
+            dialects,
+            instances,
+            &mut to_generate,
+            root.0,
+            root.1,
+            Box::new([]),
+        );
+        while let Some(f) = to_generate.pop() {
+            self.generate_ir_body(ir, dialects, instances, &mut to_generate, f);
         }
-
-        finished_functions
-        */
+        id
     }
 
     /// Emit the ir for all non-generic top-level functions in a project and functions called by them.
-    pub fn emit_whole_project_ir(&self, project: ProjectId) {
+    pub fn emit_whole_project_ir(
+        &self,
+        ir: &mut Environment,
+        dialects: &Dialects,
+        instances: &mut Instances,
+        project: ProjectId,
+    ) {
         let project = self.get_project(project);
         let mut module_queue = VecDeque::from([project.root_module]);
+        let mut to_generate = Vec::new();
         while let Some(module) = module_queue.pop_front() {
             let ast = self.get_module_ast(module);
             let functions = ast.function_ids();
             for function in functions {
                 if ast[function].generics.types.is_empty() {
-                    self.emit_ir_from_root((module, function));
+                    self.get_ir_function_id(
+                        ir,
+                        dialects,
+                        instances,
+                        &mut to_generate,
+                        module,
+                        function,
+                        Box::new([]),
+                    );
                 }
             }
+        }
+        while let Some(f) = to_generate.pop() {
+            self.generate_ir_body(ir, dialects, instances, &mut to_generate, f);
         }
     }
 
     pub fn verify_main_and_add_entry_point(
         &self,
+        ir: &mut ir::Environment,
+        dialects: &Dialects,
         main: (ModuleId, FunctionId),
+        main_ir: ir::FunctionId,
     ) -> Result<ir::FunctionId, Option<CompileError>> {
-        //let main_ir_id = self.get_ir_function_id(main.0, main.1, Box::new([]));
         let main_signature = self.get_signature(main.0, main.1);
         check::verify_main_signature(self, main_signature).map(|()| {
-            todo!("irgen: re-add entry point")
-            /*
             let main_signature = self.get_signature(main.0, main.1);
-            let entry_point = irgen::entry_point(
-                main_ir_id,
-                main_signature.return_type,
-                &self.ir,
-                &self.dialects,
-            );
-            self.ir.add_function(self.ir_module, entry_point)
-            */
+            let entry_point = irgen::entry_point(main_ir, main_signature.return_type, ir, dialects);
+            ir.add_function(dialects.main, entry_point)
         })
-    }
-
-    pub fn get_ir_function(&self, _id: ir::FunctionId) -> &ir::Function {
-        todo!("irgen")
-        // &self.ir[id]
     }
 
     /// prints all errors, consuming them and returns true if any fatal errors were present
@@ -1063,7 +1070,7 @@ impl Compiler {
                     path = relative;
                 }
                 for error in &errors.errors {
-                    print(&ast, path, error);
+                    print(ast, path, error);
                 }
             }
             return true;
@@ -1087,7 +1094,7 @@ impl Compiler {
                     path = relative;
                 }
                 for warning in &errors.warnings {
-                    print(&ast, path, warning);
+                    print(ast, path, warning);
                 }
             }
         }
@@ -1291,7 +1298,7 @@ impl Def {
                 _ => Err("a function"),
             },
             Def::Type(_) => match compiler.resolve_type(ty, module, scope) {
-                Type::Invalid => return Ok(Def::Invalid),
+                Type::Invalid => Ok(Def::Invalid),
                 Type::Type => Ok(self),
                 _ => Err("type"),
             },
@@ -1398,7 +1405,6 @@ pub struct ParsedModule {
     pub ast: Ast,
     pub child_modules: Vec<ModuleId>,
     pub symbols: ModuleSymbols,
-    pub instances: IrInstances,
 }
 
 type NamedParams = Box<[(Box<str>, Type, Option<ConstValueId>)]>;
@@ -1831,16 +1837,36 @@ pub struct CheckedTrait {
     pub impls: Vec<traits::Impl>,
 }
 
-pub struct IrInstances {
-    pub functions: Vec<DHashMap<Box<[Type]>, ir::FunctionId>>,
-    pub globals: Vec<Option<ir::GlobalId>>,
+#[derive(Default)]
+pub struct Instances {
+    functions: DHashMap<(ast::ModuleId, ast::FunctionId, Box<[Type]>), ir::FunctionId>,
+    globals: DHashMap<(ast::ModuleId, ast::GlobalId), Option<ir::GlobalId>>,
 }
-impl IrInstances {
-    pub fn new(function_count: usize, global_count: usize) -> Self {
-        Self {
-            functions: vec![dmap::new(); function_count],
-            globals: vec![None; global_count],
-        }
+impl Instances {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get_or_create_function(
+        &mut self,
+        module: ast::ModuleId,
+        function: ast::FunctionId,
+        generics: Box<[Type]>,
+        create: impl FnOnce(&[Type]) -> ir::FunctionId,
+    ) -> ir::FunctionId {
+        *self
+            .functions
+            .entry((module, function, generics))
+            .or_insert_with_key(|(_, _, generics)| create(generics))
+    }
+
+    pub fn get_or_create_global(
+        &mut self,
+        module: ast::ModuleId,
+        global: ast::GlobalId,
+        create: impl FnOnce() -> Option<ir::GlobalId>,
+    ) -> Option<ir::GlobalId> {
+        *self.globals.entry((module, global)).or_insert_with(create)
     }
 }
 
@@ -1906,6 +1932,10 @@ impl<'a> Instance<'a> {
 
     pub fn outer(&self) -> Instance<'_> {
         self.outer.copied().unwrap_or(Self::EMPTY)
+    }
+
+    pub fn new(types: &'a [Type]) -> Self {
+        Self { types, outer: None }
     }
 }
 impl<'a> Index<u8> for Instance<'a> {

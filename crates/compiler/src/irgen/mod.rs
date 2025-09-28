@@ -3,28 +3,29 @@ mod entry_point;
 mod intrinsics;
 pub mod types;
 
-use std::borrow::Cow;
-use std::rc::Rc;
-
 pub use entry_point::entry_point;
 
-use ir::builder::Builder;
-use ir::{BlockId, BlockTarget, Ref};
+use std::borrow::Cow;
+use std::num::NonZero;
+
+use ir::{BlockId, BlockTarget, Environment, Ref};
 use parser::ast::{self, ModuleId};
 
-use crate::compiler::{Dialects, FunctionToGenerate, Instance, builtins, mangle_name};
+use crate::compiler::{Dialects, FunctionToGenerate, Instance, Instances, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
-use crate::irgen::types::get_primitive;
+use crate::types::{BaseType, TypeFull};
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
 use crate::{Compiler, Type};
 use crate::{
     compiler::CheckedFunction,
     hir::{Hir, NodeId},
-    typing::TypeInfo,
 };
+
+type Builder<'a> = ir::builder::Builder<&'a mut Environment>;
 
 pub fn declare_function(
     compiler: &Compiler,
+    ir: &ir::Environment,
     checked: &CheckedFunction,
     generics: &[Type],
 ) -> ir::Function {
@@ -34,8 +35,9 @@ pub fn declare_function(
     // longer generate a valid signature
     let params = types::get_multiple(
         compiler,
+        ir,
         &mut types,
-        &checked[checked.params],
+        checked[checked.params].iter().copied(),
         Instance {
             types: generics,
             outer: None,
@@ -43,9 +45,9 @@ pub fn declare_function(
     )
     .unwrap_or_else(|| types.add_multiple((0..checked.params.count).map(|_| ir::Type::UNIT)));
 
-    let return_type = checked[checked.return_type];
     let return_type = types::get(
         compiler,
+        ir,
         &mut types,
         checked[checked.return_type],
         Instance {
@@ -59,64 +61,6 @@ pub fn declare_function(
     ir::Function::declare(name, types, params.iter(), checked.varargs, return_type)
 }
 
-/*
-pub fn lower_function(
-    compiler: &mut Compiler,
-    to_generate: &mut Vec<FunctionToGenerate>,
-    name: String,
-    checked: &CheckedFunction,
-    generics: &[Type],
-) -> ir::Function {
-    let mut types = ir::Types::new();
-    let param_types = types::get_multiple_infos(
-        compiler,
-        &checked.types,
-        &mut types,
-        checked.params,
-        types::Generics::function_instance(generics),
-    )
-    .unwrap_or_else(|| {
-        types.add_multiple(
-            (0..checked.params.count).map(|_| ir::Type::Primitive(ir::Primitive::Unit.id())),
-        )
-    });
-
-    let return_type = checked.types[checked.return_type];
-    let return_type = types::get_from_info(
-        compiler,
-        &checked.types,
-        &mut types,
-        return_type,
-        types::Generics::function_instance(generics),
-    )
-    .unwrap_or(ir::Primitive::Unit.into());
-    let return_type = types.add(return_type);
-
-    let function = if let Some(hir) = &checked.body {
-        let mut builder = ir::builder::Builder::with_types(compiler, types);
-        let (_, params) = builder.create_and_begin_block(param_types.iter());
-        lower_hir(
-            builder,
-            hir,
-            &checked.types,
-            to_generate,
-            generics,
-            params,
-            return_type,
-        )
-    } else {
-        ir::Function::declare(
-            name,
-            types,
-            param_types.iter(),
-            checked.varargs,
-            return_type,
-        )
-    };
-    function
-}
-*/
-
 type Result<T> = std::result::Result<T, NoReturn>;
 struct NoReturn;
 
@@ -128,15 +72,16 @@ macro_rules! crash_point {
 }
 
 pub fn lower_hir(
-    mut _builder: ir::builder::Builder<&mut Compiler>,
-    _hir: &Hir,
-    _to_generate: &mut Vec<FunctionToGenerate>,
-    _generics: &[Type],
-    _params: ir::Refs,
-    _return_ty: ir::TypeId,
+    compiler: &Compiler,
+    dialects: &Dialects,
+    instances: &mut Instances,
+    mut builder: Builder,
+    hir: &Hir,
+    to_generate: &mut Vec<FunctionToGenerate>,
+    generics: &[Type],
+    params: ir::Refs,
+    return_ty: ir::TypeId,
 ) -> (ir::FunctionIr, ir::Types) {
-    todo!("irgen")
-    /*
     let unit_ty = builder.types.add(ir::Type::UNIT);
     let ptr_ty = builder.types.add(ir::Primitive::Ptr);
     let i1_ty = builder.types.add(ir::Primitive::I1);
@@ -146,18 +91,31 @@ pub fn lower_hir(
         .iter()
         .map(|&var_ty| {
             match types::get(
+                compiler,
                 builder.env,
                 &mut builder.types,
                 hir[var_ty],
-                Instance { types: generics, outer: None },
+                Instance {
+                    types: generics,
+                    outer: None,
+                },
             ) {
                 Some(ty) => {
                     let ty = builder.types.add(ty);
-                    let var = builder.append(builder.env.dialects.mem.Decl(ty, ptr_ty));
+                    let var = builder.append(dialects.mem.Decl(ty, ptr_ty));
                     Ok((var, ty))
                 }
                 None => {
-                    build_crash_point_inner(&mut builder, unit_ty, ptr_ty, return_ty);
+                    build_crash_point_inner(
+                        compiler,
+                        &mut builder,
+                        dialects,
+                        instances,
+                        to_generate,
+                        unit_ty,
+                        ptr_ty,
+                        return_ty,
+                    );
                     Err(NoReturn)
                 }
             }
@@ -169,19 +127,15 @@ pub fn lower_hir(
     };
     debug_assert_eq!(params.count(), hir.params.len() as _);
     for (param, &var) in params.iter().zip(&hir.params) {
-        builder.append(
-            builder
-                .env
-                .dialects
-                .mem
-                .Store(vars[var.idx()].0, param, unit_ty),
-        );
+        builder.append(dialects.mem.Store(vars[var.idx()].0, param, unit_ty));
     }
     let mut ctx = Ctx {
+        compiler,
+        dialects,
+        instances,
         to_generate,
         hir,
         generics,
-        generic_types: generics,
         builder,
         vars: &mut vars,
         control_flow_stack: Vec::new(),
@@ -194,19 +148,19 @@ pub fn lower_hir(
     let val = lower(&mut ctx, hir.root_id());
     if let Ok(val) = val {
         let unit = ctx.builder.types.add(ir::Type::UNIT);
-        ctx.builder
-            .append(ctx.builder.env.dialects.cf.Ret(val, unit));
+        ctx.builder.append(ctx.dialects.cf.Ret(val, unit));
     }
     ctx.builder.finish_body()
-    */
 }
 
 struct Ctx<'a> {
     compiler: &'a Compiler,
+    dialects: &'a Dialects,
+    instances: &'a mut Instances,
     to_generate: &'a mut Vec<FunctionToGenerate>,
     hir: &'a Hir,
     generics: &'a [Type],
-    builder: ir::builder::Builder<&'a mut ir::Environment>,
+    builder: Builder<'a>,
     vars: &'a [(Ref, ir::TypeId)],
     control_flow_stack: Vec<ControlFlowEntry>,
     return_ty: ir::TypeId,
@@ -216,7 +170,6 @@ struct Ctx<'a> {
     ptr_ty: ir::TypeId,
     i1_ty: ir::TypeId,
 }
-/*
 impl Ctx<'_> {
     fn get_ir_id(
         &mut self,
@@ -224,92 +177,86 @@ impl Ctx<'_> {
         id: ast::FunctionId,
         generics: Box<[Type]>,
     ) -> Option<ir::FunctionId> {
-        todo!("irgen")
-        /*
+        Self::get_ir_id_inner(
+            self.compiler,
+            self.builder.env,
+            self.dialects,
+            self.instances,
+            self.to_generate,
+            module,
+            id,
+            generics,
+        )
+    }
+
+    fn get_ir_id_inner(
+        compiler: &Compiler,
+        env: &mut ir::Environment,
+        dialects: &Dialects,
+        instances: &mut Instances,
+        to_generate: &mut Vec<FunctionToGenerate>,
+        module: ModuleId,
+        id: ast::FunctionId,
+        generics: Box<[Type]>,
+    ) -> Option<ir::FunctionId> {
+        // TODO: this check is probably not sufficient for error handling
         // check that none of the types is invalid, we never wan't to generate an instance for an
         // invalid type. The caller should build a crash point in that case.
-        for ty in &generics {
-            if matches!(ty, TypeOld::Invalid) {
+        for &ty in &generics {
+            if ty == Type::Invalid {
                 return None;
             }
         }
-        let checked = Rc::clone(self.builder.env.get_hir(module, id));
-        debug_assert_eq!(
-            checked.generic_count as usize,
-            generics.len(),
-            "trying to instantiate a function with an invalid generic count"
-        );
-        let instances = &mut self.builder.env.modules[module.idx()]
-            .ast
-            .as_mut()
-            .unwrap()
-            .instances;
-
-        if let Some(&id) = instances.functions[id.idx()].get(generics.as_slice()) {
-            return Some(id);
-        }
-
-        let func = declare_function(self.builder.env, &checked, &generics);
-        let ir_id = self
-            .builder
-            .env
-            .ir
-            .add_function(self.builder.env.ir_module, func);
-        let prev = self.builder.env.modules[module.idx()]
-            .ast
-            .as_mut()
-            .unwrap()
-            .instances
-            .functions[id.idx()]
-        .insert(generics.clone(), ir_id);
-        debug_assert!(prev.is_none());
-        self.to_generate.push(FunctionToGenerate {
-            ir_id,
-            module,
-            ast_function_id: id,
-            generics,
-        });
-        Some(ir_id)
-        */
+        Some(
+            instances.get_or_create_function(module, id, generics, |generics| {
+                let checked = compiler.get_hir(module, id);
+                let func = declare_function(compiler, env, checked, generics);
+                let ir_id = env.add_function(dialects.main, func);
+                to_generate.push(FunctionToGenerate {
+                    ir_id,
+                    module,
+                    ast_function_id: id,
+                    generics: generics.into(),
+                });
+                ir_id
+            }),
+        )
     }
 
     fn get_ir_global(&mut self, module: ModuleId, id: ast::GlobalId) -> Option<ir::GlobalId> {
-        todo!("irgen")
-        /*
-        let parsed = self.builder.env.get_parsed_module(module);
-        if let Some(global) = parsed.instances.globals[id.idx()] {
-            Some(global)
-        } else {
-            let parsed = self.builder.env.get_parsed_module(module);
+        self.instances.get_or_create_global(module, id, || {
+            let parsed = self.compiler.get_parsed_module(module);
             let name = String::from(&*parsed.ast[id].name);
-            let (value, ty) = self.builder.env.get_checked_global(module, id);
+            let (value, ty) = self.compiler.get_checked_global(module, id);
             let layout = self.compiler.resolved_layout(*ty, Instance::EMPTY).ok()?;
             let mut storage = vec![0; layout.size as usize].into_boxed_slice();
-            if const_value::translate(value, *ty, self.builder.env, &mut storage).is_err() {
+            if const_value::translate(value, *ty, self.compiler, &mut storage).is_err() {
                 // FIXME: this tries to translate invalid globals again every time they are
                 // requested since we never store to the instances. Maybe create the notion of
                 // invalid globals in ir? Or get layout of the value and return zeroes.
                 return None;
             };
-            let global_id = self.builder.env.ir.add_global(
-                self.builder.env.ir_module,
+            let global_id = self.builder.env.add_global(
+                self.dialects.main,
                 name,
-                layout.alignment,
+                NonZero::new(layout.alignment).expect("alignment should not be zero"),
                 storage,
+                false,
             );
-            self.builder.env.get_parsed_module(module).instances.globals[id.idx()] =
-                Some(global_id);
             Some(global_id)
-        }
-        */
+        })
     }
 
-    fn get_type(&mut self, ty: LocalTypeId) -> Result<ir::Type> {
+    fn get_type(&mut self, ty: Type) -> Result<ir::Type> {
         types::get(
+            self.compiler,
             self.builder.env,
             &mut self.builder.types,
-            self.hir[ty],
-            Instance { types: &self.generics, outer: None },
+            ty,
+            Instance {
+                types: self.generics,
+                outer: None,
+            },
         )
         .ok_or_else(|| {
             build_crash_point(self);
@@ -317,12 +264,20 @@ impl Ctx<'_> {
         })
     }
 
+    fn get_hir_type(&mut self, ty: LocalTypeId) -> Result<ir::Type> {
+        self.get_type(self.hir[ty])
+    }
+
     fn get_multiple_types(&mut self, ids: LocalTypeIds) -> Result<ir::TypeIds> {
         types::get_multiple(
+            self.compiler,
             self.builder.env,
             &mut self.builder.types,
-            &self.hir[ids],
-            Instance { types: &self.generics, outer: None },
+            self.hir[ids].iter().copied(),
+            Instance {
+                types: self.generics,
+                outer: None,
+            },
         )
         .ok_or_else(|| {
             build_crash_point(self);
@@ -333,18 +288,16 @@ impl Ctx<'_> {
     fn terminate_noreturn(&mut self) -> Result<std::convert::Infallible> {
         let value = self.builder.append_undef(self.return_ty);
         self.builder
-            .append(self.builder.env.dialects.cf.Ret(value, self.unit_ty));
+            .append(self.dialects.cf.Ret(value, self.unit_ty));
         Err(NoReturn)
     }
 
     fn get_instantiated_ty(&mut self, self_ty: LocalTypeId) -> Type {
-        self.builder
-                .env
-                .types
-                .instantiate(self.hir[self_ty], self.generics)
+        self.compiler
+            .types
+            .instantiate(self.hir[self_ty], self.generics)
     }
 }
-*/
 
 #[derive(Debug, Clone, Copy)]
 struct ControlFlowEntry {
@@ -357,13 +310,12 @@ enum ValueOrPlace {
     Place { ptr: Ref, value_ty: ir::TypeId },
 }
 
-/*
 fn lower(ctx: &mut Ctx, node: NodeId) -> Result<Ref> {
     Ok(match lower_expr(ctx, node)? {
         ValueOrPlace::Value(r) => r,
-        ValueOrPlace::Place { ptr, value_ty } => ctx
-            .builder
-            .append(ctx.builder.env.dialects.mem.Load(ptr, value_ty)),
+        ValueOrPlace::Place { ptr, value_ty } => {
+            ctx.builder.append(ctx.dialects.mem.Load(ptr, value_ty))
+        }
     })
 }
 
@@ -373,7 +325,8 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         tuple,
         mem,
         cf,
-    } = ctx.builder.env.dialects;
+        main,
+    } = ctx.dialects;
     let value = match &ctx.hir[node] {
         Node::Invalid => crash_point!(ctx),
         Node::Block(items) => {
@@ -384,11 +337,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         Node::Unit => Ref::UNIT,
         &Node::IntLiteral { val, ty } => {
-            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+            let ty = ctx.hir[ty];
+            if !ty.is_int() {
                 crash_point!(ctx)
-            };
-            debug_assert!(p.is_int());
-            let ty = ctx.builder.types.add(types::get_primitive(p));
+            }
+            let ty = ctx.get_type(ty)?;
+            let ty = ctx.builder.types.add(ty);
             if let Ok(small) = val.try_into() {
                 ctx.builder.append(arith.Int(small, ty))
             } else {
@@ -397,20 +351,23 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             }
         }
         &Node::FloatLiteral { val, ty } => {
-            let TypeInfo::Primitive(p) = ctx.types[ty] else {
+            let ty = ctx.hir[ty];
+            if !ty.is_float() {
                 crash_point!(ctx)
-            };
-            debug_assert!(p.is_float());
-            let ty = ctx.builder.types.add(types::get_primitive(p));
+            }
+            let ty = ctx.get_type(ty)?;
+            let ty = ctx.builder.types.add(ty);
             ctx.builder.append(arith.Float(val, ty))
         }
         Node::BoolLiteral(true) => Ref::TRUE,
         Node::BoolLiteral(false) => Ref::FALSE,
         &Node::ArrayLiteral { elems, array_ty } => {
-            let TypeInfo::Array { element, count: _ } = ctx.types[array_ty] else {
+            let TypeFull::Instance(BaseType::Array, &[element, _n]) =
+                ctx.compiler.types.lookup(ctx.hir[array_ty])
+            else {
                 panic!("non-array literal type");
             };
-            let elem_ir_ty = ctx.get_type(ctx.types[element])?;
+            let elem_ir_ty = ctx.get_type(element)?;
             let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
             let array_ir_ty = ctx
                 .builder
@@ -453,7 +410,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             enum_ty,
         } => {
             debug_assert_eq!(elems.count, elem_types.count);
-            let ty = ctx.get_type(ctx.types[enum_ty])?;
+            let ty = ctx.get_hir_type(enum_ty)?;
             let enum_ty = ctx.builder.types.add(ty);
             let elem_types = ctx.get_multiple_types(elem_types)?;
             let elem_tuple = ctx.builder.types.add(ir::Type::Tuple(elem_types));
@@ -473,14 +430,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             s
         }
         &Node::InferredEnumOrdinal(variant) => {
-            let variant = &ctx.types[variant];
-            let ty = ctx.types[variant.args.iter().next().unwrap()];
+            let variant = &ctx.hir[variant];
+            let ty = ctx.hir[variant.args.iter().next().unwrap()];
             match ty {
-                TypeInfo::Tuple(elems) if elems.is_empty() => Ref::UNIT,
+                Type::Unit => Ref::UNIT,
                 _ => {
                     let ty = ctx.get_type(ty)?;
                     let ty = ctx.builder.types.add(ty);
-                    ctx.builder.append(arith.Int(variant.ordinal as u64, ty))
+                    ctx.builder.append(arith.Int(variant.ordinal, ty))
                 }
             }
         }
@@ -502,7 +459,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 crash_point!(ctx)
             };
             let global = ctx.builder.append(mem.Global(id, ctx.ptr_ty));
-            let ty = ctx.get_type(ctx.types[ty])?;
+            let ty = ctx.get_hir_type(ty)?;
             let ty = ctx.builder.types.add(ty);
             return Ok(ValueOrPlace::Place {
                 ptr: global,
@@ -527,8 +484,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 AssignType::ModAssign => Arithmetic::Mod,
             };
 
-            let ty = ctx.types[ty];
-            let ty = ctx.get_type(ty)?;
+            let ty = ctx.get_hir_type(ty)?;
             let ir_ty = ctx.builder.types.add(ty);
             let loaded = ctx.builder.append(mem.Load(lval, ir_ty));
             let result = build_arithmetic(ctx, loaded, val, arithmetic, ir_ty);
@@ -539,24 +495,21 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::Const { id, ty } => {
             // TODO: don't create a new global constant on each usage
             // PERF: cloning const value
-            let (const_val, resolved_ty) = ctx.builder.env.const_values[id.idx()].clone();
-            let Ok(layout) = resolved_layout(&resolved_ty, ctx.builder.env, &[]) else {
-                crash_point!(ctx);
-            };
+            let (const_val, global_ty) = ctx.compiler.const_values[id.idx()].clone();
+            debug_assert_eq!(ctx.hir[ty], global_ty, "Global used as wrong type");
+            let ir_ty = ctx.get_hir_type(ty)?;
+            let layout = ir::type_layout(ir_ty, &ctx.builder.types, ctx.builder.env.primitives());
             let mut storage = vec![0; layout.size as usize].into_boxed_slice();
-            if const_value::translate(&const_val, &resolved_ty, ctx.builder.env, &mut storage)
-                .is_err()
-            {
+            if const_value::translate(&const_val, global_ty, ctx.compiler, &mut storage).is_err() {
                 crash_point!(ctx);
             }
-            let global = ctx.builder.env.ir.add_global(
-                ctx.builder.env.ir_module,
+            let global = ctx.builder.env.add_global(
+                *main,
                 format!("const_{}", id.0),
-                layout.alignment,
+                layout.align,
                 storage,
+                true,
             );
-            ctx.builder.env.ir[global].readonly = true;
-            let ir_ty = ctx.get_type(ctx.types[ty])?;
             let ir_ty = ctx.builder.types.add(ir_ty);
             let global = ctx.builder.append(mem.Global(global, ir_ty));
             ctx.builder.append(mem.Load(global, ir_ty))
@@ -564,7 +517,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 
         &Node::Negate(value, ty) => {
             let value = lower(ctx, value)?;
-            let ty = ctx.get_type(ctx.types[ty])?;
+            let ty = ctx.get_hir_type(ty)?;
             let ty = ctx.builder.types.add(ty);
             ctx.builder.append(arith.Neg(value, ty))
         }
@@ -575,7 +528,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::AddressOf { value, value_ty: _ } => lower_lval(ctx, value)?,
         &Node::Deref { value, deref_ty } => {
             let value = lower(ctx, value)?;
-            let ty = ctx.get_type(ctx.types[deref_ty])?;
+            let ty = ctx.get_hir_type(deref_ty)?;
             let value_ty = ctx.builder.types.add(ty);
             //let ptr = ctx.builder.build_load(value, ty);
             return Ok(ValueOrPlace::Place {
@@ -632,15 +585,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             use crate::hir::Comparison;
             let is_equality = matches!(cmp, Comparison::Eq | Comparison::NE);
             if is_equality {
-                match ctx.types[compared] {
-                    TypeInfo::Invalid => crash_point!(ctx),
-                    TypeInfo::TypeDef(id, generics) => {
-                        let str_ty = builtins::get_str(ctx.builder.env);
-                        if id == str_ty {
-                            debug_assert!(generics.count == 0);
-                            let string_eq = builtins::get_str_eq(ctx.builder.env);
+                match ctx.hir[compared] {
+                    Type::Invalid => crash_point!(ctx),
+                    ty => {
+                        let str_ty = builtins::get_str(ctx.compiler);
+                        if ty == str_ty {
+                            let string_eq = builtins::get_str_eq(ctx.compiler);
                             let Some(string_eq) =
-                                ctx.get_ir_id(string_eq.0, string_eq.1, Vec::new())
+                                ctx.get_ir_id(string_eq.0, string_eq.1, Box::new([]))
                             else {
                                 crash_point!(ctx);
                             };
@@ -650,15 +602,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                             } else {
                                 eq
                             }));
-                        } else if id == ctx.builder.env.builtins.primitives.bool {
+                        } else if ty == ctx.compiler.builtins.primitives.bool {
                             // fall trough since a bool can be compared like an integer
                         } else {
                             panic!("invalid type for comparison, will change with traits");
                         }
                     }
-                    // let all other types fall through, they might be invalid but that will be
-                    // dealt with by traits in the future
-                    _ => {}
                 }
             }
             match cmp {
@@ -699,9 +648,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::Arithmetic(l, r, op, ty) => {
             let l = lower(ctx, l)?;
             let r = lower(ctx, r)?;
-            let ty = ctx
-                .get_type(ctx.types[ty])
-                .map(|ty| ctx.builder.types.add(ty))?;
+            let ty = ctx.get_hir_type(ty).map(|ty| ctx.builder.types.add(ty))?;
             build_arithmetic(ctx, l, r, op, ty)
         }
 
@@ -713,7 +660,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let value = lower_expr(ctx, tuple_value)?;
             let value = match value {
                 ValueOrPlace::Value(val) => {
-                    let elem_ty = ctx.get_type(ctx.types[elem_types.nth(index).unwrap()])?;
+                    let elem_ty = ctx.get_hir_type(elem_types.nth(index).unwrap())?;
                     let elem_ty = ctx.builder.types.add(elem_ty);
                     let value = ctx.builder.append(tuple.MemberValue(val, index, elem_ty));
                     ValueOrPlace::Value(value)
@@ -742,7 +689,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 ValueOrPlace::Place { ptr, .. } => ptr,
             };
             let index = lower(ctx, index)?;
-            let elem_ir_ty = ctx.get_type(ctx.types[elem_ty])?;
+            let elem_ir_ty = ctx.get_hir_type(elem_ty)?;
             let elem_ir_ty = ctx.builder.types.add(elem_ir_ty);
             return Ok(ValueOrPlace::Place {
                 ptr: ctx
@@ -830,7 +777,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     // after could still be none if all branches are noreturn, we don't have to
                     // create an after block at all in this case
                     if let Some(after) = after_block {
-                        let ty = ctx.get_type(ctx.types[resulting_ty])?;
+                        let ty = ctx.get_hir_type(resulting_ty)?;
                         let ty = ctx.builder.types.add(ty);
                         let args = ctx.builder.begin_block(after, [ty]);
                         result_value = Some(args.nth(0));
@@ -893,10 +840,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            let return_info = ctx.types[return_ty];
-            let return_ty = ctx.get_type(return_info)?;
+            let return_ty = ctx.get_hir_type(return_ty)?;
             let res = if let Node::FunctionItem(module, id, call_generics) = ctx.hir[function] {
-                if (module, id) == builtins::get_intrinsic(ctx.builder.env) {
+                if (module, id) == builtins::get_intrinsic(ctx.compiler) {
                     let arg_refs = args
                         .iter()
                         .skip(1)
@@ -916,7 +862,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     .collect::<Result<Vec<_>>>()?;
                 let call_generics = call_generics
                     .iter()
-                    .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
+                    .map(|generic| {
+                        ctx.compiler
+                            .types
+                            .instantiate(ctx.hir[generic], ctx.generics)
+                    })
                     .collect();
                 let Some(func) = ctx.get_ir_id(module, id, call_generics) else {
                     crash_point!(ctx)
@@ -947,19 +897,14 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return_ty,
             noreturn,
         } => {
-            // PERF: could implement get_checked_trait_impl_from_final_types again to avoid
-            // the to_resolved_calls and heap allocation for generics.
-            // Only do this when tests exist to ensure TraitCall instantiation works
-            let self_ ty = ctx.get_instantiated_ty(self_ty);
-            let self_ty = ctx.hir[self_ty];
-            let trait_generics: Box<[TypeOld]> = trait_generics
+            let self_ty = ctx.get_instantiated_ty(self_ty);
+            let trait_generics: Box<[Type]> = trait_generics
                 .iter()
-                .map(|ty| ctx.types.to_resolved(ctx.hir[ty], ctx.generics))
+                .map(|ty| ctx.compiler.types.instantiate(ctx.hir[ty], ctx.generics))
                 .collect();
             let Some((function, impl_generics)) =
-                ctx.builder
-                    .env
-                    .get_impl_method(trait_id, &self_ty, &trait_generics, method_index)
+                ctx.compiler
+                    .get_impl_method(trait_id, self_ty, &trait_generics, method_index)
             else {
                 crash_point!(ctx)
             };
@@ -968,7 +913,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
                 crash_point!(ctx)
             };
-            let return_ty = ctx.get_type(ctx.types[return_ty])?;
+            let return_ty = ctx.get_hir_type(return_ty)?;
             let mut arg_refs = Vec::with_capacity(args.iter().count());
             for arg in args.iter() {
                 let arg = lower(ctx, arg)?;
@@ -983,9 +928,9 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::TypeProperty(ty, property) => {
             let layout = ir::type_layout(
-                ctx.get_type(ctx.types[ty])?,
+                ctx.get_hir_type(ty)?,
                 &ctx.builder.types,
-                ctx.builder.env.ir.primitives(),
+                ctx.builder.env.primitives(),
             );
             use crate::hir::TypeProperty;
             let value = match property {
@@ -999,7 +944,11 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::FunctionItem(module, id, generics) => {
             let generics = generics
                 .iter()
-                .map(|generic| ctx.types.to_resolved(ctx.types[generic], ctx.generic_types))
+                .map(|generic| {
+                    ctx.compiler
+                        .types
+                        .instantiate(ctx.hir[generic], ctx.generics)
+                })
                 .collect();
             let Some(id) = ctx.get_ir_id(module, id, generics) else {
                 crash_point!(ctx)
@@ -1036,7 +985,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 }
 
 fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
-    let Dialects { mem, .. } = ctx.builder.env.dialects;
+    let Dialects { mem, .. } = ctx.dialects;
     Ok(match ctx.hir[lval] {
         LValue::Invalid => crash_point!(ctx),
         LValue::Variable(id) => ctx.vars[id.idx()].0,
@@ -1065,7 +1014,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
         } => {
             let ptr = lower_lval(ctx, array)?;
             let idx = lower(ctx, index)?;
-            let ty = ctx.get_type(ctx.types[element_type])?;
+            let ty = ctx.get_hir_type(element_type)?;
             let ty = ctx.builder.types.add(ty);
             ctx.builder.append(mem.ArrayIndex(ptr, ty, idx, ty))
         }
@@ -1085,7 +1034,8 @@ fn lower_pattern(
         tuple,
         mem,
         cf,
-    } = ctx.builder.env.dialects;
+        ..
+    } = ctx.dialects;
     let branch_bool = |ctx: &mut Ctx, cond: Ref| {
         let Some(on_mismatch) = on_mismatch else {
             return;
@@ -1113,19 +1063,17 @@ fn lower_pattern(
         } => {
             for i in 0..member_count {
                 let member_pat = PatternId(patterns + i);
-                let member_ty = ctx.get_type(ctx.types[LocalTypeId(types + i)])?;
+                let member_ty = ctx.get_hir_type(LocalTypeId(types + i))?;
                 let member_ty = ctx.builder.types.add(member_ty);
                 let member_value = ctx.builder.append(tuple.MemberValue(value, i, member_ty));
                 lower_pattern(ctx, member_pat, member_value, on_mismatch)?;
             }
         }
         &Pattern::Int(sign, val, ty) => {
-            let TypeInfo::Primitive(p) = ctx.types[ty] else {
-                panic!("integer type expected")
-            };
-            let ty = ctx.builder.types.add(types::get_primitive(p));
-            debug_assert!(p.is_int());
-            let pattern_value = int_pat(&mut ctx.builder, sign, val, ty);
+            let ir_ty = ctx.get_hir_type(ty)?;
+            debug_assert!(ctx.hir[ty].is_int());
+            let ty = ctx.builder.types.add(ir_ty);
+            let pattern_value = int_pat(&mut ctx.builder, ctx.dialects, sign, val, ty);
             let cond = ctx
                 .builder
                 .append(arith.Eq(value, pattern_value, ctx.i1_ty));
@@ -1150,9 +1098,9 @@ fn lower_pattern(
             ctx.builder.begin_block(on_match, []);
         }
         Pattern::String(s) => {
-            let str_eq = builtins::get_str_eq(ctx.builder.env);
+            let str_eq = builtins::get_str_eq(ctx.compiler);
             // can unwrap here because we don't pass invalid generics
-            let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Vec::new()).unwrap();
+            let str_eq = ctx.get_ir_id(str_eq.0, str_eq.1, Box::new([])).unwrap();
             let (expected, _str_ty) = lower_string_literal(ctx, s);
             let matches = ctx.builder.append((str_eq, (value, expected), ctx.i1_ty));
             branch_bool(ctx, matches);
@@ -1163,12 +1111,11 @@ fn lower_pattern(
             min_max_signs: (min_sign, max_sign),
             inclusive,
         } => {
-            let TypeInfo::Primitive(p) = ctx.types[ty] else {
-                panic!("integer type expected")
-            };
-            let ty = ctx.builder.types.add(types::get_primitive(p));
-            let min = int_pat(&mut ctx.builder, min_sign, min, ty);
-            let max = int_pat(&mut ctx.builder, max_sign, max, ty);
+            let ir_ty = ctx.get_hir_type(ty)?;
+            debug_assert!(ctx.hir[ty].is_int());
+            let ty = ctx.builder.types.add(ir_ty);
+            let min = int_pat(&mut ctx.builder, ctx.dialects, min_sign, min, ty);
+            let max = int_pat(&mut ctx.builder, ctx.dialects, max_sign, max, ty);
             let left = ctx.builder.append(arith.GE(value, min, ty));
             branch_bool(ctx, left);
             let right = if inclusive {
@@ -1200,33 +1147,31 @@ fn lower_pattern(
                 idx: types + 1,
                 count: args.count,
             };
-            match ctx.types[ordinal_ty] {
-                TypeInfo::Invalid => crash_point!(ctx),
-                TypeInfo::Tuple(elems) if elems.is_empty() => {}
-                TypeInfo::Primitive(p) => {
-                    let int_ty = p.as_int().unwrap();
-                    let ordinal_ty = ctx.builder.types.add(get_primitive(int_ty.into()));
+            match ctx.hir[ordinal_ty] {
+                Type::Invalid => crash_point!(ctx),
+                Type::Unit => {}
+                ordinal_ty => {
+                    debug_assert!(ordinal_ty.is_int());
+                    let ordinal_ty = ctx.get_type(ordinal_ty)?;
+                    let ordinal_ty = ctx.builder.types.add(ordinal_ty);
                     let actual_ordinal = ctx.builder.append(mem.Load(var, ordinal_ty));
                     let ordinal_value = match ordinal {
                         OrdinalType::Known(val) => val,
-                        OrdinalType::Inferred(variant) => ctx.types[variant].ordinal,
+                        OrdinalType::Inferred(variant) => ctx.hir[variant].ordinal,
                     };
-                    let expected = ctx
-                        .builder
-                        .append(arith.Int(ordinal_value as u64, ordinal_ty));
+                    let expected = ctx.builder.append(arith.Int(ordinal_value, ordinal_ty));
                     let ordinal_matches =
                         ctx.builder
                             .append(arith.Eq(actual_ordinal, expected, ctx.i1_ty));
                     branch_bool(ctx, ordinal_matches);
                 }
-                other => unreachable!("invalid ordinal type {other:?}"),
             }
             if args.count == 0 {
                 return Ok(());
             }
             let ir_types_tuple = ctx.builder.types.add(ir::Type::Tuple(ir_types));
             for ((arg, i), ty) in args.iter().zip(1..).zip(arg_types.iter()) {
-                let ty = ctx.get_type(ctx.types[ty])?;
+                let ty = ctx.get_hir_type(ty)?;
                 let ty = ctx.builder.types.add(ty);
                 let arg_ptr = ctx
                     .builder
@@ -1239,8 +1184,14 @@ fn lower_pattern(
     Ok(())
 }
 
-fn int_pat(builder: &mut Builder<&mut Compiler>, sign: bool, val: u128, ty: ir::TypeId) -> Ref {
-    let arith = builder.env.dialects.arith;
+fn int_pat(
+    builder: &mut Builder,
+    dialects: &Dialects,
+    sign: bool,
+    val: u128,
+    ty: ir::TypeId,
+) -> Ref {
+    let arith = dialects.arith;
     let mut pattern_value = if let Ok(small) = val.try_into() {
         builder.append(arith.Int(small, ty))
     } else {
@@ -1254,32 +1205,38 @@ fn int_pat(builder: &mut Builder<&mut Compiler>, sign: bool, val: u128, ty: ir::
 }
 
 fn lower_string_literal(ctx: &mut Ctx, s: &str) -> (Ref, ir::TypeId) {
-    lower_string_literal_inner(&mut ctx.builder, ctx.ptr_ty, s)
+    lower_string_literal_inner(&mut ctx.builder, ctx.dialects, ctx.ptr_ty, s)
 }
 
 fn lower_string_literal_inner(
-    builder: &mut Builder<&mut Compiler>,
+    builder: &mut Builder,
+    dialects: &Dialects,
     ptr_ty: ir::TypeId,
     s: &str,
 ) -> (Ref, ir::TypeId) {
     let Dialects {
-        arith, tuple, mem, ..
-    } = builder.env.dialects;
+        arith,
+        tuple,
+        mem,
+        main,
+        ..
+    } = dialects;
     // TODO: cache string ir type to prevent generating it multiple times
     let elems = builder
         .types
         .add_multiple([ir::Primitive::Ptr, ir::Primitive::U64].map(Into::into));
     let str_ty = builder.types.add(ir::Type::Tuple(elems));
-    let idx = builder.env.ir[builder.env.ir_module].globals().len();
+    let idx = builder.env[*main].global_ids().len();
     let name = format!("str{idx}");
     let mut bytes = s.as_bytes().to_vec();
     bytes.push(0);
-    let str_global =
-        builder
-            .env
-            .ir
-            .add_global(builder.env.ir_module, name, 1, bytes.into_boxed_slice());
-    builder.env.ir[str_global].readonly = true;
+    let str_global = builder.env.add_global(
+        *main,
+        name,
+        NonZero::new(1).unwrap(),
+        bytes.into_boxed_slice(),
+        true,
+    );
     let str_ptr = builder.append(mem.Global(str_global, ptr_ty));
     let r = builder.append_undef(str_ty);
     let r = builder.append(tuple.InsertMember(r, 0, str_ptr, str_ty));
@@ -1290,22 +1247,46 @@ fn lower_string_literal_inner(
 }
 
 fn build_crash_point(ctx: &mut Ctx) {
-    build_crash_point_inner(&mut ctx.builder, ctx.unit_ty, ctx.ptr_ty, ctx.return_ty);
+    build_crash_point_inner(
+        ctx.compiler,
+        &mut ctx.builder,
+        ctx.dialects,
+        ctx.instances,
+        ctx.to_generate,
+        ctx.unit_ty,
+        ctx.ptr_ty,
+        ctx.return_ty,
+    );
 }
 
 fn build_crash_point_inner(
-    builder: &mut Builder<&mut Compiler>,
+    compiler: &Compiler,
+    builder: &mut Builder,
+    dialects: &Dialects,
+    instances: &mut Instances,
+    to_generate: &mut Vec<FunctionToGenerate>,
     unit_ty: ir::TypeId,
     ptr_ty: ir::TypeId,
     return_ty: ir::TypeId,
 ) {
     let msg = "program reached a compile error at runtime";
-    let (msg, _str_ty) = lower_string_literal_inner(builder, ptr_ty, msg);
-    let panic_function = builder.env.get_builtin_panic();
+    let (msg, _str_ty) = lower_string_literal_inner(builder, dialects, ptr_ty, msg);
+    let (panic_mod, panic_function) = builtins::get_panic(compiler);
+    let panic_function = Ctx::get_ir_id_inner(
+        compiler,
+        builder.env,
+        dialects,
+        instances,
+        to_generate,
+        panic_mod,
+        panic_function,
+        Box::new([]),
+    )
+    .expect("panic function is invalid so can't generate crash point");
     let unit = builder.types.add(ir::Type::UNIT);
     builder.append((panic_function, (msg), unit));
     let value = builder.append_undef(return_ty);
-    builder.append(builder.env.dialects.cf.Ret(value, unit_ty));
+    builder.append(dialects.cf.Ret(value, unit_ty));
 }
 
 fn build_arithmetic(
@@ -1323,7 +1304,7 @@ fn build_arithmetic(
         "Invalid type {:?} for arithmetic op. Will be handled properly with traits",
         ctx.builder.types[ty]
     );
-    let arith = ctx.builder.env.dialects.arith;
+    let arith = ctx.dialects.arith;
     match op {
         Arithmetic::Add => ctx.builder.append(arith.Add(l, r, ty)),
         Arithmetic::Sub => ctx.builder.append(arith.Sub(l, r, ty)),
@@ -1340,7 +1321,7 @@ fn lower_if_else_branches(
     else_block: ir::BlockId,
     resulting_ty: LocalTypeId,
 ) -> Result<Ref> {
-    let Dialects { cf, .. } = ctx.builder.env.dialects;
+    let Dialects { cf, .. } = ctx.dialects;
     // after_block is a closure that creates the block lazily and returns it
     let else_is_trival = matches!(ctx.hir[else_], Node::Unit);
     let mut after_block = {
@@ -1372,11 +1353,10 @@ fn lower_if_else_branches(
         (None, None) => Err(NoReturn),
         _ => {
             let after_block = after_block(ctx);
-            let ty = ctx.get_type(ctx.types[resulting_ty])?;
+            let ty = ctx.get_hir_type(resulting_ty)?;
             let types = ctx.builder.types.add_multiple([ty]);
             let args = ctx.builder.begin_block(after_block, types.iter());
             Ok(args.nth(0))
         }
     }
 }
-*/

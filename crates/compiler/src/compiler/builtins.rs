@@ -2,12 +2,7 @@ use std::cell::OnceCell;
 
 use parser::ast::{FunctionId, ModuleId, TraitId};
 
-use crate::{
-    Compiler, ProjectId, Type,
-    compiler::ModuleSpan,
-    types::BaseType,
-    typing::{LocalTypeIds, TypeInfo},
-};
+use crate::{Compiler, ProjectId, Type, compiler::ModuleSpan, types::BaseType, typing::TypeInfo};
 
 use super::Def;
 
@@ -87,8 +82,7 @@ fn resolve_type(compiler: &Compiler, module: ModuleId, name: &str) -> Type {
 pub fn get_str(compiler: &Compiler) -> Type {
     *compiler.builtins.str_type.get_or_init(|| {
         let string_module = get_string_module(compiler);
-        let str_type = resolve_type(compiler, string_module, "str");
-        str_type
+        resolve_type(compiler, string_module, "str")
     })
 }
 
@@ -118,7 +112,6 @@ pub fn get_prelude(compiler: &Compiler) -> ModuleId {
         let std = compiler.builtins.std;
         let root = compiler.get_project(std).root_module;
         let prelude = compiler.resolve_in_module(root, "prelude", ModuleSpan::MISSING);
-        tracing::debug!("NOCHECKIN Resolving prelude: {std:?} {root:?} {prelude:?}");
         let Def::Module(prelude) = prelude else {
             panic!("expected a module for std.prelude, found {prelude:?}");
         };
@@ -174,16 +167,8 @@ pub fn get_option(compiler: &Compiler) -> BaseType {
     *compiler.builtins.option.get_or_init(|| {
         let std = compiler.builtins.std;
         let root = compiler.get_project(std).root_module;
-        let def = compiler.resolve_in_module(root, "option", ModuleSpan::MISSING);
-        let Def::Module(option_module) = def else {
-            panic!("expected a module for std.option but found {def:?}");
-        };
-        let def = compiler.resolve_in_module(option_module, "Option", ModuleSpan::MISSING);
-        let Def::BaseType(id) = def else {
-            panic!("expected a type for std.option.Option but found {def:?}");
-        };
-        debug_assert_eq!(compiler.get_base_type_generic_count(id), 1);
-        id
+        let option_module = resolve_module(compiler, root, "option");
+        resolve_base_type(compiler, option_module, "Option", 1)
     })
 }
 

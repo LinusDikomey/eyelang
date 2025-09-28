@@ -62,7 +62,7 @@ pub(crate) fn function(
 
         let hir = check(
             compiler,
-            &ast,
+            ast,
             module,
             &signature.generics,
             function.scope,
@@ -74,12 +74,12 @@ pub(crate) fn function(
         );
         BodyOrTypes::Body(hir)
     } else {
-        let types = types.finish(compiler, &signature.generics, module);
+        let (types, _) = types.finish(compiler, &signature.generics, module);
         BodyOrTypes::Types(types)
     };
 
     // TODO: factor potential closed_over_scope into name
-    let name = crate::compiler::function_name(&ast, function, module, id);
+    let name = crate::compiler::function_name(ast, function, module, id);
 
     CheckedFunction {
         name,
@@ -390,7 +390,7 @@ pub fn verify_main_signature(
     }
     match compiler.types.lookup(signature.return_type) {
         TypeFull::Instance(BaseType::Invalid, _) => Err(None),
-        TypeFull::Instance(BaseType::Tuple, elems) if elems.is_empty() => Ok(()),
+        TypeFull::Instance(BaseType::Tuple, []) => Ok(()),
         TypeFull::Instance(b, _) if b.is_int() => Ok(()),
         _ => Err(Some(
             Error::InvalidMainReturnType(compiler.types.display(signature.return_type).to_string())

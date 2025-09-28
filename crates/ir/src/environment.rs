@@ -1,12 +1,15 @@
 use core::{fmt, str};
 use std::{
     marker::PhantomData,
+    num::NonZero,
     ops::{Index, IndexMut},
 };
 
+use segment_list::SegmentList;
+
 use crate::{
-    Function, FunctionId, FunctionIr, Global, GlobalId, Inst, Instruction, LocalFunctionId, Module,
-    ModuleId, ModuleOf, PrimitiveInfo, display::InstName,
+    Function, FunctionId, Global, GlobalId, Inst, Instruction, LocalFunctionId, Module, ModuleId,
+    ModuleOf, PrimitiveInfo, display::InstName,
 };
 
 pub struct Environment {
@@ -22,11 +25,21 @@ impl Index<ModuleId> for Environment {
         &self.modules[index.0 as usize]
     }
 }
+impl IndexMut<ModuleId> for Environment {
+    fn index_mut(&mut self, index: ModuleId) -> &mut Self::Output {
+        &mut self.modules[index.0 as usize]
+    }
+}
 impl Index<FunctionId> for Environment {
     type Output = Function;
 
     fn index(&self, index: FunctionId) -> &Self::Output {
         &self.modules[index.module.0 as usize].functions[index.function.0 as usize]
+    }
+}
+impl IndexMut<FunctionId> for Environment {
+    fn index_mut(&mut self, index: FunctionId) -> &mut Self::Output {
+        &mut self.modules[index.module.0 as usize].functions[index.function.0 as usize]
     }
 }
 impl Index<GlobalId> for Environment {
@@ -36,11 +49,11 @@ impl Index<GlobalId> for Environment {
         &self.modules[index.module.0 as usize].globals[index.idx as usize]
     }
 }
-impl IndexMut<GlobalId> for Environment {
-    fn index_mut(&mut self, index: GlobalId) -> &mut Self::Output {
-        &mut self.modules[index.module.0 as usize].globals[index.idx as usize]
-    }
-}
+// impl IndexMut<GlobalId> for Environment {
+//     fn index_mut(&mut self, index: GlobalId) -> &mut Self::Output {
+//         &mut self.modules[index.module.0 as usize].globals[index.idx as usize]
+//     }
+// }
 impl Environment {
     pub fn new(primitives: Vec<PrimitiveInfo>) -> Self {
         let mut env = Self {
@@ -59,8 +72,8 @@ impl Environment {
         let name = name.into();
         self.modules.push(Module {
             name: name.clone(),
-            functions: Vec::new(),
-            globals: Vec::new(),
+            functions: SegmentList::new(),
+            globals: SegmentList::new(),
         });
         self.modules_by_name.insert(name, id);
         id
@@ -69,14 +82,14 @@ impl Environment {
     pub fn create_module_from_functions(
         &mut self,
         name: impl Into<Box<str>>,
-        functions: Vec<Function>,
+        functions: impl IntoIterator<Item = Function>,
     ) -> ModuleId {
         let id = ModuleId(self.modules.len() as _);
         let name = name.into();
         self.modules.push(Module {
             name: name.clone(),
-            functions,
-            globals: Vec::new(),
+            functions: functions.into_iter().collect(),
+            globals: SegmentList::new(),
         });
         self.modules_by_name.insert(name, id);
         id
@@ -97,8 +110,8 @@ impl Environment {
                 let id = ModuleId(self.modules.len() as _);
                 self.modules.push(Module {
                     name: I::MODULE_NAME.into(),
-                    functions: I::functions(),
-                    globals: Vec::new(),
+                    functions: I::functions().into_iter().collect(),
+                    globals: SegmentList::new(),
                 });
                 self.modules_by_name.insert(I::MODULE_NAME.into(), id);
                 id
@@ -111,10 +124,9 @@ impl Environment {
         Some(ModuleOf(id, PhantomData))
     }
 
-    pub fn add_function(&mut self, module: ModuleId, function: Function) -> FunctionId {
-        let module_data = &mut self.modules[module.0 as usize];
-        let id = LocalFunctionId(module_data.functions.len() as _);
-        module_data.functions.push(function);
+    pub fn add_function(&self, module: ModuleId, function: Function) -> FunctionId {
+        let module_data = &self.modules[module.0 as usize];
+        let id = LocalFunctionId(module_data.functions.add(function));
         FunctionId {
             module,
             function: id,
@@ -122,19 +134,19 @@ impl Environment {
     }
 
     pub fn add_global(
-        &mut self,
+        &self,
         module: ModuleId,
         name: impl Into<Box<str>>,
-        align: u64,
+        align: NonZero<u64>,
         value: Box<[u8]>,
+        readonly: bool,
     ) -> GlobalId {
-        let module_data = &mut self.modules[module.0 as usize];
-        let idx = module_data.globals.len() as u32;
-        module_data.globals.push(Global {
+        let module_data = &self.modules[module.0 as usize];
+        let idx = module_data.globals.add(Global {
             name: name.into(),
             align,
             value,
-            readonly: false,
+            readonly,
         });
         GlobalId { module, idx }
     }
@@ -155,21 +167,11 @@ impl Environment {
         &self.modules[module.0 as usize]
     }
 
-    pub fn attach_body(&mut self, ir_id: FunctionId, (ir, types): (FunctionIr, crate::Types)) {
-        let func = &mut self.modules[ir_id.module.idx()].functions[ir_id.function.idx()];
-        func.ir = Some(ir);
-        func.types = types;
-    }
-
-    pub fn remove_body(&mut self, id: FunctionId) -> Option<FunctionIr> {
-        self.modules[id.module.idx()].functions[id.function.idx()]
-            .ir
-            .take()
-    }
-
-    pub fn reattach_body(&mut self, id: FunctionId, ir: FunctionIr) {
-        self.modules[id.module.idx()].functions[id.function.idx()].ir = Some(ir);
-    }
+    // pub fn attach_body(&self, ir_id: FunctionId, (ir, types): (FunctionIr, crate::Types)) {
+    //     let func = &self.modules[ir_id.module.idx()].functions[ir_id.function.idx()];
+    //     func.ir.set(ir);
+    //     func.types = types;
+    // }
 
     pub fn get_inst_name(&self, inst: &Instruction) -> InstName<'_> {
         let module = self.get_module(inst.module());

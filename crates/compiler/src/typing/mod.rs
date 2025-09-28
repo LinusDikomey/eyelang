@@ -1,7 +1,4 @@
-use std::{
-    ops::{Index, IndexMut},
-    rc::Rc,
-};
+use std::ops::{Index, IndexMut};
 
 use dmap::DHashMap;
 use error::Error;
@@ -20,8 +17,7 @@ use crate::{
         traits,
     },
     compiler::{
-        Def, Generics, Instance, ModuleSpan, ResolvableTypeDef, ResolvedEnumDef,
-        ResolvedTypeContent, ResolvedTypeDef,
+        Def, Generics, Instance, ModuleSpan, ResolvedEnumDef, ResolvedTypeContent, ResolvedTypeDef,
     },
     helpers::IteratorExt,
     layout::Layout,
@@ -226,15 +222,6 @@ impl TypeTable {
                     *value = info_or_idx.into();
                     break;
                 }
-            }
-        }
-    }
-
-    fn find(&self, mut var: LocalTypeId) -> (LocalTypeId, TypeInfo) {
-        loop {
-            match self.types[var.idx()] {
-                TypeInfoOrIdx::TypeInfo(info) => break (var, info),
-                TypeInfoOrIdx::Idx(v) => var = v,
             }
         }
     }
@@ -681,6 +668,9 @@ impl TypeTable {
         }
         match types.lookup(ty) {
             TypeFull::Instance(base, type_generics) => {
+                if type_generics.is_empty() {
+                    return TypeInfo::Known(ty).into();
+                }
                 let type_generic_vars = self.add_multiple_unknown(type_generics.len() as _);
                 for (&generic, var) in type_generics.iter().zip(type_generic_vars.iter()) {
                     let info = self.from_type_instance(types, generic, generics);
@@ -824,12 +814,14 @@ impl TypeTable {
             TypeInfo::Enum(id) => self.enum_to_string(compiler, s, &self.enums[id.idx()].variants),
             TypeInfo::BaseTypeItem(base) => {
                 let name = &compiler.types.get_base(base).name;
-                s.push_str("<base type item: {name}>");
+                s.push_str("<base type item: ");
+                s.push_str(name);
+                s.push('>');
             }
             TypeInfo::TypeItem(ty) => {
                 s.push_str("<type item: ");
                 self.type_to_string(compiler, self[ty], s);
-                s.push_str(">");
+                s.push('>');
             }
             TypeInfo::TraitItem { .. } => s.push_str("<trait item>"),
             TypeInfo::FunctionItem { .. } => s.push_str("<function item>"),
@@ -878,7 +870,7 @@ impl TypeTable {
         buf: &mut Vec<Type>,
     ) -> Type {
         let mut idx = var;
-        let mut info = loop {
+        let info = loop {
             match self.types[idx.0 as usize] {
                 TypeInfoOrIdx::TypeInfo(info) => break info,
                 TypeInfoOrIdx::Idx(new) => idx = new,
@@ -931,19 +923,18 @@ impl TypeTable {
                 ty
             }
             TypeInfo::Enum(id) => {
-                let enum_ = &self.enums[id.idx()];
                 // PERF: also buffer variants? and params somehow?
                 let mut variants = Vec::new();
                 for variant_idx in 0..self.enums[id.idx()].variants.len() {
                     let variant = &self.variants[self.enums[id.idx()].variants[variant_idx].idx()];
                     let name = variant.name.clone();
                     let ordinal = variant.ordinal;
-                    let mut params = variant
+                    let params = variant
                         .args
                         .iter()
                         .map(|param| self.intern_var(compiler, module, param, buf))
                         .collect();
-                    variants.push((name, ordinal.into(), params));
+                    variants.push((name, ordinal, params));
                 }
                 // TODO: better, unique names for local_enum types
                 let base = compiler.types.add_resolved_base(
@@ -982,7 +973,7 @@ impl TypeTable {
         compiler: &Compiler,
         function_generics: &Generics,
         module: ModuleId,
-    ) -> Box<[Type]> {
+    ) -> (Box<[Type]>, Box<[InferredEnumVariant]>) {
         for (ty, bounds) in std::mem::take(&mut self.deferred_checks) {
             let mut idx = ty;
             let info = loop {
@@ -1077,11 +1068,13 @@ impl TypeTable {
             }
         }
         let mut buf = Vec::new();
-        (0..self.types.len() as u32)
+        let types = (0..self.types.len() as u32)
             .map(|i| self.intern_var(compiler, module, LocalTypeId(i), &mut buf))
-            .collect()
+            .collect();
+        (types, self.variants.into_boxed_slice())
     }
 
+    /*
     fn unify_with_generic_type(
         &mut self,
         var: LocalTypeId,
@@ -1107,6 +1100,7 @@ impl TypeTable {
             }
         }
     }
+    */
 
     fn specify_generic_type(
         &mut self,
@@ -1150,10 +1144,7 @@ impl TypeTable {
                 TypeInfo::Generic(j) if i == j => true,
                 _ => false,
             },
-            TypeFull::Const(_) => match info {
-                TypeInfo::UnknownConst => true,
-                _ => false,
-            },
+            TypeFull::Const(_) => matches!(info, TypeInfo::UnknownConst),
         })
     }
 

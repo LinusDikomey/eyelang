@@ -65,7 +65,7 @@ impl Backend {
         let abi = arch::x86::get_target_abi();
         let mut relocations = Vec::new();
 
-        let mut function_offsets = vec![0u32; env[module_id].functions().len()];
+        let mut function_offsets = vec![0u32; env[module_id].function_ids().len()];
 
         let mut pipeline = ir::pipeline::Pipeline::new("backend");
         pipeline.add_function_pass(Box::new(Isel {
@@ -79,10 +79,10 @@ impl Backend {
         }));
         pipeline.add_function_pass(Box::new(arch::x86::PrologueEpilogueInsertion { x86, abi }));
 
-        for (i, function_offset) in
-            (0..env[module_id].functions().len()).zip(function_offsets.iter_mut())
+        for (id, function_offset) in
+            (env[module_id].function_ids()).zip(function_offsets.iter_mut())
         {
-            let func = &env[module_id].functions()[i];
+            let func = &env[module_id][id];
             if let Some(ir) = func.ir() {
                 let offset = text_section.len() as u64;
                 *function_offset = offset.try_into().unwrap();
@@ -94,7 +94,7 @@ impl Backend {
                     .process_function_with_regs::<arch::x86::Reg>(env, ir, &mut types, &name);
                 arch::x86::write(env, mc, x86, &mir, &mut text_section, &mut relocations);
                 let size = text_section.len() as u64 - offset;
-                let name_index = writer.add_str(&env[module_id].functions()[i].name);
+                let name_index = writer.add_str(&env[module_id][id].name);
                 symtab.entry(exe::elf::symtab::Entry {
                     name_index,
                     bind: exe::elf::symtab::Bind::Global,

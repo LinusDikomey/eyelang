@@ -28,7 +28,7 @@ pub fn entry_point(
         Type::U64 => ir::Type::Primitive(ir::Primitive::U64.into()),
         Type::I128 => ir::Type::Primitive(ir::Primitive::I128.into()),
         Type::U128 => ir::Type::Primitive(ir::Primitive::U128.into()),
-        _ => unreachable!(),
+        _ => unreachable!("unexpected return type from main: {main_return_ty:?}"),
     };
 
     let main_ret_ty = builder.types.add(main_return);

@@ -8,16 +8,13 @@ use dmap::DHashMap;
 use fxhash::FxHasher;
 use hashbrown::HashTable;
 use parser::ast::{self, ModuleId};
+use segment_list::SegmentList;
 
 use crate::{
     InvalidTypeError, Type,
     compiler::{Generics, Resolvable, ResolvableTypeDef, ResolvedTypeDef},
-    segment_list::SegmentList,
     types::{BaseType, BuiltinType, TypeFull},
 };
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct InstanceId(u32);
 
 pub struct Types {
     tags: SegmentList<Tag>,
@@ -32,8 +29,11 @@ impl Types {
     pub fn new() -> Self {
         let tags = SegmentList::new();
         let indices = SegmentList::new();
+        let mut map = HashTable::new();
+
         let instances = SegmentList::new();
         let bases = SegmentList::new();
+        let consts = SegmentList::new();
 
         for (builtin, i) in BuiltinType::VARIANTS.into_iter().zip(0..) {
             let module = ModuleId::from_inner(0); // TODO: put something sensible here
@@ -52,27 +52,34 @@ impl Types {
                 }),
             });
             if generics.count() == 0 {
-                tags.add(Tag::Instance);
+                let j = tags.add(Tag::Instance);
                 indices.add(i);
-                instances.add((
-                    if builtin == BuiltinType::Unit {
-                        BaseType::Tuple
-                    } else {
-                        BaseType(i)
-                    },
-                    Box::new([]) as _,
-                ));
+                debug_assert_eq!(
+                    i, j,
+                    "Types without generics must come first in BuiltinType macro"
+                );
+                let base = if builtin == BuiltinType::Unit {
+                    BaseType::Tuple
+                } else {
+                    BaseType(i)
+                };
+                instances.add((base, Box::new([]) as _));
+                let value = TypeFull::Instance(base, &[]);
+                let hash = hash_full(&value);
+                map.insert_unique(hash, Type(i), |&ty| {
+                    hash_full(&Self::lookup_type(&tags, &indices, &instances, &consts, ty))
+                });
             }
         }
 
         Self {
             tags,
             indices,
-            map: RefCell::new(HashTable::new()),
+            map: RefCell::new(map),
 
             instances,
             bases,
-            consts: SegmentList::new(),
+            consts,
         }
     }
 
@@ -184,7 +191,7 @@ impl Types {
         }
     }
 
-    pub fn display(&self, ty: Type) -> TypeDisplay {
+    pub fn display(&'_ self, ty: Type) -> TypeDisplay<'_> {
         TypeDisplay { types: self, ty }
     }
 
@@ -262,12 +269,6 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
             TypeFull::Const(n) => write!(f, "{n}"),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Aggregate(u32);
-impl Aggregate {
-    pub const UNIT: Self = Self(0);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

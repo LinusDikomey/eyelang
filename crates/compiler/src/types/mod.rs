@@ -16,84 +16,63 @@ impl Type {
         }
     }
 }
+macro_rules! primitive_impl {
+    ($impl_for: ident; ints: $($int: ident)*; floats: $($float: ident)*; other: $($other: ident)*;) => {
+        impl $impl_for {
+            pub fn is_int(self) -> bool {
+                self.as_int().is_some()
+            }
 
-impl From<Primitive> for Type {
-    fn from(value: Primitive) -> Self {
-        match value {
-            Primitive::I8 => Self::I8,
-            Primitive::I16 => Self::I16,
-            Primitive::I32 => Self::I32,
-            Primitive::I64 => Self::I64,
-            Primitive::I128 => Self::I128,
-            Primitive::U8 => Self::U8,
-            Primitive::U16 => Self::U16,
-            Primitive::U32 => Self::U32,
-            Primitive::U64 => Self::U64,
-            Primitive::U128 => Self::U128,
-            Primitive::F32 => Self::F32,
-            Primitive::F64 => Self::F64,
-            Primitive::Type => Self::Type,
+            pub fn as_int(self) -> Option<IntType> {
+                Some(match self {
+                    $(Self::$int => IntType::$int,)*
+                    _ => return None,
+                })
+            }
+
+            pub fn is_float(self) -> bool {
+                self.as_float().is_some()
+            }
+
+            pub fn as_float(self) -> Option<FloatType> {
+                Some(match self {
+                    $(Self::$float => FloatType::$float,)*
+                    _ => return None,
+                })
+            }
         }
-    }
+        impl From<Primitive> for $impl_for {
+            fn from(value: Primitive) -> Self {
+                match value {
+                    $(Primitive::$int => Self::$int,)*
+                    $(Primitive::$float => Self::$float,)*
+                    $(Primitive::$other=> Self::$other,)*
+                }
+            }
+        }
+    };
 }
+macro_rules! primitive_impls {
+    ($($impl_for: ident)*) => {
+        $(
+            primitive_impl! {
+                $impl_for;
+                ints: I8 U8 I16 U16 I32 U32 I64 U64 I128 U128;
+                floats: F32 F64;
+                other: Type;
+            }
+        )*
+    };
+}
+primitive_impls! { Type BaseType }
+
 id::id!(BaseType);
-impl BaseType {
-    pub fn is_int(self) -> bool {
-        self.as_int().is_some()
-    }
-
-    pub fn as_int(self) -> Option<IntType> {
-        Some(match self {
-            Self::I8 => IntType::I8,
-            Self::I16 => IntType::I16,
-            Self::I32 => IntType::I32,
-            Self::I64 => IntType::I64,
-            Self::I128 => IntType::I128,
-            Self::U8 => IntType::U8,
-            Self::U16 => IntType::U16,
-            Self::U32 => IntType::U32,
-            Self::U64 => IntType::U64,
-            Self::U128 => IntType::U128,
-            _ => return None,
-        })
-    }
-
-    pub fn is_float(self) -> bool {
-        self.as_float().is_some()
-    }
-
-    pub fn as_float(self) -> Option<FloatType> {
-        Some(match self {
-            Self::F32 => FloatType::F32,
-            Self::F64 => FloatType::F64,
-            _ => return None,
-        })
-    }
-}
-impl From<Primitive> for BaseType {
-    fn from(value: Primitive) -> Self {
-        match value {
-            Primitive::I8 => Self::I8,
-            Primitive::I16 => Self::I16,
-            Primitive::I32 => Self::I32,
-            Primitive::I64 => Self::I64,
-            Primitive::I128 => Self::I128,
-            Primitive::U8 => Self::U8,
-            Primitive::U16 => Self::U16,
-            Primitive::U32 => Self::U32,
-            Primitive::U64 => Self::U64,
-            Primitive::U128 => Self::U128,
-            Primitive::F32 => Self::F32,
-            Primitive::F64 => Self::F64,
-            Primitive::Type => Self::Type,
-        }
-    }
-}
-impl Default for BaseType {
-    fn default() -> Self {
-        Self(0)
-    }
-}
+// TODO: remove if not needed
+// impl Default for BaseType {
+//     fn default() -> Self {
+//         Self(0)
+//     }
+// }
 
 macro_rules! builtin_types {
     ($count: literal $($name: ident = $size: literal)* @generic: $($generic_name: ident = $generics: expr,)*) => {

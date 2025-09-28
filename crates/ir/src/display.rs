@@ -79,7 +79,7 @@ impl fmt::Display for ModuleDisplay<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { env, module } = self;
         cwriteln!(f, "#m<begin module> #u;c<{}>", module.name)?;
-        for global in &module.globals {
+        for global in module.globals.iter() {
             cwrite!(
                 f,
                 "  #m<global> #b<{}> [align {}",
@@ -112,7 +112,7 @@ impl fmt::Display for ModuleDisplay<'_> {
         if !module.globals.is_empty() {
             writeln!(f)?;
         }
-        for function in &module.functions {
+        for function in module.functions.iter() {
             writeln!(f, "{}", FunctionDisplay { env, function })?;
         }
         cwriteln!(f, "#m<end module> #u;c<{}>\n", module.name)
@@ -144,7 +144,7 @@ impl fmt::Display for FunctionDisplay<'_> {
             }
             writeln!(f, ")")
         };
-        if let Some(ir) = &function.ir {
+        if let Some(ir) = function.ir.get() {
             cwrite!(f, "  #m<begin> #b<{}>", function.name)?;
             display_params(f)?;
             writeln!(

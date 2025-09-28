@@ -1,9 +1,10 @@
 use std::{
     borrow::Cow,
+    cell::OnceCell,
     fmt, iter,
     marker::PhantomData,
     mem::transmute,
-    num::NonZeroU64,
+    num::{NonZero, NonZeroU64},
     ops::{Deref, Index, IndexMut},
 };
 
@@ -66,24 +67,28 @@ impl<I> From<ModuleOf<I>> for ModuleId {
 
 pub struct Module {
     name: Box<str>,
-    functions: Vec<Function>,
-    globals: Vec<Global>,
+    functions: SegmentList<Function>,
+    globals: SegmentList<Global>,
 }
 impl Module {
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn functions(&self) -> &[Function] {
-        &self.functions
+    pub fn functions(&self) -> segment_list::Iter<'_, Function> {
+        self.functions.iter()
     }
 
-    pub fn function_ids(&self) -> impl ExactSizeIterator<Item = LocalFunctionId> {
-        (0..self.functions.len() as u32).map(LocalFunctionId)
+    pub fn function_ids(&self) -> impl use<> + ExactSizeIterator<Item = LocalFunctionId> {
+        (0..self.functions.len()).map(LocalFunctionId)
     }
 
-    pub fn globals(&self) -> &[Global] {
-        &self.globals
+    pub fn globals(&self) -> segment_list::Iter<'_, Global> {
+        self.globals.iter()
+    }
+
+    pub fn global_ids(&self) -> impl use<> + ExactSizeIterator<Item = u32> {
+        0..self.globals.len()
     }
 }
 impl Index<LocalFunctionId> for Module {
@@ -309,12 +314,13 @@ impl MCReg {
 
 pub struct Function {
     pub name: Box<str>,
+    // TODO: rethink type storage of function, especially with parameters vs content
     types: Types,
     params: Vec<Parameter>,
     varargs: Option<Parameter>,
     flags: InstFlags,
     return_type: Option<TypeId>,
-    pub(crate) ir: Option<FunctionIr>,
+    pub(crate) ir: OnceCell<FunctionIr>,
 }
 impl Index<TypeId> for Function {
     type Output = Type;
@@ -332,7 +338,7 @@ impl Function {
             varargs: None,
             flags: InstFlags::default(),
             return_type: None,
-            ir: None,
+            ir: OnceCell::new(),
         }
     }
 
@@ -350,7 +356,7 @@ impl Function {
             varargs: None,
             flags: InstFlags::default(),
             return_type: Some(return_type),
-            ir: Some(ir),
+            ir: OnceCell::from(ir),
         }
     }
 
@@ -368,7 +374,7 @@ impl Function {
             varargs: varargs.then_some(Parameter::Ref),
             flags: InstFlags::default(),
             return_type: Some(return_type),
-            ir: None,
+            ir: OnceCell::new(),
         }
     }
 
@@ -385,18 +391,28 @@ impl Function {
             varargs: attrs.varargs,
             flags: attrs.flags,
             return_type: None,
-            ir: None,
+            ir: OnceCell::new(),
         }
     }
 
+    pub fn take_body(&mut self) -> Option<FunctionIr> {
+        self.ir.take()
+    }
+
     #[inline]
-    pub fn attach_body(&mut self, body: FunctionIr) {
-        self.ir = Some(body);
+    pub fn attach_body(&self, body: FunctionIr) {
+        self.ir
+            .set(body)
+            .unwrap_or_else(|_| panic!("Ir already had a body"));
+    }
+
+    pub fn overwrite_types(&mut self, types: Types) {
+        self.types = types;
     }
 
     #[inline]
     pub fn ir(&self) -> Option<&FunctionIr> {
-        self.ir.as_ref()
+        self.ir.get()
     }
 
     #[inline]
@@ -430,7 +446,7 @@ impl Function {
 
 pub struct Global {
     pub name: Box<str>,
-    pub align: u64,
+    pub align: NonZero<u64>,
     pub value: Box<[u8]>,
     pub readonly: bool,
 }
@@ -1363,6 +1379,7 @@ pub struct InvalidInstruction;
 pub struct InvalidPrimitive;
 
 use mc::Register;
+use segment_list::SegmentList;
 #[doc(hidden)]
 pub use strum::FromRepr as __FromRepr;
 

@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use crate::{
     Argument, BlockId, BlockInfo, Environment, Function, FunctionId, INLINE_ARGS, Instruction,
     ModuleId, Parameter, Ref, Refs, TypeId, Types,
@@ -215,7 +217,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             varargs: None,
             flags: InstFlags::default(),
             return_type: Some(return_type),
-            ir: Some(ir),
+            ir: OnceCell::from(ir),
         }
     }
 

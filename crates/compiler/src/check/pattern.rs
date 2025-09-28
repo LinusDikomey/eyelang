@@ -6,7 +6,7 @@ use crate::{
     compiler::{VarId, builtins},
     hir::Pattern,
     types::BaseType,
-    typing::{LocalTypeId, LocalTypeIds, TypeInfo},
+    typing::{LocalTypeId, TypeInfo},
 };
 
 use parser::ast::{Expr, ExprId, IntLiteral, Operator, Primitive, UnOp};

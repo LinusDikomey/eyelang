@@ -13,6 +13,7 @@ members = [
     "crates/error",
     "crates/token",
     "crates/format",
+    "crates/segment-list",
 ]
 default-members = ["crates/eye"]
 
@@ -27,6 +28,7 @@ error.path = "crates/error"
 parser.path = "crates/parser"
 token.path = "crates/token"
 format.path = "crates/format"
+segment-list.path = "crates/segment-list"
 
 pathdiff = "0.2.1"
 tracing = { version = "0.1.41", default-features = false, features = ["release_max_level_off"] }

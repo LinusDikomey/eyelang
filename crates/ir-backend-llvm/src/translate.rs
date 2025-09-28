@@ -103,7 +103,11 @@ pub fn add_global(
         LLVMSetInitializer(llvm_global, value);
         core::LLVMSetAlignment(
             llvm_global,
-            global.align.try_into().expect("align too large for llvm"),
+            global
+                .align
+                .get()
+                .try_into()
+                .expect("align too large for llvm"),
         );
         if global.readonly {
             core::LLVMSetGlobalConstant(llvm_global, 1);

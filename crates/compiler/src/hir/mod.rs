@@ -9,7 +9,7 @@ use crate::{
     Compiler, Type,
     compiler::{CaptureId, Generics, VarId},
     eval::ConstValueId,
-    typing::{LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
+    typing::{InferredEnumVariant, LocalTypeId, LocalTypeIds, OrdinalType, TypeTable, VariantId},
 };
 
 id!(NodeId);
@@ -18,7 +18,7 @@ id!(CastId);
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
 /// nodes must be non-empty and the last node is the root node
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Hir {
     nodes: Vec<Node>,
     types: Box<[Type]>,
@@ -28,6 +28,7 @@ pub struct Hir {
     pub params: Vec<VarId>,
     casts: Vec<Cast>,
     pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
+    variants: Box<[InferredEnumVariant]>,
 }
 impl Hir {
     pub fn root_id(&self) -> NodeId {
@@ -107,6 +108,12 @@ impl Index<CastId> for Hir {
 impl IndexMut<CastId> for Hir {
     fn index_mut(&mut self, index: CastId) -> &mut Self::Output {
         &mut self.casts[index.idx()]
+    }
+}
+impl Index<VariantId> for Hir {
+    type Output = InferredEnumVariant;
+    fn index(&self, index: VariantId) -> &Self::Output {
+        &self.variants[index.idx()]
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -499,7 +506,7 @@ impl HIRBuilder {
         params: Vec<VarId>,
     ) -> Hir {
         self.nodes.push(root);
-        let types = self.types.finish(compiler, generics, module);
+        let (types, variants) = self.types.finish(compiler, generics, module);
         Hir {
             nodes: self.nodes,
             types,
@@ -509,6 +516,7 @@ impl HIRBuilder {
             params,
             casts: self.casts,
             trait_calls: Vec::new(),
+            variants,
         }
     }
 

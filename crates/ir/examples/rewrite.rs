@@ -2,24 +2,22 @@ use ir::{dialect::Primitive, modify::IrModify, rewrite::LinearRewriteOrder};
 
 fn main() {
     let mut env = ir::Environment::new(Primitive::create_infos());
-    let main_module = env.create_module("main");
-    let func = create_add_function(&mut env);
-    let func_id = env.add_function(main_module, func);
+    let mut func = create_add_function(&mut env);
     let rewriter = AddZeroRewriter::new(&mut env);
-    println!("Before rewrite:\n{}", env.display_module(main_module));
+    println!("Before rewrite:\n{}", func.display(&env));
 
-    let mut func_ir = IrModify::new(env.remove_body(func_id).unwrap());
+    let mut func_ir = IrModify::new(func.take_body().unwrap());
     ir::rewrite::rewrite_in_place(
         &mut func_ir,
-        env[func_id].types(),
+        func.types(),
         &env,
         &mut (),
         &rewriter,
         LinearRewriteOrder::new(),
     );
-    env.reattach_body(func_id, func_ir.finish_and_compress(&env));
+    func.attach_body(func_ir.finish_and_compress(&env));
 
-    println!("After rewrite:\n{}", env.display_module(main_module));
+    println!("After rewrite:\n{}", func.display(&env));
 }
 
 fn create_add_function(env: &mut ir::Environment) -> ir::Function {

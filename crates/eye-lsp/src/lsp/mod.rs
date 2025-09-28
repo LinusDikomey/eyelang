@@ -26,7 +26,7 @@ impl Lsp {
             || initialize.root_path.as_deref().map(PathBuf::from),
             |uri| Some(uri.path().to_path_buf()),
         );
-        let std = match compiler.add_project("std".to_owned(), compiler::std_path::find()) {
+        let std = match compiler.add_project("std".to_owned(), compiler::std_path::find(), vec![]) {
             Ok(std) => {
                 compiler.resolve_builtins(std);
                 Some(std)
@@ -44,11 +44,9 @@ impl Lsp {
             if !path.join("main.eye").exists() {
                 return None;
             }
-            compiler.add_project(name, path).ok().inspect(|&project| {
-                if let Some(std) = std {
-                    compiler.add_dependency(project, std);
-                }
-            })
+            compiler
+                .add_project(name, path, std.into_iter().collect())
+                .ok()
         });
         let mut lsp = Self {
             compiler,
@@ -159,7 +157,7 @@ impl Lsp {
             self.compiler.errors = ProjectErrors::new();
             self.compiler.check_complete_project(project);
             let errors = std::mem::replace(&mut self.compiler.errors, ProjectErrors::new());
-            for (module, errors) in errors.by_file {
+            for (&module, errors) in errors.by_file.borrow().iter() {
                 let src = self.compiler.get_module_ast(module).src();
                 let mut diagnostics = Vec::new();
                 let mut emit = |errors: &[error::CompileError], severity| {

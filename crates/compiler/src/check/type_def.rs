@@ -16,7 +16,7 @@ pub fn type_def(compiler: &Compiler, ty: BaseType) -> ResolvedTypeDef {
     let ast_id = resolved_ty.id;
     let ast = compiler.get_module_ast(module);
     let def = &ast[ast_id];
-    let generics = compiler.resolve_generics(&def.generics.types, module, def.scope, &ast);
+    let generics = compiler.resolve_generics(&def.generics.types, module, def.scope, ast);
     let resolved_def = match &def.content {
         ast::TypeContent::Struct { members } => {
             let named_fields = members
@@ -84,13 +84,12 @@ pub fn type_def(compiler: &Compiler, ty: BaseType) -> ResolvedTypeDef {
             // can't check trait impl because the trait was invalid
             continue;
         };
-        let checked_trait = checked_trait;
         let checked_impl = traits::check_impl(
             compiler,
             &trait_impl.base,
             implemented_ty,
             module,
-            &ast,
+            ast,
             checked_trait.generics.count(),
             &checked_trait.functions,
             &checked_trait.functions_by_name,

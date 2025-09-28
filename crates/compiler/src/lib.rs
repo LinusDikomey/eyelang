@@ -25,7 +25,6 @@ mod layout;
 mod link;
 /// module file path discovery
 mod modules;
-mod segment_list;
 /// find the path of the std library
 pub mod std_path;
 mod types;

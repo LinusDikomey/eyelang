@@ -965,91 +965,61 @@ fn check_member_access(
         _ => {}
     }
     // now check the type while allowing auto deref for field access, methods
-    let mut current_ty = left_ty;
+    let mut current_ty = ctx.hir.types[left_ty];
     let mut pointer_count = 0;
     loop {
-        match ctx.hir.types[current_ty] {
+        match current_ty {
             TypeInfo::Instance(BaseType::Pointer, pointee) => {
                 pointer_count += 1;
-                current_ty = pointee.nth(0).unwrap();
+                current_ty = ctx.hir.types[pointee.nth(0).unwrap()];
             }
             TypeInfo::Instance(BaseType::Invalid, _) => {
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
-            TypeInfo::Instance(base, generics) => {
-                let resolved = ctx.compiler.get_base_type_def(base);
-                if let Some(&method) = resolved.methods.get(name) {
-                    let module = resolved.module;
-                    let signature = ctx.compiler.get_signature(module, method);
-                    let Some((required_pointer_count, call_generics)) =
-                        check_is_instance_method(signature, base, generics, ctx, |ast| {
-                            ast[expr].span(ast)
-                        })
-                    else {
-                        ctx.emit(Error::NotAnInstanceMethod.at_span(ctx.span(expr)));
-                        ctx.invalidate(expected);
-                        return Node::Invalid;
-                    };
-                    let self_value = ctx.auto_ref_deref(
+            TypeInfo::Known(ty) => match ctx.compiler.types.lookup(ty) {
+                TypeFull::Instance(BaseType::Pointer, &[pointee]) => {
+                    pointer_count += 1;
+                    current_ty = TypeInfo::Known(pointee);
+                }
+                TypeFull::Instance(base, generics) => {
+                    let generics = ctx
+                        .hir
+                        .types
+                        .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
+                    return instance_member(
+                        ctx,
+                        name_span,
+                        expr,
+                        expected,
                         pointer_count,
-                        required_pointer_count,
                         left_node,
                         left_ty,
+                        base,
+                        generics,
                     );
-                    ctx.specify(
-                        expected,
-                        TypeInfo::MethodItem {
-                            module,
-                            function: method,
-                            generics: call_generics,
-                        },
-                        |ast| ast[expr].span(ast),
-                    );
-                    return self_value;
                 }
-                if let ResolvedTypeContent::Struct(def) = &resolved.def {
-                    let (indexed_field, elem_types) = def.get_indexed_field(ctx, generics, name);
-                    if let Some((index, field_ty)) = indexed_field {
-                        // perform auto deref first
-                        let mut dereffed_node = left_node;
-                        let mut current_ty = left_ty;
-                        for _ in 0..pointer_count {
-                            let TypeInfo::Instance(BaseType::Pointer, pointee) =
-                                ctx.hir.types[current_ty]
-                            else {
-                                // the deref was already checked so we know the type is wrapped in
-                                // `pointer_count` pointers
-                                unreachable!()
-                            };
-                            let pointee = pointee.nth(0).unwrap();
-                            let value = ctx.hir.add(dereffed_node);
-                            dereffed_node = Node::Deref {
-                                value,
-                                deref_ty: pointee,
-                            };
-                            current_ty = pointee;
-                        }
-                        ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
-                        return Node::Element {
-                            tuple_value: ctx.hir.add(dereffed_node),
-                            index,
-                            elem_types,
-                        };
-                    }
+                TypeFull::Generic(_) | TypeFull::Const(_) => {
+                    ctx.emit(Error::NonexistantMember(None).at_span(name_span));
+                    ctx.invalidate(expected);
+                    return Node::Invalid;
                 }
-                ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                ctx.invalidate(expected);
-                return Node::Invalid;
+            },
+            TypeInfo::Instance(base, generics) => {
+                return instance_member(
+                    ctx,
+                    name_span,
+                    expr,
+                    expected,
+                    pointer_count,
+                    left_node,
+                    left_ty,
+                    base,
+                    generics,
+                );
             }
             TypeInfo::Unknown(bounds) => {
-                let needed_bound = bounds.iter().next().map(|bound| {
-                    let trait_id = ctx.hir.types.get_bound(bound).trait_id;
-                    ctx.compiler
-                        .get_trait_name(trait_id.0, trait_id.1)
-                        .to_owned()
-                });
-                ctx.emit(Error::TypeMustBeKnownHere { needed_bound }.at_span(ctx.span(left)));
+                ctx.emit_unknown(bounds, ctx.span(left));
                 ctx.invalidate(expected);
                 return Node::Invalid;
             }
@@ -1062,6 +1032,76 @@ fn check_member_access(
             }
         }
     }
+}
+
+fn instance_member(
+    ctx: &mut Ctx,
+    name_span: TSpan,
+    expr: ExprId,
+    expected: LocalTypeId,
+    pointer_count: u32,
+    left_node: Node,
+    left_ty: LocalTypeId,
+    base: BaseType,
+    generics: LocalTypeIds,
+) -> Node {
+    let name = &ctx.ast[name_span];
+    let resolved = ctx.compiler.get_base_type_def(base);
+    if let Some(&method) = resolved.methods.get(name) {
+        let module = resolved.module;
+        let signature = ctx.compiler.get_signature(module, method);
+        let Some((required_pointer_count, call_generics)) =
+            check_is_instance_method(signature, base, generics, ctx, |ast| ast[expr].span(ast))
+        else {
+            ctx.emit(Error::NotAnInstanceMethod.at_span(ctx.span(expr)));
+            ctx.invalidate(expected);
+            return Node::Invalid;
+        };
+        let self_value =
+            ctx.auto_ref_deref(pointer_count, required_pointer_count, left_node, left_ty);
+        ctx.specify(
+            expected,
+            TypeInfo::MethodItem {
+                module,
+                function: method,
+                generics: call_generics,
+            },
+            |ast| ast[expr].span(ast),
+        );
+        return self_value;
+    }
+    if let ResolvedTypeContent::Struct(def) = &resolved.def {
+        let (indexed_field, elem_types) = def.get_indexed_field(ctx, generics, name);
+        if let Some((index, field_ty)) = indexed_field {
+            // perform auto deref first
+            let mut dereffed_node = left_node;
+            let mut current_ty = left_ty;
+            for _ in 0..pointer_count {
+                let TypeInfo::Instance(BaseType::Pointer, pointee) = ctx.hir.types[current_ty]
+                else {
+                    // the deref was already checked so we know the type is wrapped in
+                    // `pointer_count` pointers
+                    unreachable!()
+                };
+                let pointee = pointee.nth(0).unwrap();
+                let value = ctx.hir.add(dereffed_node);
+                dereffed_node = Node::Deref {
+                    value,
+                    deref_ty: pointee,
+                };
+                current_ty = pointee;
+            }
+            ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
+            return Node::Element {
+                tuple_value: ctx.hir.add(dereffed_node),
+                index,
+                elem_types,
+            };
+        }
+    }
+    ctx.emit(Error::NonexistantMember(None).at_span(name_span));
+    ctx.invalidate(expected);
+    Node::Invalid
 }
 
 /// checks if the provided method signature is valid as an instance method of the provided type.

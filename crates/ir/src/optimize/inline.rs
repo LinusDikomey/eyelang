@@ -127,7 +127,10 @@ impl Inline {
         }
         let ir = ir.finish_and_compress(env);
         let ir_function = &mut env.modules[module.idx()].functions[function.idx()];
-        ir_function.ir = Some(ir);
+        ir_function
+            .ir
+            .set(ir)
+            .unwrap_or_else(|_| panic!("ir set twice"));
         ir_function.types = types;
     }
 }

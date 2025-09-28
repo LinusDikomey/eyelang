@@ -7,4 +7,5 @@ edition = "2024"
 color-format.workspace = true
 dmap.workspace = true
 tracing.workspace = true
+segment-list.workspace = true
 strum = { version = "0.26.3", features = ["derive"] }

@@ -52,7 +52,7 @@ impl<State: Default> Pipeline<State> {
     ) {
         for id in env[module].function_ids() {
             let function = &env[module][id];
-            let Some(ir) = &function.ir else {
+            let Some(ir) = function.ir.get() else {
                 continue;
             };
             tracing::debug!(
@@ -77,8 +77,8 @@ impl<State: Default> Pipeline<State> {
         module: ModuleId,
         step: &[Box<dyn FunctionPass<State>>],
     ) {
-        for i in 0..env[module].functions().len() {
-            let Some(mut ir) = env.modules[module.idx()].functions[i].ir.take() else {
+        for id in env[module].function_ids() {
+            let Some(mut ir) = env.modules[module.idx()].functions[id.idx()].ir.take() else {
                 continue;
             };
 
@@ -86,21 +86,24 @@ impl<State: Default> Pipeline<State> {
 
             for pass in step {
                 let types;
-                let func = &env[module].functions[i];
+                let func = &env[module][id];
                 (ir, types) = pass.run(env, &func.types, ir, &func.name, &mut state);
                 if let Some(types) = types {
-                    env.modules[module.idx()].functions[i].types = types;
+                    env.modules[module.idx()].functions[id.idx()].types = types;
                 }
                 tracing::debug!(
                     target: "passes",
-                    function = env[module].functions[i].name,
+                    function = env[module][id].name,
                     pass = ?pass,
                     "After {pass:?}:\n{}",
-                    ir.display_with_phys_regs::<R>(env, &env[module].functions[i].types),
+                    ir.display_with_phys_regs::<R>(env, &env[module][id].types),
                 );
             }
-            tracing::debug!(target: "passes", function = env[module].functions[i].name, "Done optimizing");
-            env.modules[module.idx()].functions[i].ir = Some(ir);
+            tracing::debug!(target: "passes", function = env[module][id].name, "Done optimizing");
+            env.modules[module.idx()][id]
+                .ir
+                .set(ir)
+                .unwrap_or_else(|_| panic!("function was set twice"));
         }
     }
 

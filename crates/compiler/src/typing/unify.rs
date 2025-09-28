@@ -1,8 +1,6 @@
-use std::rc::Rc;
-
 use crate::{
     Compiler, InvalidTypeError, Type,
-    check::expr::{int_primitive_from_variant_count, type_from_variant_count},
+    check::expr::type_from_variant_count,
     compiler::{Generics, ResolvedTypeContent},
     types::BaseType,
     typing::{Bounds, LocalTypeIds, TypeInfoOrIdx, traits},

@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::{
     Compiler, Type,
     compiler::{Instance, ResolvedTypeContent},
@@ -8,6 +6,7 @@ use crate::{
 
 pub fn get(
     compiler: &Compiler,
+    ir: &ir::Environment,
     ir_types: &mut ir::Types,
     ty: Type,
     instance: Instance,
@@ -39,7 +38,7 @@ pub fn get(
                         let refs =
                             ir_types.add_multiple(type_generics.iter().map(|_| ir::Type::UNIT));
                         for (&elem, ty) in type_generics.iter().zip(refs.iter()) {
-                            let elem = get(compiler, ir_types, elem, instance)?;
+                            let elem = get(compiler, ir, ir_types, elem, instance)?;
                             ir_types[ty] = elem;
                         }
                         ir::Type::Tuple(refs)
@@ -49,7 +48,7 @@ pub fn get(
                     }
                     BuiltinType::Array => {
                         let n = type_generics[1];
-                        let elem = get(compiler, ir_types, type_generics[0], instance)?;
+                        let elem = get(compiler, ir, ir_types, type_generics[0], instance)?;
                         let TypeFull::Const(n) = compiler.types.lookup(n) else {
                             return None;
                         };
@@ -65,6 +64,7 @@ pub fn get(
                     for ((_, field), r) in def.all_fields().zip(elems.iter()) {
                         let ty = get(
                             compiler,
+                            ir,
                             ir_types,
                             field,
                             Instance {
@@ -92,6 +92,7 @@ pub fn get(
                         for (&arg, r) in args.iter().zip(elem_iter) {
                             let Some(elem) = get(
                                 compiler,
+                                ir,
                                 ir_types,
                                 arg,
                                 Instance {
@@ -103,11 +104,8 @@ pub fn get(
                             };
                             ir_types[r] = elem;
                         }
-                        let variant_layout = ir::type_layout(
-                            ir::Type::Tuple(elems),
-                            ir_types,
-                            todo!("irgen"), // compiler.ir.primitives(),
-                        );
+                        let variant_layout =
+                            ir::type_layout(ir::Type::Tuple(elems), ir_types, ir.primitives());
                         accumulated_layout.accumulate_variant(variant_layout);
                     }
                     if has_content {
@@ -118,20 +116,21 @@ pub fn get(
                 }
             }
         }
-        TypeFull::Generic(i) => get(compiler, ir_types, instance[i], instance.outer())?,
+        TypeFull::Generic(i) => get(compiler, ir, ir_types, instance[i], instance.outer())?,
         TypeFull::Const(_) => ir::Type::UNIT,
     })
 }
 
 pub fn get_multiple(
     compiler: &Compiler,
+    ir: &ir::Environment,
     ir_types: &mut ir::Types,
-    types: &[Type],
+    types: impl ExactSizeIterator<Item = Type>,
     instance: Instance,
 ) -> Option<ir::TypeIds> {
-    let refs = ir_types.add_multiple(types.iter().map(|_| ir::Type::UNIT));
-    for (&elem, ty) in types.iter().zip(refs.iter()) {
-        let elem = get(compiler, ir_types, elem, instance)?;
+    let refs = ir_types.add_multiple((0..types.len()).map(|_| ir::Type::UNIT));
+    for (elem, ty) in types.into_iter().zip(refs.iter()) {
+        let elem = get(compiler, ir, ir_types, elem, instance)?;
         ir_types[ty] = elem;
     }
     Some(refs)

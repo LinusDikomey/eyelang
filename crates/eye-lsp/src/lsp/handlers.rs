@@ -1,4 +1,4 @@
-use std::{path::Path, rc::Rc};
+use std::{cell::OnceCell, path::Path};
 
 use compiler::{Def, ModuleSpan};
 use error::span::TSpan;
@@ -73,14 +73,12 @@ impl Lsp {
             path.display(),
             project_path.display()
         );
-        match self
-            .compiler
-            .add_project(name.to_owned(), project_path.to_path_buf())
-        {
+        match self.compiler.add_project(
+            name.to_owned(),
+            project_path.to_path_buf(),
+            self.std.into_iter().collect(),
+        ) {
             Ok(id) => {
-                if let Some(std) = self.std {
-                    self.compiler.add_dependency(id, std);
-                }
                 self.projects.push(id);
                 self.update_diagnostics();
             }
@@ -126,7 +124,7 @@ impl Lsp {
         for module in self.compiler.module_ids() {
             let project = self.compiler.modules[module.idx()].project;
             if invalidated_projects.contains(&project) {
-                self.compiler.modules[module.idx()].ast = None;
+                self.compiler.modules[module.idx()].ast = OnceCell::new();
             }
         }
 
@@ -157,7 +155,7 @@ impl Lsp {
         let mut current = (module, found.scope);
         let mut in_prelude = false;
         loop {
-            let ast = Rc::clone(self.compiler.get_module_ast(current.0));
+            let ast = self.compiler.get_module_ast(current.0);
             let scope = &ast[current.1];
             for name in scope.definitions.keys() {
                 let def =
@@ -174,7 +172,7 @@ impl Lsp {
                     Def::Global(_, _) => CompletionItemKind::Variable,
                 };
                 completions.push(CompletionItem {
-                    label: name.clone(),
+                    label: name.to_owned(),
                     kind: Some(kind),
                 });
             }
@@ -182,10 +180,8 @@ impl Lsp {
             match scope.parent {
                 Some(parent) => current.1 = parent,
                 None => {
-                    if !in_prelude
-                        && let Some(prelude) =
-                            compiler::compiler::builtins::get_prelude(&mut self.compiler)
-                    {
+                    if !in_prelude {
+                        let prelude = compiler::compiler::builtins::get_prelude(&self.compiler);
                         current = (
                             prelude,
                             self.compiler.get_module_ast(prelude).top_level_scope_id(),
@@ -206,7 +202,7 @@ impl Lsp {
         let (module, found) = self.find_document_position(&params.position)?;
         let (module, span) = match found.ty {
             FoundType::VarRef | FoundType::Generic => {
-                let ast = Rc::clone(self.compiler.get_module_ast(module));
+                let ast = self.compiler.get_module_ast(module);
                 let name = &ast.src()[found.span.range()];
                 match self
                     .compiler

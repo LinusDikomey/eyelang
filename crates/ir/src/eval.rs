@@ -256,7 +256,7 @@ pub fn eval<E: EvalEnvironment>(
     let val = 'outer: loop {
         let (ir, types) = current_function.map_or(top_level_function, |id| {
             let function = &env.env()[id];
-            (function.ir.as_ref().unwrap(), &function.types)
+            (function.ir.get().unwrap(), &function.types)
         });
 
         let get_ref_and_ty = |values: &Values, r: Ref| -> (Val, Type) {

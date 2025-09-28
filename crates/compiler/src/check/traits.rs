@@ -20,7 +20,7 @@ pub fn trait_def(compiler: &Compiler, ast: &Ast, id: (ModuleId, TraitId)) -> Che
     let module = id.0;
     let def = &ast[id.1];
     // don't include self type in generics, it is handled seperately
-    let generics = compiler.resolve_generics(&def.generics.types[1..], id.0, def.scope, &ast);
+    let generics = compiler.resolve_generics(&def.generics.types[1..], id.0, def.scope, ast);
     let mut functions_by_name = dmap::with_capacity(def.functions.len());
     let functions: Vec<Signature> = def
         .functions
@@ -34,7 +34,7 @@ pub fn trait_def(compiler: &Compiler, ast: &Ast, id: (ModuleId, TraitId)) -> Che
                     .errors
                     .emit(module, Error::DuplicateDefinition.at_span(function.name));
             }
-            compiler.check_signature(&ast[function.function], module, &ast)
+            compiler.check_signature(&ast[function.function], module, ast)
         })
         .collect();
     let impls = def
@@ -47,7 +47,7 @@ pub fn trait_def(compiler: &Compiler, ast: &Ast, id: (ModuleId, TraitId)) -> Che
                 &impl_.base,
                 impl_ty,
                 module,
-                &ast,
+                ast,
                 generics.count(),
                 &functions,
                 &functions_by_name,
@@ -100,7 +100,7 @@ pub fn check_impl(
     }
 
     let mut function_ids = vec![ast::FunctionId::from_inner(u32::MAX); trait_functions.len()];
-    let base_generics: Box<[Type]> = std::iter::once(impl_ty.clone())
+    let base_generics: Box<[Type]> = std::iter::once(impl_ty)
         .chain(trait_generics.clone())
         .collect();
     let base_offset = base_generics.len() as u8;
@@ -299,7 +299,7 @@ pub fn match_instance(
             true
         }
         TypeFull::Instance(implemented_base, implemented_generics) => match types.lookup(ty) {
-            TypeFull::Instance(BaseType::Invalid, _) => return true,
+            TypeFull::Instance(BaseType::Invalid, _) => true,
             TypeFull::Instance(base, generics) => {
                 if base != implemented_base {
                     return false;
@@ -314,9 +314,9 @@ pub fn match_instance(
                         return false;
                     }
                 }
-                return true;
+                true
             }
-            TypeFull::Generic(_) | TypeFull::Const(_) => return false,
+            TypeFull::Generic(_) | TypeFull::Const(_) => false,
         },
         TypeFull::Const(implemented_n) => {
             let TypeFull::Const(n) = types.lookup(ty) else {

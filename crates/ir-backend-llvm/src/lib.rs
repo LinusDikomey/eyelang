@@ -69,7 +69,6 @@ impl Backend {
         let module = env.get_module(module_id);
         let llvm_funcs = module
             .functions()
-            .iter()
             .map(|func| unsafe {
                 translate::add_function(self.context, llvm_module, func, &self.attribs)
             })
@@ -77,11 +76,10 @@ impl Backend {
 
         let globals: Vec<_> = module
             .globals()
-            .iter()
             .map(|global| translate::add_global(self.context, llvm_module, global))
             .collect::<Result<_, _>>()?;
 
-        for (func, (llvm_func, _)) in module.functions().iter().zip(llvm_funcs.iter().copied()) {
+        for (func, (llvm_func, _)) in module.functions().zip(llvm_funcs.iter().copied()) {
             unsafe {
                 translate::function(
                     env,
