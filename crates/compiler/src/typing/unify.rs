@@ -18,9 +18,8 @@ pub fn unify(
 ) -> Option<TypeInfo> {
     use TypeInfo::*;
     Some(match (a, b) {
-        (Instance(BaseType::Invalid, _), _) | (_, Instance(BaseType::Invalid, _)) => {
-            TypeInfo::INVALID
-        }
+        (Instance(BaseType::Invalid, _) | Known(Type::Invalid), _)
+        | (_, Instance(BaseType::Invalid, _) | Known(Type::Invalid)) => TypeInfo::INVALID,
         (Unknown(bounds), Generic(generic_id)) | (Generic(generic_id), Unknown(bounds)) => {
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
@@ -133,11 +132,7 @@ pub fn unify(
                 let variant = &mut types.variants[variant.idx()];
                 // TODO: make it possible to return specific errors here so it's more clear when an
                 // enum doesn't match a definition
-                let Some((_, declared_ordinal, declared_args)) = def.get_by_name(&variant.name)
-                else {
-                    eprintln!("enum variant {} not found", variant.name);
-                    return None;
-                };
+                let (_, declared_ordinal, declared_args) = def.get_by_name(&variant.name)?;
                 variant.ordinal = declared_ordinal;
                 // add one because the inferred enum args contain the ordinal type
                 if variant.args.count != declared_args.len() as u32 + 1 {

@@ -296,20 +296,24 @@ impl Ctx<'_> {
             pointer_count += 1;
         }
         while pointer_count > required_pointer_count {
-            let TypeInfo::Instance(BaseType::Pointer, pointee) =
-                self.hir.types.get_info_or_idx(current_ty)
-            else {
-                // the deref was already checked so we know the type is wrapped in
-                // `pointer_count` pointers
-                unreachable!()
+            let pointee = match self.hir.types.get_info_or_idx(current_ty) {
+                TypeInfo::Instance(BaseType::Pointer, pointee) => pointee.nth(0).unwrap(),
+                TypeInfo::Known(ty) => {
+                    let TypeFull::Instance(BaseType::Pointer, &[pointee]) =
+                        self.compiler.types.lookup(ty)
+                    else {
+                        unreachable!()
+                    };
+                    self.hir.types.add(TypeInfo::Known(pointee))
+                }
+                _ => unreachable!(),
             };
-            let pointee = pointee.nth(0).unwrap();
             let prev_value = self.hir.add(value);
             value = Node::Deref {
                 value: prev_value,
                 deref_ty: pointee,
             };
-            current_ty = TypeInfoOrIdx::Idx(pointee);
+            current_ty = pointee.into();
             pointer_count -= 1;
         }
         value

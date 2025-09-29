@@ -265,7 +265,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                     Ok(())
                 }
             },
-            TypeFull::Generic(_) => panic!("unhandled generic during type display"),
+            TypeFull::Generic(i) => write!(f, "${i}"),
             TypeFull::Const(n) => write!(f, "{n}"),
         }
     }

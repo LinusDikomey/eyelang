@@ -3,7 +3,7 @@ use error::{Error, span::TSpan};
 use crate::{
     compiler::{Def, LocalItem, LocalScope, ModuleSpan, ResolvedTypeContent},
     hir::{LValue, Node},
-    types::BaseType,
+    types::{BaseType, TypeFull},
     typing::{Bounds, LocalTypeId, LocalTypeIds, TypeInfo},
 };
 use parser::ast::{Ast, Expr, ExprId, UnOp};
@@ -74,40 +74,62 @@ pub fn check(
                     let ty = ctx.compiler.get_base_type_def(id);
                     // TODO differentiate between nonexistant member and 'can't assign to
                     // member' in the case of methods, enum variants etc.
-                    match &ty.def {
-                        ResolvedTypeContent::Struct(struct_) => {
+                    if let ResolvedTypeContent::Struct(struct_) = &ty.def {
+                        let (indexed_field, elem_types) =
+                            struct_.get_indexed_field(ctx, generics, name);
+                        let Some((index, field_ty)) = indexed_field else {
+                            ctx.emit(Error::NonexistantMember(None).at_span(name_span));
+                            return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
+                        };
+
+                        let left_lval =
+                            dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
+                                ast[left].span(ast)
+                            });
+                        return (
+                            LValue::Member {
+                                tuple: ctx.hir.add_lvalue(left_lval),
+                                index,
+                                elem_types,
+                            },
+                            field_ty,
+                        );
+                    }
+                }
+                TypeInfo::Known(ty) => {
+                    if let TypeFull::Instance(base, generics) = ctx.compiler.types.lookup(ty) {
+                        let def = ctx.compiler.get_base_type_def(base);
+                        if let ResolvedTypeContent::Struct(def) = &def.def {
+                            let generics = ctx
+                                .hir
+                                .types
+                                .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
                             let (indexed_field, elem_types) =
-                                struct_.get_indexed_field(ctx, generics, name);
+                                def.get_indexed_field(ctx, generics, name);
                             let Some((index, field_ty)) = indexed_field else {
                                 ctx.emit(Error::NonexistantMember(None).at_span(name_span));
                                 return (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID));
                             };
-
                             let left_lval =
                                 dereffed_to_lvalue(ctx, left_val, left_ty, pointer_count, |ast| {
                                     ast[left].span(ast)
                                 });
-                            (
+                            return (
                                 LValue::Member {
                                     tuple: ctx.hir.add_lvalue(left_lval),
                                     index,
                                     elem_types,
                                 },
                                 field_ty,
-                            )
-                        }
-                        ResolvedTypeContent::Builtin(_) | ResolvedTypeContent::Enum(_) => {
-                            ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                            (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
+                            );
                         }
                     }
                 }
-                _ => {
-                    // TODO(error): better error why the type doesn't have named members
-                    ctx.emit(Error::NonexistantMember(None).at_span(name_span));
-                    (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
-                }
+                _ => {}
             }
+            // TODO(error): better error why the type doesn't have named members
+            ctx.emit(Error::NonexistantMember(None).at_span(name_span));
+            (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
         }
         Expr::TupleIdx { left, idx, .. } => {
             let left_ty = ctx.hir.types.add_unknown();
@@ -181,6 +203,16 @@ fn auto_deref(
             TypeInfo::Instance(BaseType::Pointer, pointee) => {
                 current_ty = pointee.nth(0).unwrap();
                 pointer_count += 1;
+            }
+            ty @ TypeInfo::Known(known_ty) => {
+                if let TypeFull::Instance(BaseType::Pointer, &[pointee]) =
+                    ctx.compiler.types.lookup(known_ty)
+                {
+                    current_ty = ctx.hir.types.add(TypeInfo::Known(pointee));
+                    pointer_count += 1;
+                } else {
+                    return Some((ty, pointer_count));
+                }
             }
             TypeInfo::Unknown(bounds) => {
                 let needed_bound = bounds.iter().next().map(|bound| {

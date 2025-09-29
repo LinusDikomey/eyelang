@@ -676,7 +676,7 @@ impl TypeTable {
                     let info = self.from_type_instance(types, generic, generics);
                     self.replace(var, info);
                 }
-                TypeInfo::Instance(base, generics).into()
+                TypeInfo::Instance(base, type_generic_vars).into()
             }
             TypeFull::Generic(i) => generics.nth(u32::from(i)).unwrap().into(),
             TypeFull::Const(_) => unreachable!("consts don't have generics"),
@@ -780,8 +780,10 @@ impl TypeTable {
                     self.type_to_string(compiler, self[generics.nth(0).unwrap()], s);
                     s.push_str("; ");
                     self.type_to_string(compiler, self[generics.nth(1).unwrap()], s);
+                    s.push(']');
                 }
                 BaseType::Pointer => {
+                    debug_assert_eq!(generics.count, 1);
                     s.push('*');
                     self.type_to_string(compiler, self[generics.nth(0).unwrap()], s);
                 }
@@ -1074,7 +1076,6 @@ impl TypeTable {
         (types, self.variants.into_boxed_slice())
     }
 
-    /*
     fn unify_with_generic_type(
         &mut self,
         var: LocalTypeId,
@@ -1089,7 +1090,7 @@ impl TypeTable {
                     self.types[idx.0 as usize],
                     TypeInfoOrIdx::TypeInfo(_),
                 ));
-                self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(info);
+                self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::Known(ty));
                 Ok(true)
             }
             Ok(false) => Ok(false),
@@ -1100,7 +1101,6 @@ impl TypeTable {
             }
         }
     }
-    */
 
     fn specify_generic_type(
         &mut self,
@@ -1118,7 +1118,7 @@ impl TypeTable {
                 TypeInfo::Unknown(bounds) => {
                     for bound in bounds.iter() {
                         let bound = *self.get_bound(bound);
-                        if !self.unify_bound_with_type(ty, bound, compiler, function_generics)? {
+                        if !self.unify_bound_with_type(ty, bound, compiler)? {
                             return Ok(false);
                         }
                     }
@@ -1134,7 +1134,7 @@ impl TypeTable {
                         .iter()
                         .zip(info_instance.iter())
                         .try_all(|(&ty, info)| {
-                            self.specify_generic_type(self[info], ty, compiler, function_generics)
+                            self.unify_with_generic_type(info, ty, compiler, function_generics)
                         })?
                 }
                 _ => false,
@@ -1150,12 +1150,42 @@ impl TypeTable {
 
     fn unify_bound_with_type(
         &mut self,
-        _ty: Type,
-        _bound: Bound,
-        _compiler: &Compiler,
-        _generics: &Generics,
+        ty: Type,
+        bound: Bound,
+        compiler: &Compiler,
     ) -> Result<bool, InvalidTypeError> {
-        todo!("unify bounds with types")
+        let mut has_invalid_type = false;
+        let candidates =
+            compiler.get_impl(
+                bound.trait_id,
+                ty,
+                bound.generics.iter(),
+                |var, ty| match self.compatible_with_type(&compiler.types, self[var], ty) {
+                    Ok(b) => b,
+                    Err(InvalidTypeError) => {
+                        has_invalid_type = true;
+                        false
+                    }
+                },
+            );
+        if has_invalid_type {
+            return Err(InvalidTypeError);
+        }
+        match candidates {
+            traits::Candidates::None => Ok(false),
+            traits::Candidates::Invalid => Err(InvalidTypeError),
+            traits::Candidates::Multiple => Ok(true),
+            traits::Candidates::Unique {
+                instance: (_, trait_generics),
+            } => {
+                debug_assert_eq!(trait_generics.len(), bound.generics.count as usize);
+                for (var, ty) in bound.generics.iter().zip(trait_generics) {
+                    let (var, _) = self.find_shorten(var);
+                    self.replace(var, TypeInfo::Known(ty));
+                }
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -1187,7 +1217,7 @@ impl LocalTypeIds {
         self.count == 0
     }
 
-    pub fn iter(self) -> impl ExactSizeIterator<Item = LocalTypeId> {
+    pub fn iter(self) -> impl Clone + ExactSizeIterator<Item = LocalTypeId> {
         (self.idx..self.idx + self.count).map(LocalTypeId)
     }
 

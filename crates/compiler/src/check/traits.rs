@@ -164,11 +164,11 @@ pub fn check_impl(
 }
 
 #[derive(Debug)]
-pub enum Candidates {
+pub enum Candidates<I = TypeInfoOrIdx> {
     None,
     Invalid,
     Multiple,
-    Unique { instance: TypeInfoOrIdx },
+    Unique { instance: I },
 }
 
 pub fn get_impl_candidates(

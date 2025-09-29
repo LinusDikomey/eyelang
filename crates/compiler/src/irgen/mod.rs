@@ -11,6 +11,7 @@ use std::num::NonZero;
 use ir::{BlockId, BlockTarget, Environment, Ref};
 use parser::ast::{self, ModuleId};
 
+use crate::check::traits::Candidates;
 use crate::compiler::{Dialects, FunctionToGenerate, Instance, Instances, builtins, mangle_name};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::types::{BaseType, TypeFull};
@@ -902,15 +903,20 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .iter()
                 .map(|ty| ctx.compiler.types.instantiate(ctx.hir[ty], ctx.generics))
                 .collect();
-            let Some((function, impl_generics)) =
-                ctx.compiler
-                    .get_impl_method(trait_id, self_ty, &trait_generics, method_index)
+            let Candidates::Unique {
+                instance: ((functions_module, functions), impl_generics),
+            } = ctx
+                .compiler
+                .get_impl(trait_id, self_ty, trait_generics.iter(), |&ty, other| {
+                    ty == other
+                })
             else {
                 crash_point!(ctx)
             };
+            let function = functions[method_index as usize];
 
             // TODO: handle impl/method generics
-            let Some(func) = ctx.get_ir_id(function.0, function.1, impl_generics) else {
+            let Some(func) = ctx.get_ir_id(functions_module, function, impl_generics) else {
                 crash_point!(ctx)
             };
             let return_ty = ctx.get_hir_type(return_ty)?;

@@ -26,7 +26,10 @@ use segment_list::SegmentList;
 
 use crate::{
     InvalidTypeError, ProjectId, Type,
-    check::{self, ProjectErrors, traits},
+    check::{
+        self, ProjectErrors,
+        traits::{self, Candidates},
+    },
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
     hir::Hir,
@@ -680,13 +683,14 @@ impl Compiler {
             .as_ref()
     }
 
-    pub fn get_impl_method(
+    pub fn get_impl<T>(
         &self,
         trait_id: (ModuleId, ast::TraitId),
         ty: Type,
-        trait_generics: &[Type],
-        method_index: u16,
-    ) -> Option<((ModuleId, FunctionId), Box<[Type]>)> {
+        trait_generics: impl Clone + ExactSizeIterator<Item = T>,
+        mut type_fits: impl FnMut(T, Type) -> bool,
+    ) -> Candidates<((ModuleId, &[FunctionId]), Box<[Type]>)> {
+        // TODO: this is definitely wrong in some edge cases
         let mut impl_generics = Vec::new();
         // TODO: why aren't the generics of the type used here
         let def = if let TypeFull::Instance(base, _generics) = self.types.lookup(ty) {
@@ -694,7 +698,9 @@ impl Compiler {
         } else {
             None
         };
-        let checked_trait = self.get_checked_trait(trait_id.0, trait_id.1)?;
+        let Some(checked_trait) = self.get_checked_trait(trait_id.0, trait_id.1) else {
+            return Candidates::Invalid;
+        };
         let impls = def
             .iter()
             .flat_map(|def| {
@@ -703,15 +709,17 @@ impl Compiler {
                     .map_or(&[] as &[_], |impls| impls.as_slice())
             })
             .chain(&checked_trait.impls);
+        let mut found = None;
         'impls: for impl_ in impls {
             impl_generics.clear();
             impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
             if !traits::match_instance(impl_.impl_ty, ty, &self.types, &mut impl_generics) {
                 continue 'impls;
             }
+            let trait_generics = trait_generics.clone();
             debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
-            for (&impl_ty, &ty) in impl_.trait_generics.iter().zip(trait_generics) {
-                if self.types.instantiate(impl_ty, &impl_generics) != ty {
+            for (&impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
+                if !type_fits(ty, self.types.instantiate(impl_ty, &impl_generics)) {
                     continue 'impls;
                 }
             }
@@ -719,12 +727,19 @@ impl Compiler {
                 impl_generics.iter().all(|ty| !matches!(*ty, Type::Invalid)),
                 "impl generics were not properly instantiated"
             );
-            return Some((
-                (impl_.impl_module, impl_.functions[method_index as usize]),
-                impl_generics.into_boxed_slice(),
+            if found.is_some() {
+                return Candidates::Multiple;
+            }
+            found = Some((
+                (impl_.impl_module, impl_.functions.as_slice()),
+                std::mem::take(&mut impl_generics).into_boxed_slice(),
             ));
         }
-        None
+        if let Some(instance) = found {
+            Candidates::Unique { instance }
+        } else {
+            Candidates::None
+        }
     }
 
     pub fn get_hir(&self, module: ModuleId, id: ast::FunctionId) -> &CheckedFunction {
