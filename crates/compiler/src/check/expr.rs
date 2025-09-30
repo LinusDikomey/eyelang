@@ -926,18 +926,22 @@ fn check_member_access(
     match ctx.hir.types[left_ty] {
         TypeInfo::BaseTypeItem(base) => {
             let generic_count = ctx.compiler.types.get_base(base).generic_count;
-            if generic_count != 0 {
-                panic!(
-                    "TODO: let this error with type needs to be known here when getting size of generic base type"
-                );
-            }
-            let type_var = ctx
-                .hir
-                .types
-                .add(TypeInfo::Instance(base, LocalTypeIds::EMPTY));
+            let generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
+            let type_var = ctx.hir.types.add(TypeInfo::Instance(base, generics));
             return check_type_item_member_access(
                 ctx,
                 type_var,
+                name,
+                name_span,
+                expected,
+                left,
+                |ast| ast[expr].span(ast),
+            );
+        }
+        TypeInfo::TypeItem(var) => {
+            return check_type_item_member_access(
+                ctx,
+                var,
                 name,
                 name_span,
                 expected,
@@ -1202,64 +1206,20 @@ fn check_type_item_member_access(
     }
     match ctx.hir.types[ty] {
         TypeInfo::Instance(BaseType::Invalid, _) => return Node::Invalid,
-        TypeInfo::Instance(id, generics) => {
-            let ty = ctx.compiler.get_base_type_def(id);
-            if let Some(&method) = ty.methods.get(name) {
-                let module = ty.module;
-                let signature = ctx.compiler.get_signature(module, method);
-                let call_generics = create_method_call_generics(
-                    &mut ctx.hir.types,
-                    signature,
-                    generics,
-                    span(ctx.ast),
+        TypeInfo::Instance(base, generics) => {
+            return instance_type_item_member_access(
+                ctx, base, generics, name, name_span, expected, span,
+            );
+        }
+        TypeInfo::Known(ty) => {
+            if let TypeFull::Instance(base, generics) = ctx.compiler.types.lookup(ty) {
+                let generics = ctx
+                    .hir
+                    .types
+                    .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
+                return instance_type_item_member_access(
+                    ctx, base, generics, name, name_span, expected, span,
                 );
-                ctx.specify(
-                    expected,
-                    TypeInfo::FunctionItem {
-                        module,
-                        function: method,
-                        generics: call_generics,
-                    },
-                    span,
-                );
-                return Node::FunctionItem(module, method, call_generics);
-            }
-            if let ResolvedTypeContent::Enum(def) = &ty.def
-                && let Some((_, ordinal, args)) = def.get_by_name(name)
-            {
-                let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
-                let node = if args.is_empty() {
-                    ctx.specify(expected, TypeInfo::Instance(id, generics), span);
-                    let ordinal_ty = ctx.hir.types.add(ordinal_ty);
-                    let elem_types = ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
-                    let elems = ctx.hir.add_nodes([Node::IntLiteral {
-                        val: ordinal as u128,
-                        ty: ordinal_ty,
-                    }]);
-                    Node::TupleLiteral { elems, elem_types }
-                } else {
-                    let arg_types = ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
-                    let mut arg_type_iter = arg_types.iter();
-                    ctx.hir
-                        .types
-                        .replace(arg_type_iter.next().unwrap(), ordinal_ty);
-                    for (r, &ty) in arg_type_iter.zip(args.iter()) {
-                        let ty = ctx.from_type_instance(ty, generics);
-                        ctx.hir.types.replace(r, ty);
-                    }
-                    ctx.specify(
-                        expected,
-                        TypeInfo::EnumVariantItem {
-                            enum_type: id,
-                            generics,
-                            ordinal,
-                            arg_types,
-                        },
-                        span,
-                    );
-                    Node::Invalid
-                };
-                return node;
             }
         }
         TypeInfo::Enum { .. } => todo!("local enum variant from type item"),
@@ -1273,6 +1233,74 @@ fn check_type_item_member_access(
         }
         _ => {}
     };
+    ctx.emit(Error::NonexistantMember(None).at_span(name_span));
+    ctx.invalidate(expected);
+    Node::Invalid
+}
+
+fn instance_type_item_member_access(
+    ctx: &mut Ctx,
+    base: BaseType,
+    generics: LocalTypeIds,
+    name: &str,
+    name_span: TSpan,
+    expected: LocalTypeId,
+    span: impl Copy + Fn(&Ast) -> TSpan,
+) -> Node {
+    let ty = ctx.compiler.get_base_type_def(base);
+    if let Some(&method) = ty.methods.get(name) {
+        let module = ty.module;
+        let signature = ctx.compiler.get_signature(module, method);
+        let call_generics =
+            create_method_call_generics(&mut ctx.hir.types, signature, generics, span(ctx.ast));
+        ctx.specify(
+            expected,
+            TypeInfo::FunctionItem {
+                module,
+                function: method,
+                generics: call_generics,
+            },
+            span,
+        );
+        return Node::FunctionItem(module, method, call_generics);
+    }
+    if let ResolvedTypeContent::Enum(def) = &ty.def
+        && let Some((_, ordinal, args)) = def.get_by_name(name)
+    {
+        let ordinal_ty = type_info_from_variant_count(def.variants.len() as u32);
+        let node = if args.is_empty() {
+            ctx.specify(expected, TypeInfo::Instance(base, generics), span);
+            let ordinal_ty = ctx.hir.types.add(ordinal_ty);
+            let elem_types = ctx.hir.types.add_multiple_info_or_idx([ordinal_ty.into()]);
+            let elems = ctx.hir.add_nodes([Node::IntLiteral {
+                val: ordinal as u128,
+                ty: ordinal_ty,
+            }]);
+            Node::TupleLiteral { elems, elem_types }
+        } else {
+            let arg_types = ctx.hir.types.add_multiple_unknown(args.len() as u32 + 1);
+            let mut arg_type_iter = arg_types.iter();
+            ctx.hir
+                .types
+                .replace(arg_type_iter.next().unwrap(), ordinal_ty);
+            for (r, &ty) in arg_type_iter.zip(args.iter()) {
+                let ty = ctx.from_type_instance(ty, generics);
+                ctx.hir.types.replace(r, ty);
+            }
+            ctx.specify(
+                expected,
+                TypeInfo::EnumVariantItem {
+                    enum_type: base,
+                    generics,
+                    ordinal,
+                    arg_types,
+                },
+                span,
+            );
+            Node::Invalid
+        };
+        return node;
+    }
     ctx.emit(Error::NonexistantMember(None).at_span(name_span));
     ctx.invalidate(expected);
     Node::Invalid
