@@ -1,11 +1,14 @@
+use std::num::NonZeroU64;
+
 use error::Error;
+use ir::eval::Val;
 use parser::ast::{
     Ast, Expr, ExprId, FloatLiteral, IntLiteral, ModuleId, Primitive, ScopeId, UnresolvedType,
 };
 
 use crate::{
     Compiler, Def, Type,
-    compiler::{Generics, ModuleSpan},
+    compiler::{Dialects, Generics, Instance, Instances, ModuleSpan},
     hir::HIRBuilder,
     types::TypeFull,
     typing::TypeTable,
@@ -220,54 +223,66 @@ pub fn value_expr(
         return Ok((ConstValue::Undefined, ty));
     }
 
-    todo!("consteval irgen")
-    /*
+    // TODO: share the environment and cache functions compiled for const eval
     let mut to_generate = Vec::new();
-    let mut builder = ir::builder::Builder::new(&mut *compiler);
+    let mut env = ir::Environment::new(ir::dialect::Primitive::create_infos());
+    let dialects = Dialects {
+        arith: env.get_dialect_module(),
+        tuple: env.get_dialect_module(),
+        mem: env.get_dialect_module(),
+        cf: env.get_dialect_module(),
+        main: env.create_module("main"),
+    };
+    let mut instances = Instances::new();
+
+    let mut builder = ir::builder::Builder::new(&mut env);
     builder.create_and_begin_block([]);
-    let Some(return_ty) = crate::irgen::types::get_from_info(
+    let Some(return_ty) = crate::irgen::types::get(
+        compiler,
         builder.env,
-        &types,
         &mut builder.types,
-        types[expected],
-        crate::irgen::types::Generics::Empty,
+        ty,
+        Instance::EMPTY,
     ) else {
         return Ok((ConstValue::Undefined, ty));
     };
     let return_ty = builder.types.add(return_ty);
     let (ir, ir_types) = crate::irgen::lower_hir(
+        compiler,
+        &dialects,
+        &mut instances,
         builder,
         &hir,
-        &types,
         &mut to_generate,
         &[],
         ir::Refs::EMPTY,
         return_ty,
     );
     while let Some(f) = to_generate.pop() {
-        let checked = Rc::clone(compiler.get_hir(f.module, f.ast_function_id));
+        let checked = compiler.get_hir(f.module, f.ast_function_id);
 
-        if let Some(body) = &checked.body {
-            let return_type = compiler.ir[f.ir_id].return_type().unwrap();
-            let (builder, params) = ir::builder::Builder::begin_function(&mut *compiler, f.ir_id);
-            let res = irgen::lower_hir(
+        if let crate::compiler::BodyOrTypes::Body(body) = &checked.body_or_types {
+            let return_type = env[f.ir_id].return_type().unwrap();
+            let (builder, params) = ir::builder::Builder::begin_function(&mut env, f.ir_id);
+            let (body, types) = crate::irgen::lower_hir(
+                compiler,
+                &dialects,
+                &mut instances,
                 builder,
                 body,
-                &checked.types,
                 &mut to_generate,
                 &f.generics,
                 params,
                 return_type,
             );
-            compiler.ir.attach_body(f.ir_id, res);
+            env[f.ir_id].attach_body(body);
+            env[f.ir_id].overwrite_types(types);
         }
     }
-    let mut env = LazyEvalEnv { compiler };
+    let mut env = LazyEvalEnv { env: &env };
     ir::eval::eval(&ir, &ir_types, &[], &mut env).map(|val| (to_const_val(val), ty))
-    */
 }
 
-/*
 fn to_const_val(val: Val) -> ConstValue {
     match val {
         Val::Invalid => ConstValue::Undefined,
@@ -283,15 +298,11 @@ fn to_const_val(val: Val) -> ConstValue {
 }
 
 struct LazyEvalEnv<'a> {
-    compiler: &'a mut Compiler,
+    env: &'a ir::Environment,
 }
 impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
     fn env(&self) -> &ir::Environment {
-        &self.compiler.ir
-    }
-
-    fn env_mut(&mut self) -> &mut ir::Environment {
-        &mut self.compiler.ir
+        self.env
     }
 
     fn debug(&self) -> bool {
@@ -311,7 +322,7 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
         args: &[Val],
         mem: &mut ir::eval::Mem,
     ) -> Result<Val, Box<str>> {
-        let func = &self.compiler.ir[id];
+        let func = &self.env[id];
         Ok(match &*func.name {
             "malloc" => {
                 let &[Val::Int(size)] = args else {
@@ -333,4 +344,3 @@ impl ir::eval::EvalEnvironment for LazyEvalEnv<'_> {
         })
     }
 }
-*/

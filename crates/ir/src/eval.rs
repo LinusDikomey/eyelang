@@ -177,7 +177,6 @@ impl From<ProvenanceError> for Error {
 
 pub trait EvalEnvironment {
     fn env(&self) -> &Environment;
-    fn env_mut(&mut self) -> &mut Environment;
     fn debug(&self) -> bool;
 
     fn call_extern(
@@ -194,10 +193,6 @@ impl EvalEnvironment for Environment {
         self
     }
 
-    fn env_mut(&mut self) -> &mut Environment {
-        self
-    }
-
     fn debug(&self) -> bool {
         false
     }
@@ -210,12 +205,13 @@ struct Dialects {
     cf: ModuleOf<crate::dialect::Cf>,
 }
 impl Dialects {
-    fn get(env: &mut crate::Environment) -> Self {
+    fn get(env: &crate::Environment) -> Self {
+        // TODO: get rid of the unwraps, maybe let the user provide dialects
         Self {
-            arith: env.get_dialect_module(),
-            tuple: env.get_dialect_module(),
-            mem: env.get_dialect_module(),
-            cf: env.get_dialect_module(),
+            arith: env.get_dialect_module_if_present().unwrap(),
+            tuple: env.get_dialect_module_if_present().unwrap(),
+            mem: env.get_dialect_module_if_present().unwrap(),
+            cf: env.get_dialect_module_if_present().unwrap(),
         }
     }
 }
@@ -235,7 +231,7 @@ pub fn eval<E: EvalEnvironment>(
             top_level_ir.display(env.env(), top_level_types)
         );
     }
-    let dialects = Dialects::get(env.env_mut());
+    let dialects = Dialects::get(env.env());
     let mut mem = Mem::new();
 
     let mut values = Values::new(top_level_ir, top_level_types);
