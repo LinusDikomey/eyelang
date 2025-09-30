@@ -779,10 +779,33 @@ impl Compiler {
                 };
                 n != 0 && self.is_uninhabited(item, instance)?
             }
-            TypeFull::Instance(_base, _instance_generics) => {
-                todo!("get resolved type and check")
+            TypeFull::Instance(base, instance_generics) => {
+                let instance = Instance {
+                    types: instance_generics,
+                    outer: Some(instance),
+                };
+                let def = self.get_base_type_def(base);
+                match &def.def {
+                    ResolvedTypeContent::Builtin(_) => false,
+                    ResolvedTypeContent::Struct(def) => def
+                        .all_fields()
+                        .try_any(|(_, ty)| self.is_uninhabited(ty, &instance))?,
+                    ResolvedTypeContent::Enum(def) => {
+                        def.variants.iter().try_all(|(_, _, args)| {
+                            args.iter()
+                                .try_any(|&ty| self.is_uninhabited(ty, &instance))
+                        })?
+                    }
+                }
             }
-            TypeFull::Generic(i) => self.is_uninhabited(instance[i], &instance.outer())?,
+            // if no instance is provided, the type is not known to be uninhabited
+            TypeFull::Generic(i) => {
+                if instance.is_empty() {
+                    self.is_uninhabited(instance[i], &instance.outer())?
+                } else {
+                    false
+                }
+            }
             TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
         })
     }
@@ -1951,6 +1974,10 @@ impl<'a> Instance<'a> {
 
     pub fn new(types: &'a [Type]) -> Self {
         Self { types, outer: None }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.types.is_empty() && self.outer.is_none()
     }
 }
 impl<'a> Index<u8> for Instance<'a> {

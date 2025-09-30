@@ -1,6 +1,6 @@
-use crate::Type;
 use crate::check::traits;
 use crate::types::{BaseType, BuiltinType, TypeFull};
+use crate::{InvalidTypeError, Type};
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
@@ -8,7 +8,7 @@ use crate::{
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
 use error::{Error, span::TSpan};
-use parser::ast::{Call, ExprId, ExprIds};
+use parser::ast::{Ast, Call, ExprId, ExprIds};
 
 use super::{Ctx, expr};
 
@@ -123,32 +123,30 @@ pub fn check_call(
                         return Node::Invalid;
                     }
                     // TODO: figure out noreturn checking, maybe after typecheck is done?
-                    // let resolved_generics: Box<[TypeOld]> = generics
-                    //     .iter()
-                    //     .map(|ty| {
-                    //         ctx.hir
-                    //             .types
-                    //             .to_generic_resolved(ctx.hir.types[ty])
-                    //             .unwrap_or(TypeOld::Invalid)
-                    //     })
-                    //     .collect();
-                    // let call_noreturn = ctx
-                    //     .compiler
-                    //     .uninhabited(&signature.return_type, &resolved_generics);
-                    /*if let Ok(true) = call_noreturn {
-                        *noreturn = true;
-                    } else {*/
-                    // only specify the return type if we are *not* noreturn, otherwise the type
-                    // can be anything since it is a "never" type
-                    ctx.specify_resolved(expected, signature.return_type, generics, |ast| {
-                        ast[expr].span(ast)
-                    });
-                    // }
+                    let return_info = ctx.hir.types.from_type_instance(
+                        &ctx.compiler.types,
+                        signature.return_type,
+                        generics,
+                    );
+                    let return_var = ctx.hir.types.add_info_or_idx(return_info);
+                    let call_noreturn = ctx
+                        .hir
+                        .types
+                        .is_uninhabited(ctx.compiler, ctx.hir.types[return_var]);
+                    match call_noreturn {
+                        Ok(true) => *noreturn = true,
+                        Ok(false) => {
+                            ctx.unify(expected, return_var, |ast: &Ast| ast[expr].span(ast));
+                        }
+                        Err(InvalidTypeError) => {
+                            ctx.invalidate(expected);
+                        }
+                    }
 
                     Node::Call {
                         function,
                         args,
-                        return_ty: expected,
+                        return_ty: return_var,
                         arg_types,
                         noreturn: *noreturn,
                     }

@@ -241,6 +241,7 @@ impl Ctx<'_> {
                 module: self.module,
                 span: span(self.ast),
             },
+            |types| types.add_multiple_unknown(generic_count),
         )
     }
 

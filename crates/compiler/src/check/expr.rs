@@ -8,7 +8,9 @@ use crate::{
     eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
     types::{BaseType, TypeFull},
-    typing::{Bound, Bounds, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeTable},
+    typing::{
+        Bound, Bounds, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeInfoOrIdx, TypeTable,
+    },
 };
 use parser::ast::{
     Ast, Expr, ExprId, ExprIds, FloatLiteral, FunctionId, IntLiteral, ModuleId, Operator,
@@ -93,7 +95,20 @@ pub fn check(
             Node::StringLiteral(str)
         }
         &Expr::Array { span, elements, .. } => {
-            let elem_ty_and_count = ctx.specify_base(expected, BaseType::Array, 2, |_| span);
+            let elem_ty_and_count = ctx.hir.types.specify_base(
+                expected,
+                BaseType::Array,
+                2,
+                ctx.generics,
+                ctx.compiler,
+                || ModuleSpan {
+                    module: ctx.module,
+                    span,
+                },
+                |types| {
+                    types.add_multiple([TypeInfo::Unknown(Bounds::EMPTY), TypeInfo::UnknownConst])
+                },
+            );
             let elem_ty = elem_ty_and_count.nth(0).unwrap();
             let count = elem_ty_and_count.nth(1).unwrap();
             let const_count = ctx
@@ -368,10 +383,10 @@ pub fn check(
             ctx, left, name_span, expr, scope, expected, return_ty, noreturn,
         ),
         &Expr::Index { expr, idx, .. } => {
-            let elem_and_count = ctx.hir.types.add_multiple_unknown(2);
-            ctx.hir
-                .types
-                .replace(elem_and_count.nth(0).unwrap(), expected);
+            let elem_and_count = ctx.hir.types.add_multiple_info_or_idx([
+                TypeInfoOrIdx::Idx(expected),
+                TypeInfo::UnknownConst.into(),
+            ]);
             let array_ty = ctx
                 .hir
                 .types

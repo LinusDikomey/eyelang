@@ -495,6 +495,7 @@ impl TypeTable {
         function_generics: &Generics,
         compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
+        fresh_generics: impl FnOnce(&mut Self) -> LocalTypeIds,
     ) -> LocalTypeIds {
         let (idx, info) = self.find_shorten(ty);
         // check if the type is already correct to avoid adding unnecessary variables
@@ -504,7 +505,7 @@ impl TypeTable {
         {
             return generics;
         }
-        let generics = self.add_multiple_unknown(generic_count);
+        let generics = fresh_generics(self);
         let info = TypeInfo::Instance(base, generics);
         self.specify(idx, info, function_generics, compiler, span);
         generics
@@ -1191,6 +1192,49 @@ impl TypeTable {
                 Ok(true)
             }
         }
+    }
+
+    pub fn is_uninhabited(
+        &mut self,
+        compiler: &Compiler,
+        info: TypeInfo,
+    ) -> Result<bool, InvalidTypeError> {
+        Ok(match info {
+            TypeInfo::Unknown(_) | TypeInfo::Generic(_) | TypeInfo::Integer | TypeInfo::Float => {
+                false
+            }
+            TypeInfo::Known(ty) => compiler.is_uninhabited(ty, &Instance::EMPTY)?,
+            TypeInfo::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
+            TypeInfo::Instance(base, instance) => match &compiler.get_base_type_def(base).def {
+                ResolvedTypeContent::Builtin(_) => false,
+                ResolvedTypeContent::Struct(def) => def.all_fields().try_any(|(_, ty)| {
+                    let ty = self.from_type_instance(&compiler.types, ty, instance);
+                    self.is_uninhabited(compiler, self.get_info_or_idx(ty))
+                })?,
+                ResolvedTypeContent::Enum(def) => def.variants.iter().try_all(|(_, _, args)| {
+                    args.iter().try_any(|&ty| {
+                        let ty = self.from_type_instance(&compiler.types, ty, instance);
+                        self.is_uninhabited(compiler, self.get_info_or_idx(ty))
+                    })
+                })?,
+            },
+            TypeInfo::Enum(id) => (0..self.get_enum_variants(id).len()).try_all(|i| {
+                let variant = self.get_enum_variants(id)[i];
+                self[variant]
+                    .args
+                    .iter()
+                    .try_any(|ty| self.is_uninhabited(compiler, self[ty]))
+            })?,
+            TypeInfo::BaseTypeItem(_)
+            | TypeInfo::TypeItem(_)
+            | TypeInfo::TraitItem { .. }
+            | TypeInfo::FunctionItem { .. }
+            | TypeInfo::ModuleItem(_)
+            | TypeInfo::MethodItem { .. }
+            | TypeInfo::TraitMethodItem { .. }
+            | TypeInfo::EnumVariantItem { .. } => false,
+            TypeInfo::UnknownConst => unreachable!(),
+        })
     }
 }
 

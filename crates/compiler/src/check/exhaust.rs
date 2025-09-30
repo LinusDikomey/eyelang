@@ -2,6 +2,7 @@ use dmap::DHashMap;
 
 use crate::{
     Compiler, InvalidTypeError, Type,
+    compiler::Instance,
     helpers::IteratorExt,
     types::{BaseType, TypeFull},
 };
@@ -53,7 +54,7 @@ impl Exhaustion {
     pub fn is_exhausted(&self, ty: Type, compiler: &Compiler) -> Result<bool, InvalidTypeError> {
         let types = &compiler.types;
         Ok(match self {
-            Exhaustion::None => types.is_uninhabited(ty)?,
+            Exhaustion::None => types.is_uninhabited(ty, &Instance::EMPTY)?,
             Exhaustion::Full => true,
             Exhaustion::UnsignedInt(ranges) => match types.lookup(ty) {
                 TypeFull::Instance(base, _) if base.is_int() => {
