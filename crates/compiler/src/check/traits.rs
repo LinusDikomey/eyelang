@@ -164,7 +164,7 @@ pub fn check_impl(
 }
 
 #[derive(Debug)]
-pub enum Candidates<I = TypeInfoOrIdx> {
+pub enum Candidates<I> {
     None,
     Invalid,
     Multiple,
@@ -177,7 +177,7 @@ pub fn get_impl_candidates(
     ty: TypeInfo,
     types: &mut TypeTable,
     function_generics: &Generics,
-) -> Candidates {
+) -> Candidates<TypeInfoOrIdx> {
     let Some(checked_trait) = compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1) else {
         return Candidates::Invalid;
     };
@@ -276,11 +276,13 @@ fn is_candidate_valid(
     table: &TypeTable,
 ) -> Result<bool, InvalidTypeError> {
     debug_assert_eq!(trait_generics.count, impl_.trait_generics.len() as u32);
+    // TODO: compatible_with_type needs to track generics and somehow determine if they can be
+    // unified without updating the Type Table
     Ok(trait_generics
         .iter()
         .zip(&impl_.trait_generics)
         .try_all(|(idx, &ty)| table.compatible_with_type(types, table[idx], ty))?
-        && matches_type_info(impl_.impl_ty, info, types, table))
+        && table.compatible_with_type(types, info, impl_.impl_ty)?)
 }
 
 pub fn match_instance(
@@ -325,68 +327,6 @@ pub fn match_instance(
             implemented_n == n
         }
     }
-}
-
-fn matches_type_info(
-    _implemented_ty: Type,
-    _info: TypeInfo,
-    _types: &Types,
-    _table: &TypeTable,
-    // instance: LocalTypeIds,
-) -> bool {
-    // TODO: the problem is that we want to update the instance like in the method above
-    // so that generics mentioned multiple times unify correctly. This is however a destructive
-    // action (unification on input types) which will invalidate all the mismatched types on match
-    // failure (which is just supposed to be a check). So maybe a method like can_unify(a, b) is needed
-    // that doesn't modify the type table at all
-    todo!("match impls again")
-    /*
-    match types.lookup(implemented_ty) {
-        TypeFull::Generic(i) => {
-            table.unify(, instance.nth(i.into()).unwrap(), generics, compiler, span);
-        }
-        Self::Base(impl_base, args) => {
-            // TODO: pass info about which type doesn't implement a trait on error
-            match implemented_ty {
-                TypeInfo::Instance(BaseType::Invalid, _) => true,
-                TypeInfo::Known(ty) => self.matches_type(types, ty, &mut []),
-                TypeInfo::Unknown(bounds) => {
-                    if !bounds.is_empty() {
-                        todo!("handle multiple requirements")
-                    }
-                    true
-                }
-                TypeInfo::UnknownConst => todo!("error"),
-                TypeInfo::Integer => impl_base.is_int(),
-                TypeInfo::Float => impl_base.is_float(),
-                TypeInfo::Instance(base, def_generics) => {
-                    if *impl_base != base {
-                        return false;
-                    }
-                    if def_generics.count as usize != args.len() {
-                        return false;
-                    }
-                    for (arg, impl_tree) in def_generics.iter().zip(args) {
-                        if !impl_tree.matches_type_info(types, table[arg], table) {
-                            return false;
-                        }
-                    }
-                    true
-                }
-                TypeInfo::Enum(_) => false, // TODO: auto impl some traits for local enums
-                TypeInfo::Generic(_)
-                | TypeInfo::BaseTypeItem { .. }
-                | TypeInfo::TypeItem(_)
-                | TypeInfo::TraitItem { .. }
-                | TypeInfo::FunctionItem { .. }
-                | TypeInfo::ModuleItem { .. }
-                | TypeInfo::MethodItem { .. }
-                | TypeInfo::TraitMethodItem { .. }
-                | TypeInfo::EnumVariantItem { .. } => false,
-            }
-        }
-    }
-    */
 }
 
 #[derive(Debug)]

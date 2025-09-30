@@ -28,7 +28,7 @@ use crate::{
     InvalidTypeError, ProjectId, Type,
     check::{
         self, ProjectErrors,
-        traits::{self, Candidates},
+        traits::{self, Candidates, Impl},
     },
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
@@ -689,7 +689,7 @@ impl Compiler {
         ty: Type,
         trait_generics: impl Clone + ExactSizeIterator<Item = T>,
         mut type_fits: impl FnMut(T, Type) -> bool,
-    ) -> Candidates<((ModuleId, &[FunctionId]), Box<[Type]>)> {
+    ) -> Candidates<((ModuleId, &Impl), Box<[Type]>)> {
         // TODO: this is definitely wrong in some edge cases
         let mut impl_generics = Vec::new();
         // TODO: why aren't the generics of the type used here
@@ -731,7 +731,7 @@ impl Compiler {
                 return Candidates::Multiple;
             }
             found = Some((
-                (impl_.impl_module, impl_.functions.as_slice()),
+                (impl_.impl_module, impl_),
                 std::mem::take(&mut impl_generics).into_boxed_slice(),
             ));
         }

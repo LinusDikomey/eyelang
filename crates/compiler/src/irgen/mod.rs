@@ -606,7 +606,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                         } else if ty == ctx.compiler.builtins.primitives.bool {
                             // fall trough since a bool can be compared like an integer
                         } else {
-                            panic!("invalid type for comparison, will change with traits");
+                            assert!(
+                                ty.is_int() | ty.is_float(),
+                                "invalid type for comparison, will change with traits"
+                            );
                         }
                     }
                 }
@@ -904,7 +907,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 .map(|ty| ctx.compiler.types.instantiate(ctx.hir[ty], ctx.generics))
                 .collect();
             let Candidates::Unique {
-                instance: ((functions_module, functions), impl_generics),
+                instance: ((functions_module, impl_), impl_generics),
             } = ctx
                 .compiler
                 .get_impl(trait_id, self_ty, trait_generics.iter(), |&ty, other| {
@@ -913,7 +916,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             else {
                 crash_point!(ctx)
             };
-            let function = functions[method_index as usize];
+            let function = impl_.functions[method_index as usize];
 
             // TODO: handle impl/method generics
             let Some(func) = ctx.get_ir_id(functions_module, function, impl_generics) else {

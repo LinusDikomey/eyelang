@@ -359,8 +359,10 @@ impl TypeTable {
     ) -> Result<bool, InvalidTypeError> {
         let full = types.lookup(ty);
         if let TypeFull::Generic(_) = full {
-            todo!("is it correct to return true here?")
-            // return true;
+            // FIXME: it is not always correct to return true here as the generic may appear in
+            // multiple places. Therefore, unification would be needed but isn't trivially possible
+            //
+            return Ok(true);
         }
         #[allow(unused)]
         Ok(match info {
@@ -395,7 +397,8 @@ impl TypeTable {
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
             | TypeInfo::EnumVariantItem { .. } => false,
-            TypeInfo::Generic(i) => matches!(full, TypeFull::Generic(j) if i == j),
+            // a generic type from the function is not compatible with any concrete type
+            TypeInfo::Generic(i) => false,
         })
     }
 
@@ -1176,12 +1179,14 @@ impl TypeTable {
             traits::Candidates::Invalid => Err(InvalidTypeError),
             traits::Candidates::Multiple => Ok(true),
             traits::Candidates::Unique {
-                instance: (_, trait_generics),
+                instance: ((_, impl_), impl_generics),
             } => {
-                debug_assert_eq!(trait_generics.len(), bound.generics.count as usize);
-                for (var, ty) in bound.generics.iter().zip(trait_generics) {
+                let impl_generics =
+                    self.add_multiple(impl_generics.into_iter().map(TypeInfo::Known));
+                for (var, &ty) in bound.generics.iter().zip(&impl_.trait_generics) {
                     let (var, _) = self.find_shorten(var);
-                    self.replace(var, TypeInfo::Known(ty));
+                    let ty = self.from_type_instance(&compiler.types, ty, impl_generics);
+                    self.replace(var, ty);
                 }
                 Ok(true)
             }
