@@ -11,9 +11,8 @@ use parser::ast::{self, ModuleId};
 use segment_list::SegmentList;
 
 use crate::{
-    InvalidTypeError, Type,
-    compiler::{Generics, Instance, Resolvable, ResolvableTypeDef, ResolvedTypeDef},
-    helpers::IteratorExt,
+    Type,
+    compiler::{Generics, Resolvable, ResolvableTypeDef, ResolvedTypeDef},
     types::{BaseType, BuiltinType, TypeFull},
 };
 
@@ -194,27 +193,6 @@ impl Types {
 
     pub fn display(&'_ self, ty: Type) -> TypeDisplay<'_> {
         TypeDisplay { types: self, ty }
-    }
-
-    pub fn is_uninhabited(&self, ty: Type, instance: &Instance) -> Result<bool, InvalidTypeError> {
-        Ok(match self.lookup(ty) {
-            TypeFull::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
-            TypeFull::Instance(BaseType::Tuple, items) => items
-                .iter()
-                .try_any(|&item| self.is_uninhabited(item, instance))?,
-            TypeFull::Instance(BaseType::Array, g) => {
-                let &[item, count] = g else { unreachable!() };
-                let TypeFull::Const(n) = self.lookup(count) else {
-                    unreachable!()
-                };
-                n != 0 && self.is_uninhabited(item, instance)?
-            }
-            TypeFull::Instance(_base, _instance_generics) => {
-                todo!("get resolved type and check")
-            }
-            TypeFull::Generic(i) => self.is_uninhabited(instance[i], &instance.outer())?,
-            TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
-        })
     }
 }
 

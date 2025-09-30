@@ -349,11 +349,7 @@ impl Ctx<'_> {
         generics: LocalTypeIds,
         span: impl Fn(&Ast) -> TSpan,
     ) {
-        let info = if generics.is_empty() {
-            TypeInfoOrIdx::TypeInfo(TypeInfo::Known(ty))
-        } else {
-            self.from_type_instance(ty, generics)
-        };
+        let info = self.from_type_instance(ty, generics);
         match info {
             TypeInfoOrIdx::TypeInfo(info) => self.specify(var, info, span),
             TypeInfoOrIdx::Idx(other) => self.unify(var, other, span),
