@@ -7,6 +7,8 @@ pub use token::{
     AssignType, FloatLiteral, FloatType, IntLiteral, IntType, Operator, Primitive, Token, TokenType,
 };
 
+mod eq;
+
 macro_rules! ids {
     ($($name: ident)*) => {
         $(
@@ -1137,8 +1139,8 @@ impl UnresolvedType {
                     for (i, ty) in generics.iter().enumerate() {
                         if i != 0 {
                             s.push_str(", ");
-                            ty.to_string(s, src);
                         }
+                        ty.to_string(s, src);
                     }
                     s.push(']');
                 }

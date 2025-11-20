@@ -45,6 +45,7 @@ impl fmt::Display for Backend {
         f.write_str(s)
     }
 }
+#[allow(clippy::derivable_impls)] // the #[cfg] conditions make this annoying to do with #[derive]
 impl Default for Backend {
     fn default() -> Self {
         #[cfg(feature = "llvm-backend")]

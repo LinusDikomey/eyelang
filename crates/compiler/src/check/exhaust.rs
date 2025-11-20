@@ -11,8 +11,10 @@ use crate::{
 pub struct SignedInt(pub u128, pub bool);
 #[derive(Clone, Debug, PartialEq, Eq)]
 // FIXME: exhaustion of tuples/enum arguments is wrong
+#[derive(Default)]
 pub enum Exhaustion {
     /// no values exhausted
+    #[default]
     None,
     /// all values exhausted
     Full,
@@ -28,11 +30,6 @@ pub enum Exhaustion {
     Enum(DHashMap<String, Vec<Exhaustion>>),
     Tuple(Vec<Exhaustion>),
     Invalid,
-}
-impl Default for Exhaustion {
-    fn default() -> Self {
-        Self::None
-    }
 }
 impl Exhaustion {
     pub fn is_trivially_exhausted(&self) -> bool {

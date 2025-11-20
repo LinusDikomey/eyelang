@@ -85,59 +85,67 @@ impl<'a> Converter<'a> {
         let scope = &self.cst[scope];
         let mut defs: Vec<_> = scope.definitions.values().collect();
         // sort the items by their order of appearence so it is preserved
-        defs.sort_by_key(|&def| match def {
+        defs.sort_by_key(|&def| self.def_start(def));
+        for item in defs {
+            self.def(nodes, item);
+        }
+    }
+
+    fn def_start(&self, def: &Definition<Token>) -> u32 {
+        match def {
             Definition::Expr { t_name, .. } => t_name.start,
             Definition::Use { t_use, .. } => t_use.start,
             &Definition::Global(global_id) => self.cst[global_id].t_name.start,
             Definition::Module(_) | Definition::Generic(_) => 0,
-        });
-        for item in defs {
-            self.keep_user_newlines_scope();
-            match item {
-                &Definition::Expr {
-                    t_name,
-                    t_colon_colon,
-                    id,
-                } => {
-                    let (expr, ty) = &self.cst[id];
-                    self.tok_s(nodes, t_name);
-                    match t_colon_colon {
-                        parser::ast::Either::A(t) => {
-                            self.tok_s(nodes, t);
-                        }
-                        parser::ast::Either::B((a, b)) => {
-                            self.tok_s(nodes, a);
-                            nodes.push(self.ty(ty));
-                            nodes.push(" ".into());
-                            self.tok_s(nodes, b);
-                        }
-                    }
-                    self.expr(nodes, *expr);
-                }
-                &Definition::Use { t_use, path } => {
-                    self.tok_s(nodes, t_use);
-                    self.path(nodes, path);
-                }
-                &Definition::Global(global_id) => {
-                    let global = &self.cst[global_id];
-                    match global.t_colon_and_equals_or_colon_equals {
-                        parser::ast::Either::A((colon, equals)) => {
-                            self.tok(nodes, global.t_name);
-                            self.tok_s(nodes, colon);
-                            nodes.push(self.ty(&global.ty));
-                            self.tok_s(nodes, equals);
-                        }
-                        parser::ast::Either::B(colon_equals) => {
-                            self.tok_s(nodes, global.t_name);
-                            self.tok_s(nodes, colon_equals);
-                        }
-                    }
-                    self.expr(nodes, global.val);
-                }
-                Definition::Module(_) | Definition::Generic(_) => {}
-            }
-            nodes.push(Node::Text("\n".into()));
         }
+    }
+
+    fn def(&mut self, nodes: &mut Vec<Node>, item: &Definition<Token>) {
+        self.keep_user_newlines_scope();
+        match item {
+            &Definition::Expr {
+                t_name,
+                t_colon_colon,
+                id,
+            } => {
+                let (expr, ty) = &self.cst[id];
+                self.tok_s(nodes, t_name);
+                match t_colon_colon {
+                    parser::ast::Either::A(t) => {
+                        self.tok_s(nodes, t);
+                    }
+                    parser::ast::Either::B((a, b)) => {
+                        self.tok_s(nodes, a);
+                        nodes.push(self.ty(ty));
+                        nodes.push(" ".into());
+                        self.tok_s(nodes, b);
+                    }
+                }
+                self.expr(nodes, *expr);
+            }
+            &Definition::Use { t_use, path } => {
+                self.tok_s(nodes, t_use);
+                self.path(nodes, path);
+            }
+            &Definition::Global(global_id) => {
+                let global = &self.cst[global_id];
+                match global.t_colon_and_equals_or_colon_equals {
+                    parser::ast::Either::A((colon, equals)) => {
+                        self.tok(nodes, global.t_name);
+                        self.tok_s(nodes, colon);
+                        nodes.push(self.ty(&global.ty));
+                        self.tok_s(nodes, equals);
+                    }
+                    parser::ast::Either::B(colon_equals) => {
+                        self.tok_s(nodes, global.t_name);
+                        self.tok_s(nodes, colon_equals);
+                    }
+                }
+                self.expr(nodes, global.val);
+            }
+            Definition::Module(_) | Definition::Generic(_) => {}
+        }
+        nodes.push(Node::Text("\n".into()));
     }
 
     fn path(&mut self, nodes: &mut Vec<Node>, path: IdentPath) {
@@ -160,17 +168,48 @@ impl<'a> Converter<'a> {
             } => {
                 let mut block_nodes = Vec::new();
                 self.tok(&mut block_nodes, t_open);
-                let mut group = Vec::new();
-                self.scope_contents(&mut group, scope);
-                let mut first = true;
-                for item in items {
-                    if !first || group.is_empty() {
-                        group.push(Node::Text("\n".into()));
-                    }
-                    self.keep_user_newlines();
-                    first = false;
-                    self.expr(&mut group, item);
+                // split the contents of the block into two groups: definitions and statements
+                // this is done since we want to sort all the definitions at the start but still
+                // have to iterate in order of appearance to handle whitespace properly
+                let mut def_group = Vec::new();
+                let mut statement_group = Vec::new();
+                let scope = &self.cst[scope];
+                enum DefOrStatement<'a> {
+                    Def(&'a str, &'a Definition<Token>),
+                    Expr(ExprId),
                 }
+                let mut items: Vec<_> = scope
+                    .definitions
+                    .iter()
+                    .map(|(name, def)| DefOrStatement::Def(name, def))
+                    .chain(items.into_iter().map(DefOrStatement::Expr))
+                    .collect();
+                items.sort_by_key(|item| match item {
+                    DefOrStatement::Def(_, def) => self.def_start(def),
+                    &DefOrStatement::Expr(id) => self.cst[id].start(self.cst),
+                });
+                let mut first_expr = true;
+                for item in items {
+                    match item {
+                        DefOrStatement::Def(name, def) => {
+                            self.def(&mut def_group, def);
+                        }
+                        DefOrStatement::Expr(id) => {
+                            if !first_expr || statement_group.is_empty() {
+                                statement_group.push(Node::Text("\n".into()));
+                            }
+                            self.keep_user_newlines();
+                            first_expr = false;
+                            self.expr(&mut statement_group, id);
+                        }
+                    }
+                }
+                let mut group = def_group;
+                if !group.is_empty() && !statement_group.is_empty() {
+                    group.push(Node::Text("\n\n".into()));
+                }
+                group.append(&mut statement_group);
+
                 let empty = group.is_empty();
                 if !empty {
                     group.push(Node::Text("\n".into()));
@@ -831,7 +870,7 @@ impl<'a> Converter<'a> {
                 if !function.params.is_empty() {
                     args.push(Cond::Flat.then(", "));
                 }
-                self.tok(nodes, t);
+                self.tok(&mut args, t);
             }
             self.whitespace_before(&mut args, r.start);
             self.close_group(&mut group, args, r);

@@ -3,7 +3,7 @@ print :: fn(s std.string.str, ...) {}
 parse :: fn(s std.string.str) -> i32: 0
 
 sayHello :: fn(newline bool): print("Hello", if newline: "\n" else "")
-bye :: fn { print("Bye") }
+bye :: fn { println("Bye") }
 
 add :: fn(x i32, y i32) -> i32: x + y
 
@@ -63,6 +63,7 @@ main :: fn {
     # Here Vec3 means Vec3 from the global scope again
     v := Vec3(x: 1., y: 2.5, z: 3.141)
     printVec3(v)
+    commentTest()
     bye()
 }
 
@@ -91,8 +92,7 @@ commentTest :: fn {
     -#
     #- nested #- multiline -# comment -#
 
-    # Multiline in #-
-    comment
-    -#
+    # Should not start a Multiline comment in a comment #-
+    println("This is not commented out")
     # #--# Still a comment after multiline
 }

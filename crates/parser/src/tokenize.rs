@@ -134,15 +134,9 @@ impl<'a> Tokenizer<'a> {
                         newline |= self.parse_multiline_comment();
                     } else {
                         while let Some(c) = self.next_byte() {
-                            match c {
-                                b'#' if self.next_byte_if_eq(b'-') => {
-                                    newline |= self.parse_multiline_comment();
-                                }
-                                b'\n' => {
-                                    newline = true;
-                                    break;
-                                }
-                                _ => {}
+                            if c == b'\n' {
+                                newline = true;
+                                break;
                             }
                         }
                     }

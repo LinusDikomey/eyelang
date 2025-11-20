@@ -289,16 +289,12 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Tag {
+    #[default]
     Instance,
     Generic,
     Const,
-}
-impl Default for Tag {
-    fn default() -> Self {
-        Self::Instance
-    }
 }
 
 fn hash_full(full: &TypeFull) -> u64 {

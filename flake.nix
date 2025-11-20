@@ -57,7 +57,9 @@
       default = pkgs.mkShell {
         inputsFrom = [self.packages.${system}.default];
         nativeBuildInputs = [
-          (rustToolchain pkgs)
+          ((rustToolchain pkgs).override {
+            extensions = ["rust-analyzer" "rust-src"];
+          })
           pkgs.python3
         ];
         RUST_BACKTRACE = 1;
