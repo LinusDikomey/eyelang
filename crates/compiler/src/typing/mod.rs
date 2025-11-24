@@ -397,8 +397,6 @@ impl TypeTable {
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
             | TypeInfo::EnumVariantItem { .. } => false,
-            // a generic type from the function is not compatible with any concrete type
-            TypeInfo::Generic(i) => false,
         })
     }
 
@@ -540,8 +538,43 @@ impl TypeTable {
         while let TypeInfoOrIdx::Idx(next) = self.types[idx.idx()] {
             idx = next;
         }
-        match self[idx] {
-            TypeInfo::Instance(BaseType::Invalid, _) => Err(None),
+        let info = self[idx];
+        let mut on_instance = |base: BaseType, generics: LocalOrGlobalInstance| {
+            let resolved_ty = compiler.get_base_type_def(base);
+            if let ResolvedTypeContent::Enum(enum_) = &resolved_ty.def {
+                let Some((variant_index, arg_types)) =
+                    enum_
+                        .variants
+                        .iter()
+                        .find_map(|(variant_name, ordinal, arg_types)| {
+                            (&**variant_name == name).then_some((*ordinal, &**arg_types))
+                        })
+                else {
+                    return Some(Err(Some(Error::NonexistantEnumVariant)));
+                };
+                if arg_types.len() != arg_count as usize {
+                    return Some(Err(Some(Error::InvalidArgCount {
+                        expected: arg_types.len() as _,
+                        varargs: false,
+                        found: arg_count,
+                    })));
+                }
+                let arg_type_ids = self.add_multiple_unknown(arg_types.len() as u32 + 1);
+                let mut arg_type_iter = arg_type_ids.iter();
+                self.replace(
+                    arg_type_iter.next().unwrap(),
+                    type_info_from_variant_count(enum_.variants.len() as u32),
+                );
+                for (r, &ty) in arg_type_iter.zip(arg_types.iter()) {
+                    let ty = self.from_type_instance(&compiler.types, ty, generics);
+                    self.replace(r, ty);
+                }
+                return Some(Ok((OrdinalType::Known(variant_index), arg_type_ids)));
+            }
+            None
+        };
+        match info {
+            TypeInfo::Instance(BaseType::Invalid, _) => return Err(None),
             TypeInfo::Enum(id) => {
                 let variants = self.get_enum_variants(id);
                 if let Some(variant) = variants
@@ -550,11 +583,11 @@ impl TypeTable {
                     .find(|&variant| &*self[variant].name == name)
                 {
                     let arg_types = self[variant].args;
-                    Ok((OrdinalType::Inferred(variant), arg_types))
+                    return Ok((OrdinalType::Inferred(variant), arg_types));
                 } else {
                     let arg_types = self.add_multiple_unknown(arg_count + 1);
                     let variant = self.append_enum_variant(id, name.into(), arg_types);
-                    Ok((OrdinalType::Inferred(variant), arg_types))
+                    return Ok((OrdinalType::Inferred(variant), arg_types));
                 }
             }
             TypeInfo::Unknown(bounds) if bounds.is_empty() => {
@@ -562,61 +595,28 @@ impl TypeTable {
                 let enum_id = self.add_enum_type();
                 let variant = self.append_enum_variant(enum_id, name.into(), arg_types);
                 self.replace(idx, TypeInfo::Enum(enum_id));
-                Ok((OrdinalType::Inferred(variant), arg_types))
+                return Ok((OrdinalType::Inferred(variant), arg_types));
             }
-            TypeInfo::Instance(id, generics) => {
-                let resolved_ty = compiler.get_base_type_def(id);
-                if let ResolvedTypeContent::Enum(enum_) = &resolved_ty.def {
-                    let variant =
-                        enum_
-                            .variants
-                            .iter()
-                            .find_map(|(variant_name, ordinal, arg_types)| {
-                                (&**variant_name == name).then_some((*ordinal, &**arg_types))
-                            });
-                    if let Some((variant_index, arg_types)) = variant {
-                        if arg_types.len() != arg_count as usize {
-                            Err(Some(Error::InvalidArgCount {
-                                expected: arg_types.len() as _,
-                                varargs: false,
-                                found: arg_count,
-                            }))
-                        } else {
-                            let arg_type_ids =
-                                self.add_multiple_unknown(arg_types.len() as u32 + 1);
-                            let mut arg_type_iter = arg_type_ids.iter();
-                            self.replace(
-                                arg_type_iter.next().unwrap(),
-                                type_info_from_variant_count(enum_.variants.len() as u32),
-                            );
-                            for (r, &ty) in arg_type_iter.zip(arg_types.iter()) {
-                                let ty = self.from_type_instance(&compiler.types, ty, generics);
-                                self.replace(r, ty);
-                            }
-
-                            Ok((OrdinalType::Known(variant_index), arg_type_ids))
-                        }
-                    } else {
-                        Err(Some(Error::NonexistantEnumVariant))
-                    }
-                } else {
-                    let mut expected_str = String::new();
-                    self.type_to_string(compiler, self[expected], &mut expected_str);
-                    Err(Some(Error::MismatchedType {
-                        expected: expected_str,
-                        found: format!("enum variant \"{name}\""),
-                    }))
+            TypeInfo::Known(id) => {
+                if let TypeFull::Instance(base, generics) = compiler.types.lookup(id)
+                    && let Some(res) = on_instance(base, LocalOrGlobalInstance::Global(generics))
+                {
+                    return res;
                 }
             }
-            _ => {
-                let mut expected_str = String::new();
-                self.type_to_string(compiler, self[expected], &mut expected_str);
-                Err(Some(Error::MismatchedType {
-                    expected: expected_str,
-                    found: format!("enum variant \"{name}\""),
-                }))
+            TypeInfo::Instance(base, generics) => {
+                if let Some(res) = on_instance(base, LocalOrGlobalInstance::Local(generics)) {
+                    return res;
+                }
             }
+            _ => {}
         }
+        let mut expected_str = String::new();
+        self.type_to_string(compiler, self[expected], &mut expected_str);
+        Err(Some(Error::MismatchedType {
+            expected: expected_str,
+            found: format!("enum variant \"{name}\""),
+        }))
     }
 
     fn mismatched_type_error(
@@ -661,12 +661,13 @@ impl TypeTable {
         }
     }
 
-    pub fn from_type_instance(
+    pub fn from_type_instance<'a>(
         &mut self,
         types: &Types,
         ty: Type,
-        generics: LocalTypeIds,
+        generics: impl Into<LocalOrGlobalInstance<'a>>,
     ) -> TypeInfoOrIdx {
+        let generics = generics.into();
         if generics.is_empty() {
             return TypeInfo::Known(ty).into();
         }
@@ -682,7 +683,14 @@ impl TypeTable {
                 }
                 TypeInfo::Instance(base, type_generic_vars).into()
             }
-            TypeFull::Generic(i) => generics.nth(u32::from(i)).unwrap().into(),
+            TypeFull::Generic(i) => match generics {
+                LocalOrGlobalInstance::Local(generics) => {
+                    generics.nth(u32::from(i)).unwrap().into()
+                }
+                LocalOrGlobalInstance::Global(generics) => {
+                    TypeInfo::Known(generics[usize::from(i)]).into()
+                }
+            },
             TypeFull::Const(_) => unreachable!("consts don't have generics"),
         }
     }
@@ -835,7 +843,6 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
             TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
-            TypeInfo::Generic(i) => write!(s, "${i}").unwrap(),
         }
     }
 
@@ -968,7 +975,6 @@ impl TypeTable {
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
             | TypeInfo::EnumVariantItem { .. } => Type::Invalid, // TODO: what to return here?
-            TypeInfo::Generic(i) => compiler.types.intern(TypeFull::Generic(i)),
         };
         self.types[idx.idx()] = TypeInfo::Known(ty).into();
         ty
@@ -1144,8 +1150,9 @@ impl TypeTable {
                 _ => false,
             },
             TypeFull::Generic(i) => match info {
-                TypeInfo::Unknown(_) => true,
-                TypeInfo::Generic(j) if i == j => true,
+                TypeInfo::Unknown(bounds) => bounds
+                    .iter()
+                    .all(|bound| function_generics.check_bound_satisfied(i, bound, self, compiler)),
                 _ => false,
             },
             TypeFull::Const(_) => matches!(info, TypeInfo::UnknownConst),
@@ -1200,9 +1207,7 @@ impl TypeTable {
         info: TypeInfo,
     ) -> Result<bool, InvalidTypeError> {
         Ok(match info {
-            TypeInfo::Unknown(_) | TypeInfo::Generic(_) | TypeInfo::Integer | TypeInfo::Float => {
-                false
-            }
+            TypeInfo::Unknown(_) | TypeInfo::Integer | TypeInfo::Float => false,
             TypeInfo::Known(ty) => compiler.is_uninhabited(ty, &Instance::EMPTY)?,
             TypeInfo::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
             TypeInfo::Instance(base, instance) => match &compiler.get_base_type_def(base).def {
@@ -1251,6 +1256,25 @@ impl From<TypeInfo> for TypeInfoOrIdx {
 impl From<LocalTypeId> for TypeInfoOrIdx {
     fn from(value: LocalTypeId) -> Self {
         Self::Idx(value)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum LocalOrGlobalInstance<'a> {
+    Local(LocalTypeIds),
+    Global(&'a [Type]),
+}
+impl<'a> From<LocalTypeIds> for LocalOrGlobalInstance<'a> {
+    fn from(value: LocalTypeIds) -> Self {
+        Self::Local(value)
+    }
+}
+impl<'a> LocalOrGlobalInstance<'a> {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            LocalOrGlobalInstance::Local(ids) => ids.is_empty(),
+            LocalOrGlobalInstance::Global(instance) => instance.is_empty(),
+        }
     }
 }
 
@@ -1356,7 +1380,6 @@ pub enum TypeInfo {
         /// always includes the ordinal type as it's first type
         arg_types: LocalTypeIds,
     },
-    Generic(u8),
 }
 impl From<Primitive> for TypeInfo {
     fn from(value: Primitive) -> Self {

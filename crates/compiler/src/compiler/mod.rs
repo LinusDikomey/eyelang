@@ -35,7 +35,7 @@ use crate::{
     hir::Hir,
     irgen,
     types::{BaseType, BuiltinType, TypeFull, Types},
-    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
+    typing::{BoundId, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
 use builtins::Builtins;
@@ -1560,11 +1560,12 @@ impl Generics {
     pub fn check_bound_satisfied(
         &self,
         generic: u8,
-        bound: &Bound,
+        bound: BoundId,
         types: &mut TypeTable,
         compiler: &Compiler,
     ) -> bool {
         let mut found = None;
+        let bound = *types.get_bound(bound);
         for generic_bound in self.generics[generic as usize].1.iter() {
             if bound.trait_id == generic_bound.trait_id {
                 assert!(

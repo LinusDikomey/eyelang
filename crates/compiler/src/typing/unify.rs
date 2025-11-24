@@ -20,16 +20,6 @@ pub fn unify(
     Some(match (a, b) {
         (Instance(BaseType::Invalid, _) | Known(Type::Invalid), _)
         | (_, Instance(BaseType::Invalid, _) | Known(Type::Invalid)) => TypeInfo::INVALID,
-        (Unknown(bounds), Generic(generic_id)) | (Generic(generic_id), Unknown(bounds)) => {
-            for bound in bounds.iter() {
-                let bound = *types.get_bound(bound);
-                if !function_generics.check_bound_satisfied(generic_id, &bound, types, compiler) {
-                    // TODO: more specific error message with missing trait bound
-                    return None;
-                }
-            }
-            Generic(generic_id)
-        }
         (Unknown(a), Unknown(b)) => {
             if a.is_empty() && b.is_empty() {
                 Unknown(Bounds::EMPTY)
@@ -282,7 +272,6 @@ pub fn unify(
             }
             a
         }
-        (Generic(a), Generic(b)) if a == b => Generic(a),
         _ => return None,
     })
 }
