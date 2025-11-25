@@ -2,7 +2,12 @@ use std::cell::OnceCell;
 
 use parser::ast::{FunctionId, ModuleId, TraitId};
 
-use crate::{Compiler, ProjectId, Type, compiler::ModuleSpan, types::BaseType, typing::TypeInfo};
+use crate::{
+    Compiler, ProjectId, Type,
+    compiler::ModuleSpan,
+    types::{BaseType, TypeFull},
+    typing::TypeInfo,
+};
 
 use super::Def;
 
@@ -95,12 +100,15 @@ fn get_string_module(compiler: &Compiler) -> ModuleId {
 pub fn get_str_eq(compiler: &Compiler) -> (ModuleId, FunctionId) {
     *compiler.builtins.str_eq.get_or_init(|| {
         let string_module = get_string_module(compiler);
-        let Def::BaseType(str_type) =
+        let Def::Type(str_type) =
             compiler.resolve_in_module(string_module, "str", ModuleSpan::MISSING)
         else {
             panic!("missing std.string.str");
         };
-        let Some(&str_eq) = compiler.get_base_type_def(str_type).methods.get("eq") else {
+        let TypeFull::Instance(str_base, &[]) = compiler.types.lookup(str_type) else {
+            panic!("str is not a non-generic type instance");
+        };
+        let Some(&str_eq) = compiler.get_base_type_def(str_base).methods.get("eq") else {
             panic!("missing std.str.eq method");
         };
         (string_module, str_eq)
