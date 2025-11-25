@@ -403,31 +403,53 @@ pub fn check(
         &Expr::TupleIdx { left, idx, .. } => {
             let tuple_ty = ctx.hir.types.add_unknown(); // add Size::AtLeast tuple here maybe
             let tuple_value = check(ctx, left, scope, tuple_ty, return_ty, noreturn);
-            let elem_types = match ctx.hir.types[tuple_ty] {
-                TypeInfo::Instance(BaseType::Tuple, ids) => ids,
+            match ctx.hir.types[tuple_ty] {
+                TypeInfo::Instance(BaseType::Tuple, elem_types) => {
+                    return if let Some(elem_ty) = elem_types.nth(idx) {
+                        ctx.unify(expected, elem_ty, |ast| ast[expr].span(ast));
+                        Node::Element {
+                            tuple_value: ctx.hir.add(tuple_value),
+                            index: idx,
+                            elem_types,
+                        }
+                    } else {
+                        ctx.emit(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
+                        Node::Invalid
+                    };
+                }
                 TypeInfo::Instance(BaseType::Invalid, _) => return Node::Invalid,
-                _ => {
-                    // FIXME: emit invalid type error on a known but wrong type
-                    // TODO: could add TupleCountMode and stuff again to unify with tuple with
-                    // Size::AtLeast. Not doing that for now since it is very rare.
-                    ctx.emit(
-                        Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)),
-                    );
-                    ctx.invalidate(expected);
-                    return Node::Invalid;
+                TypeInfo::Known(ty) => {
+                    if let TypeFull::Instance(BaseType::Tuple, elem_types) =
+                        ctx.compiler.types.lookup(ty)
+                    {
+                        return if let Some(&elem_ty) = elem_types.get(idx as usize) {
+                            ctx.specify(expected, TypeInfo::Known(elem_ty), |ast| {
+                                ast[expr].span(ast)
+                            });
+                            let elem_types = ctx
+                                .hir
+                                .types
+                                .add_multiple(elem_types.iter().copied().map(TypeInfo::Known));
+                            Node::Element {
+                                tuple_value: ctx.hir.add(tuple_value),
+                                index: idx,
+                                elem_types,
+                            }
+                        } else {
+                            ctx.emit(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
+                            Node::Invalid
+                        };
+                    };
                 }
+                _ => {}
             };
-            if let Some(elem_ty) = elem_types.nth(idx) {
-                ctx.unify(expected, elem_ty, |ast| ast[expr].span(ast));
-                Node::Element {
-                    tuple_value: ctx.hir.add(tuple_value),
-                    index: idx,
-                    elem_types,
-                }
-            } else {
-                ctx.emit(Error::TupleIndexOutOfRange.at_span(ctx.span(expr)));
-                Node::Invalid
-            }
+
+            // FIXME: emit invalid type error on a known but wrong type
+            // TODO: could add TupleCountMode and stuff again to unify with tuple with
+            // Size::AtLeast. Not doing that for now since it is very rare.
+            ctx.emit(Error::TypeMustBeKnownHere { needed_bound: None }.at_span(ctx.span(left)));
+            ctx.invalidate(expected);
+            Node::Invalid
         }
 
         Expr::ReturnUnit { .. } => {
