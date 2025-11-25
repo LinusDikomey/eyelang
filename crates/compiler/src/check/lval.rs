@@ -171,7 +171,12 @@ pub fn check(
                 .types
                 .add_multiple([TypeInfo::Unknown(Bounds::EMPTY), TypeInfo::UnknownConst]);
             let element_type = array_generics.nth(0).unwrap();
-            let (array, _array_ty) = check(ctx, expr, scope, return_ty, noreturn);
+            let (array, array_ty) = check(ctx, expr, scope, return_ty, noreturn);
+            ctx.specify(
+                array_ty,
+                TypeInfo::Instance(BaseType::Array, array_generics),
+                |ast| ast[expr].span(ast),
+            );
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
             let index = expr::check(ctx, idx, scope, index_ty, return_ty, noreturn);
             (

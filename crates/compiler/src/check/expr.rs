@@ -1094,21 +1094,32 @@ fn instance_member(
         if let Some((index, field_ty)) = indexed_field {
             // perform auto deref first
             let mut dereffed_node = left_node;
-            let mut current_ty = left_ty;
+            let mut current_ty = ctx.hir.types[left_ty];
             for _ in 0..pointer_count {
-                let TypeInfo::Instance(BaseType::Pointer, pointee) = ctx.hir.types[current_ty]
-                else {
-                    // the deref was already checked so we know the type is wrapped in
-                    // `pointer_count` pointers
-                    unreachable!()
+                // the deref was already checked so we know the type is wrapped in
+                // `pointer_count` pointers
+                let pointee = match current_ty {
+                    TypeInfo::Instance(BaseType::Pointer, pointee) => {
+                        let pointee = pointee.nth(0).unwrap();
+                        current_ty = ctx.hir.types[pointee];
+                        pointee
+                    }
+                    TypeInfo::Known(ty) => {
+                        let TypeFull::Instance(BaseType::Pointer, &[pointee]) =
+                            ctx.compiler.types.lookup(ty)
+                        else {
+                            unreachable!()
+                        };
+                        current_ty = TypeInfo::Known(pointee);
+                        ctx.hir.types.add(TypeInfo::Known(pointee))
+                    }
+                    _ => unreachable!(),
                 };
-                let pointee = pointee.nth(0).unwrap();
                 let value = ctx.hir.add(dereffed_node);
                 dereffed_node = Node::Deref {
                     value,
                     deref_ty: pointee,
                 };
-                current_ty = pointee;
             }
             ctx.unify(expected, field_ty, |ast| ast[expr].span(ast));
             return Node::Element {

@@ -72,7 +72,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
                     }
                     cwrite!(f, "{}", hir.display(elem, compiler, indent_count))?;
                 }
-                cwrite!(f, "): [{}]", compiler.types.display(hir[array_ty]))?;
+                cwrite!(f, "): {}", compiler.types.display(hir[array_ty]))?;
             }
             Node::TupleLiteral { elems, elem_types } => {
                 cwrite!(f, "(#b<tuple> ")?;
