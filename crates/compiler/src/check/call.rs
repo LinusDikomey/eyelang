@@ -50,10 +50,12 @@ pub fn check_call(
     ctx.hir
         .types
         .type_to_string(ctx.compiler, ctx.hir.types[called_ty], &mut s);
-    match ctx.hir.types[called_ty] {
+
+    let called_type_info = ctx.hir.types[called_ty];
+    match called_type_info {
         TypeInfo::Known(Type::Invalid) => {
             ctx.invalidate(expected);
-            Node::Invalid
+            return Node::Invalid;
         }
         TypeInfo::BaseTypeItem(base) => {
             debug_assert!(
@@ -65,38 +67,34 @@ pub fn check_call(
             );
             let generic_count = ctx.compiler.get_base_type_generic_count(base);
             let base_generics = ctx.hir.types.add_multiple_unknown(generic_count.into());
-            base_type_called(ctx, base, base_generics)
+            return base_type_called(ctx, base, base_generics);
         }
-        TypeInfo::TypeItem(ty) => match ctx.hir.types[ty] {
-            TypeInfo::Instance(BaseType::Invalid, _) => {
-                ctx.invalidate(expected);
-                Node::Invalid
-            }
-            TypeInfo::Unknown(bounds) => {
-                ctx.emit_unknown(bounds, ctx.span(call.called_expr));
-                ctx.invalidate(expected);
-                Node::Invalid
-            }
-            TypeInfo::Instance(base, instance_generics) => {
-                base_type_called(ctx, base, instance_generics)
-            }
-            TypeInfo::Known(ty) => {
-                if let TypeFull::Instance(base, generics) = ctx.compiler.types.lookup(ty) {
-                    let generics = ctx
-                        .hir
-                        .types
-                        .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
-                    base_type_called(ctx, base, generics)
-                } else {
-                    ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-                    Node::Invalid
+        TypeInfo::TypeItem(ty) => {
+            match ctx.hir.types[ty] {
+                TypeInfo::Instance(BaseType::Invalid, _) => {
+                    ctx.invalidate(expected);
+                    return Node::Invalid;
                 }
-            }
-            _ => {
-                ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-                Node::Invalid
-            }
-        },
+                TypeInfo::Unknown(bounds) => {
+                    ctx.emit_unknown(bounds, ctx.span(call.called_expr));
+                    ctx.invalidate(expected);
+                    return Node::Invalid;
+                }
+                TypeInfo::Instance(base, instance_generics) => {
+                    return base_type_called(ctx, base, instance_generics);
+                }
+                TypeInfo::Known(ty) => {
+                    if let TypeFull::Instance(base, generics) = ctx.compiler.types.lookup(ty) {
+                        let generics = ctx
+                            .hir
+                            .types
+                            .add_multiple(generics.iter().map(|&ty| TypeInfo::Known(ty)));
+                        return base_type_called(ctx, base, generics);
+                    }
+                }
+                _ => {}
+            };
+        }
         TypeInfo::FunctionItem {
             module,
             function,
@@ -143,72 +141,52 @@ pub fn check_call(
                         }
                     }
 
-                    Node::Call {
+                    return Node::Call {
                         function,
                         args,
                         return_ty: return_var,
                         arg_types,
                         noreturn: *noreturn,
-                    }
+                    };
                 }
                 Err(err) => {
                     ctx.emit(err);
                     ctx.invalidate(expected);
-                    Node::Invalid
+                    return Node::Invalid;
                 }
             }
         }
         TypeInfo::Instance(BaseType::Function, generics) => {
-            let return_type = generics.nth(0).unwrap();
-            let params = generics.skip(1);
-            // TODO: call noreturn checking
-            let call_noreturn = false;
-            // let call_noreturn = matches!(
-            //     ctx.compiler.uninhabited(
-            //         &ctx.hir
-            //             .types
-            //             .to_generic_resolved(ctx.hir.types[return_type])
-            //             .unwrap_or(TypeOld::Invalid),
-            //         &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
-            //     ),
-            //     Ok(true)
-            // );
-            ctx.unify(expected, return_type, |_| call_span);
-            match check_call_args_inner(
+            return function_type_call(
                 ctx,
+                generics,
+                call,
+                called_node,
+                call_span,
                 scope,
+                expected,
                 return_ty,
                 noreturn,
-                call_span,
-                call.args,
-                &[],
-                params.count,
-                &[],
-                params,
-                false,
-            ) {
-                Ok((args, arg_types)) => {
-                    if *noreturn {
-                        return Node::Invalid;
-                    }
-                    if call_noreturn {
-                        *noreturn = true;
-                    }
-                    let function = ctx.hir.add(called_node);
-
-                    Node::Call {
-                        function,
-                        args,
-                        return_ty: expected,
-                        arg_types,
-                        noreturn: false, // TODO: call_noreturn,
-                    }
-                }
-                Err(err) => {
-                    ctx.emit(err);
-                    ctx.invalidate(expected);
-                    Node::Invalid
-                }
+            );
+        }
+        TypeInfo::Known(ty) => {
+            if let TypeFull::Instance(BaseType::Function, generics) = ctx.compiler.types.lookup(ty)
+            {
+                let generics = ctx
+                    .hir
+                    .types
+                    .add_multiple(generics.iter().copied().map(TypeInfo::Known));
+                return function_type_call(
+                    ctx,
+                    generics,
+                    call,
+                    called_node,
+                    call_span,
+                    scope,
+                    expected,
+                    return_ty,
+                    noreturn,
+                );
             }
         }
         TypeInfo::MethodItem {
@@ -262,18 +240,18 @@ pub fn check_call(
                     }
                     */
 
-                    Node::Call {
+                    return Node::Call {
                         function: ctx.hir.add(Node::FunctionItem(module, function, generics)),
                         args,
                         return_ty: expected,
                         arg_types,
                         noreturn: false, // TODO
-                    }
+                    };
                 }
                 Err(err) => {
                     ctx.emit(err);
                     ctx.invalidate(expected);
-                    Node::Invalid
+                    return Node::Invalid;
                 }
             }
         }
@@ -312,11 +290,11 @@ pub fn check_call(
                 let node = expr::check(ctx, arg, scope, ty, return_ty, noreturn);
                 ctx.hir.modify_node(r, node);
             }
-            Node::EnumLiteral {
+            return Node::EnumLiteral {
                 elems,
                 elem_types: arg_types,
                 enum_ty: called_ty,
-            }
+            };
         }
         TypeInfo::TraitMethodItem {
             module: trait_module,
@@ -379,7 +357,7 @@ pub fn check_call(
                         *noreturn = true;
                     }
                     */
-                    Node::TraitCall {
+                    return Node::TraitCall {
                         trait_id: (trait_module, trait_id),
                         trait_generics,
                         method_index,
@@ -387,94 +365,158 @@ pub fn check_call(
                         args,
                         return_ty: expected,
                         noreturn: false, // call_noreturn, // TODO
-                    }
+                    };
                 }
                 Err(err) => {
                     ctx.emit(err);
                     ctx.invalidate(expected);
                     ctx.invalidate(self_ty);
-                    Node::Invalid
+                    return Node::Invalid;
                 }
             }
         }
-        called_type_info => {
-            // TODO: auto ref/deref on called value
-            let arg_types = ctx.hir.types.add_multiple_unknown(call.args.len() as _);
-            let fn_instance = ctx.hir.types.add_multiple_info_or_idx([
-                TypeInfoOrIdx::TypeInfo(TypeInfo::Instance(BaseType::Tuple, arg_types)),
-                expected.into(),
-            ]);
-            assert_eq!(
-                call.named_args.len(),
-                0,
-                "TODO: support named args in trait calls or error properly"
-            );
+        _ => {}
+    }
 
-            let fn_trait = builtins::get_fn_trait(ctx.compiler);
-            let fn_bound = Bound {
-                trait_id: fn_trait,
-                generics: fn_instance,
-                span: call_span,
-            };
-            let candidates = traits::get_impl_candidates(
-                ctx.compiler,
-                &fn_bound,
-                called_type_info,
-                &mut ctx.hir.types,
-                ctx.generics,
-            );
-            match candidates {
-                traits::Candidates::Invalid => return Node::Invalid,
-                traits::Candidates::None => {
-                    ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-                    ctx.invalidate(expected);
-                    return Node::Invalid;
-                }
-                traits::Candidates::Unique { .. } | traits::Candidates::Multiple => {}
-            }
+    // TODO: auto ref/deref on called value
+    let arg_types = ctx.hir.types.add_multiple_unknown(call.args.len() as _);
+    let fn_instance = ctx.hir.types.add_multiple_info_or_idx([
+        TypeInfoOrIdx::TypeInfo(TypeInfo::Instance(BaseType::Tuple, arg_types)),
+        expected.into(),
+    ]);
+    assert_eq!(
+        call.named_args.len(),
+        0,
+        "TODO: support named args in trait calls or error properly"
+    );
 
-            let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
-            for ((arg, ty), node_id) in call
-                .args
-                .into_iter()
-                .zip(arg_types.iter())
-                .zip(arg_nodes.iter())
-            {
-                let node = expr::check(ctx, arg, scope, ty, return_ty, noreturn);
-                ctx.hir.modify_node(node_id, node);
-                if *noreturn {
-                    return Node::Invalid;
-                }
+    let fn_trait = builtins::get_fn_trait(ctx.compiler);
+    let fn_bound = Bound {
+        trait_id: fn_trait,
+        generics: fn_instance,
+        span: call_span,
+    };
+    let candidates = traits::get_impl_candidates(
+        ctx.compiler,
+        &fn_bound,
+        called_type_info,
+        &mut ctx.hir.types,
+        ctx.generics,
+    );
+    match candidates {
+        traits::Candidates::Invalid => return Node::Invalid,
+        traits::Candidates::None => {
+            ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
+            ctx.invalidate(expected);
+            return Node::Invalid;
+        }
+        traits::Candidates::Unique { .. } | traits::Candidates::Multiple => {}
+    }
+
+    let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
+    for ((arg, ty), node_id) in call
+        .args
+        .into_iter()
+        .zip(arg_types.iter())
+        .zip(arg_nodes.iter())
+    {
+        let node = expr::check(ctx, arg, scope, ty, return_ty, noreturn);
+        ctx.hir.modify_node(node_id, node);
+        if *noreturn {
+            return Node::Invalid;
+        }
+    }
+    let called_ptr = match LValue::try_from_node(&called_node, &mut ctx.hir) {
+        Some(value) => Node::AddressOf {
+            value: ctx.hir.add_lvalue(value),
+            value_ty: called_ty,
+        },
+        None => {
+            let variable = ctx.hir.add_var(called_ty);
+            Node::Promote {
+                value: ctx.hir.add(called_node),
+                variable,
             }
-            let called_ptr = match LValue::try_from_node(&called_node, &mut ctx.hir) {
-                Some(value) => Node::AddressOf {
-                    value: ctx.hir.add_lvalue(value),
-                    value_ty: called_ty,
-                },
-                None => {
-                    let variable = ctx.hir.add_var(called_ty);
-                    Node::Promote {
-                        value: ctx.hir.add(called_node),
-                        variable,
-                    }
-                }
-            };
-            let fn_args = ctx.hir.add_nodes([
-                called_ptr,
-                Node::TupleLiteral {
-                    elems: arg_nodes,
-                    elem_types: arg_types,
-                },
-            ]);
-            Node::TraitCall {
-                trait_id: fn_trait,
-                trait_generics: fn_instance,
-                method_index: 0,
-                self_ty: called_ty,
-                args: fn_args,
+        }
+    };
+    let fn_args = ctx.hir.add_nodes([
+        called_ptr,
+        Node::TupleLiteral {
+            elems: arg_nodes,
+            elem_types: arg_types,
+        },
+    ]);
+    Node::TraitCall {
+        trait_id: fn_trait,
+        trait_generics: fn_instance,
+        method_index: 0,
+        self_ty: called_ty,
+        args: fn_args,
+        return_ty: expected,
+        noreturn: false,
+    }
+}
+
+fn function_type_call(
+    ctx: &mut Ctx,
+    function_generics: LocalTypeIds,
+    call: &Call,
+    called_node: Node,
+    call_span: TSpan,
+    scope: &mut LocalScope,
+    expected: LocalTypeId,
+    return_ty: LocalTypeId,
+    noreturn: &mut bool,
+) -> Node {
+    let return_type = function_generics.nth(0).unwrap();
+    let params = function_generics.skip(1);
+    // TODO: call noreturn checking
+    let call_noreturn = false;
+    // let call_noreturn = matches!(
+    //     ctx.compiler.uninhabited(
+    //         &ctx.hir
+    //             .types
+    //             .to_generic_resolved(ctx.hir.types[return_type])
+    //             .unwrap_or(TypeOld::Invalid),
+    //         &[], // TODO: this will probably cause issues, need to be able to not pass in generics?
+    //     ),
+    //     Ok(true)
+    // );
+    ctx.unify(expected, return_type, |_| call_span);
+    match check_call_args_inner(
+        ctx,
+        scope,
+        return_ty,
+        noreturn,
+        call_span,
+        call.args,
+        &[],
+        params.count,
+        &[],
+        params,
+        false,
+    ) {
+        Ok((args, arg_types)) => {
+            if *noreturn {
+                return Node::Invalid;
+            }
+            if call_noreturn {
+                *noreturn = true;
+            }
+            let function = ctx.hir.add(called_node);
+
+            Node::Call {
+                function,
+                args,
                 return_ty: expected,
-                noreturn: false,
+                arg_types,
+                noreturn: false, // TODO: call_noreturn,
             }
+        }
+        Err(err) => {
+            ctx.emit(err);
+            ctx.invalidate(expected);
+            Node::Invalid
         }
     }
 }
