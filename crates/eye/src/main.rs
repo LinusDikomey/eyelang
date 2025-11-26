@@ -12,7 +12,7 @@ pub use compiler::Compiler;
 
 use compiler::{
     Def, ModuleSpan,
-    compiler::{Dialects, Instances},
+    compiler::{Dialects, Instances, ModuleStorage},
 };
 
 use error::{Error, span::TSpan};
@@ -22,6 +22,7 @@ pub enum MainError {
     CantAccessPath(std::io::Error, PathBuf),
     NonexistentPath(PathBuf),
     MissingProjectDirectoryName(PathBuf),
+    InvalidWorkingDirectory,
     MissingProjectFileName(PathBuf),
     NoMainFileInProjectDirectory,
     InvalidPath(PathBuf),
@@ -29,6 +30,7 @@ pub enum MainError {
     BackendFailed(String),
     LinkingFailed(String),
     RunningProgramFailed(std::io::Error),
+    ReadingStdinFailed(std::io::Error),
     LspFailed(String),
 }
 impl From<compiler::ProjectError> for MainError {
@@ -59,19 +61,6 @@ fn main() -> Result<(), MainError> {
             return Ok(());
         }
         args::Cmd::Fmt(fmt_args) => return fmt_command::format(args.path, fmt_args),
-        args::Cmd::FmtStdin => {
-            let mut s = String::new();
-            std::io::stdin()
-                .read_to_string(&mut s)
-                .expect("Failed to read stdin");
-            let (formatted, errors) = format::format(s.into_boxed_str());
-            if errors.error_count() > 0 {
-                // TODO: print errors here
-                return Err(MainError::ErrorsFound);
-            }
-            print!("{formatted}");
-            return Ok(());
-        }
         _ => {}
     }
     let start_time = std::time::Instant::now();
@@ -81,15 +70,19 @@ fn main() -> Result<(), MainError> {
         compiler.errors.enable_crash_on_error();
     }
 
-    let (name, path) = path_arg(args.path)?;
-
-    println!("Compiling {name} ...");
-
     // add standard library
     let std = compiler.add_project("std".to_owned(), compiler::std_path::find(), vec![])?;
 
     // create project
-    let project = compiler.add_project(name.clone(), path, vec![std])?;
+    let dependencies = vec![std];
+    let (name, storage) = path_arg(args.path)?;
+    println!("Compiling {name} ...");
+    let project = match storage {
+        ModuleStorage::Path(path) => compiler.add_project(name.clone(), path, dependencies)?,
+        ModuleStorage::String(content) => {
+            compiler.add_single_file_project_from_string(name.clone(), content, dependencies)
+        }
+    };
     let root_module = compiler.get_project(project).root_module;
 
     compiler.resolve_builtins(std);
@@ -283,7 +276,7 @@ fn main() -> Result<(), MainError> {
                 }
             }
         }
-        args::Cmd::ListTargets | args::Cmd::Fmt(_) | args::Cmd::FmtStdin => unreachable!(),
+        args::Cmd::ListTargets | args::Cmd::Fmt(_) => unreachable!(),
         #[cfg(feature = "lsp")]
         args::Cmd::Lsp => unreachable!(),
     }
@@ -291,31 +284,42 @@ fn main() -> Result<(), MainError> {
     Ok(())
 }
 
-fn path_arg(path: Option<String>) -> Result<(String, PathBuf), MainError> {
-    Ok(match path {
+fn path_arg(path: Option<String>) -> Result<(String, ModuleStorage), MainError> {
+    let path = match path {
+        Some(s) if s == "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(MainError::ReadingStdinFailed)?;
+            return Ok((
+                "<stdin>".to_owned(),
+                ModuleStorage::String(buf.into_boxed_str()),
+            ));
+        }
         Some(path_str) => {
             let path = PathBuf::from(path_str);
-            if !path
-                .try_exists()
-                .map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))?
-            {
-                return Err(MainError::NonexistentPath(path.to_owned()));
-            }
-            let name = if path.is_file() {
-                path.file_stem()
-                    .ok_or_else(|| MainError::MissingProjectFileName(path.to_path_buf()))?
-                    .to_str()
-                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
-            } else {
-                path.file_name()
-                    .ok_or_else(|| MainError::MissingProjectDirectoryName(path.to_path_buf()))?
-                    .to_str()
-                    .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
-            };
-            (name.to_owned(), path)
+            path.canonicalize().unwrap_or(path)
         }
-        None => ("main".to_owned(), PathBuf::from("./")),
-    })
+        None => std::env::current_dir().map_err(|_| MainError::InvalidWorkingDirectory)?,
+    };
+    if !path
+        .try_exists()
+        .map_err(|err| MainError::CantAccessPath(err, path.to_path_buf()))?
+    {
+        return Err(MainError::NonexistentPath(path.to_owned()));
+    }
+    let name = if path.is_file() {
+        path.file_stem()
+            .ok_or_else(|| MainError::MissingProjectFileName(path.to_path_buf()))?
+            .to_str()
+            .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
+    } else {
+        path.file_name()
+            .ok_or_else(|| MainError::MissingProjectDirectoryName(path.to_path_buf()))?
+            .to_str()
+            .ok_or_else(|| MainError::InvalidPath(path.to_path_buf()))?
+    };
+    Ok((name.to_owned(), ModuleStorage::Path(path)))
 }
 
 fn enable_tracing(args: &args::Args) {

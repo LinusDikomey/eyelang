@@ -108,14 +108,14 @@ impl Compiler {
             return Err(ProjectError::NonexistentPath(root));
         }
         for (project, i) in self.projects.iter().zip(0..) {
-            if project.name == name && project.root == root {
+            if project.name == name && project.root.as_ref().is_some_and(|r| r == &root) {
                 return Ok(ProjectId(i));
             }
         }
         let next_module_id = ModuleId::from_inner(self.modules.len());
         let project_id = ProjectId(self.projects.add(Project {
             name,
-            root: root.clone(),
+            root: Some(root.clone()),
             root_module: next_module_id,
             dependencies,
         }));
@@ -132,6 +132,29 @@ impl Compiler {
         );
 
         Ok(project_id)
+    }
+
+    pub fn add_single_file_project_from_string(
+        &self,
+        name: String,
+        content: Box<str>,
+        dependencies: Vec<ProjectId>,
+    ) -> ProjectId {
+        let module_id = ModuleId::from_inner(self.modules.len());
+        let project = ProjectId(self.projects.add(Project {
+            name,
+            root: None,
+            root_module: module_id,
+            dependencies,
+        }));
+        self.modules.add(Module {
+            storage: ModuleStorage::String(content),
+            project,
+            ast: OnceCell::new(),
+            root: module_id,
+            parent: None,
+        });
+        project
     }
 
     pub fn add_type_def(
@@ -181,37 +204,44 @@ impl Compiler {
             .collect();
 
             let mut child_modules = Vec::new();
-            let contents = if module.path.is_file() {
-                std::fs::read_to_string(&module.path)
-            } else {
-                let (file, child_module_paths) =
-                    crate::modules::module_and_children(&module.path, module_id == module.root);
-                for (name, path) in child_module_paths {
-                    let id = ModuleId::from_inner(self.modules.add(Module::at_path(
-                        path,
-                        project,
-                        root,
-                        Some(module_id),
-                    )));
-                    definitions.insert(name, ast::Definition::Module(id));
-                    child_modules.push(id);
-                }
+            let contents = match &module.storage {
+                ModuleStorage::Path(path) => {
+                    let contents = if path.is_file() {
+                        std::fs::read_to_string(path)
+                    } else {
+                        let (file, child_module_paths) =
+                            crate::modules::module_and_children(path, module_id == module.root);
+                        for (name, path) in child_module_paths {
+                            let id = ModuleId::from_inner(self.modules.add(Module::at_path(
+                                path,
+                                project,
+                                root,
+                                Some(module_id),
+                            )));
+                            definitions.insert(name, ast::Definition::Module(id));
+                            child_modules.push(id);
+                        }
 
-                // TODO is this path needed?
-                // self.modules[module_id.idx()].path = file;
-                std::fs::read_to_string(&file)
-            };
-            let source = match contents {
-                Ok(source) => source.into_boxed_str(),
-                Err(err) => panic!(
-                    "compiler failed to open the file {}: {:?}",
-                    self.modules[module_id.idx()].path.display(),
-                    err,
-                ),
+                        // TODO is this path needed?
+                        // self.modules[module_id.idx()].path = file;
+                        std::fs::read_to_string(&file)
+                    };
+                    contents.map_or_else(
+                        |err| {
+                            panic!(
+                                "compiler failed to open the file {}: {:?}",
+                                path.display(),
+                                err,
+                            )
+                        },
+                        String::into_boxed_str,
+                    )
+                }
+                ModuleStorage::String(contents) => contents.clone(),
             };
 
             let mut errors = Errors::new();
-            let ast = parser::parse(source, &mut errors, definitions);
+            let ast = parser::parse(contents, &mut errors, definitions);
             self.errors.add_module(module_id, errors);
             let checked = ModuleSymbols::empty(&ast);
             ParsedModule {
@@ -1089,6 +1119,17 @@ impl Compiler {
         };
         let by_file = errors.by_file.into_inner();
         let err_count: usize = by_file.values().map(|errors| errors.error_count()).sum();
+        let module_path = |module: ModuleId| match &self.modules[module.idx()].storage {
+            ModuleStorage::Path(path) => {
+                let relative = working_directory
+                    .as_ref()
+                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
+                relative.unwrap_or(path.clone())
+            }
+            ModuleStorage::String(_) => {
+                PathBuf::from(&self.projects[self.modules[module.idx()].project.idx()].name)
+            }
+        };
         if err_count != 0 {
             cprintln!(
                 "#r<Finished with #u;r!<{}> error{}>",
@@ -1100,15 +1141,10 @@ impl Compiler {
                     continue;
                 }
                 let ast = self.get_module_ast(module);
-                let mut path: &Path = &self.modules[module.idx()].path;
-                let relative = working_directory
-                    .as_ref()
-                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
-                if let Some(relative) = &relative {
-                    path = relative;
-                }
+                let path = module_path(module);
+
                 for error in &errors.errors {
-                    print(ast, path, error);
+                    print(ast, &path, error);
                 }
             }
             return true;
@@ -1124,15 +1160,9 @@ impl Compiler {
                     continue;
                 }
                 let ast = self.get_module_ast(module);
-                let mut path: &Path = &self.modules[module.idx()].path;
-                let relative = working_directory
-                    .as_ref()
-                    .and_then(|cwd| pathdiff::diff_paths(path, cwd));
-                if let Some(relative) = &relative {
-                    path = relative;
-                }
+                let path = module_path(module);
                 for warning in &errors.warnings {
-                    print(ast, path, warning);
+                    print(ast, &path, warning);
                 }
             }
         }
@@ -1411,12 +1441,12 @@ impl Def {
 
 pub struct Project {
     pub name: String,
-    pub root: PathBuf,
+    pub root: Option<PathBuf>,
     pub root_module: ModuleId,
     pub dependencies: Vec<ProjectId>,
 }
 pub struct Module {
-    pub path: PathBuf,
+    pub storage: ModuleStorage,
     pub project: ProjectId,
     pub ast: OnceCell<ParsedModule>,
     pub root: ModuleId,
@@ -1430,12 +1460,25 @@ impl Module {
         parent: Option<ModuleId>,
     ) -> Self {
         Self {
-            path,
+            storage: ModuleStorage::Path(path),
             project,
             ast: OnceCell::new(),
             root,
             parent,
         }
+    }
+}
+
+pub enum ModuleStorage {
+    Path(PathBuf),
+    String(Box<str>),
+}
+impl ModuleStorage {
+    pub fn path(&self) -> Option<&Path> {
+        let ModuleStorage::Path(path) = self else {
+            return None;
+        };
+        Some(path)
     }
 }
 

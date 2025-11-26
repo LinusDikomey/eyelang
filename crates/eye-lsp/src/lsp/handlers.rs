@@ -55,7 +55,12 @@ impl Lsp {
                 "Opened file {} is part of existing project {} at {}",
                 open.textDocument.uri.path().display(),
                 self.compiler.get_project(project).name,
-                self.compiler.get_project(project).root.display(),
+                self.compiler
+                    .get_project(project)
+                    .root
+                    .as_ref()
+                    .unwrap()
+                    .display(),
             );
             return;
         }

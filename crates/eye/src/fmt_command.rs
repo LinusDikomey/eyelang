@@ -1,4 +1,5 @@
 use color_format::{ceprintln, cwriteln};
+use compiler::compiler::ModuleStorage;
 
 use std::{fmt::Write, path::Path};
 
@@ -8,10 +9,22 @@ pub(crate) fn format(
     path: Option<String>,
     fmt_args: crate::args::FmtArgs,
 ) -> Result<(), MainError> {
-    let (name, path) = path_arg(path)?;
+    let (name, storage) = path_arg(path)?;
     eprintln!("Formatting project {name}");
     let mut had_errors = false;
     let mut ok = true;
+    let path = match storage {
+        ModuleStorage::Path(path) => path,
+        ModuleStorage::String(contents) => {
+            let (formatted, errors) = format::format(contents);
+            if errors.error_count() > 0 {
+                // TODO: print errors here
+                return Err(MainError::ErrorsFound);
+            }
+            print!("{formatted}");
+            return Ok(());
+        }
+    };
     for file in compiler::all_project_files_from_root(&path) {
         let src = std::fs::read_to_string(&file).unwrap_or_else(|err| {
             panic!("Failed to read project file {}: {err:?}", file.display())

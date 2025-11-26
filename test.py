@@ -4,7 +4,7 @@ import subprocess
 import time
 from sys import stdout
 
-cargo_test = ['cargo', 'test']
+cargo_test = ['cargo', 'test', '--all']
 build = ['cargo', 'build']
 eye_path = './target/debug/eye'
 run_cmd = [eye_path, 'run']

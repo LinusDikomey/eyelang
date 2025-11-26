@@ -16,8 +16,6 @@ pub enum Cmd {
     ListTargets,
     /// format a project
     Fmt(FmtArgs),
-    // format stdin and print the formatted output to stdout
-    FmtStdin,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]

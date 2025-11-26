@@ -78,23 +78,26 @@ impl Lsp {
     pub fn find_project_of_uri(&self, uri: &Uri) -> Option<ProjectId> {
         let path = uri.path();
         self.projects.iter().copied().find(|&project| {
-            pathdiff::diff_paths(path, &self.compiler.get_project(project).root)
-                .is_some_and(|diff| !diff.components().any(|c| c == Component::ParentDir))
+            pathdiff::diff_paths(
+                path,
+                self.compiler.get_project(project).root.as_ref().unwrap(),
+            )
+            .is_some_and(|diff| !diff.components().any(|c| c == Component::ParentDir))
         })
     }
 
     pub fn uri_from_module(&self, module: ModuleId) -> Uri {
-        Uri::from_path(&self.compiler.modules[module.idx()].path)
+        Uri::from_path(self.compiler.modules[module.idx()].storage.path().unwrap())
     }
 
     pub fn find_module_of_uri(&mut self, uri: &Uri) -> Option<ModuleId> {
         let path = uri.path();
         self.projects.iter().copied().find_map(|project_id| {
             let project = self.compiler.get_project(project_id);
-            if path == project.root {
+            if path == project.root.as_ref().unwrap() {
                 return Some(project.root_module);
             }
-            let diff = pathdiff::diff_paths(path, &project.root)?;
+            let diff = pathdiff::diff_paths(path, project.root.as_ref().unwrap())?;
             if diff.components().any(|c| c == Component::ParentDir) {
                 tracing::debug!("Project at {:?} has no relative path", project.root);
                 return None;
@@ -193,7 +196,9 @@ impl Lsp {
                 emit(&errors.warnings, types::DiagnosticSeverity::Warning);
 
                 let params = types::notification::PublishDiagnosticsParams {
-                    uri: Uri::from_path(&self.compiler.modules[module.idx()].path),
+                    uri: Uri::from_path(
+                        self.compiler.modules[module.idx()].storage.path().unwrap(),
+                    ),
                     // TODO: track versions of files
                     version: None,
                     diagnostics,
