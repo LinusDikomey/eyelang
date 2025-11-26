@@ -1,23 +1,26 @@
-Option :: enum[T] { Some(T), None }
-
-main :: fn {
-    opt: Option[_] = .Some(3)
-    l := List.new()
-    l.push(.None)
-    l.push(.Some(5 as u64))
-    l.push(opt)
-
-    assert(eq(l.get(0), .None))
-    assert(eq(l.get(1), .Some(5)))
-    assert(eq(l.get(2), .Some(3)))
-    println("Success")
+Option :: enum[T] {
+  Some(T)
+  None
 }
 
-eq :: fn[T](a Option[T], b Option[T]) -> bool: match a {
-    .Some(a): if .Some(b) := b: a == b else false,
-    .None: if .None := b: true else false
+main :: fn {
+  opt: Option[_] = .Some(3)
+  l := List.new()
+  l.push(.None)
+  l.push(.Some(5 as u64))
+  l.push(opt)
+
+  assert(eq(l.get(0), .None))
+  assert(eq(l.get(1), .Some(5)))
+  assert(eq(l.get(2), .Some(3)))
+  println("Success")
+}
+
+eq :: fn[T: Eq](a Option[T], b Option[T]) -> bool: match a {
+  .Some(a): if .Some(b) := b: Eq.eq(a, b) else false,
+  .None: if .None := b: true else false,
 }
 
 assert :: fn(b bool) {
-    if !b: panic("assertion failed")
+  if !b: panic("assertion failed")
 }

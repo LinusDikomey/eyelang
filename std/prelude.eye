@@ -1,8 +1,7 @@
 # All items defined here are included in all modules by default. They can be
 # shadowed by other definitions so adding new items here won't break anything.
-
 use root.primitive.bool
-use root.primitive.usize 
+use root.primitive.usize
 use root.primitive.isize
 
 true :: bool.true
@@ -14,6 +13,7 @@ use root.print
 use root.println
 use root.input
 use root.panic
+use root.Eq
 
 use root.option.Option
 use root.result.Result

@@ -856,8 +856,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     else {
                         panic!("expected string literal passed to intrinsic call");
                     };
-                    let return_ty = ctx.builder.types.add(return_ty);
-                    return intrinsics::call_intrinsic(ctx, intrinsic, &arg_refs, return_ty);
+                    return intrinsics::call_intrinsic(ctx, intrinsic, &arg_refs);
                 }
                 // PERF: make it possible to write refs directly into the ir to avoid collecting here
                 let arg_refs = args

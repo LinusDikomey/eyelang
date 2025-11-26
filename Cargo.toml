@@ -33,4 +33,5 @@ segment-list.path = "crates/segment-list"
 pathdiff = "0.2.1"
 tracing = { version = "0.1.41", default-features = false, features = ["release_max_level_off"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-error.version = "0.2.1"
 color-format = { git = "https://github.com/LinusDikomey/color-format" }

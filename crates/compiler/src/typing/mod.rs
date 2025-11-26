@@ -366,7 +366,7 @@ impl TypeTable {
         }
         #[allow(unused)]
         Ok(match info {
-            TypeInfo::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
+            TypeInfo::Known(Type::Invalid) => return Err(InvalidTypeError),
             TypeInfo::UnknownConst => matches!(types.lookup(ty), TypeFull::Const(_)),
             TypeInfo::Known(known) => known.is_same_as(ty)?,
             TypeInfo::Unknown(bounds) => bounds
@@ -574,7 +574,7 @@ impl TypeTable {
             None
         };
         match info {
-            TypeInfo::Instance(BaseType::Invalid, _) => return Err(None),
+            TypeInfo::Known(Type::Invalid) => return Err(None),
             TypeInfo::Enum(id) => {
                 let variants = self.get_enum_variants(id);
                 if let Some(variant) = variants
@@ -773,7 +773,9 @@ impl TypeTable {
             TypeInfo::Integer => s.push_str("<integer>"),
             TypeInfo::Float => s.push_str("<float>"),
             TypeInfo::Instance(base, generics) => match base {
-                BaseType::Invalid => s.push_str("<invalid>"),
+                BaseType::Invalid => unreachable!(
+                    "invalid types should always be represented as Known(Type::Invalid)"
+                ),
                 BaseType::Tuple => {
                     s.push('(');
                     let mut first = true;
@@ -1208,8 +1210,8 @@ impl TypeTable {
     ) -> Result<bool, InvalidTypeError> {
         Ok(match info {
             TypeInfo::Unknown(_) | TypeInfo::Integer | TypeInfo::Float => false,
+            TypeInfo::Known(Type::Invalid) => return Err(InvalidTypeError),
             TypeInfo::Known(ty) => compiler.is_uninhabited(ty, &Instance::EMPTY)?,
-            TypeInfo::Instance(BaseType::Invalid, _) => return Err(InvalidTypeError),
             TypeInfo::Instance(base, instance) => match &compiler.get_base_type_def(base).def {
                 ResolvedTypeContent::Builtin(_) => false,
                 ResolvedTypeContent::Struct(def) => def.all_fields().try_any(|(_, ty)| {
@@ -1391,10 +1393,7 @@ impl TypeInfo {
     pub const UNIT: Self = Self::Instance(BaseType::Tuple, LocalTypeIds::EMPTY);
 
     pub fn is_invalid(&self) -> bool {
-        matches!(
-            self,
-            Self::Instance(BaseType::Invalid, _) | Self::Known(Type::Invalid)
-        )
+        matches!(self, Self::Known(Type::Invalid))
     }
 }
 

@@ -50,6 +50,7 @@ fn main() -> Result<(), MainError> {
     }
     #[cfg(not(feature = "lsp"))]
     enable_tracing(&args);
+
     match args.cmd {
         args::Cmd::ListTargets => {
             list_targets(args.backend);
@@ -403,8 +404,17 @@ fn enable_tracing(args: &args::Args) {
                 }))
                 .init();
         } else {
-            subscriber.with(fmt_layer).init();
+            subscriber
+                .with(fmt_layer)
+                .with(tracing_error::ErrorLayer::default())
+                .init();
         }
+        let default_panic_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let span_trace = tracing_error::SpanTrace::capture();
+            tracing::error!("panic occured:\n{span_trace}");
+            default_panic_hook(info);
+        }));
     }
 }
 

@@ -984,6 +984,14 @@ impl Compiler {
         to_generate: &mut Vec<FunctionToGenerate>,
         f: FunctionToGenerate,
     ) {
+        let _enter = tracing::span!(
+            target: "irgen",
+            tracing::Level::INFO,
+            "generate_ir_body",
+            function = ir[f.ir_id].name,
+        )
+        .entered();
+
         let checked = self.get_hir(f.module, f.ast_function_id);
         assert_eq!(
             checked.generic_count as usize,

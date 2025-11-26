@@ -222,7 +222,7 @@ impl Error {
             Error::UnknownEscapeCode => "invalid escape code",
             Error::TypeExpected => "expected a type",
             Error::ModuleExpected => "expected a module",
-            Error::FunctionOrTypeExpected => "expected a type or function",
+            Error::FunctionOrTypeExpected => "expected a function or type",
             Error::TraitExpected => "expected a trait",
             Error::IntExpected => "integer expected",
             Error::FloatExpected => "float expected",

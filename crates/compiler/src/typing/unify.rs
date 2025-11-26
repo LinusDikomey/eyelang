@@ -18,8 +18,10 @@ pub fn unify(
 ) -> Option<TypeInfo> {
     use TypeInfo::*;
     Some(match (a, b) {
-        (Instance(BaseType::Invalid, _) | Known(Type::Invalid), _)
-        | (_, Instance(BaseType::Invalid, _) | Known(Type::Invalid)) => TypeInfo::INVALID,
+        (Instance(BaseType::Invalid, _), _) | (_, Instance(BaseType::Invalid, _)) => {
+            unreachable!("Invalid type should always be represented as Known(Type::Invalid)")
+        }
+        (Known(Type::Invalid), _) | (_, Known(Type::Invalid)) => TypeInfo::INVALID,
         (Unknown(a), Unknown(b)) => {
             if a.is_empty() && b.is_empty() {
                 Unknown(Bounds::EMPTY)

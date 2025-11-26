@@ -51,7 +51,7 @@ pub fn check_call(
         .types
         .type_to_string(ctx.compiler, ctx.hir.types[called_ty], &mut s);
     match ctx.hir.types[called_ty] {
-        TypeInfo::Instance(BaseType::Invalid, _) => {
+        TypeInfo::Known(Type::Invalid) => {
             ctx.invalidate(expected);
             Node::Invalid
         }

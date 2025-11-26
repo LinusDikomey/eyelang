@@ -221,6 +221,10 @@ impl<Env: HasEnvironment> Builder<Env> {
         }
     }
 
+    pub fn get_ref_ty(&self, arg: Ref) -> TypeId {
+        self.insts[arg.idx()].ty
+    }
+
     pub fn finish_body(self) -> (crate::FunctionIr, Types) {
         let ir = crate::FunctionIr {
             blocks: self.blocks,
