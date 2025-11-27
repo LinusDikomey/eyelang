@@ -637,11 +637,11 @@ impl TypeTable {
         );
     }
 
-    pub fn try_specify_type_instance(
+    pub fn try_specify_type_instance<'a>(
         &mut self,
         id: LocalTypeId,
         ty: Type,
-        generics: LocalTypeIds,
+        generics: impl Into<LocalOrGlobalInstance<'a>>,
         function_generics: &Generics,
         compiler: &Compiler,
     ) -> Result<(), (TypeInfo, TypeInfo)> {
@@ -1138,7 +1138,14 @@ impl TypeTable {
                 }
                 TypeInfo::Integer if base.is_int() => true,
                 TypeInfo::Float if base.is_float() => true,
-                TypeInfo::Enum(_id) => todo!("unify inferred enums with known"),
+                TypeInfo::Enum(enum_id) => unify::local_enum_with_instance(
+                    compiler,
+                    self,
+                    function_generics,
+                    enum_id,
+                    base,
+                    instance,
+                ),
                 TypeInfo::Instance(info_base, info_instance)
                     if base == info_base && instance.len() as u32 == info_instance.count =>
                 {
@@ -1269,6 +1276,11 @@ pub enum LocalOrGlobalInstance<'a> {
 impl<'a> From<LocalTypeIds> for LocalOrGlobalInstance<'a> {
     fn from(value: LocalTypeIds) -> Self {
         Self::Local(value)
+    }
+}
+impl<'a> From<&'a [Type]> for LocalOrGlobalInstance<'a> {
+    fn from(value: &'a [Type]) -> Self {
+        Self::Global(value)
     }
 }
 impl<'a> LocalOrGlobalInstance<'a> {

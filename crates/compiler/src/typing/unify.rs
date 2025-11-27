@@ -3,7 +3,7 @@ use crate::{
     check::expr::type_from_variant_count,
     compiler::{Generics, ResolvedTypeContent},
     types::BaseType,
-    typing::{Bounds, LocalTypeIds, TypeInfoOrIdx, traits},
+    typing::{Bounds, LocalOrGlobalInstance, LocalTypeIds, TypeInfoOrIdx, traits},
 };
 
 use super::{LocalTypeId, TypeInfo, TypeTable};
@@ -104,48 +104,15 @@ pub fn unify(
             a
         }
         (Instance(id, generics), Enum(enum_id)) | (Enum(enum_id), Instance(id, generics)) => {
-            let resolved = compiler.get_base_type_def(id);
-            let ResolvedTypeContent::Enum(def) = &resolved.def else {
-                return None;
-            };
-            let variants = &types.enums[enum_id.idx()];
-            if let Some(&first_variant) = variants.variants.first() {
-                let ordinal_type = types[first_variant].args.iter().next().unwrap();
-                debug_assert!(matches!(
-                    types.types[ordinal_type.idx()],
-                    TypeInfoOrIdx::TypeInfo(_)
-                ));
-                types.types[ordinal_type.idx()] =
-                    Known(type_from_variant_count(def.variants.len() as _)).into();
-            }
-            // iterate by index because we need to borrow types mutably during the loop
-            for variant_index in 0..variants.variants.len() {
-                let variant = types.enums[enum_id.idx()].variants[variant_index];
-                let variant = &mut types.variants[variant.idx()];
-                // TODO: make it possible to return specific errors here so it's more clear when an
-                // enum doesn't match a definition
-                let (_, declared_ordinal, declared_args) = def.get_by_name(&variant.name)?;
-                variant.ordinal = declared_ordinal;
-                // add one because the inferred enum args contain the ordinal type
-                if variant.args.count != declared_args.len() as u32 + 1 {
-                    return None;
-                }
-                for (arg, &declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
-                    if types
-                        .try_specify_type_instance(
-                            arg,
-                            declared_arg,
-                            generics,
-                            function_generics,
-                            compiler,
-                        )
-                        .is_err()
-                    {
-                        return None;
-                    }
-                }
-            }
-            TypeInfo::Instance(id, generics)
+            return local_enum_with_instance(
+                compiler,
+                types,
+                function_generics,
+                enum_id,
+                id,
+                generics,
+            )
+            .then_some(Instance(id, generics));
         }
         (Enum(a), Enum(b)) => {
             // always merge into a_variants which becomes the longer variant list to try to avoid
@@ -276,4 +243,53 @@ pub fn unify(
         }
         _ => return None,
     })
+}
+
+pub fn local_enum_with_instance<'a>(
+    compiler: &Compiler,
+    types: &mut TypeTable,
+    function_generics: &Generics,
+    enum_id: super::InferredEnumId,
+    id: BaseType,
+    instance: impl Into<LocalOrGlobalInstance<'a>>,
+) -> bool {
+    let instance = instance.into();
+    let resolved = compiler.get_base_type_def(id);
+    let ResolvedTypeContent::Enum(def) = &resolved.def else {
+        return false;
+    };
+    let variants = &types.enums[enum_id.idx()];
+    if let Some(&first_variant) = variants.variants.first() {
+        let ordinal_type = types[first_variant].args.iter().next().unwrap();
+        debug_assert!(matches!(
+            types.types[ordinal_type.idx()],
+            TypeInfoOrIdx::TypeInfo(_)
+        ));
+        types.types[ordinal_type.idx()] =
+            TypeInfo::Known(type_from_variant_count(def.variants.len() as _)).into();
+    }
+    // iterate by index because we need to borrow types mutably during the loop
+    for variant_index in 0..variants.variants.len() {
+        let variant = types.enums[enum_id.idx()].variants[variant_index];
+        let variant = &mut types.variants[variant.idx()];
+        // TODO: make it possible to return specific errors here so it's more clear when an
+        // enum doesn't match a definition
+        let Some((_, declared_ordinal, declared_args)) = def.get_by_name(&variant.name) else {
+            return false;
+        };
+        variant.ordinal = declared_ordinal;
+        // add one because the inferred enum args contain the ordinal type
+        if variant.args.count != declared_args.len() as u32 + 1 {
+            return false;
+        }
+        for (arg, &declared_arg) in variant.args.iter().skip(1).zip(declared_args) {
+            if types
+                .try_specify_type_instance(arg, declared_arg, instance, function_generics, compiler)
+                .is_err()
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
