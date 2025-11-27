@@ -356,12 +356,14 @@ impl TypeTable {
         types: &Types,
         info: TypeInfo,
         ty: Type,
+        on_generic_selected: &mut impl FnMut(u8, TypeInfo) -> bool,
     ) -> Result<bool, InvalidTypeError> {
         let full = types.lookup(ty);
-        if let TypeFull::Generic(_) = full {
+        if let TypeFull::Generic(i) = full {
             // FIXME: it is not always correct to return true here as the generic may appear in
             // multiple places. Therefore, unification would be needed but isn't trivially possible
             //
+            on_generic_selected(i, info);
             return Ok(true);
         }
         #[allow(unused)]
@@ -382,7 +384,7 @@ impl TypeTable {
                     return Ok(false);
                 }
                 for (v, &ty) in generics.iter().zip(type_generics) {
-                    if !self.compatible_with_type(types, self[v], ty)? {
+                    if !self.compatible_with_type(types, self[v], ty, on_generic_selected)? {
                         return Ok(false);
                     }
                 }
@@ -1050,17 +1052,11 @@ impl TypeTable {
                 };
                 // TODO: probably should retry impl candidates in a loop as long as one bound has
                 // multiple candidates but progress is made
-                match traits::get_impl_candidates(
-                    compiler,
-                    &bound,
-                    info,
-                    &mut self,
-                    function_generics,
-                ) {
-                    traits::Candidates::Invalid => {
+                match self.unify_bound_with_info(compiler, info, bound) {
+                    Err(InvalidTypeError) => {
                         continue;
                     }
-                    traits::Candidates::None => {
+                    Ok(None) => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
                         self.type_to_string(compiler, function_generics, info, &mut type_name);
@@ -1074,7 +1070,7 @@ impl TypeTable {
                         );
                         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::INVALID);
                     }
-                    traits::Candidates::Unique { instance } => {
+                    Ok(Some(instance)) => {
                         let span = || ModuleSpan { module, span };
                         match instance {
                             TypeInfoOrIdx::TypeInfo(info) => {
@@ -1084,41 +1080,42 @@ impl TypeTable {
                                 self.unify(idx, self_idx, function_generics, compiler, span)
                             }
                         }
-                    }
-                    traits::Candidates::Multiple => {
-                        let name = checked_trait.name.clone();
-                        let retry_with = match info {
-                            TypeInfo::Integer => Some(Primitive::I32.into()),
-                            TypeInfo::Float => Some(Primitive::F32.into()),
-                            _ => None,
-                        };
-                        let new_candidate = retry_with.and_then(|new_info| {
-                            let new_candidates = traits::get_impl_candidates(
-                                compiler,
-                                &bound,
-                                new_info,
-                                &mut self,
-                                function_generics,
-                            );
-                            if let traits::Candidates::Unique { instance: _ } = new_candidates {
-                                Some(new_info)
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(new_info) = new_candidate {
-                            self.replace(idx, new_info);
-                        } else {
-                            compiler.errors.emit(
-                                module,
-                                Error::TypeAnnotationNeeded {
-                                    bound: name, // TODO: should also show generics here
-                                }
-                                .at_span(span),
-                            );
-                            self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::INVALID);
-                        }
-                    }
+                    } // TODO: reimplement retry properly, maybe inside unify_bound_with_info
+                      // Ok(traits::Candidates::Multiple) => {
+                      //     let name = checked_trait.name.clone();
+                      //     let retry_with = match info {
+                      //         TypeInfo::Integer => Some(Primitive::I32.into()),
+                      //         TypeInfo::Float => Some(Primitive::F32.into()),
+                      //         _ => None,
+                      //     };
+                      //     let new_candidate = retry_with.and_then(|new_info| {
+                      //         todo!("retrying with more concrete type")
+                      //         // let new_candidates = traits::get_impl_candidates(
+                      //         //     compiler,
+                      //         //     &bound,
+                      //         //     new_info,
+                      //         //     &mut self,
+                      //         //     function_generics,
+                      //         // );
+                      //         // if let traits::Candidates::Unique { instance: _ } = new_candidates {
+                      //         //     Some(new_info)
+                      //         // } else {
+                      //         //     None
+                      //         // }
+                      //     });
+                      //     if let Some(new_info) = new_candidate {
+                      //         self.replace(idx, new_info);
+                      //     } else {
+                      //         compiler.errors.emit(
+                      //             module,
+                      //             Error::TypeAnnotationNeeded {
+                      //                 bound: name, // TODO: should also show generics here
+                      //             }
+                      //             .at_span(span),
+                      //         );
+                      //         self.types[idx.0 as usize] = TypeInfoOrIdx::TypeInfo(TypeInfo::INVALID);
+                      //     }
+                      // }
                 }
             }
         }
@@ -1171,7 +1168,10 @@ impl TypeTable {
                 TypeInfo::Unknown(bounds) => {
                     for bound in bounds.iter() {
                         let bound = *self.get_bound(bound);
-                        if !self.unify_bound_with_type(ty, bound, compiler)? {
+                        if self
+                            .unify_bound_with_info(compiler, TypeInfo::Known(ty), bound)?
+                            .is_none()
+                        {
                             return Ok(false);
                         }
                     }
@@ -1209,44 +1209,134 @@ impl TypeTable {
         })
     }
 
-    fn unify_bound_with_type(
+    // fn unify_bound_with_type(
+    //     &mut self,
+    //     ty: Type,
+    //     bound: Bound,
+    //     compiler: &Compiler,
+    // ) -> Result<bool, InvalidTypeError> {
+    //     let mut has_invalid_type = false;
+    //     let known_instance =
+    //         if let TypeFull::Instance(self_base, self_instance) = compiler.types.lookup(ty) {
+    //             Some((self_base, self_instance))
+    //         } else {
+    //             None
+    //         };
+    //     let candidates =
+    //         self.unify_bound_with_info(compiler, TypeInfo::Known(ty), known_instance, bound)?;
+    //     match candidates {
+    //         traits::Candidates::None => Ok(false),
+    //         traits::Candidates::Invalid => Err(InvalidTypeError),
+    //         traits::Candidates::Multiple => Ok(true),
+    //         traits::Candidates::Unique {
+    //             instance: ((_, impl_), impl_generics),
+    //         } => {
+    //             let impl_generics = self.add_multiple_info_or_idx(impl_generics);
+    //             for (var, &ty) in bound.generics.iter().zip(&impl_.trait_instance) {
+    //                 let (var, _) = self.find_shorten(var);
+    //                 let ty = self.from_type_instance(&compiler.types, ty, impl_generics);
+    //                 self.replace(var, ty);
+    //             }
+    //             Ok(true)
+    //         }
+    //     }
+    // }
+
+    pub fn specify_bound(&mut self, compiler: &Compiler, var: LocalTypeId, bound: Bound) -> bool {
+        let (var, info) = self.find_shorten(var);
+        match self.unify_bound_with_info(compiler, info, bound) {
+            Ok(Some(info_or_idx)) => {
+                self.replace_value(var, info_or_idx);
+                true
+            }
+            Ok(None) => {
+                self.invalidate(var);
+                false
+            }
+            Err(InvalidTypeError) => {
+                self.invalidate(var);
+                true
+            }
+        }
+    }
+
+    pub fn unify_bound_with_info(
         &mut self,
-        ty: Type,
-        bound: Bound,
         compiler: &Compiler,
-    ) -> Result<bool, InvalidTypeError> {
+        ty: TypeInfo,
+        bound: Bound,
+    ) -> Result<Option<TypeInfoOrIdx>, InvalidTypeError> {
         let mut has_invalid_type = false;
-        let candidates =
-            compiler.get_impl(
-                bound.trait_id,
-                ty,
-                bound.generics.iter(),
-                |var, ty| match self.compatible_with_type(&compiler.types, self[var], ty) {
-                    Ok(b) => b,
-                    Err(InvalidTypeError) => {
-                        has_invalid_type = true;
-                        false
+        let base = match ty {
+            TypeInfo::Known(ty) => {
+                if let TypeFull::Instance(base, _) = compiler.types.lookup(ty) {
+                    Some(base)
+                } else {
+                    None
+                }
+            }
+            TypeInfo::Instance(base, _) => Some(base),
+            TypeInfo::Unknown(bounds) if bounds.is_empty() => {
+                return Ok(Some(TypeInfo::Unknown(self.add_bounds([bound])).into()));
+            }
+            TypeInfo::Unknown(bounds) => {
+                // PERF: avoid the vec and allocate into new bounds instead (helper method extend_bounds using copy_within)
+                let mut bounds = self.get_bounds(bounds).to_vec();
+                bounds.push(bound);
+                return Ok(Some(TypeInfo::Unknown(self.add_bounds(bounds)).into()));
+            }
+            _ => None,
+        };
+        let candidates = compiler.get_impl_candidates(
+            bound.trait_id,
+            TypeInfoOrIdx::TypeInfo(ty),
+            base,
+            bound.generics.iter().map(TypeInfoOrIdx::Idx),
+            |impl_ty, ty, types, instance| match self.compatible_with_type(
+                types,
+                self.get_info_or_idx(ty),
+                impl_ty,
+                &mut |i, info| match &mut instance[usize::from(i)] {
+                    Some(_existing) => {
+                        // FIXME: should do out-of-place unification somehow i.e. get the new
+                        // TypeInfo that represents the unified type independently.
+                        // If the unification fails, return false
+                        true
+                    }
+                    val @ None => {
+                        *val = Some(TypeInfoOrIdx::TypeInfo(info));
+                        true
                     }
                 },
-            );
+            ) {
+                Ok(b) => b,
+                Err(InvalidTypeError) => {
+                    has_invalid_type = true;
+                    false
+                }
+            },
+        );
         if has_invalid_type {
             return Err(InvalidTypeError);
         }
         match candidates {
-            traits::Candidates::None => Ok(false),
+            traits::Candidates::None => Ok(None),
             traits::Candidates::Invalid => Err(InvalidTypeError),
-            traits::Candidates::Multiple => Ok(true),
+            traits::Candidates::Multiple => Ok(Some(ty.into())),
             traits::Candidates::Unique {
                 instance: ((_, impl_), impl_generics),
             } => {
-                let impl_generics =
-                    self.add_multiple(impl_generics.into_iter().map(TypeInfo::Known));
-                for (var, &ty) in bound.generics.iter().zip(&impl_.trait_generics) {
+                let impl_generics = self.add_multiple_info_or_idx(impl_generics);
+                for (var, &ty) in bound.generics.iter().zip(&impl_.trait_instance) {
                     let (var, _) = self.find_shorten(var);
                     let ty = self.from_type_instance(&compiler.types, ty, impl_generics);
                     self.replace(var, ty);
                 }
-                Ok(true)
+                Ok(Some(self.from_type_instance(
+                    &compiler.types,
+                    impl_.impl_ty,
+                    impl_generics,
+                )))
             }
         }
     }

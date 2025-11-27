@@ -1,4 +1,3 @@
-use crate::check::traits;
 use crate::types::{BaseType, BuiltinType, TypeFull};
 use crate::{InvalidTypeError, Type};
 use crate::{
@@ -51,8 +50,7 @@ pub fn check_call(
         .types
         .type_to_string(ctx.compiler, ctx.generics, ctx.hir.types[called_ty], &mut s);
 
-    let called_type_info = ctx.hir.types[called_ty];
-    match called_type_info {
+    match ctx.hir.types[called_ty] {
         TypeInfo::Known(Type::Invalid) => {
             ctx.invalidate(expected);
             return Node::Invalid;
@@ -396,22 +394,9 @@ pub fn check_call(
         generics: fn_instance,
         span: call_span,
     };
-    let candidates = traits::get_impl_candidates(
-        ctx.compiler,
-        &fn_bound,
-        called_type_info,
-        &mut ctx.hir.types,
-        ctx.generics,
-    );
-    match candidates {
-        traits::Candidates::Invalid => return Node::Invalid,
-        traits::Candidates::None => {
-            ctx.emit(Error::FunctionOrTypeExpected.at_span(ctx.span(call.called_expr)));
-            ctx.invalidate(expected);
-            return Node::Invalid;
-        }
-        traits::Candidates::Unique { .. } | traits::Candidates::Multiple => {}
-    }
+    ctx.hir
+        .types
+        .specify_bound(ctx.compiler, called_ty, fn_bound);
 
     let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
     for ((arg, ty), node_id) in call

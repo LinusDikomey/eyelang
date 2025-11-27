@@ -722,57 +722,55 @@ impl Compiler {
             .as_ref()
     }
 
-    pub fn get_impl<T>(
+    pub fn get_impl_candidates<T: Copy>(
         &self,
         trait_id: (ModuleId, ast::TraitId),
-        ty: Type,
-        trait_generics: impl Clone + ExactSizeIterator<Item = T>,
-        mut type_fits: impl FnMut(T, Type) -> bool,
-    ) -> Candidates<((ModuleId, &Impl), Box<[Type]>)> {
+        ty: T,
+        instance: Option<BaseType>,
+        trait_instance: impl Clone + ExactSizeIterator<Item = T>,
+        mut type_fits: impl FnMut(Type, T, &Types, &mut [Option<T>]) -> bool,
+    ) -> Candidates<((ModuleId, &Impl), Box<[T]>)> {
+        tracing::debug!(target: "traitsolve", "❓ Finding instance of {trait_id:?}");
         // TODO: this is definitely wrong in some edge cases
         let mut impl_generics = Vec::new();
-        // TODO: why aren't the generics of the type used here
-        let def = if let TypeFull::Instance(base, _generics) = self.types.lookup(ty) {
-            Some(self.get_base_type_def(base))
-        } else {
-            None
-        };
         let Some(checked_trait) = self.get_checked_trait(trait_id.0, trait_id.1) else {
             return Candidates::Invalid;
         };
-        let impls = def
+        let impls = instance
             .iter()
-            .flat_map(|def| {
-                def.inherent_trait_impls
+            .filter_map(|&base| {
+                self.get_base_type_def(base)
+                    .inherent_trait_impls
                     .get(&trait_id)
-                    .map_or(&[] as &[_], |impls| impls.as_slice())
             })
+            .flatten()
             .chain(&checked_trait.impls);
         let mut found = None;
         'impls: for impl_ in impls {
             impl_generics.clear();
-            impl_generics.resize(impl_.generics.count().into(), Type::Invalid);
-            if !traits::match_instance(impl_.impl_ty, ty, &self.types, &mut impl_generics) {
+            impl_generics.resize_with(impl_.generics.count().into(), || None);
+            if !type_fits(impl_.impl_ty, ty, &self.types, &mut impl_generics) {
+                tracing::debug!(target: "traitsolve", "❌ Instance candidate type is not a match");
                 continue 'impls;
             }
-            let trait_generics = trait_generics.clone();
-            debug_assert_eq!(trait_generics.len(), impl_.trait_generics.len());
-            for (&impl_ty, ty) in impl_.trait_generics.iter().zip(trait_generics) {
-                if !type_fits(ty, self.types.instantiate(impl_ty, &impl_generics)) {
+            let trait_instance = trait_instance.clone();
+            debug_assert_eq!(trait_instance.len(), impl_.trait_instance.len());
+            for (&impl_ty, ty) in impl_.trait_instance.iter().zip(trait_instance) {
+                if !type_fits(impl_ty, ty, &self.types, &mut impl_generics) {
+                    tracing::debug!(target: "traitsolve", "❌ Instance generic type is not a match");
                     continue 'impls;
                 }
             }
-            debug_assert!(
-                impl_generics.iter().all(|ty| !matches!(*ty, Type::Invalid)),
-                "impl generics were not properly instantiated"
-            );
+            let impl_generics = impl_generics
+                .iter()
+                .map(|ty| ty.expect("Impl generics were not properly instantiated"))
+                .collect();
+            tracing::debug!(target: "traitsolve", "✅ Matching instance found");
             if found.is_some() {
+                tracing::debug!(target: "traitsolve", "⚠️ Multiple qualifying candidates");
                 return Candidates::Multiple;
             }
-            found = Some((
-                (impl_.impl_module, impl_),
-                std::mem::take(&mut impl_generics).into_boxed_slice(),
-            ));
+            found = Some(((impl_.impl_module, impl_), impl_generics));
         }
         if let Some(instance) = found {
             Candidates::Unique { instance }

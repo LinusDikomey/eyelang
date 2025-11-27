@@ -132,7 +132,6 @@ fn main() -> Result<(), MainError> {
         .transpose()?;
 
     if tracing::enabled!(target: "hir", tracing::Level::DEBUG) {
-        eprintln!("[hir]: Displaying HIR:");
         compiler.print_project_hir(project);
     }
 

@@ -3,7 +3,7 @@ use crate::{
     check::expr::type_from_variant_count,
     compiler::{Generics, ResolvedTypeContent},
     types::BaseType,
-    typing::{Bounds, LocalOrGlobalInstance, LocalTypeIds, TypeInfoOrIdx, traits},
+    typing::{Bounds, LocalOrGlobalInstance, LocalTypeIds, TypeInfoOrIdx},
 };
 
 use super::{LocalTypeId, TypeInfo, TypeTable};
@@ -46,22 +46,9 @@ pub fn unify(
                 let bound = *types.get_bound(bound);
                 let mut s = String::new();
                 types.type_to_string(compiler, function_generics, chosen_ty, &mut s);
-                let candidates = traits::get_impl_candidates(
-                    compiler,
-                    &bound,
-                    chosen_ty,
-                    types,
-                    function_generics,
-                );
-                match candidates {
-                    traits::Candidates::None => return None, // TODO: better errors
-                    traits::Candidates::Invalid => return Some(TypeInfo::INVALID),
-                    traits::Candidates::Multiple => {
-                        // TODO: might emit multiple checks since this path happens when a single
-                        // bound is not fulfilled but will check all bounds again
-                        types.defer_impl_check(unified_id, bounds);
-                    }
-                    traits::Candidates::Unique { instance } => match instance {
+                match types.unify_bound_with_info(compiler, chosen_ty, bound) {
+                    // TODO: is defer_impl_check just no longer needed
+                    Ok(Some(new)) => match new {
                         TypeInfoOrIdx::TypeInfo(info) => {
                             chosen_ty = unify(
                                 chosen_ty,
@@ -80,6 +67,11 @@ pub fn unify(
                             types.replace(idx, TypeInfoOrIdx::Idx(unified_id));
                         }
                     },
+                    Ok(None) => {
+                        // TODO: better error
+                        return None;
+                    }
+                    Err(InvalidTypeError) => return Some(TypeInfo::INVALID),
                 }
             }
             chosen_ty

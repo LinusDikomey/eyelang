@@ -4,15 +4,13 @@ use error::span::TSpan;
 use parser::ast::{self, Ast, TraitId};
 use parser::ast::{FunctionId, ModuleId};
 
-use super::{LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable};
+use super::{LocalTypeIds, TypeInfoOrIdx, TypeTable};
 
-use crate::helpers::IteratorExt;
 use crate::types::{BaseType, TypeFull, Types};
 use crate::{
     Compiler,
     compiler::Signature,
     compiler::{CheckedTrait, Generics},
-    typing::Bound,
 };
 use crate::{InvalidTypeError, Type};
 
@@ -156,7 +154,7 @@ pub fn check_impl(
     }
     Some(Impl {
         generics: impl_generics,
-        trait_generics,
+        trait_instance: trait_generics,
         impl_ty,
         impl_module: module,
         functions: function_ids,
@@ -171,152 +169,152 @@ pub enum Candidates<I> {
     Unique { instance: I },
 }
 
-pub fn get_impl_candidates(
-    compiler: &Compiler,
-    bound: &Bound,
-    ty: TypeInfo,
-    types: &mut TypeTable,
-    function_generics: &Generics,
-) -> Candidates<TypeInfoOrIdx> {
-    let Some(checked_trait) = compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1) else {
-        return Candidates::Invalid;
-    };
-    let mut found = None;
-    //let resolved;
-    let mut on_instance = |base: BaseType| {
-        let resolved = compiler.get_base_type_def(base);
-        let impls_for_ty = resolved
-            .inherent_trait_impls
-            .get(&bound.trait_id)
-            .map_or(&[] as &[Impl], |v| v.as_slice());
-        for impl_ in impls_for_ty {
-            match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
-                Ok(true) => {
-                    if found.is_some() {
-                        return Some(Candidates::Multiple);
-                    }
-                    found = Some(impl_);
-                }
-                Ok(false) => {}
-                Err(InvalidTypeError) => return Some(Candidates::Invalid),
-            }
-        }
-        None
-    };
-    match ty {
-        TypeInfo::Unknown(_) => return Candidates::Multiple,
-        TypeInfo::Instance(base, _) => {
-            if let Some(candidates) = on_instance(base) {
-                return candidates;
-            }
-        }
-        TypeInfo::Known(id) => {
-            match compiler.types.lookup(id) {
-                TypeFull::Instance(base, _) => {
-                    if let Some(candidates) = on_instance(base) {
-                        return candidates;
-                    }
-                }
-                TypeFull::Generic(i) => {
-                    let mut compatible_bound = None;
-                    for generic_bound in function_generics.get_bounds(i) {
-                        if generic_bound.trait_id != bound.trait_id {
-                            continue;
-                        }
+// pub fn get_impl_candidates(
+//     compiler: &Compiler,
+//     bound: &Bound,
+//     ty: TypeInfo,
+//     types: &mut TypeTable,
+//     function_generics: &Generics,
+// ) -> Candidates<TypeInfoOrIdx> {
+//     let Some(checked_trait) = compiler.get_checked_trait(bound.trait_id.0, bound.trait_id.1) else {
+//         return Candidates::Invalid;
+//     };
+//     let mut found = None;
+//     //let resolved;
+//     let mut on_instance = |base: BaseType| {
+//         let resolved = compiler.get_base_type_def(base);
+//         let impls_for_ty = resolved
+//             .inherent_trait_impls
+//             .get(&bound.trait_id)
+//             .map_or(&[] as &[Impl], |v| v.as_slice());
+//         for impl_ in impls_for_ty {
+//             match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
+//                 Ok(true) => {
+//                     if found.is_some() {
+//                         return Some(Candidates::Multiple);
+//                     }
+//                     found = Some(impl_);
+//                 }
+//                 Ok(false) => {}
+//                 Err(InvalidTypeError) => return Some(Candidates::Invalid),
+//             }
+//         }
+//         None
+//     };
+//     match ty {
+//         TypeInfo::Unknown(_) => return Candidates::Multiple,
+//         TypeInfo::Instance(base, _) => {
+//             if let Some(candidates) = on_instance(base) {
+//                 return candidates;
+//             }
+//         }
+//         TypeInfo::Known(id) => {
+//             match compiler.types.lookup(id) {
+//                 TypeFull::Instance(base, _) => {
+//                     if let Some(candidates) = on_instance(base) {
+//                         return candidates;
+//                     }
+//                 }
+//                 TypeFull::Generic(i) => {
+//                     let mut compatible_bound = None;
+//                     for generic_bound in function_generics.get_bounds(i) {
+//                         if generic_bound.trait_id != bound.trait_id {
+//                             continue;
+//                         }
 
-                        debug_assert_eq!(
-                            generic_bound.generics.len(),
-                            bound.generics.count as usize
-                        );
-                        let Ok(compatible) = generic_bound
-                            .generics
-                            .iter()
-                            .zip(bound.generics.iter())
-                            .try_all(|(&ty, idx)| {
-                                types.compatible_with_type(&compiler.types, types[idx], ty)
-                            })
-                        else {
-                            return Candidates::Invalid;
-                        };
-                        if compatible {
-                            if compatible_bound.is_some() {
-                                return Candidates::Multiple;
-                            }
-                            compatible_bound = Some(generic_bound);
-                        }
-                    }
-                    if let Some(generic_bound) = compatible_bound {
-                        for (&ty, idx) in generic_bound.generics.iter().zip(bound.generics.iter()) {
-                            // type was checked to be compatible so should be safe to replace
-                            types.replace_value(idx, TypeInfo::Known(ty));
-                        }
-                        return Candidates::Unique {
-                            instance: ty.into(),
-                        };
-                    }
-                }
-                TypeFull::Const(_) => todo!(),
-            }
-        }
-        _ => {} // type doesn't have inherent impls
-    };
-    for impl_ in &checked_trait.impls {
-        match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
-            Ok(true) => {
-                if found.is_some() {
-                    return Candidates::Multiple;
-                }
-                found = Some(impl_);
-            }
-            Ok(false) => {}
-            Err(InvalidTypeError) => return Candidates::Invalid,
-        }
-    }
-    if let Some(found) = found {
-        Candidates::Unique {
-            instance: found.instantiate(
-                bound.generics,
-                function_generics,
-                types,
-                compiler,
-                bound.span,
-            ),
-        }
-    } else {
-        Candidates::None
-    }
-}
+//                         debug_assert_eq!(
+//                             generic_bound.generics.len(),
+//                             bound.generics.count as usize
+//                         );
+//                         let Ok(compatible) = generic_bound
+//                             .generics
+//                             .iter()
+//                             .zip(bound.generics.iter())
+//                             .try_all(|(&ty, idx)| {
+//                                 types.compatible_with_type(&compiler.types, types[idx], ty)
+//                             })
+//                         else {
+//                             return Candidates::Invalid;
+//                         };
+//                         if compatible {
+//                             if compatible_bound.is_some() {
+//                                 return Candidates::Multiple;
+//                             }
+//                             compatible_bound = Some(generic_bound);
+//                         }
+//                     }
+//                     if let Some(generic_bound) = compatible_bound {
+//                         for (&ty, idx) in generic_bound.generics.iter().zip(bound.generics.iter()) {
+//                             // type was checked to be compatible so should be safe to replace
+//                             types.replace_value(idx, TypeInfo::Known(ty));
+//                         }
+//                         return Candidates::Unique {
+//                             instance: ty.into(),
+//                         };
+//                     }
+//                 }
+//                 TypeFull::Const(_) => todo!(),
+//             }
+//         }
+//         _ => {} // type doesn't have inherent impls
+//     };
+//     for impl_ in &checked_trait.impls {
+//         match is_candidate_valid(&compiler.types, impl_, bound.generics, ty, types) {
+//             Ok(true) => {
+//                 if found.is_some() {
+//                     return Candidates::Multiple;
+//                 }
+//                 found = Some(impl_);
+//             }
+//             Ok(false) => {}
+//             Err(InvalidTypeError) => return Candidates::Invalid,
+//         }
+//     }
+//     if let Some(found) = found {
+//         Candidates::Unique {
+//             instance: found.instantiate(
+//                 bound.generics,
+//                 function_generics,
+//                 types,
+//                 compiler,
+//                 bound.span,
+//             ),
+//         }
+//     } else {
+//         Candidates::None
+//     }
+// }
 
-fn is_candidate_valid(
-    types: &Types,
-    impl_: &Impl,
-    trait_generics: LocalTypeIds,
-    info: TypeInfo,
-    table: &TypeTable,
-) -> Result<bool, InvalidTypeError> {
-    debug_assert_eq!(trait_generics.count, impl_.trait_generics.len() as u32);
-    // TODO: compatible_with_type needs to track generics and somehow determine if they can be
-    // unified without updating the Type Table
-    Ok(trait_generics
-        .iter()
-        .zip(&impl_.trait_generics)
-        .try_all(|(idx, &ty)| table.compatible_with_type(types, table[idx], ty))?
-        && table.compatible_with_type(types, info, impl_.impl_ty)?)
-}
+// fn is_candidate_valid(
+//     types: &Types,
+//     impl_: &Impl,
+//     trait_generics: LocalTypeIds,
+//     info: TypeInfo,
+//     table: &TypeTable,
+// ) -> Result<bool, InvalidTypeError> {
+//     debug_assert_eq!(trait_generics.count, impl_.trait_instance.len() as u32);
+//     // TODO: compatible_with_type needs to track generics and somehow determine if they can be
+//     // unified without updating the Type Table
+//     Ok(trait_generics
+//         .iter()
+//         .zip(&impl_.trait_instance)
+//         .try_all(|(idx, &ty)| table.compatible_with_type(types, table[idx], ty))?
+//         && table.compatible_with_type(types, info, impl_.impl_ty)?)
+// }
 
 pub fn match_instance(
     implemented_ty: Type,
     ty: Type,
     types: &Types,
-    instance: &mut [Type],
+    instance: &mut [Option<Type>],
 ) -> bool {
     match types.lookup(implemented_ty) {
         TypeFull::Generic(i) => {
             let instance_ty = &mut instance[usize::from(i)];
-            if *instance_ty != Type::Invalid && *instance_ty != ty {
+            if instance_ty.is_some_and(|instance_ty| instance_ty != ty) {
                 return false;
             }
-            *instance_ty = ty;
+            *instance_ty = Some(ty);
             true
         }
         TypeFull::Instance(implemented_base, implemented_generics) => match types.lookup(ty) {
@@ -351,7 +349,7 @@ pub fn match_instance(
 #[derive(Debug)]
 pub struct Impl {
     pub generics: Generics,
-    pub trait_generics: Vec<Type>,
+    pub trait_instance: Vec<Type>,
     pub impl_ty: Type,
     pub impl_module: ModuleId,
     pub functions: Vec<FunctionId>,
@@ -367,8 +365,8 @@ impl Impl {
         span: TSpan,
     ) -> TypeInfoOrIdx {
         let impl_generics = self.generics.instantiate(types, span);
-        debug_assert_eq!(trait_generics.count, self.trait_generics.len() as u32);
-        for (idx, &ty) in trait_generics.iter().zip(&self.trait_generics) {
+        debug_assert_eq!(trait_generics.count, self.trait_instance.len() as u32);
+        for (idx, &ty) in trait_generics.iter().zip(&self.trait_instance) {
             types.specify_type_instance(
                 idx,
                 ty,

@@ -11,8 +11,8 @@ use std::num::NonZero;
 use ir::{BlockId, BlockTarget, Environment, Ref};
 use parser::ast::{self, ModuleId};
 
-use crate::check::traits::Candidates;
-use crate::compiler::{Dialects, FunctionToGenerate, Instance, Instances, builtins};
+use crate::check::traits::{self, Candidates};
+use crate::compiler::{Dialects, FunctionToGenerate, Generics, Instance, Instances, builtins};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::types::{BaseType, TypeFull};
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
@@ -68,6 +68,7 @@ struct NoReturn;
 
 macro_rules! crash_point {
     ($ctx: expr) => {{
+        tracing::warn!(target: "irgen", file = file!(), line = line!(), "Building crash point");
         build_crash_point($ctx);
         return Err(NoReturn);
     }};
@@ -870,38 +871,53 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             noreturn,
         } => {
             let self_ty = ctx.get_instantiated_ty(self_ty);
-            let trait_generics: Box<[Type]> = trait_generics
+            let trait_instance: Box<[Type]> = trait_generics
                 .iter()
                 .map(|ty| ctx.compiler.types.instantiate(ctx.hir[ty], ctx.generics))
                 .collect();
-            let Candidates::Unique {
-                instance: ((functions_module, impl_), impl_generics),
-            } = ctx
-                .compiler
-                .get_impl(trait_id, self_ty, trait_generics.iter(), |&ty, other| {
-                    ty == other
-                })
-            else {
-                crash_point!(ctx)
+            let TypeFull::Instance(self_base, _) = ctx.compiler.types.lookup(self_ty) else {
+                unreachable!("instantiated TraitCall self type should be an instance")
             };
-            let function = impl_.functions[method_index as usize];
+            match ctx.compiler.get_impl_candidates(
+                trait_id,
+                self_ty,
+                Some(self_base),
+                trait_instance.iter().copied(),
+                traits::match_instance,
+            ) {
+                Candidates::Unique {
+                    instance: ((functions_module, impl_), impl_generics),
+                } => {
+                    let function = impl_.functions[method_index as usize];
 
-            // TODO: handle impl/method generics
-            let Some(func) = ctx.get_ir_id(functions_module, function, impl_generics) else {
-                crash_point!(ctx)
-            };
-            let return_ty = ctx.get_hir_type(return_ty)?;
-            let mut arg_refs = Vec::with_capacity(args.iter().count());
-            for arg in args.iter() {
-                let arg = lower(ctx, arg)?;
-                arg_refs.push(arg);
+                    // TODO: handle impl/method generics
+                    let Some(func) = ctx.get_ir_id(functions_module, function, impl_generics)
+                    else {
+                        crash_point!(ctx)
+                    };
+                    let return_ty = ctx.get_hir_type(return_ty)?;
+                    let mut arg_refs = Vec::with_capacity(args.iter().count());
+                    for arg in args.iter() {
+                        let arg = lower(ctx, arg)?;
+                        arg_refs.push(arg);
+                    }
+                    let return_ty = ctx.builder.types.add(return_ty);
+                    let res = ctx.builder.append((func, arg_refs, return_ty));
+                    if noreturn {
+                        ctx.terminate_noreturn()?;
+                    }
+                    res
+                }
+                candidates => {
+                    // FIXME: this trace could crash since Generics::EMPTY is passed which is not always correct
+                    tracing::info!(
+                        target: "irgen",
+                        "Failed to select a trait instance for {trait_id:?} with {}. Candidates: {candidates:?}",
+                        ctx.compiler.types.display(self_ty, &Generics::EMPTY),
+                    );
+                    crash_point!(ctx);
+                }
             }
-            let return_ty = ctx.builder.types.add(return_ty);
-            let res = ctx.builder.append((func, arg_refs, return_ty));
-            if noreturn {
-                ctx.terminate_noreturn()?;
-            }
-            res
         }
         &Node::TypeProperty(ty, property) => {
             let layout = ir::type_layout(
