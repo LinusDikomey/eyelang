@@ -875,10 +875,10 @@ fn check_enum_literal(
     noreturn: &mut bool,
 ) -> Node {
     let name = &ctx.ast[ident];
-    let res = ctx
-        .hir
-        .types
-        .specify_enum_literal(expected, name, args.count, ctx.compiler);
+    let res =
+        ctx.hir
+            .types
+            .specify_enum_literal(expected, name, args.count, ctx.compiler, ctx.generics);
     match res {
         Ok((variant_index, arg_type_ids)) => {
             debug_assert_eq!(arg_type_ids.count, args.count + 1);

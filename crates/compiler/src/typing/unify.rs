@@ -45,7 +45,7 @@ pub fn unify(
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
                 let mut s = String::new();
-                types.type_to_string(compiler, chosen_ty, &mut s);
+                types.type_to_string(compiler, function_generics, chosen_ty, &mut s);
                 let candidates = traits::get_impl_candidates(
                     compiler,
                     &bound,

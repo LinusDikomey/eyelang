@@ -530,7 +530,10 @@ impl Compiler {
                             self.errors.emit(
                                 func_id.0,
                                 Error::MismatchedType {
-                                    expected: self.types.display(ty).to_string(),
+                                    expected: self
+                                        .types
+                                        .display(ty, &signature.generics)
+                                        .to_string(),
                                     found: "a function".to_owned(),
                                 }
                                 .at_span(span),
@@ -544,7 +547,10 @@ impl Compiler {
                                 self.errors.emit(
                                     func_id.0,
                                     Error::MismatchedType {
-                                        expected: self.types.display(ty).to_string(),
+                                        expected: self
+                                            .types
+                                            .display(ty, &signature.generics)
+                                            .to_string(),
                                         found: "TODO: display function type".to_owned(),
                                     }
                                     .at_span(span),
@@ -1022,10 +1028,12 @@ impl Compiler {
         let project = self.get_project(project);
         let mut module_queue = VecDeque::from([project.root_module]);
         while let Some(module) = module_queue.pop_front() {
-            let functions = self.get_module_ast(module).function_ids();
+            let ast = self.get_module_ast(module);
+            let functions = ast.function_ids();
             for function in functions {
                 let hir = self.get_hir(module, function);
-                tracing::debug!(target: "hir", function = hir.name, "\n{}", hir.display(self));
+                let generics = &self.get_signature(module, function).generics;
+                tracing::debug!(target: "hir", function = hir.name, "\n{}", hir.display(self, generics));
             }
             module_queue.extend(self.get_parsed_module(module).child_modules.iter().copied())
         }
@@ -1408,7 +1416,7 @@ impl Def {
             Self::ConstValue(value) => {
                 let (val, ty) = &compiler.const_values[value.idx()];
                 val.dump();
-                print!(": {}", compiler.types.display(*ty));
+                print!(": {}", compiler.types.display(*ty, &Generics::EMPTY));
             }
             Self::Module(id) => print!("Module({})", id.idx()),
             Self::Global(module, id) => print!("Global({}, {})", module.idx(), id.idx()),
@@ -1699,8 +1707,12 @@ impl Generics {
         Ok(true)
     }
 
+    pub fn get_name(&self, i: u8) -> &str {
+        &self.generics[usize::from(i)].0
+    }
+
     pub fn get_bounds(&self, i: u8) -> &[TraitBound] {
-        &self.generics[i as usize].1
+        &self.generics[usize::from(i)].1
     }
 }
 
@@ -1887,10 +1899,15 @@ pub struct CheckedFunction {
     pub body_or_types: BodyOrTypes,
 }
 impl CheckedFunction {
-    pub fn display<'a>(&'a self, compiler: &'a Compiler) -> display::CheckedFunctionDisplay<'a> {
+    pub fn display<'a>(
+        &'a self,
+        compiler: &'a Compiler,
+        generics: &'a Generics,
+    ) -> display::CheckedFunctionDisplay<'a> {
         display::CheckedFunctionDisplay {
             function: self,
             compiler,
+            generics,
         }
     }
 
@@ -1985,7 +2002,8 @@ pub fn mangle_name(checked: &CheckedFunction, types: &Types, generics: &[Type]) 
                 name.push(',');
             }
             use std::fmt::Write;
-            write!(name, "{}", types.display(ty)).unwrap();
+            // this type is instantiated so we can pass empty generics here
+            write!(name, "{}", types.display(ty, &Generics::EMPTY)).unwrap();
         }
         name.push(']');
     }

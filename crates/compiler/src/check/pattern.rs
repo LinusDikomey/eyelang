@@ -139,10 +139,13 @@ pub fn check(
             span, ident, args, ..
         } => {
             let name = &ctx.ast[ident];
-            let res = ctx
-                .hir
-                .types
-                .specify_enum_literal(expected, name, args.count, ctx.compiler);
+            let res = ctx.hir.types.specify_enum_literal(
+                expected,
+                name,
+                args.count,
+                ctx.compiler,
+                ctx.generics,
+            );
             match res {
                 Ok((ordinal, arg_types)) => {
                     debug_assert_eq!(arg_types.count, args.count + 1);

@@ -124,7 +124,13 @@ pub fn def_expr(
         Expr::ReturnUnit { .. } => {
             let ty = compiler.resolve_type(ty, module, scope);
             if ty != Type::Unit {
-                mismatched_type(compiler, compiler.types.display(Type::Unit).to_string());
+                mismatched_type(
+                    compiler,
+                    compiler
+                        .types
+                        .display(Type::Unit, &Generics::EMPTY)
+                        .to_string(),
+                );
                 return Def::Invalid;
             }
             Def::ConstValue(compiler.add_const_value(ConstValue::Unit, ty))

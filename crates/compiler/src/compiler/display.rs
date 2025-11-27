@@ -4,16 +4,21 @@ use color_format::{cwrite, cwriteln};
 
 use crate::{
     Compiler,
-    compiler::{BodyOrTypes, CheckedFunction},
+    compiler::{BodyOrTypes, CheckedFunction, Generics},
 };
 
 pub struct CheckedFunctionDisplay<'a> {
     pub function: &'a CheckedFunction,
     pub compiler: &'a Compiler,
+    pub generics: &'a Generics,
 }
 impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { function, compiler } = self;
+        let Self {
+            function,
+            compiler,
+            generics,
+        } = self;
         cwrite!(f, "BEGIN HIR {}", function.name)?;
         if function.generic_count != 0 {
             cwrite!(f, "[")?;
@@ -21,7 +26,7 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
                 if i != 0 {
                     cwrite!(f, ", ")?;
                 }
-                cwrite!(f, "${i}")?;
+                cwrite!(f, "{}", generics.get_name(i))?;
             }
             cwrite!(f, "]")?;
         }
@@ -33,7 +38,7 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
             cwrite!(
                 f,
                 "(var {i}): {}",
-                self.compiler.types.display(function[param])
+                self.compiler.types.display(function[param], generics)
             )?;
         }
         if function.varargs {
@@ -46,12 +51,14 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
             f,
             ") -{} {}",
             ">",
-            self.compiler.types.display(function[function.return_type]),
+            self.compiler
+                .types
+                .display(function[function.return_type], generics),
         )?; // TODO: problem in color-format: can't escape >
         cwrite!(f, "\n  ")?;
         match &function.body_or_types {
             BodyOrTypes::Body(body) => {
-                cwrite!(f, "{}", body.display(body.root_id(), compiler, 1))?;
+                cwrite!(f, "{}", body.display(body.root_id(), compiler, generics, 1))?;
             }
             BodyOrTypes::Types(_) => {
                 cwriteln!(f, "  #m<<extern{}>", ">")?;

@@ -49,7 +49,7 @@ pub fn check_call(
     let mut s = String::new();
     ctx.hir
         .types
-        .type_to_string(ctx.compiler, ctx.hir.types[called_ty], &mut s);
+        .type_to_string(ctx.compiler, ctx.generics, ctx.hir.types[called_ty], &mut s);
 
     let called_type_info = ctx.hir.types[called_ty];
     match called_type_info {

@@ -39,12 +39,14 @@ impl Hir {
         &'a self,
         node: NodeId,
         compiler: &'a Compiler,
+        generics: &'a Generics,
         indent_count: usize,
     ) -> display::HirDisplay<'a> {
         display::HirDisplay {
             node,
             hir: self,
             compiler,
+            generics,
             indent_count,
         }
     }
@@ -53,11 +55,13 @@ impl Hir {
         &'a self,
         pattern: PatternId,
         compiler: &'a Compiler,
+        generics: &'a Generics,
     ) -> display::PatternDisplay<'a> {
         display::PatternDisplay {
             pattern,
             hir: self,
             compiler,
+            generics,
         }
     }
 
@@ -65,12 +69,14 @@ impl Hir {
         &'a self,
         lval: LValueId,
         compiler: &'a Compiler,
+        generics: &'a Generics,
         indent_count: usize,
     ) -> display::LValueDisplay<'a> {
         display::LValueDisplay {
             lval,
             hir: self,
             compiler,
+            generics,
             indent_count,
         }
     }

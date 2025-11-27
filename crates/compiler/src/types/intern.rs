@@ -4,6 +4,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use color_format::cwrite;
 use dmap::DHashMap;
 use fxhash::FxHasher;
 use hashbrown::HashTable;
@@ -191,13 +192,18 @@ impl Types {
         }
     }
 
-    pub fn display(&'_ self, ty: Type) -> TypeDisplay<'_> {
-        TypeDisplay { types: self, ty }
+    pub fn display<'a>(&'a self, ty: Type, generics: &'a Generics) -> TypeDisplay<'a> {
+        TypeDisplay {
+            types: self,
+            generics,
+            ty,
+        }
     }
 }
 
 pub struct TypeDisplay<'a> {
     types: &'a Types,
+    generics: &'a Generics,
     ty: Type,
 }
 impl<'a> fmt::Display for TypeDisplay<'a> {
@@ -213,17 +219,19 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "{}", self.types.display(item))?;
+                        write!(f, "{}", self.types.display(item, self.generics))?;
                     }
                     write!(f, ")")
                 }
                 BaseType::Array => write!(
                     f,
                     "[{}; {}]",
-                    self.types.display(generics[0]),
-                    self.types.display(generics[1])
+                    self.types.display(generics[0], self.generics),
+                    self.types.display(generics[1], self.generics)
                 ),
-                BaseType::Pointer => write!(f, "*{}", self.types.display(generics[0])),
+                BaseType::Pointer => {
+                    write!(f, "*{}", self.types.display(generics[0], self.generics))
+                }
                 BaseType::Function => {
                     write!(f, "fn(")?;
                     let mut first = true;
@@ -232,13 +240,13 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                             write!(f, ", ")?;
                         }
                         first = false;
-                        write!(f, "{}", self.types.display(arg))?;
+                        write!(f, "{}", self.types.display(arg, self.generics))?;
                     }
-                    write!(f, ") -> {}", self.types.display(generics[0]))
+                    write!(f, ") -> {}", self.types.display(generics[0], self.generics))
                 }
                 _ => {
                     let name = &self.types.get_base(base).name;
-                    write!(f, "{name}")?;
+                    cwrite!(f, "#r<{name}>")?;
                     if !generics.is_empty() {
                         write!(f, "[")?;
                         let mut first = true;
@@ -252,6 +260,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                                 "{}",
                                 TypeDisplay {
                                     types: self.types,
+                                    generics: self.generics,
                                     ty: generic
                                 }
                             )?;
@@ -261,7 +270,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                     Ok(())
                 }
             },
-            TypeFull::Generic(i) => write!(f, "${i}"),
+            TypeFull::Generic(i) => write!(f, "{}", self.generics.get_name(i)),
             TypeFull::Const(n) => write!(f, "{n}"),
         }
     }

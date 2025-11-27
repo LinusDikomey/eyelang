@@ -2,11 +2,17 @@ use error::Error;
 
 use crate::{
     Compiler, Type,
+    compiler::Generics,
     hir::CastType,
     types::{BaseType, TypeFull},
 };
 
-pub fn check(from_ty: Type, to_ty: Type, compiler: &Compiler) -> (CastType, Option<Error>) {
+pub fn check(
+    from_ty: Type,
+    to_ty: Type,
+    compiler: &Compiler,
+    generics: &Generics,
+) -> (CastType, Option<Error>) {
     let mut error = None;
     if from_ty == to_ty {
         return (CastType::Noop, Some(Error::TrivialCast));
@@ -28,8 +34,8 @@ pub fn check(from_ty: Type, to_ty: Type, compiler: &Compiler) -> (CastType, Opti
         }
         _ => {
             error = Some(Error::InvalidCast {
-                from: compiler.types.display(from_ty).to_string(),
-                to: compiler.types.display(to_ty).to_string(),
+                from: compiler.types.display(from_ty, generics).to_string(),
+                to: compiler.types.display(to_ty, generics).to_string(),
             });
             CastType::Invalid
         }

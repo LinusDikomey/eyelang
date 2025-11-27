@@ -427,9 +427,9 @@ impl TypeTable {
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
         let new = unify(a_ty, b_ty, self, generics, compiler, a).unwrap_or_else(|| {
             let mut expected = String::new();
-            self.type_to_string(compiler, a_ty, &mut expected);
+            self.type_to_string(compiler, generics, a_ty, &mut expected);
             let mut found = String::new();
-            self.type_to_string(compiler, b_ty, &mut found);
+            self.type_to_string(compiler, generics, b_ty, &mut found);
             let ModuleSpan { module, span } = span();
             compiler.errors.emit(
                 module,
@@ -474,12 +474,12 @@ impl TypeTable {
         &mut self,
         a: LocalTypeId,
         info: TypeInfo,
-        function_generics: &Generics,
+        generics: &Generics,
         compiler: &Compiler,
         span: impl FnOnce() -> ModuleSpan,
     ) {
-        if let Err((a, b)) = self.try_specify(a, info, function_generics, compiler) {
-            self.mismatched_type_error(compiler, a, b, span());
+        if let Err((a, b)) = self.try_specify(a, info, generics, compiler) {
+            self.mismatched_type_error(compiler, generics, a, b, span());
         }
     }
 
@@ -521,7 +521,7 @@ impl TypeTable {
         if let Err((a, b)) =
             self.try_specify_type_instance(id, ty, generics, function_generics, compiler)
         {
-            self.mismatched_type_error(compiler, a, b, span());
+            self.mismatched_type_error(compiler, function_generics, a, b, span());
         }
     }
 
@@ -531,6 +531,7 @@ impl TypeTable {
         name: &str,
         arg_count: u32,
         compiler: &Compiler,
+        generics: &Generics,
     ) -> Result<(OrdinalType, LocalTypeIds), Option<Error>> {
         // Do the type checking manually instead of using `specify`.
         // This allows skipping construction of unneeded enum variant representations.
@@ -612,7 +613,7 @@ impl TypeTable {
             _ => {}
         }
         let mut expected_str = String::new();
-        self.type_to_string(compiler, self[expected], &mut expected_str);
+        self.type_to_string(compiler, generics, self[expected], &mut expected_str);
         Err(Some(Error::MismatchedType {
             expected: expected_str,
             found: format!("enum variant \"{name}\""),
@@ -622,14 +623,15 @@ impl TypeTable {
     fn mismatched_type_error(
         &self,
         compiler: &Compiler,
+        generics: &Generics,
         a: TypeInfo,
         b: TypeInfo,
         span: ModuleSpan,
     ) {
         let mut expected = String::new();
-        self.type_to_string(compiler, a, &mut expected);
+        self.type_to_string(compiler, generics, a, &mut expected);
         let mut found = String::new();
-        self.type_to_string(compiler, b, &mut found);
+        self.type_to_string(compiler, generics, b, &mut found);
         let ModuleSpan { module, span } = span;
         compiler.errors.emit(
             module,
@@ -731,16 +733,24 @@ impl TypeTable {
     pub fn display<'a>(
         &'a self,
         compiler: &'a Compiler,
+        generics: &'a Generics,
         ty: LocalTypeId,
     ) -> display::TypeDisplay<'a> {
         display::TypeDisplay {
             ty,
             table: self,
             compiler,
+            generics,
         }
     }
 
-    pub fn type_to_string(&self, compiler: &Compiler, ty: TypeInfo, s: &mut String) {
+    pub fn type_to_string(
+        &self,
+        compiler: &Compiler,
+        function_generics: &Generics,
+        ty: TypeInfo,
+        s: &mut String,
+    ) {
         use std::fmt::Write;
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
@@ -759,7 +769,7 @@ impl TypeTable {
                                 if i != 0 {
                                     s.push_str(", ");
                                 }
-                                self.type_to_string(compiler, self[generic], s);
+                                self.type_to_string(compiler, function_generics, self[generic], s);
                             }
                             s.push(']');
                         }
@@ -768,7 +778,7 @@ impl TypeTable {
             }
             TypeInfo::UnknownConst => s.push_str("<unknown constant>"),
             TypeInfo::Known(ty) => {
-                write!(s, "{}", compiler.types.display(ty)).unwrap();
+                write!(s, "{}", compiler.types.display(ty, function_generics)).unwrap();
             }
             TypeInfo::Integer => s.push_str("<integer>"),
             TypeInfo::Float => s.push_str("<float>"),
@@ -785,21 +795,36 @@ impl TypeTable {
                         } else {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, self[member], s);
+                        self.type_to_string(compiler, function_generics, self[member], s);
                     }
                     s.push(')');
                 }
                 BaseType::Array => {
                     s.push('[');
-                    self.type_to_string(compiler, self[generics.nth(0).unwrap()], s);
+                    self.type_to_string(
+                        compiler,
+                        function_generics,
+                        self[generics.nth(0).unwrap()],
+                        s,
+                    );
                     s.push_str("; ");
-                    self.type_to_string(compiler, self[generics.nth(1).unwrap()], s);
+                    self.type_to_string(
+                        compiler,
+                        function_generics,
+                        self[generics.nth(1).unwrap()],
+                        s,
+                    );
                     s.push(']');
                 }
                 BaseType::Pointer => {
                     debug_assert_eq!(generics.count, 1);
                     s.push('*');
-                    self.type_to_string(compiler, self[generics.nth(0).unwrap()], s);
+                    self.type_to_string(
+                        compiler,
+                        function_generics,
+                        self[generics.nth(0).unwrap()],
+                        s,
+                    );
                 }
                 BaseType::Function => {
                     s.push_str("fn(");
@@ -807,10 +832,15 @@ impl TypeTable {
                         if i != 0 {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, self[param], s);
+                        self.type_to_string(compiler, function_generics, self[param], s);
                     }
                     s.push_str(") -> ");
-                    self.type_to_string(compiler, self[generics.nth(0).unwrap()], s);
+                    self.type_to_string(
+                        compiler,
+                        function_generics,
+                        self[generics.nth(0).unwrap()],
+                        s,
+                    );
                 }
                 _ => {
                     let name = &compiler.types.get_base(base).name;
@@ -821,13 +851,18 @@ impl TypeTable {
                             if i != 0 {
                                 s.push_str(", ");
                             }
-                            self.type_to_string(compiler, self[generic], s);
+                            self.type_to_string(compiler, function_generics, self[generic], s);
                         }
                         s.push(']');
                     }
                 }
             },
-            TypeInfo::Enum(id) => self.enum_to_string(compiler, s, &self.enums[id.idx()].variants),
+            TypeInfo::Enum(id) => self.enum_to_string(
+                compiler,
+                function_generics,
+                s,
+                &self.enums[id.idx()].variants,
+            ),
             TypeInfo::BaseTypeItem(base) => {
                 let name = &compiler.types.get_base(base).name;
                 s.push_str("<base type item: ");
@@ -836,7 +871,7 @@ impl TypeTable {
             }
             TypeInfo::TypeItem(ty) => {
                 s.push_str("<type item: ");
-                self.type_to_string(compiler, self[ty], s);
+                self.type_to_string(compiler, function_generics, self[ty], s);
                 s.push('>');
             }
             TypeInfo::TraitItem { .. } => s.push_str("<trait item>"),
@@ -848,7 +883,13 @@ impl TypeTable {
         }
     }
 
-    pub fn enum_to_string(&self, compiler: &Compiler, s: &mut String, variants: &[VariantId]) {
+    pub fn enum_to_string(
+        &self,
+        compiler: &Compiler,
+        generics: &Generics,
+        s: &mut String,
+        variants: &[VariantId],
+    ) {
         s.push_str("enum { ");
         for (i, variant) in variants.iter().enumerate() {
             let variant = &self.variants[variant.idx()];
@@ -862,7 +903,7 @@ impl TypeTable {
                     if i != 0 {
                         s.push_str(", ");
                     }
-                    self.type_to_string(compiler, self[arg], s);
+                    self.type_to_string(compiler, generics, self[arg], s);
                 }
                 s.push(')');
             }
@@ -1022,7 +1063,7 @@ impl TypeTable {
                     traits::Candidates::None => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
-                        self.type_to_string(compiler, info, &mut type_name);
+                        self.type_to_string(compiler, function_generics, info, &mut type_name);
                         compiler.errors.emit(
                             module,
                             Error::UnsatisfiedTraitBound {

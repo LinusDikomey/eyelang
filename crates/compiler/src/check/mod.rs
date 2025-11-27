@@ -331,7 +331,7 @@ impl Ctx<'_> {
             }
         }
         for (from_ty, to_ty, cast_expr, cast_id) in self.deferred_casts {
-            let (cast, err) = cast::check(hir[from_ty], hir[to_ty], self.compiler);
+            let (cast, err) = cast::check(hir[from_ty], hir[to_ty], self.compiler, self.generics);
             hir[cast_id].cast_ty = cast;
             if let Some(err) = err {
                 self.compiler
@@ -394,8 +394,13 @@ pub fn verify_main_signature(
         TypeFull::Instance(BaseType::Tuple, []) => Ok(()),
         TypeFull::Instance(b, _) if b.is_int() => Ok(()),
         _ => Err(Some(
-            Error::InvalidMainReturnType(compiler.types.display(signature.return_type).to_string())
-                .at_span(signature.span),
+            Error::InvalidMainReturnType(
+                compiler
+                    .types
+                    .display(signature.return_type, &signature.generics)
+                    .to_string(),
+            )
+            .at_span(signature.span),
         )),
     }
 }
