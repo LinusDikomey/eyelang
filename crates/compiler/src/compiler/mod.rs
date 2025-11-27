@@ -114,13 +114,14 @@ impl Compiler {
         }
         let next_module_id = ModuleId::from_inner(self.modules.len());
         let project_id = ProjectId(self.projects.add(Project {
-            name,
+            name: name.clone(),
             root: Some(root.clone()),
             root_module: next_module_id,
             dependencies,
         }));
 
         let root_module = ModuleId::from_inner(self.modules.add(Module::at_path(
+            name.into_boxed_str(),
             root.clone(),
             project_id,
             next_module_id,
@@ -142,12 +143,13 @@ impl Compiler {
     ) -> ProjectId {
         let module_id = ModuleId::from_inner(self.modules.len());
         let project = ProjectId(self.projects.add(Project {
-            name,
+            name: name.clone(),
             root: None,
             root_module: module_id,
             dependencies,
         }));
         self.modules.add(Module {
+            name: name.into_boxed_str(),
             storage: ModuleStorage::String(content),
             project,
             ast: OnceCell::new(),
@@ -213,6 +215,7 @@ impl Compiler {
                             crate::modules::module_and_children(path, module_id == module.root);
                         for (name, path) in child_module_paths {
                             let id = ModuleId::from_inner(self.modules.add(Module::at_path(
+                                name.clone().into_boxed_str(),
                                 path,
                                 project,
                                 root,
@@ -969,7 +972,7 @@ impl Compiler {
         Some(
             instances.get_or_create_function(module, id, generics, |generics| {
                 let checked = self.get_hir(module, id);
-                let func = irgen::declare_function(self, ir, checked, generics);
+                let func = irgen::declare_function(self, ir, checked, module, generics);
                 let ir_id = ir.add_function(dialects.main, func);
                 to_generate.push(FunctionToGenerate {
                     ir_id,
@@ -1188,6 +1191,47 @@ impl Compiler {
     pub fn resolve_builtins(&mut self, std: ProjectId) {
         self.builtins.std = std;
         self.builtins.primitives = builtins::Primitives::resolve(self);
+    }
+
+    pub fn mangle_name(
+        &self,
+        checked: &CheckedFunction,
+        module: ModuleId,
+        generics: &[Type],
+    ) -> String {
+        if checked.is_extern() {
+            return checked.name.clone();
+        }
+        let mut name = self.module_path(module) + "." + &checked.name;
+        if !generics.is_empty() {
+            // 2 characters per type because of commas and brackets is the minimum
+            name.reserve(1 + 2 * generics.len());
+            name.push('[');
+            let mut first = true;
+            for &ty in generics {
+                if first {
+                    first = false;
+                } else {
+                    name.push(',');
+                }
+                use std::fmt::Write;
+                // don't print colors in mangled name
+                color_format::config::set_override(false);
+                // this type is instantiated so we can pass empty generics here
+                write!(name, "{}", self.types.display(ty, &Generics::EMPTY)).unwrap();
+                color_format::config::unset_override();
+            }
+            name.push(']');
+        }
+        name
+    }
+
+    pub fn module_path(&self, module: ModuleId) -> String {
+        let module = &self.modules[module.idx()];
+        module
+            .parent
+            .map_or_else(String::new, |parent| self.module_path(parent) + ".")
+            + &module.name
     }
 }
 
@@ -1462,6 +1506,7 @@ pub struct Project {
     pub dependencies: Vec<ProjectId>,
 }
 pub struct Module {
+    pub name: Box<str>,
     pub storage: ModuleStorage,
     pub project: ProjectId,
     pub ast: OnceCell<ParsedModule>,
@@ -1470,12 +1515,14 @@ pub struct Module {
 }
 impl Module {
     pub fn at_path(
+        name: Box<str>,
         path: PathBuf,
         project: ProjectId,
         root: ModuleId,
         parent: Option<ModuleId>,
     ) -> Self {
         Self {
+            name,
             storage: ModuleStorage::Path(path),
             project,
             ast: OnceCell::new(),
@@ -1917,6 +1964,10 @@ impl CheckedFunction {
             BodyOrTypes::Types(types) => types,
         }
     }
+
+    pub fn is_extern(&self) -> bool {
+        matches!(self.body_or_types, BodyOrTypes::Types(_))
+    }
 }
 pub enum BodyOrTypes {
     Body(Hir),
@@ -1982,32 +2033,6 @@ pub struct FunctionToGenerate {
     pub module: ModuleId,
     pub ast_function_id: ast::FunctionId,
     pub generics: Box<[Type]>,
-}
-
-pub fn mangle_name(checked: &CheckedFunction, types: &Types, generics: &[Type]) -> String {
-    let mut name = checked.name.clone();
-    if name == "main" {
-        name.clear();
-        name.push_str("eyemain");
-    }
-    if !generics.is_empty() {
-        // 2 characters per type because of commas and brackets is the minimum
-        name.reserve(1 + 2 * generics.len());
-        name.push('[');
-        let mut first = true;
-        for &ty in generics {
-            if first {
-                first = false;
-            } else {
-                name.push(',');
-            }
-            use std::fmt::Write;
-            // this type is instantiated so we can pass empty generics here
-            write!(name, "{}", types.display(ty, &Generics::EMPTY)).unwrap();
-        }
-        name.push(']');
-    }
-    name
 }
 
 pub fn function_name(

@@ -12,7 +12,7 @@ use ir::{BlockId, BlockTarget, Environment, Ref};
 use parser::ast::{self, ModuleId};
 
 use crate::check::traits::Candidates;
-use crate::compiler::{Dialects, FunctionToGenerate, Instance, Instances, builtins, mangle_name};
+use crate::compiler::{Dialects, FunctionToGenerate, Instance, Instances, builtins};
 use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
 use crate::types::{BaseType, TypeFull};
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
@@ -28,9 +28,10 @@ pub fn declare_function(
     compiler: &Compiler,
     ir: &ir::Environment,
     checked: &CheckedFunction,
+    module: ModuleId,
     generics: &[Type],
 ) -> ir::Function {
-    let name = mangle_name(checked, &compiler.types, generics);
+    let name = compiler.mangle_name(checked, module, generics);
     let mut types = ir::Types::new();
     // TODO: figure out what to do when params/return_type are Invalid or never types. We can no
     // longer generate a valid signature
@@ -211,7 +212,7 @@ impl Ctx<'_> {
         Some(
             instances.get_or_create_function(module, id, generics, |generics| {
                 let checked = compiler.get_hir(module, id);
-                let func = declare_function(compiler, env, checked, generics);
+                let func = declare_function(compiler, env, checked, module, generics);
                 let ir_id = env.add_function(dialects.main, func);
                 to_generate.push(FunctionToGenerate {
                     ir_id,

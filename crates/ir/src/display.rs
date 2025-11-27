@@ -147,7 +147,7 @@ impl fmt::Display for FunctionDisplay<'_> {
         if let Some(ir) = function.ir.get() {
             cwrite!(f, "  #m<begin> #b<{}>", function.name)?;
             display_params(f)?;
-            writeln!(
+            write!(
                 f,
                 "{}",
                 BodyDisplay::<UnknownRegister> {
@@ -205,22 +205,22 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 }
                 cwrite!(f, ")")?;
             }
-            cwrite!(f, ": preds [")?;
+            cwrite!(f, ": #i<preds [>")?;
             for (i, &pred) in ir.blocks[block.idx()].preds.iter().enumerate() {
                 if i != 0 {
                     cwrite!(f, " ")?;
                 }
-                cwrite!(f, "{pred}")?;
+                cwrite!(f, "#i<{pred}>")?;
             }
-            cwrite!(f, "] succs [")?;
+            cwrite!(f, "#i<] succs [>")?;
             for (i, &succ) in ir.blocks[block.idx()].succs.iter().enumerate() {
                 if i != 0 {
                     cwrite!(f, " ")?;
                 }
 
-                cwrite!(f, "{succ}")?;
+                cwrite!(f, "#i<{succ}>")?;
             }
-            cwriteln!(f, "]")?;
+            cwriteln!(f, "#i<]>")?;
             for (r, inst) in ir.get_block(block) {
                 if inst.module() == builtins::BUILTIN.id()
                     && inst.function() == builtins::Builtin::Nothing.id()

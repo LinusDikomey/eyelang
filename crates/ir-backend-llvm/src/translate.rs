@@ -60,18 +60,7 @@ pub unsafe fn add_function(
         params.len() as _,
         llvm_bool(varargs),
     );
-    let name = CString::from_vec_with_nul(
-        // HACK: temporary prefix until proper name mangling is implemented
-        if function.ir().is_some()
-            && function.name.as_ref() != "main"
-            && function.name.as_ref() != "_start"
-        {
-            format!("__eye__{}\0", function.name).into_bytes()
-        } else {
-            format!("{}\0", function.name).into_bytes()
-        },
-    )
-    .map_err(|_| Error::NulByte)?;
+    let name = CString::new(function.name.to_string()).map_err(|_| Error::NulByte)?;
     let llvm_func = LLVMAddFunction(llvm_module, name.as_ptr(), llvm_func_ty);
     if function.flags().terminator() {
         let noreturn = core::LLVMCreateEnumAttribute(ctx, attribs.noreturn, 0);
