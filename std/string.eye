@@ -21,14 +21,16 @@ str :: struct {
         ret str(ptr: bytes.buf, len: bytes.len)
     }
 
-    eq :: fn(this str, other str) -> bool {
-        if this.len != other.len: ret false
-        i := 0
-        while i < this.len {
-            if this.byte(i) != other.byte(i): ret false
-            i += 1
+    impl Eq {
+        eq :: fn(this str, other str) -> bool {
+            if this.len != other.len: ret false
+            i := 0
+            while i < this.len {
+                if this.byte(i) != other.byte(i): ret false
+                i += 1
+            }
+            ret true
         }
-        ret true
     }
 
     clone :: fn(this str) -> str {

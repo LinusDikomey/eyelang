@@ -237,8 +237,6 @@ impl<'a> fmt::Display for HirDisplay<'a> {
                 compared: _,
             } => {
                 let cmp = match cmp {
-                    Comparison::Eq => "==",
-                    Comparison::NE => "!=",
                     Comparison::LT => "<",
                     Comparison::GT => ">",
                     Comparison::LE => "<=",

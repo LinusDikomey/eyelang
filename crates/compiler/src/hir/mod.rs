@@ -431,8 +431,6 @@ pub enum CastType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Comparison {
-    Eq,
-    NE,
     LT,
     GT,
     LE,

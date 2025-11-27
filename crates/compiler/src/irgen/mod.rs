@@ -579,44 +579,12 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             l,
             r,
             cmp,
-            compared,
+            compared: _,
         } => {
             let l = lower(ctx, l)?;
             let r = lower(ctx, r)?;
             use crate::hir::Comparison;
-            let is_equality = matches!(cmp, Comparison::Eq | Comparison::NE);
-            if is_equality {
-                match ctx.hir[compared] {
-                    Type::Invalid => crash_point!(ctx),
-                    ty => {
-                        let str_ty = builtins::get_str(ctx.compiler);
-                        if ty == str_ty {
-                            let string_eq = builtins::get_str_eq(ctx.compiler);
-                            let Some(string_eq) =
-                                ctx.get_ir_id(string_eq.0, string_eq.1, Box::new([]))
-                            else {
-                                crash_point!(ctx);
-                            };
-                            let eq = ctx.builder.append((string_eq, (l, r), ctx.i1_ty));
-                            return Ok(ValueOrPlace::Value(if cmp == Comparison::NE {
-                                ctx.builder.append(arith.Neg(eq, ctx.i1_ty))
-                            } else {
-                                eq
-                            }));
-                        } else if ty == ctx.compiler.builtins.primitives.bool {
-                            // fall trough since a bool can be compared like an integer
-                        } else {
-                            assert!(
-                                ty.is_int() | ty.is_float(),
-                                "invalid type for comparison, will change with traits"
-                            );
-                        }
-                    }
-                }
-            }
             match cmp {
-                Comparison::Eq => ctx.builder.append(arith.Eq(l, r, ctx.i1_ty)),
-                Comparison::NE => ctx.builder.append(arith.NE(l, r, ctx.i1_ty)),
                 Comparison::LT => ctx.builder.append(arith.LT(l, r, ctx.i1_ty)),
                 Comparison::GT => ctx.builder.append(arith.GT(l, r, ctx.i1_ty)),
                 Comparison::LE => ctx.builder.append(arith.LE(l, r, ctx.i1_ty)),

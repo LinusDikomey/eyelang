@@ -5,5 +5,6 @@
 # compiler.
 intrinsic :: fn(s str, ...) -> Never extern
 
+eq :: fn[T](l T, r T) -> bool: intrinsic("eq", l, r)
 rotate_left :: fn[T](x T, rot T) -> T: intrinsic("rotate_left", x, rot)
 xor :: fn[T](x T, y T) -> T: intrinsic("xor", x, y)

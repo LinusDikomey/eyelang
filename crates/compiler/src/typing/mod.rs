@@ -745,7 +745,7 @@ impl TypeTable {
         // TODO: some of these types could be described better if they could look up symbols
         match ty {
             TypeInfo::Unknown(bounds) => {
-                s.push_str("<unknown>");
+                s.push('_');
                 if !bounds.is_empty() {
                     s.push_str(": ");
                     for (i, bound) in self.get_bounds(bounds).iter().enumerate() {

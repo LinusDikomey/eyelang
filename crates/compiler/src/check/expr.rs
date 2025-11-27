@@ -302,21 +302,30 @@ pub fn check(
                     ctx.specify(expected, ctx.primitives().bool_info(), |ast| {
                         ast[expr].span(ast)
                     });
-                    let compared = ctx.hir.types.add_unknown();
+                    let eq_trait = builtins::get_eq_trait(ctx.compiler);
+                    let span = ctx.span(expr);
+                    let bounds = ctx.hir.types.add_bounds([Bound {
+                        trait_id: eq_trait,
+                        generics: LocalTypeIds::EMPTY,
+                        span,
+                    }]);
+                    let compared = ctx.hir.types.add(TypeInfo::Unknown(bounds));
                     let l = check(ctx, l, scope, compared, return_ty, noreturn);
                     let r = check(ctx, r, scope, compared, return_ty, noreturn);
-                    let l = ctx.hir.add(l);
-                    let r = ctx.hir.add(r);
-                    let cmp = if op == Operator::Equals {
-                        Comparison::Eq
-                    } else {
-                        Comparison::NE
+                    let args = ctx.hir.add_nodes([l, r]);
+                    let node = Node::TraitCall {
+                        trait_id: eq_trait,
+                        trait_generics: LocalTypeIds::EMPTY,
+                        method_index: 0,
+                        self_ty: compared,
+                        args,
+                        return_ty: expected,
+                        noreturn: false,
                     };
-                    Node::Comparison {
-                        l,
-                        r,
-                        cmp,
-                        compared,
+                    if op == Operator::Equals {
+                        node
+                    } else {
+                        Node::Not(ctx.hir.add(node))
                     }
                 }
                 Operator::LT | Operator::GT | Operator::LE | Operator::GE => {

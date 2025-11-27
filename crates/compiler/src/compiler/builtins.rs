@@ -23,6 +23,7 @@ pub struct Builtins {
     iterator: OnceCell<(ModuleId, TraitId)>,
     option: OnceCell<BaseType>,
     fn_trait: OnceCell<(ModuleId, TraitId)>,
+    eq_trait: OnceCell<(ModuleId, TraitId)>,
 }
 impl Builtins {
     pub fn set_std(&mut self, std: ProjectId) {
@@ -189,6 +190,18 @@ pub fn get_fn_trait(compiler: &Compiler) -> (ModuleId, TraitId) {
             compiler.resolve_in_module(fn_module, "Fn", ModuleSpan::MISSING)
         else {
             panic!("expected a trait for std.call.Fn");
+        };
+        (module, t)
+    })
+}
+
+pub fn get_eq_trait(compiler: &Compiler) -> (ModuleId, TraitId) {
+    *compiler.builtins.eq_trait.get_or_init(|| {
+        let std = compiler.builtins.std;
+        let root = compiler.get_project(std).root_module;
+        let Def::Trait(module, t) = compiler.resolve_in_module(root, "Eq", ModuleSpan::MISSING)
+        else {
+            panic!("expected a trait for std.Eq");
         };
         (module, t)
     })

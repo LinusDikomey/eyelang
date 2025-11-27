@@ -113,55 +113,76 @@ sort :: fn(l *List[u64]) {
 Eq :: trait {
     eq :: fn(this Self, other Self) -> bool 
 } for {
-    impl _ for u8 { eq :: fn(this u8, other u8) -> bool: this == other }
-    impl _ for u16 { eq :: fn(this u16, other u16) -> bool: this == other }
-    impl _ for u32 { eq :: fn(this u32, other u32) -> bool: this == other }
-    impl _ for u64 { eq :: fn(this u64, other u64) -> bool: this == other }
+  impl _ for u8 {
+    eq :: fn(this u8, other u8) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for u16 {
+    eq :: fn(this u16, other u16) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for u32 {
+    eq :: fn(this u32, other u32) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for u64 {
+    eq :: fn(this u64, other u64) -> bool: intrinsics.eq(this, other)
+  }
 
-    impl _ for i8 { eq :: fn(this i8, other i8) -> bool: this == other }
-    impl _ for i16 { eq :: fn(this i16, other i16) -> bool: this == other }
-    impl _ for i32 { eq :: fn(this i32, other i32) -> bool: this == other }
-    impl _ for i64 { eq :: fn(this i64, other i64) -> bool: this == other }
+  impl _ for i8 {
+    eq :: fn(this i8, other i8) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for i16 {
+    eq :: fn(this i16, other i16) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for i32 {
+    eq :: fn(this i32, other i32) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for i64 {
+    eq :: fn(this i64, other i64) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for f32 {
+    eq :: fn(this f32, other f32) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for f64 {
+    eq :: fn(this f64, other f64) -> bool: intrinsics.eq(this, other)
+  }
+  impl _ for bool {
+    eq :: fn(this bool, other bool) -> bool: intrinsics.eq(this, other)
+  }
 
-    impl[T: Eq, U: Eq] _ for (T, U) {
-        eq :: fn(this (T, U), other (T, U)) -> bool {
-            ret Eq.eq(this.0, other.0)
-                and Eq.eq(this.1, other.1)
-        }
+  impl[T: Eq, U: Eq] _ for (T, U) {
+    eq :: fn(this (T, U), other (T, U)) -> bool {
+      ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1)
     }
-    impl[T: Eq, U: Eq, V: Eq] _ for (T, U, V) {
-        eq :: fn(this (T, U, V), other (T, U, V)) -> bool {
-            ret Eq.eq(this.0, other.0)
-                and Eq.eq(this.1, other.1)
-                and Eq.eq(this.2, other.2)
-        }
+  }
+  impl[T: Eq, U: Eq, V: Eq] _ for (T, U, V) {
+    eq :: fn(this (T, U, V), other (T, U, V)) -> bool {
+      ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1) and Eq.eq(this.2, other.2)
     }
-    impl[T: Eq, U: Eq, V: Eq, W: Eq] _ for (T, U, V, W) {
-        eq :: fn(this (T, U, V, W), other (T, U, V, W)) -> bool {
-            ret Eq.eq(this.0, other.0)
-                and Eq.eq(this.1, other.1)
-                and Eq.eq(this.2, other.2)
-                and Eq.eq(this.3, other.3)
-        }
+  }
+  impl[T: Eq, U: Eq, V: Eq, W: Eq] _ for (T, U, V, W) {
+    eq :: fn(this (T, U, V, W), other (T, U, V, W)) -> bool {
+      ret Eq.eq(this.0, other.0) and Eq.eq(this.1, other.1) and Eq.eq(this.2, other.2) and Eq.eq(
+        this.3
+        other.3
+      )
     }
+  }
 }
 
 Ordering :: enum {
-    Less
-    Equal
-    Greater
+  Less
+  Equal
+  Greater
 }
 
 Ord :: trait {
-    ord :: fn(this Self, other Self) -> Ordering
+  ord :: fn(this Self, other Self) -> Ordering
 } for {
-    impl[T: int.Int + Eq] _ for T {
-        ord :: fn(this T, other T) -> Ordering {
-            ret if int.Int.lt(this, other): .Less
-            else if int.Int.eq(this, other): .Equal
-            else .Greater
-        }
+  impl[T: int.Int + Eq] _ for T {
+    ord :: fn(this T, other T) -> Ordering {
+      ret if int.Int.lt(this, other): .Less
+      else if int.Int.eq(this, other): .Equal else .Greater
     }
+  }
 }
 
 
@@ -172,7 +193,7 @@ max :: fn[T: Ord](a T, b T) -> T: match Ord.ord(a, b) {
 }
 
 min :: fn[T: Ord](a T, b T) -> T: match Ord.ord(a, b) {
-    .Less: a,
-    .Equal: a,
-    .Greater: b,
+  .Less: a,
+  .Equal: a,
+  .Greater: b,
 }
