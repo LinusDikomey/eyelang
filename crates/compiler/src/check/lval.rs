@@ -27,7 +27,7 @@ pub fn check(
                     let var_ty = ctx.hir.get_var(id);
                     (LValue::Variable(id), var_ty)
                 }
-                LocalItem::Capture(id) => todo!("lvalue capture: {id:?}"),
+                LocalItem::Capture(id, ty) => todo!("lvalue capture: {id:?}: {ty:?}"),
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }

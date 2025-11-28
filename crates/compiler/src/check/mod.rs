@@ -18,11 +18,12 @@ pub use type_def::type_def;
 
 use crate::{
     Compiler, InvalidTypeError, Type,
+    check::closure::CheckedClosure,
     compiler::{
         BodyOrTypes, CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Signature, VarId,
         builtins,
     },
-    hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
+    hir::{CastId, HIRBuilder, Hir, LValue, Node},
     types::{BaseType, TypeFull},
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
@@ -53,6 +54,11 @@ pub(crate) fn function(
     let generic_count = signature.generics.count();
     let varargs = signature.varargs;
 
+    let name = crate::compiler::function_name(ast, function, module, id);
+    let full_name = compiler.module_path(module)
+        + "."
+        + &crate::compiler::function_name(ast, function, module, id);
+
     let body_or_types = if let Some(body) = function.body {
         let hir = HIRBuilder::new(types);
         let params = signature
@@ -70,6 +76,7 @@ pub(crate) fn function(
             params,
             body,
             return_type,
+            &full_name,
             LocalScopeParent::None,
         );
         BodyOrTypes::Body(hir)
@@ -77,9 +84,6 @@ pub(crate) fn function(
         let (types, _) = types.finish(compiler, &signature.generics, module);
         BodyOrTypes::Types(types)
     };
-
-    // TODO: factor potential closed_over_scope into name
-    let name = crate::compiler::function_name(ast, function, module, id);
 
     CheckedFunction {
         name,
@@ -101,6 +105,7 @@ pub fn check(
     params: impl IntoIterator<Item = (Box<str>, LocalTypeId)>,
     expr: ExprId,
     expected: LocalTypeId,
+    name: &str,
     parent_scope: LocalScopeParent,
 ) -> Hir {
     let params = params.into_iter();
@@ -128,7 +133,7 @@ pub fn check(
         control_flow_stack: Vec::new(),
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
-        capture_elements_to_replace: Vec::new(),
+        checked_closures: Vec::new(),
     };
     let root = expr::check(
         &mut check_ctx,
@@ -138,11 +143,7 @@ pub fn check(
         expected,
         &mut false,
     );
-    debug_assert!(
-        check_ctx.capture_elements_to_replace.is_empty(),
-        "non-closure tried to capture something"
-    );
-    check_ctx.finish(root, param_vars)
+    check_ctx.finish(root, param_vars, name)
 }
 
 pub struct ProjectErrors {
@@ -194,7 +195,7 @@ pub struct Ctx<'a> {
     pub deferred_exhaustions: Vec<(Exhaustion, LocalTypeId, ExprId)>,
     /// from, to, cast_expr
     pub deferred_casts: Vec<(LocalTypeId, LocalTypeId, ExprId, CastId)>,
-    pub capture_elements_to_replace: Vec<NodeId>,
+    pub checked_closures: Vec<CheckedClosure>,
 }
 impl Ctx<'_> {
     fn emit(&mut self, error: CompileError) {
@@ -320,10 +321,36 @@ impl Ctx<'_> {
         value
     }
 
-    pub(crate) fn finish(self, root: Node, params: Vec<VarId>) -> Hir {
+    pub(crate) fn finish(self, root: Node, params: Vec<VarId>, name: &str) -> Hir {
         let mut hir = self
             .hir
             .finish(root, self.compiler, self.generics, self.module, params);
+        let symbols = &self.compiler.get_parsed_module(self.module).symbols;
+        for closure in self.checked_closures {
+            let hir = closure.hir.finish_with_types(
+                hir.clone_types_for_closure(),
+                closure.root,
+                closure.params,
+            );
+            symbols.function_signatures[closure.id.idx()].start_resolving();
+            symbols.function_signatures[closure.id.idx()].put(Signature {
+                params: closure.params,
+                named_params: (),
+                varargs: (),
+                return_type: (),
+                generics: (),
+                span: (),
+            });
+            symbols.functions[closure.id.idx()].start_resolving();
+            symbols.functions[closure.id.idx()].put(CheckedFunction {
+                name: format!("{name}$closure{}", closure.id.idx()),
+                params: closure.param_types,
+                varargs: false,
+                return_type: closure.return_type,
+                generic_count: closure.generic_count,
+                body_or_types: BodyOrTypes::Body(hir),
+            });
+        }
         for (exhaustion, ty, pat) in self.deferred_exhaustions {
             if let Ok(false) = exhaustion.is_exhausted(hir[ty], self.compiler) {
                 let error = Error::Inexhaustive.at_span(self.ast[pat].span(self.ast));
@@ -380,7 +407,7 @@ impl Ctx<'_> {
 
     fn type_to_string(&self, ty: impl Into<TypeInfoOrIdx>) -> String {
         let mut s = String::new();
-        self.hir.types.type_to_string(
+        self.hir.types.type_to_string_inner(
             self.compiler,
             self.generics,
             self.hir.types.get_info_or_idx(ty.into()),
@@ -391,11 +418,11 @@ impl Ctx<'_> {
 
     pub fn specify_bound(&mut self, var: LocalTypeId, bound: Bound, span: TSpan) -> bool {
         let (var, info) = self.hir.types.find_shorten(var);
-        match dbg!(
-            self.hir
-                .types
-                .unify_bound_with_info(self.compiler, self.generics, info, bound)
-        ) {
+        match self
+            .hir
+            .types
+            .unify_bound_with_info(self.compiler, self.generics, info, bound)
+        {
             Ok(Some(info_or_idx)) => {
                 self.hir.types.replace_value(var, info_or_idx);
                 true

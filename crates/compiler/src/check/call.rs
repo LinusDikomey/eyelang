@@ -48,7 +48,7 @@ pub fn check_call(
     let mut s = String::new();
     ctx.hir
         .types
-        .type_to_string(ctx.compiler, ctx.generics, ctx.hir.types[called_ty], &mut s);
+        .type_to_string_inner(ctx.compiler, ctx.generics, ctx.hir.types[called_ty], &mut s);
 
     match ctx.hir.types[called_ty] {
         TypeInfo::Known(Type::Invalid) => {

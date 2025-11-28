@@ -18,6 +18,7 @@ use crate::{
     },
     compiler::{
         Def, Generics, Instance, ModuleSpan, ResolvedEnumDef, ResolvedTypeContent, ResolvedTypeDef,
+        builtins,
     },
     helpers::IteratorExt,
     layout::Layout,
@@ -58,6 +59,11 @@ impl Index<VariantId> for TypeTable {
 impl IndexMut<VariantId> for TypeTable {
     fn index_mut(&mut self, index: VariantId) -> &mut Self::Output {
         &mut self.variants[index.idx()]
+    }
+}
+impl Default for TypeTable {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl TypeTable {
@@ -398,7 +404,8 @@ impl TypeTable {
             | TypeInfo::ModuleItem(_)
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
-            | TypeInfo::EnumVariantItem { .. } => false,
+            | TypeInfo::EnumVariantItem { .. }
+            | TypeInfo::Closure { .. } => false,
         })
     }
 
@@ -429,9 +436,9 @@ impl TypeTable {
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
         let new = unify(a_ty, b_ty, self, generics, compiler, a).unwrap_or_else(|| {
             let mut expected = String::new();
-            self.type_to_string(compiler, generics, a_ty, &mut expected);
+            self.type_to_string_inner(compiler, generics, a_ty, &mut expected);
             let mut found = String::new();
-            self.type_to_string(compiler, generics, b_ty, &mut found);
+            self.type_to_string_inner(compiler, generics, b_ty, &mut found);
             let ModuleSpan { module, span } = span();
             compiler.errors.emit(
                 module,
@@ -615,7 +622,7 @@ impl TypeTable {
             _ => {}
         }
         let mut expected_str = String::new();
-        self.type_to_string(compiler, generics, self[expected], &mut expected_str);
+        self.type_to_string_inner(compiler, generics, self[expected], &mut expected_str);
         Err(Some(Error::MismatchedType {
             expected: expected_str,
             found: format!("enum variant \"{name}\""),
@@ -631,9 +638,9 @@ impl TypeTable {
         span: ModuleSpan,
     ) {
         let mut expected = String::new();
-        self.type_to_string(compiler, generics, a, &mut expected);
+        self.type_to_string_inner(compiler, generics, a, &mut expected);
         let mut found = String::new();
-        self.type_to_string(compiler, generics, b, &mut found);
+        self.type_to_string_inner(compiler, generics, b, &mut found);
         let ModuleSpan { module, span } = span;
         compiler.errors.emit(
             module,
@@ -751,6 +758,17 @@ impl TypeTable {
         compiler: &Compiler,
         function_generics: &Generics,
         ty: TypeInfo,
+    ) -> String {
+        let mut s = String::new();
+        self.type_to_string_inner(compiler, function_generics, ty, &mut s);
+        s
+    }
+
+    pub fn type_to_string_inner(
+        &self,
+        compiler: &Compiler,
+        function_generics: &Generics,
+        ty: TypeInfo,
         s: &mut String,
     ) {
         use std::fmt::Write;
@@ -771,7 +789,12 @@ impl TypeTable {
                                 if i != 0 {
                                     s.push_str(", ");
                                 }
-                                self.type_to_string(compiler, function_generics, self[generic], s);
+                                self.type_to_string_inner(
+                                    compiler,
+                                    function_generics,
+                                    self[generic],
+                                    s,
+                                );
                             }
                             s.push(']');
                         }
@@ -797,20 +820,20 @@ impl TypeTable {
                         } else {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, function_generics, self[member], s);
+                        self.type_to_string_inner(compiler, function_generics, self[member], s);
                     }
                     s.push(')');
                 }
                 BaseType::Array => {
                     s.push('[');
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
                         s,
                     );
                     s.push_str("; ");
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(1).unwrap()],
@@ -821,7 +844,7 @@ impl TypeTable {
                 BaseType::Pointer => {
                     debug_assert_eq!(generics.count, 1);
                     s.push('*');
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
@@ -834,10 +857,10 @@ impl TypeTable {
                         if i != 0 {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, function_generics, self[param], s);
+                        self.type_to_string_inner(compiler, function_generics, self[param], s);
                     }
                     s.push_str(") -> ");
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
@@ -853,7 +876,12 @@ impl TypeTable {
                             if i != 0 {
                                 s.push_str(", ");
                             }
-                            self.type_to_string(compiler, function_generics, self[generic], s);
+                            self.type_to_string_inner(
+                                compiler,
+                                function_generics,
+                                self[generic],
+                                s,
+                            );
                         }
                         s.push(']');
                     }
@@ -873,7 +901,7 @@ impl TypeTable {
             }
             TypeInfo::TypeItem(ty) => {
                 s.push_str("<type item: ");
-                self.type_to_string(compiler, function_generics, self[ty], s);
+                self.type_to_string_inner(compiler, function_generics, self[ty], s);
                 s.push('>');
             }
             TypeInfo::TraitItem { .. } => s.push_str("<trait item>"),
@@ -882,6 +910,7 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
             TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
+            TypeInfo::Closure { .. } => s.push_str("<closure>"),
         }
     }
 
@@ -905,7 +934,7 @@ impl TypeTable {
                     if i != 0 {
                         s.push_str(", ");
                     }
-                    self.type_to_string(compiler, generics, self[arg], s);
+                    self.type_to_string_inner(compiler, generics, self[arg], s);
                 }
                 s.push(')');
             }
@@ -1012,6 +1041,21 @@ impl TypeTable {
                 );
                 compiler.types.intern(TypeFull::Instance(base, &[]))
             }
+            TypeInfo::Closure { captures, .. } => {
+                // TODO: maybe create a new unique type here in the future
+                let start = buf.len();
+                buf.reserve(captures.count as usize);
+                for i in captures.iter() {
+                    let capture = self.intern_var(compiler, module, i, buf);
+                    buf.push(capture);
+                }
+                debug_assert_eq!(buf[start..].len(), captures.count as usize);
+                let ty = compiler
+                    .types
+                    .intern(TypeFull::Instance(BaseType::Tuple, &buf[start..]));
+                buf.truncate(start);
+                ty
+            }
             TypeInfo::BaseTypeItem(_)
             | TypeInfo::TypeItem(_)
             | TypeInfo::TraitItem { .. }
@@ -1059,7 +1103,12 @@ impl TypeTable {
                     Ok(None) => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
-                        self.type_to_string(compiler, function_generics, info, &mut type_name);
+                        self.type_to_string_inner(
+                            compiler,
+                            function_generics,
+                            info,
+                            &mut type_name,
+                        );
                         compiler.errors.emit(
                             module,
                             Error::UnsatisfiedTraitBound {
@@ -1274,6 +1323,25 @@ impl TypeTable {
             TypeInfo::Unknown(bounds) if bounds.is_empty() => {
                 return Ok(Some(TypeInfo::Unknown(self.add_bounds([bound])).into()));
             }
+            TypeInfo::Closure {
+                params,
+                return_type,
+                ..
+            } if bound.trait_id == builtins::get_fn_trait(compiler) => {
+                debug_assert_eq!(bound.generics.count, 2);
+                let ok = self.try_unify(
+                    bound.generics.nth(0).unwrap(),
+                    params,
+                    function_generics,
+                    compiler,
+                ) && self.try_unify(
+                    bound.generics.nth(1).unwrap(),
+                    return_type,
+                    function_generics,
+                    compiler,
+                );
+                return Ok(ok.then_some(ty.into()));
+            }
             TypeInfo::Unknown(bounds) => {
                 // PERF: avoid the vec and allocate into new bounds instead (helper method extend_bounds using copy_within)
                 let mut bounds = self.get_bounds(bounds).to_vec();
@@ -1372,7 +1440,8 @@ impl TypeTable {
             | TypeInfo::ModuleItem(_)
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
-            | TypeInfo::EnumVariantItem { .. } => false,
+            | TypeInfo::EnumVariantItem { .. }
+            | TypeInfo::Closure { .. } => false,
             TypeInfo::UnknownConst => unreachable!(),
         })
     }
@@ -1520,6 +1589,14 @@ pub enum TypeInfo {
         /// always includes the ordinal type as it's first type
         arg_types: LocalTypeIds,
     },
+    Closure {
+        function: ast::FunctionId,
+        captures: LocalTypeIds,
+        generics: LocalTypeIds,
+        /// represented as a tuple
+        params: LocalTypeId,
+        return_type: LocalTypeId,
+    },
 }
 impl From<Primitive> for TypeInfo {
     fn from(value: Primitive) -> Self {
@@ -1543,7 +1620,7 @@ pub struct InferredEnum {
     variants: Vec<VariantId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InferredEnumVariant {
     pub name: Box<str>,
     pub ordinal: u64,

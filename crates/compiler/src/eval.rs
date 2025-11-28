@@ -187,7 +187,8 @@ pub fn def_expr(
         }
         _ => {
             tracing::debug!(target: "eval", "Running evaluator for definition of {name}:");
-            match value_expr(compiler, module, scope, ast, expr, ty) {
+            let value_name = compiler.module_path(module) + "." + name;
+            match value_expr(compiler, module, scope, ast, expr, ty, &value_name) {
                 Ok((val, ty)) => Def::ConstValue(compiler.add_const_value(val, ty)),
                 Err(err) => {
                     compiler
@@ -207,11 +208,13 @@ pub fn value_expr(
     ast: &Ast,
     expr: ExprId,
     ty: &UnresolvedType,
+    name: &str,
 ) -> Result<(ConstValue, Type), ir::eval::Error> {
     let mut types = TypeTable::new();
     let expected = types.from_annotation(ty, compiler, module, scope);
     let expected = types.add(expected);
     let hir = HIRBuilder::new(types);
+    let name = compiler.module_path(module) + name;
     let hir = crate::check::check(
         compiler,
         ast,
@@ -222,6 +225,7 @@ pub fn value_expr(
         [],
         expr,
         expected,
+        &name,
         crate::compiler::LocalScopeParent::None,
     );
     let ty = hir[expected];
