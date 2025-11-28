@@ -17,14 +17,14 @@ pub use traits::trait_def;
 pub use type_def::type_def;
 
 use crate::{
-    Compiler, Type,
+    Compiler, InvalidTypeError, Type,
     compiler::{
         BodyOrTypes, CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Signature, VarId,
         builtins,
     },
     hir::{CastId, HIRBuilder, Hir, LValue, Node, NodeId},
     types::{BaseType, TypeFull},
-    typing::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
+    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx, TypeTable},
 };
 
 use self::exhaust::Exhaustion;
@@ -376,6 +376,51 @@ impl Ctx<'_> {
         });
         let err = Error::TypeMustBeKnownHere { needed_bound };
         self.compiler.errors.emit(self.module, err.at_span(span));
+    }
+
+    fn type_to_string(&self, ty: impl Into<TypeInfoOrIdx>) -> String {
+        let mut s = String::new();
+        self.hir.types.type_to_string(
+            self.compiler,
+            self.generics,
+            self.hir.types.get_info_or_idx(ty.into()),
+            &mut s,
+        );
+        s
+    }
+
+    pub fn specify_bound(&mut self, var: LocalTypeId, bound: Bound, span: TSpan) -> bool {
+        let (var, info) = self.hir.types.find_shorten(var);
+        match dbg!(
+            self.hir
+                .types
+                .unify_bound_with_info(self.compiler, self.generics, info, bound)
+        ) {
+            Ok(Some(info_or_idx)) => {
+                self.hir.types.replace_value(var, info_or_idx);
+                true
+            }
+            Ok(None) => {
+                let trait_name = self
+                    .compiler
+                    .get_trait_name(bound.trait_id.0, bound.trait_id.1)
+                    .into();
+                self.compiler.errors.emit(
+                    self.module,
+                    Error::UnsatisfiedTraitBound {
+                        trait_name,
+                        ty: self.type_to_string(var),
+                    }
+                    .at_span(span),
+                );
+                self.invalidate(var);
+                false
+            }
+            Err(InvalidTypeError) => {
+                self.invalidate(var);
+                true
+            }
+        }
     }
 }
 

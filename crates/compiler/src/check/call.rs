@@ -394,9 +394,7 @@ pub fn check_call(
         generics: fn_instance,
         span: call_span,
     };
-    ctx.hir
-        .types
-        .specify_bound(ctx.compiler, called_ty, fn_bound);
+    ctx.specify_bound(called_ty, fn_bound, ctx.span(call.called_expr));
 
     let arg_nodes = ctx.hir.add_invalid_nodes(arg_types.count);
     for ((arg, ty), node_id) in call

@@ -180,4 +180,5 @@ impl FunctionType {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct InvalidTypeError;

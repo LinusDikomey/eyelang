@@ -46,7 +46,7 @@ pub fn unify(
                 let bound = *types.get_bound(bound);
                 let mut s = String::new();
                 types.type_to_string(compiler, function_generics, chosen_ty, &mut s);
-                match types.unify_bound_with_info(compiler, chosen_ty, bound) {
+                match types.unify_bound_with_info(compiler, function_generics, chosen_ty, bound) {
                     // TODO: is defer_impl_check just no longer needed
                     Ok(Some(new)) => match new {
                         TypeInfoOrIdx::TypeInfo(info) => {

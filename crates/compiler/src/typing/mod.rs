@@ -226,7 +226,7 @@ impl TypeTable {
         }
     }
 
-    fn find_shorten(&mut self, mut var: LocalTypeId) -> (LocalTypeId, TypeInfo) {
+    pub fn find_shorten(&mut self, mut var: LocalTypeId) -> (LocalTypeId, TypeInfo) {
         let original_var = var;
         let (final_var, info) = loop {
             match self.types[var.idx()] {
@@ -1052,7 +1052,7 @@ impl TypeTable {
                 };
                 // TODO: probably should retry impl candidates in a loop as long as one bound has
                 // multiple candidates but progress is made
-                match self.unify_bound_with_info(compiler, info, bound) {
+                match self.unify_bound_with_info(compiler, function_generics, info, bound) {
                     Err(InvalidTypeError) => {
                         continue;
                     }
@@ -1169,7 +1169,12 @@ impl TypeTable {
                     for bound in bounds.iter() {
                         let bound = *self.get_bound(bound);
                         if self
-                            .unify_bound_with_info(compiler, TypeInfo::Known(ty), bound)?
+                            .unify_bound_with_info(
+                                compiler,
+                                function_generics,
+                                TypeInfo::Known(ty),
+                                bound,
+                            )?
                             .is_none()
                         {
                             return Ok(false);
@@ -1200,9 +1205,14 @@ impl TypeTable {
                 _ => false,
             },
             TypeFull::Generic(i) => match info {
-                TypeInfo::Unknown(bounds) => bounds
-                    .iter()
-                    .all(|bound| function_generics.check_bound_satisfied(i, bound, self, compiler)),
+                TypeInfo::Unknown(bounds) => bounds.iter().all(|bound| {
+                    function_generics.check_bound_satisfied(
+                        i,
+                        *self.get_bound(bound),
+                        self,
+                        compiler,
+                    )
+                }),
                 _ => false,
             },
             TypeFull::Const(_) => matches!(info, TypeInfo::UnknownConst),
@@ -1242,39 +1252,24 @@ impl TypeTable {
     //     }
     // }
 
-    pub fn specify_bound(&mut self, compiler: &Compiler, var: LocalTypeId, bound: Bound) -> bool {
-        let (var, info) = self.find_shorten(var);
-        match self.unify_bound_with_info(compiler, info, bound) {
-            Ok(Some(info_or_idx)) => {
-                self.replace_value(var, info_or_idx);
-                true
-            }
-            Ok(None) => {
-                self.invalidate(var);
-                false
-            }
-            Err(InvalidTypeError) => {
-                self.invalidate(var);
-                true
-            }
-        }
-    }
-
     pub fn unify_bound_with_info(
         &mut self,
         compiler: &Compiler,
+        function_generics: &Generics,
         ty: TypeInfo,
         bound: Bound,
     ) -> Result<Option<TypeInfoOrIdx>, InvalidTypeError> {
         let mut has_invalid_type = false;
         let base = match ty {
-            TypeInfo::Known(ty) => {
-                if let TypeFull::Instance(base, _) = compiler.types.lookup(ty) {
-                    Some(base)
-                } else {
-                    None
+            TypeInfo::Known(known) => match compiler.types.lookup(known) {
+                TypeFull::Instance(base, _) => Some(base),
+                TypeFull::Generic(i) => {
+                    return Ok(function_generics
+                        .check_bound_satisfied(i, bound, self, compiler)
+                        .then_some(ty.into()));
                 }
-            }
+                _ => None,
+            },
             TypeInfo::Instance(base, _) => Some(base),
             TypeInfo::Unknown(bounds) if bounds.is_empty() => {
                 return Ok(Some(TypeInfo::Unknown(self.add_bounds([bound])).into()));
