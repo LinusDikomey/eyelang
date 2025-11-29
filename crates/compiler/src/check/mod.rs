@@ -325,21 +325,27 @@ impl Ctx<'_> {
         let mut hir = self
             .hir
             .finish(root, self.compiler, self.generics, self.module, params);
-        let symbols = &self.compiler.get_parsed_module(self.module).symbols;
+        let parsed = self.compiler.get_parsed_module(self.module);
+        let symbols = &parsed.symbols;
         for closure in self.checked_closures {
             let hir = closure.hir.finish_with_types(
                 hir.clone_types_for_closure(),
                 closure.root,
-                closure.params,
+                closure.params.iter().map(|(_name, id)| *id).collect(),
             );
             symbols.function_signatures[closure.id.idx()].start_resolving();
+            let generic_count = closure.generics.count();
             symbols.function_signatures[closure.id.idx()].put(Signature {
-                params: closure.params,
-                named_params: (),
-                varargs: (),
-                return_type: (),
-                generics: (),
-                span: (),
+                params: closure
+                    .params
+                    .iter()
+                    .map(|(name, id)| (name.clone(), hir[hir.vars[id.idx()]]))
+                    .collect(),
+                named_params: Box::new([]), // TODO: named closure params
+                varargs: false,
+                return_type: hir[closure.return_type],
+                generics: closure.generics,
+                span: parsed.ast[closure.id].signature_span,
             });
             symbols.functions[closure.id.idx()].start_resolving();
             symbols.functions[closure.id.idx()].put(CheckedFunction {
@@ -347,7 +353,7 @@ impl Ctx<'_> {
                 params: closure.param_types,
                 varargs: false,
                 return_type: closure.return_type,
-                generic_count: closure.generic_count,
+                generic_count,
                 body_or_types: BodyOrTypes::Body(hir),
             });
         }

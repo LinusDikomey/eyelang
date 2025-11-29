@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     check::expr,
-    compiler::VarId,
+    compiler::{Generics, VarId},
     eval::ConstValueId,
     types::BaseType,
     typing::{LocalTypeId, LocalTypeIds},
@@ -23,11 +23,11 @@ use super::Ctx;
 pub struct CheckedClosure {
     pub id: FunctionId,
     pub hir: HIRBuilder,
+    pub generics: Generics,
     pub root: Node,
-    pub params: Vec<VarId>,
+    pub params: Box<[(Box<str>, VarId)]>,
     pub param_types: LocalTypeIds,
     pub return_type: LocalTypeId,
-    pub generic_count: u8,
 }
 
 pub fn closure(
@@ -174,25 +174,22 @@ pub fn closure(
     );
 
     let (params, param_types) = if capture_types.is_empty() {
-        (
-            params.into_iter().map(|(_name, var)| var).collect(),
-            param_types.skip(1),
-        )
+        (params, param_types.skip(1))
     } else {
-        let params = std::iter::once(captures_param)
-            .chain(params.into_iter().map(|(_name, var)| var))
+        let params = std::iter::once(("".into(), captures_param))
+            .chain(params)
             .collect();
         (params, param_types)
     };
 
     let checked = CheckedClosure {
         id,
+        generics,
         hir: closure_hir,
         root,
         params,
         param_types,
         return_type,
-        generic_count: generics.count(),
     };
     debug_assert_eq!(checked.params.len(), param_types.count as usize);
     ctx.checked_closures.push(checked);
