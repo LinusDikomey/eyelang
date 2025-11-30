@@ -6,6 +6,7 @@ macro_rules! id {
     ($(#[$($attrss:tt)*])* $ty: ident $name: ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         $(#[$($attrss)*])*
+        #[repr(transparent)]
         pub struct $name(pub $ty);
         impl $name {
             pub const MISSING: Self = Self($ty::MAX);

@@ -851,7 +851,7 @@ impl Compiler {
                     false
                 }
             }
-            TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
+            TypeFull::Const(_) => false,
         })
     }
 
@@ -1313,6 +1313,17 @@ impl<T> Resolvable<T> {
             .unwrap_or_else(|_| panic!("Value was put multiple times"));
         self.resolved.get().unwrap()
     }
+
+    pub fn put_immediate(&self, value: T) -> &T {
+        debug_assert!(
+            self.resolving.get().is_none(),
+            "Resolving was set before putting resolved despite using put_immediate"
+        );
+        self.resolved
+            .set(value)
+            .unwrap_or_else(|_| panic!("Value was put multiple times"));
+        self.resolved.get().unwrap()
+    }
 }
 
 id::id!(VarId);
@@ -1661,7 +1672,7 @@ impl Signature {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Generics {
     generics: Vec<(String, Vec<TraitBound>)>,
 }
@@ -1777,7 +1788,7 @@ impl Generics {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TraitBound {
     pub trait_id: (ModuleId, TraitId),
     pub generics: Box<[Type]>,

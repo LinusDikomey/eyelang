@@ -35,14 +35,14 @@ pub fn get(
                     BuiltinType::F64 => ir::Type::Primitive(ir::Primitive::F64.into()),
                     BuiltinType::Type => ir::Type::Primitive(ir::Primitive::U64.into()), // TODO: convert Type Type
                     BuiltinType::Tuple => {
-                        let refs =
-                            ir_types.add_multiple(type_generics.iter().map(|_| ir::Type::UNIT));
-                        for (&elem, ty) in type_generics.iter().zip(refs.iter()) {
+                        let members: &[Type] = &type_generics;
+                        let refs = ir_types.add_multiple(members.iter().map(|_| ir::Type::UNIT));
+                        for (&elem, ty) in members.iter().zip(refs.iter()) {
                             let elem = get(compiler, ir, ir_types, elem, instance)?;
                             ir_types[ty] = elem;
                         }
-                        ir::Type::Tuple(refs)
-                    }
+                        Some(ir::Type::Tuple(refs))
+                    }?,
                     BuiltinType::Pointer | BuiltinType::Function => {
                         ir::Type::Primitive(ir::Primitive::Ptr.into())
                     }

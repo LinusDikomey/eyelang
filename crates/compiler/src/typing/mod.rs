@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    collections::HashMap,
+    ops::{Index, IndexMut},
+};
 
 use dmap::DHashMap;
 use error::Error;
@@ -1041,7 +1044,13 @@ impl TypeTable {
                 );
                 compiler.types.intern(TypeFull::Instance(base, &[]))
             }
-            TypeInfo::Closure { captures, .. } => {
+            TypeInfo::Closure {
+                captures,
+                generics: type_generics,
+                function,
+                params,
+                return_type,
+            } => {
                 // TODO: maybe create a new unique type here in the future
                 let start = buf.len();
                 buf.reserve(captures.count as usize);
@@ -1050,9 +1059,64 @@ impl TypeTable {
                     buf.push(capture);
                 }
                 debug_assert_eq!(buf[start..].len(), captures.count as usize);
+                let fields = buf[start..].iter().map(|&ty| ("".into(), ty)).collect();
+                buf.truncate(start);
+
+                let params = self.intern_var(compiler, module, params, buf);
+                let return_type = self.intern_var(compiler, module, return_type, buf);
+
+                let generics = Generics::new(
+                    (0..type_generics.count)
+                        .map(|_| (String::new(), vec![]))
+                        .collect(),
+                );
+                let base = compiler.types.add_base(
+                    module,
+                    ast::TypeId::MISSING,
+                    format!("closure{}", function.idx()).into_boxed_str(),
+                    type_generics.count.try_into().unwrap(),
+                );
+                let impl_generics: Box<[_]> = (0..generics.count())
+                    .map(|i| compiler.types.intern(TypeFull::Generic(i)))
+                    .collect();
+                let closure_impl_ty = compiler
+                    .types
+                    .intern(TypeFull::Instance(base, &impl_generics));
+                compiler
+                    .types
+                    .get_base(base)
+                    .resolved
+                    .put_immediate(ResolvedTypeDef {
+                        def: ResolvedTypeContent::Struct(crate::compiler::ResolvedStructDef {
+                            fields,
+                            named_fields: Box::new([]),
+                        }),
+                        module,
+                        methods: HashMap::default(),
+                        generics: generics.clone(),
+                        inherent_trait_impls: [(
+                            builtins::get_fn_trait(compiler),
+                            vec![traits::Impl {
+                                generics,
+                                trait_instance: vec![params, return_type],
+                                impl_ty: closure_impl_ty,
+                                functions: vec![function],
+                                impl_module: module,
+                            }],
+                        )]
+                        .into_iter()
+                        .collect(),
+                    });
+                buf.truncate(start);
+                buf.reserve(type_generics.count as usize);
+                for i in type_generics.iter() {
+                    let generic = self.intern_var(compiler, module, i, buf);
+                    buf.push(generic);
+                }
+                debug_assert_eq!(buf[start..].len(), type_generics.count as usize);
                 let ty = compiler
                     .types
-                    .intern(TypeFull::Instance(BaseType::Tuple, &buf[start..]));
+                    .intern(TypeFull::Instance(base, &buf[start..]));
                 buf.truncate(start);
                 ty
             }

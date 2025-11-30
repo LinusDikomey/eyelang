@@ -22,7 +22,7 @@ pub struct Types {
     indices: SegmentList<u32>,
     map: RefCell<HashTable<Type>>,
 
-    instances: SegmentList<(BaseType, Box<[Type]>)>,
+    instances: SegmentList<(u32, Box<[Type]>)>,
     bases: SegmentList<ResolvableTypeDef>,
     consts: SegmentList<u64>,
 }
@@ -64,7 +64,7 @@ impl Types {
                 } else {
                     BaseType(i)
                 };
-                instances.add((base, Box::new([]) as _));
+                instances.add((base.0, Box::new([]) as _));
                 let value = TypeFull::Instance(base, &[]);
                 let hash = hash_full(&value);
                 map.insert_unique(hash, Type(i), |&ty| {
@@ -95,7 +95,7 @@ impl Types {
         .unwrap_or_else(|| {
             let (interned, idx) = match ty {
                 TypeFull::Instance(base, generics) => {
-                    (Tag::Instance, self.instances.add((base, generics.into())))
+                    (Tag::Instance, self.instances.add((base.0, generics.into())))
                 }
                 TypeFull::Generic(i) => (Tag::Generic, i as u32),
                 TypeFull::Const(value) => (Tag::Const, self.consts.add(value)),
@@ -123,7 +123,7 @@ impl Types {
     fn lookup_type<'a>(
         tags: &'a SegmentList<Tag>,
         indices: &'a SegmentList<u32>,
-        instances: &'a SegmentList<(BaseType, Box<[Type]>)>,
+        instances: &'a SegmentList<(u32, Box<[Type]>)>,
         consts: &'a SegmentList<u64>,
         ty: Type,
     ) -> TypeFull<'a> {
@@ -131,7 +131,7 @@ impl Types {
         match tags.get(ty.0) {
             Tag::Instance => {
                 let (base, generics) = instances.get(idx);
-                TypeFull::Instance(*base, generics)
+                TypeFull::Instance(BaseType(*base), generics)
             }
             Tag::Generic => TypeFull::Generic(idx as u8),
             Tag::Const => TypeFull::Const(*consts.get(idx)),
@@ -177,6 +177,8 @@ impl Types {
 
     pub fn instantiate(&self, ty: Type, generics: &[Type]) -> Type {
         // PERF: temporary Vec for storage of allocated types
+        // PERF: could save an allocation by not calling intern() which takes a reference to generics
+        // because we have an owned type already
         match self.lookup(ty) {
             TypeFull::Instance(base, instance_generics) => {
                 let instance_generics: Box<[Type]> = instance_generics.into();
@@ -247,32 +249,37 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
                 _ => {
                     let name = &self.types.get_base(base).name;
                     cwrite!(f, "#r<{name}>")?;
-                    if !generics.is_empty() {
-                        write!(f, "[")?;
-                        let mut first = true;
-                        for &generic in generics {
-                            if !first {
-                                write!(f, ", ")?;
-                            }
-                            first = false;
-                            write!(
-                                f,
-                                "{}",
-                                TypeDisplay {
-                                    types: self.types,
-                                    generics: self.generics,
-                                    ty: generic
-                                }
-                            )?;
-                        }
-                        write!(f, "]")?;
-                    }
-                    Ok(())
+                    self.write_generics(f, generics)
                 }
             },
             TypeFull::Generic(i) => write!(f, "{}", self.generics.get_name(i)),
             TypeFull::Const(n) => write!(f, "{n}"),
         }
+    }
+}
+impl<'a> TypeDisplay<'a> {
+    fn write_generics(&self, f: &mut fmt::Formatter<'_>, generics: &[Type]) -> fmt::Result {
+        if generics.is_empty() {
+            return Ok(());
+        }
+        write!(f, "[")?;
+        let mut first = true;
+        for &generic in generics {
+            if !first {
+                write!(f, ", ")?;
+            }
+            first = false;
+            write!(
+                f,
+                "{}",
+                TypeDisplay {
+                    types: self.types,
+                    generics: self.generics,
+                    ty: generic
+                }
+            )?;
+        }
+        write!(f, "]")
     }
 }
 
