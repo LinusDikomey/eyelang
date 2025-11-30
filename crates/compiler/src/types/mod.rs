@@ -67,12 +67,6 @@ macro_rules! primitive_impls {
 primitive_impls! { Type BaseType }
 
 id::id!(BaseType);
-// TODO: remove if not needed
-// impl Default for BaseType {
-//     fn default() -> Self {
-//         Self(0)
-//     }
-// }
 
 macro_rules! builtin_types {
     ($count: literal $($name: ident = $size: literal)* @generic: $($generic_name: ident = $generics: expr,)*) => {

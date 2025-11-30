@@ -801,8 +801,8 @@ fn check_ident(
             Node::Variable(var)
         }
         LocalItem::Def(def) => def_to_node(ctx, def, expected, span),
-        LocalItem::Capture(id) => {
-            // TODO: unify with expected (probably copy over type info on capture or something)
+        LocalItem::Capture(id, ty) => {
+            ctx.unify(expected, ty, |_| span);
             Node::Capture(id)
         }
         LocalItem::Invalid => {

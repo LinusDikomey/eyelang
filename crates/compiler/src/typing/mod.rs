@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    collections::HashMap,
+    ops::{Index, IndexMut},
+};
 
 use dmap::DHashMap;
 use error::Error;
@@ -18,6 +21,7 @@ use crate::{
     },
     compiler::{
         Def, Generics, Instance, ModuleSpan, ResolvedEnumDef, ResolvedTypeContent, ResolvedTypeDef,
+        builtins,
     },
     helpers::IteratorExt,
     layout::Layout,
@@ -58,6 +62,11 @@ impl Index<VariantId> for TypeTable {
 impl IndexMut<VariantId> for TypeTable {
     fn index_mut(&mut self, index: VariantId) -> &mut Self::Output {
         &mut self.variants[index.idx()]
+    }
+}
+impl Default for TypeTable {
+    fn default() -> Self {
+        Self::new()
     }
 }
 impl TypeTable {
@@ -398,7 +407,8 @@ impl TypeTable {
             | TypeInfo::ModuleItem(_)
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
-            | TypeInfo::EnumVariantItem { .. } => false,
+            | TypeInfo::EnumVariantItem { .. }
+            | TypeInfo::Closure { .. } => false,
         })
     }
 
@@ -427,19 +437,19 @@ impl TypeTable {
             return;
         }
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-        let new = unify(a_ty, b_ty, self, generics, compiler, a).unwrap_or_else(|| {
+        let new = unify(a_ty, b_ty, self, generics, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
-            self.type_to_string(compiler, generics, a_ty, &mut expected);
+            self.type_to_string_inner(compiler, generics, a_ty, &mut expected);
             let mut found = String::new();
-            self.type_to_string(compiler, generics, b_ty, &mut found);
+            self.type_to_string_inner(compiler, generics, b_ty, &mut found);
             let ModuleSpan { module, span } = span();
             compiler.errors.emit(
                 module,
                 Error::MismatchedType { expected, found }.at_span(span),
             );
-            TypeInfo::INVALID
+            TypeInfo::INVALID.into()
         });
-        self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(new);
+        self.types[a.idx()] = new;
     }
 
     fn try_unify(
@@ -463,9 +473,9 @@ impl TypeTable {
             }
         };
         a == b
-            || unify(a_ty, b_ty, self, generics, compiler, a)
+            || unify(a_ty, b_ty, self, generics, compiler)
                 .map(|unified| {
-                    self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
+                    self.types[a.idx()] = unified;
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
                     self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
                 })
@@ -615,7 +625,7 @@ impl TypeTable {
             _ => {}
         }
         let mut expected_str = String::new();
-        self.type_to_string(compiler, generics, self[expected], &mut expected_str);
+        self.type_to_string_inner(compiler, generics, self[expected], &mut expected_str);
         Err(Some(Error::MismatchedType {
             expected: expected_str,
             found: format!("enum variant \"{name}\""),
@@ -631,9 +641,9 @@ impl TypeTable {
         span: ModuleSpan,
     ) {
         let mut expected = String::new();
-        self.type_to_string(compiler, generics, a, &mut expected);
+        self.type_to_string_inner(compiler, generics, a, &mut expected);
         let mut found = String::new();
-        self.type_to_string(compiler, generics, b, &mut found);
+        self.type_to_string_inner(compiler, generics, b, &mut found);
         let ModuleSpan { module, span } = span;
         compiler.errors.emit(
             module,
@@ -712,11 +722,11 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(info) => break info,
             }
         };
-        let Some(info) = unify(a_ty, info, self, function_generics, compiler, a) else {
+        let Some(info) = unify(a_ty, info, self, function_generics, compiler) else {
             self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(TypeInfo::INVALID);
             return Err((a_ty, info));
         };
-        self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(info);
+        self.types[a.idx()] = info;
         Ok(())
     }
 
@@ -751,6 +761,17 @@ impl TypeTable {
         compiler: &Compiler,
         function_generics: &Generics,
         ty: TypeInfo,
+    ) -> String {
+        let mut s = String::new();
+        self.type_to_string_inner(compiler, function_generics, ty, &mut s);
+        s
+    }
+
+    pub fn type_to_string_inner(
+        &self,
+        compiler: &Compiler,
+        function_generics: &Generics,
+        ty: TypeInfo,
         s: &mut String,
     ) {
         use std::fmt::Write;
@@ -771,7 +792,12 @@ impl TypeTable {
                                 if i != 0 {
                                     s.push_str(", ");
                                 }
-                                self.type_to_string(compiler, function_generics, self[generic], s);
+                                self.type_to_string_inner(
+                                    compiler,
+                                    function_generics,
+                                    self[generic],
+                                    s,
+                                );
                             }
                             s.push(']');
                         }
@@ -797,20 +823,20 @@ impl TypeTable {
                         } else {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, function_generics, self[member], s);
+                        self.type_to_string_inner(compiler, function_generics, self[member], s);
                     }
                     s.push(')');
                 }
                 BaseType::Array => {
                     s.push('[');
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
                         s,
                     );
                     s.push_str("; ");
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(1).unwrap()],
@@ -821,7 +847,7 @@ impl TypeTable {
                 BaseType::Pointer => {
                     debug_assert_eq!(generics.count, 1);
                     s.push('*');
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
@@ -834,10 +860,10 @@ impl TypeTable {
                         if i != 0 {
                             s.push_str(", ");
                         }
-                        self.type_to_string(compiler, function_generics, self[param], s);
+                        self.type_to_string_inner(compiler, function_generics, self[param], s);
                     }
                     s.push_str(") -> ");
-                    self.type_to_string(
+                    self.type_to_string_inner(
                         compiler,
                         function_generics,
                         self[generics.nth(0).unwrap()],
@@ -853,7 +879,12 @@ impl TypeTable {
                             if i != 0 {
                                 s.push_str(", ");
                             }
-                            self.type_to_string(compiler, function_generics, self[generic], s);
+                            self.type_to_string_inner(
+                                compiler,
+                                function_generics,
+                                self[generic],
+                                s,
+                            );
                         }
                         s.push(']');
                     }
@@ -873,7 +904,7 @@ impl TypeTable {
             }
             TypeInfo::TypeItem(ty) => {
                 s.push_str("<type item: ");
-                self.type_to_string(compiler, function_generics, self[ty], s);
+                self.type_to_string_inner(compiler, function_generics, self[ty], s);
                 s.push('>');
             }
             TypeInfo::TraitItem { .. } => s.push_str("<trait item>"),
@@ -882,6 +913,7 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
             TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
+            TypeInfo::Closure { function, .. } => write!(s, "<closure{}>", function.idx()).unwrap(),
         }
     }
 
@@ -905,7 +937,7 @@ impl TypeTable {
                     if i != 0 {
                         s.push_str(", ");
                     }
-                    self.type_to_string(compiler, generics, self[arg], s);
+                    self.type_to_string_inner(compiler, generics, self[arg], s);
                 }
                 s.push(')');
             }
@@ -1012,6 +1044,81 @@ impl TypeTable {
                 );
                 compiler.types.intern(TypeFull::Instance(base, &[]))
             }
+            TypeInfo::Closure {
+                captures,
+                generics: type_generics,
+                function,
+                params,
+                return_type,
+            } => {
+                let start = buf.len();
+                buf.reserve(captures.count as usize);
+                for i in captures.iter() {
+                    let capture = self.intern_var(compiler, module, i, buf);
+                    buf.push(capture);
+                }
+                debug_assert_eq!(buf[start..].len(), captures.count as usize);
+                let fields = buf[start..].iter().map(|&ty| ("".into(), ty)).collect();
+                buf.truncate(start);
+
+                let params = self.intern_var(compiler, module, params, buf);
+                let return_type = self.intern_var(compiler, module, return_type, buf);
+
+                let generics = Generics::new(
+                    (0..type_generics.count)
+                        .map(|_| (String::new(), vec![]))
+                        .collect(),
+                );
+                let base = compiler.types.add_base(
+                    module,
+                    ast::TypeId::MISSING,
+                    format!("closure{}", function.idx()).into_boxed_str(),
+                    type_generics.count.try_into().unwrap(),
+                );
+                let impl_generics: Box<[_]> = (0..generics.count())
+                    .map(|i| compiler.types.intern(TypeFull::Generic(i)))
+                    .collect();
+                let closure_impl_ty = compiler
+                    .types
+                    .intern(TypeFull::Instance(base, &impl_generics));
+                compiler
+                    .types
+                    .get_base(base)
+                    .resolved
+                    .put_immediate(ResolvedTypeDef {
+                        def: ResolvedTypeContent::Struct(crate::compiler::ResolvedStructDef {
+                            fields,
+                            named_fields: Box::new([]),
+                        }),
+                        module,
+                        methods: HashMap::default(),
+                        generics: generics.clone(),
+                        inherent_trait_impls: [(
+                            builtins::get_fn_trait(compiler),
+                            vec![traits::Impl {
+                                generics,
+                                trait_instance: vec![params, return_type],
+                                impl_ty: closure_impl_ty,
+                                functions: vec![function],
+                                impl_module: module,
+                            }],
+                        )]
+                        .into_iter()
+                        .collect(),
+                    });
+                buf.truncate(start);
+                buf.reserve(type_generics.count as usize);
+                for i in type_generics.iter() {
+                    let generic = self.intern_var(compiler, module, i, buf);
+                    buf.push(generic);
+                }
+                debug_assert_eq!(buf[start..].len(), type_generics.count as usize);
+                let ty = compiler
+                    .types
+                    .intern(TypeFull::Instance(base, &buf[start..]));
+                buf.truncate(start);
+                ty
+            }
             TypeInfo::BaseTypeItem(_)
             | TypeInfo::TypeItem(_)
             | TypeInfo::TraitItem { .. }
@@ -1059,7 +1166,12 @@ impl TypeTable {
                     Ok(None) => {
                         let trait_name = checked_trait.name.clone();
                         let mut type_name = String::new();
-                        self.type_to_string(compiler, function_generics, info, &mut type_name);
+                        self.type_to_string_inner(
+                            compiler,
+                            function_generics,
+                            info,
+                            &mut type_name,
+                        );
                         compiler.errors.emit(
                             module,
                             Error::UnsatisfiedTraitBound {
@@ -1274,6 +1386,32 @@ impl TypeTable {
             TypeInfo::Unknown(bounds) if bounds.is_empty() => {
                 return Ok(Some(TypeInfo::Unknown(self.add_bounds([bound])).into()));
             }
+            TypeInfo::Closure {
+                params,
+                return_type,
+                ..
+            } if bound.trait_id == builtins::get_fn_trait(compiler) => {
+                debug_assert_eq!(bound.generics.count, 2);
+                let args_ok = self.try_unify(
+                    bound.generics.nth(0).unwrap(),
+                    params,
+                    function_generics,
+                    compiler,
+                );
+                let return_ok = self.try_unify(
+                    bound.generics.nth(1).unwrap(),
+                    return_type,
+                    function_generics,
+                    compiler,
+                );
+                tracing::debug!(
+                    target: "check",
+                    args_ok = args_ok,
+                    return_ok = return_ok,
+                    "unifying closure with Fn trait",
+                );
+                return Ok((args_ok && return_ok).then_some(ty.into()));
+            }
             TypeInfo::Unknown(bounds) => {
                 // PERF: avoid the vec and allocate into new bounds instead (helper method extend_bounds using copy_within)
                 let mut bounds = self.get_bounds(bounds).to_vec();
@@ -1372,7 +1510,8 @@ impl TypeTable {
             | TypeInfo::ModuleItem(_)
             | TypeInfo::MethodItem { .. }
             | TypeInfo::TraitMethodItem { .. }
-            | TypeInfo::EnumVariantItem { .. } => false,
+            | TypeInfo::EnumVariantItem { .. }
+            | TypeInfo::Closure { .. } => false,
             TypeInfo::UnknownConst => unreachable!(),
         })
     }
@@ -1520,6 +1659,14 @@ pub enum TypeInfo {
         /// always includes the ordinal type as it's first type
         arg_types: LocalTypeIds,
     },
+    Closure {
+        function: ast::FunctionId,
+        captures: LocalTypeIds,
+        generics: LocalTypeIds,
+        /// represented as a tuple
+        params: LocalTypeId,
+        return_type: LocalTypeId,
+    },
 }
 impl From<Primitive> for TypeInfo {
     fn from(value: Primitive) -> Self {
@@ -1543,7 +1690,7 @@ pub struct InferredEnum {
     variants: Vec<VariantId>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InferredEnumVariant {
     pub name: Box<str>,
     pub ordinal: u64,

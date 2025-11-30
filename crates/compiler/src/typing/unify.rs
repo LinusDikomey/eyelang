@@ -14,10 +14,9 @@ pub fn unify(
     types: &mut TypeTable,
     function_generics: &Generics,
     compiler: &Compiler,
-    unified_id: LocalTypeId,
-) -> Option<TypeInfo> {
+) -> Option<TypeInfoOrIdx> {
     use TypeInfo::*;
-    Some(match (a, b) {
+    Some(TypeInfoOrIdx::TypeInfo(match (a, b) {
         (Instance(BaseType::Invalid, _), _) | (_, Instance(BaseType::Invalid, _)) => {
             unreachable!("Invalid type should always be represented as Known(Type::Invalid)")
         }
@@ -41,40 +40,22 @@ pub fn unify(
             }
         }
         (t, Unknown(bounds)) | (Unknown(bounds), t) => {
-            let mut chosen_ty = t;
+            let mut chosen_ty = TypeInfoOrIdx::TypeInfo(t);
             for bound in bounds.iter() {
                 let bound = *types.get_bound(bound);
-                let mut s = String::new();
-                types.type_to_string(compiler, function_generics, chosen_ty, &mut s);
-                match types.unify_bound_with_info(compiler, function_generics, chosen_ty, bound) {
-                    // TODO: is defer_impl_check just no longer needed
-                    Ok(Some(new)) => match new {
-                        TypeInfoOrIdx::TypeInfo(info) => {
-                            chosen_ty = unify(
-                                chosen_ty,
-                                info,
-                                types,
-                                function_generics,
-                                compiler,
-                                unified_id,
-                            )?;
-                        }
-                        TypeInfoOrIdx::Idx(idx) => {
-                            types
-                                .try_specify(idx, chosen_ty, function_generics, compiler)
-                                .ok()?;
-                            chosen_ty = types[idx];
-                            types.replace(idx, TypeInfoOrIdx::Idx(unified_id));
-                        }
-                    },
-                    Ok(None) => {
-                        // TODO: better error
-                        return None;
-                    }
-                    Err(InvalidTypeError) => return Some(TypeInfo::INVALID),
+                match types.unify_bound_with_info(
+                    compiler,
+                    function_generics,
+                    types.get_info_or_idx(chosen_ty),
+                    bound,
+                ) {
+                    Ok(Some(new)) => chosen_ty = new,
+                    // TODO: attach error context here when it's possible in the future
+                    Ok(None) => return None,
+                    Err(InvalidTypeError) => return Some(TypeInfo::INVALID.into()),
                 }
             }
-            chosen_ty
+            return Some(chosen_ty);
         }
         (Integer, Integer) => Integer,
         (Float, Float) => Float,
@@ -104,7 +85,7 @@ pub fn unify(
                 id,
                 generics,
             )
-            .then_some(Instance(id, generics));
+            .then_some(TypeInfo::Instance(id, generics).into());
         }
         (Enum(a), Enum(b)) => {
             // always merge into a_variants which becomes the longer variant list to try to avoid
@@ -116,7 +97,7 @@ pub fn unify(
             };
             let Some(&first_a) = types.get_enum_variants(a).first() else {
                 // if a is empty, both enums are empty and just returning one is fine
-                return Some(TypeInfo::Enum(a));
+                return Some(TypeInfo::Enum(a).into());
             };
             let ordinal_type_idx = types[first_a].args.idx;
             let b_variant_count = types.get_enum_variants(b).len();
@@ -234,7 +215,7 @@ pub fn unify(
             a
         }
         _ => return None,
-    })
+    }))
 }
 
 pub fn local_enum_with_instance<'a>(

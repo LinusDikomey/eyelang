@@ -895,12 +895,42 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     else {
                         crash_point!(ctx)
                     };
-                    let return_ty = ctx.get_hir_type(return_ty)?;
-                    let mut arg_refs = Vec::with_capacity(args.iter().count());
-                    for arg in args.iter() {
-                        let arg = lower(ctx, arg)?;
-                        arg_refs.push(arg);
+
+                    let mut arg_refs;
+                    // HACK(fn-trait): special-cased calling convention only for function trait
+                    if trait_id == builtins::get_fn_trait(ctx.compiler) {
+                        debug_assert_eq!(
+                            trait_instance.len(),
+                            2,
+                            "Fn trait should have 2 generic parameters"
+                        );
+                        let args_ty = trait_instance[0];
+                        let TypeFull::Instance(BaseType::Tuple, arg_types) =
+                            ctx.compiler.types.lookup(args_ty)
+                        else {
+                            panic!(
+                                "Fn trait should be called with tuples. TODO: manual impls can't enforce this requirement right now"
+                            );
+                        };
+                        arg_refs = Vec::with_capacity(1 + arg_types.len());
+                        debug_assert_eq!(args.count, 2, "Fn trait call should have 2 arguments");
+                        arg_refs.push(lower(ctx, args.nth(0).unwrap())?);
+                        let args_arg = lower(ctx, args.nth(1).unwrap())?;
+                        for (&ty, i) in arg_types.iter().zip(0..) {
+                            let ty = ctx.get_type(ty)?;
+                            let ty = ctx.builder.types.add(ty);
+                            let arg = ctx.builder.append(tuple.MemberValue(args_arg, i, ty));
+                            arg_refs.push(arg);
+                        }
+                    } else {
+                        arg_refs = Vec::with_capacity(args.iter().count());
+                        for arg in args.iter() {
+                            let arg = lower(ctx, arg)?;
+                            arg_refs.push(arg);
+                        }
                     }
+
+                    let return_ty = ctx.get_hir_type(return_ty)?;
                     let return_ty = ctx.builder.types.add(return_ty);
                     let res = ctx.builder.append((func, arg_refs, return_ty));
                     if noreturn {
@@ -910,7 +940,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 }
                 candidates => {
                     // FIXME: this trace could crash since Generics::EMPTY is passed which is not always correct
-                    tracing::info!(
+                    tracing::debug!(
                         target: "irgen",
                         "Failed to select a trait instance for {trait_id:?} with {}. Candidates: {candidates:?}",
                         ctx.compiler.types.display(self_ty, &Generics::EMPTY),

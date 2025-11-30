@@ -18,7 +18,7 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = String::new();
         self.table
-            .type_to_string(self.compiler, self.generics, self.table[self.ty], &mut s);
+            .type_to_string_inner(self.compiler, self.generics, self.table[self.ty], &mut s);
         cwrite!(f, "#m<{s}>")
     }
 }

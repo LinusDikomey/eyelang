@@ -659,9 +659,13 @@ impl Compiler {
             .named_params
             .iter()
             .map(|(name_span, ty, default_value)| {
-                let name = ast[*name_span].into();
+                let name: Box<str> = ast[*name_span].into();
                 let (ty, default_value) = match default_value.map(|default_value| {
-                    match eval::value_expr(self, module, scope, ast, default_value, ty) {
+                    let function_name = &ast[function.associated_name];
+                    let value_name =
+                        self.module_path(module) + "." + function_name + ".param$" + &name;
+                    match eval::value_expr(self, module, scope, ast, default_value, ty, &value_name)
+                    {
                         Ok(val) => val,
                         Err(err) => {
                             self.errors.emit(
@@ -678,7 +682,11 @@ impl Compiler {
                 (name, ty, default_value)
             })
             .collect();
-        let return_type = self.resolve_type(&function.return_type, module, scope);
+        let return_type = if matches!(function.return_type, UnresolvedType::Infer(_)) {
+            Type::Unit
+        } else {
+            self.resolve_type(&function.return_type, module, scope)
+        };
         Signature {
             params,
             named_params,
@@ -843,7 +851,7 @@ impl Compiler {
                     false
                 }
             }
-            TypeFull::Const(_) => todo!("what to do on checking const uninhabited"),
+            TypeFull::Const(_) => false,
         })
     }
 
@@ -1031,8 +1039,11 @@ impl Compiler {
         while let Some(module) = module_queue.pop_front() {
             let ast = self.get_module_ast(module);
             let functions = ast.function_ids();
+            let checked = &self.modules[module.idx()].ast.get().unwrap().symbols;
             for function in functions {
-                let hir = self.get_hir(module, function);
+                let Some(hir) = checked.functions[function.idx()].get() else {
+                    continue;
+                };
                 let generics = &self.get_signature(module, function).generics;
                 tracing::debug!(target: "hir", function = hir.name, "\n{}", hir.display(self, generics));
             }
@@ -1302,6 +1313,17 @@ impl<T> Resolvable<T> {
             .unwrap_or_else(|_| panic!("Value was put multiple times"));
         self.resolved.get().unwrap()
     }
+
+    pub fn put_immediate(&self, value: T) -> &T {
+        debug_assert!(
+            self.resolving.get().is_none(),
+            "Resolving was set before putting resolved despite using put_immediate"
+        );
+        self.resolved
+            .set(value)
+            .unwrap_or_else(|_| panic!("Value was put multiple times"));
+        self.resolved.get().unwrap()
+    }
 }
 
 id::id!(VarId);
@@ -1312,6 +1334,7 @@ pub enum LocalScopeParent<'p> {
     ClosedOver {
         scope: &'p LocalScope<'p>,
         captures: &'p RefCell<IndexMap<VarId, CaptureId>>,
+        outer_vars: &'p [LocalTypeId],
     },
     None,
 }
@@ -1326,7 +1349,7 @@ pub struct LocalScope<'p> {
 pub enum LocalItem {
     Var(VarId),
     Def(Def),
-    Capture(CaptureId),
+    Capture(CaptureId, LocalTypeId),
     Invalid,
 }
 impl LocalScope<'_> {
@@ -1341,16 +1364,21 @@ impl LocalScope<'_> {
         } else {
             match &self.parent {
                 LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler),
-                LocalScopeParent::ClosedOver { scope, captures } => {
+                LocalScopeParent::ClosedOver {
+                    scope,
+                    captures,
+                    outer_vars,
+                } => {
                     let local = scope.resolve(name, name_span, compiler);
                     match local {
                         LocalItem::Var(id) => {
                             let mut captures = captures.borrow_mut();
                             let next_id = CaptureId(captures.len() as _);
-                            LocalItem::Capture(*captures.entry(id).or_insert_with(|| next_id))
+                            let ty = outer_vars[id.idx()];
+                            LocalItem::Capture(*captures.entry(id).or_insert_with(|| next_id), ty)
                         }
                         LocalItem::Def(def) => LocalItem::Def(def),
-                        LocalItem::Capture(_) => todo!("capture captures"),
+                        LocalItem::Capture(_, _) => todo!("capture captures"),
                         LocalItem::Invalid => LocalItem::Invalid,
                     }
                 }
@@ -1389,7 +1417,7 @@ impl LocalScope<'_> {
             // associated with it
             current_local = match &current_local.parent {
                 LocalScopeParent::Some(parent) => parent,
-                LocalScopeParent::ClosedOver { scope, captures: _ } => scope,
+                LocalScopeParent::ClosedOver { scope, .. } => scope,
                 LocalScopeParent::None => unreachable!(),
             };
         }
@@ -1644,7 +1672,7 @@ impl Signature {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Generics {
     generics: Vec<(String, Vec<TraitBound>)>,
 }
@@ -1760,7 +1788,7 @@ impl Generics {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TraitBound {
     pub trait_id: (ModuleId, TraitId),
     pub generics: Box<[Type]>,

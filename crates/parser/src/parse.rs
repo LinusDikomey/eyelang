@@ -673,10 +673,7 @@ impl<T: TreeToken> Parser<'_, T> {
             end = ty.span().end;
             (T::opt(t(arrow)), ty)
         } else {
-            (
-                T::opt_none(),
-                UnresolvedType::Tuple(Vec::new(), TSpan::new(end, end)),
-            )
+            (T::opt_none(), UnresolvedType::Infer(TSpan::new(end, end)))
         };
 
         let span = TSpan::new(start, end);

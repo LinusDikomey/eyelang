@@ -84,6 +84,10 @@ impl Hir {
     pub fn types(&self) -> &[Type] {
         &self.types
     }
+
+    pub fn clone_types_for_closure(&self) -> (Box<[Type]>, Box<[InferredEnumVariant]>) {
+        (self.types.clone(), self.variants.clone())
+    }
 }
 impl Index<NodeId> for Hir {
     type Output = Node;
@@ -143,6 +147,10 @@ impl NodeIds {
 
     pub fn is_empty(&self) -> bool {
         self.count == 0
+    }
+
+    pub fn nth(&self, n: u32) -> Option<NodeId> {
+        (n < self.count).then(|| NodeId(self.index + n))
     }
 }
 impl From<NodeId> for NodeIds {
@@ -480,7 +488,7 @@ pub struct HIRBuilder {
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub types: TypeTable,
-    vars: Vec<LocalTypeId>,
+    pub vars: Vec<LocalTypeId>,
     casts: Vec<Cast>,
 }
 impl Index<NodeId> for HIRBuilder {
@@ -502,23 +510,63 @@ impl HIRBuilder {
     }
 
     pub fn finish(
-        mut self,
+        self,
         root: Node,
         compiler: &Compiler,
         generics: &Generics,
         module: ModuleId,
         params: Vec<VarId>,
     ) -> Hir {
-        self.nodes.push(root);
-        let (types, variants) = self.types.finish(compiler, generics, module);
-        Hir {
-            nodes: self.nodes,
-            types,
-            lvalues: self.lvalues,
-            patterns: self.patterns,
-            vars: self.vars,
+        let types = self.types.finish(compiler, generics, module);
+        Self::finish_with_types_inner(
+            self.nodes,
+            self.lvalues,
+            self.patterns,
+            self.vars,
+            self.casts,
+            root,
             params,
-            casts: self.casts,
+            types,
+        )
+    }
+
+    pub fn finish_with_types(
+        self,
+        types: (Box<[Type]>, Box<[InferredEnumVariant]>),
+        root: Node,
+        params: Vec<VarId>,
+    ) -> Hir {
+        Self::finish_with_types_inner(
+            self.nodes,
+            self.lvalues,
+            self.patterns,
+            self.vars,
+            self.casts,
+            root,
+            params,
+            types,
+        )
+    }
+
+    fn finish_with_types_inner(
+        mut nodes: Vec<Node>,
+        lvalues: Vec<LValue>,
+        patterns: Vec<Pattern>,
+        vars: Vec<LocalTypeId>,
+        casts: Vec<Cast>,
+        root: Node,
+        params: Vec<VarId>,
+        (types, variants): (Box<[Type]>, Box<[InferredEnumVariant]>),
+    ) -> Hir {
+        nodes.push(root);
+        Hir {
+            nodes,
+            types,
+            lvalues,
+            patterns,
+            vars,
+            params,
+            casts,
             trait_calls: Vec::new(),
             variants,
         }
