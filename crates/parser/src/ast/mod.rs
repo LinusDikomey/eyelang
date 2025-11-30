@@ -614,7 +614,7 @@ pub struct Function<T: TreeToken = ()> {
     pub generics: Generics<T>,
     pub t_parens: T::Opt<(T, T)>,
     pub params: Box<[(TSpan, UnresolvedType)]>,
-    pub named_params: Box<[(TSpan, UnresolvedType, Option<ExprId>)]>,
+    pub named_params: Box<[NamedParam<T>]>,
     pub varargs: bool,
     pub t_varargs: T::Opt<T>,
     pub t_arrow: T::Opt<T>,
@@ -625,6 +625,14 @@ pub struct Function<T: TreeToken = ()> {
     pub scope: ScopeId,
     pub signature_span: TSpan,
     pub associated_name: TSpan,
+}
+
+#[derive(Debug)]
+pub struct NamedParam<T: TreeToken = ()> {
+    pub name: TSpan,
+    pub ty: UnresolvedType,
+    pub t_eq: T,
+    pub default_value: ExprId,
 }
 
 #[derive(Debug)]

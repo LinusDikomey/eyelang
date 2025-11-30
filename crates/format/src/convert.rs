@@ -857,17 +857,38 @@ impl<'a> Converter<'a> {
             let mut first = true;
             args.push(Cond::Broken.then("\n"));
             for (name_span, ty) in &function.params {
-                if !first {
-                    args.push(Cond::Flat.then(", "));
+                if first {
+                    first = false;
                     args.push(Cond::Broken.then("\n"));
+                } else {
+                    args.push(Cond::Flat.then(", "));
                 }
-                first = false;
-                self.tok_with_char(&mut args, *name_span, Some(' '));
-                args.push(self.ty(ty));
+                if matches!(ty, UnresolvedType::Infer(_)) {
+                    self.tok_span(&mut args, *name_span);
+                } else {
+                    self.tok_span(&mut args, *name_span);
+                    args.extend([" ".into(), self.ty(ty)]);
+                }
+                args.push(Cond::Broken.then("\n"));
+            }
+            for param in &function.named_params {
+                if first {
+                    first = false;
+                    args.push(Cond::Broken.then("\n"));
+                } else {
+                    args.push(Cond::Flat.then(", "));
+                }
+                self.tok_span(&mut args, param.name);
+                args.push(" ".into());
+                if !matches!(param.ty, UnresolvedType::Infer(_)) {
+                    args.extend([self.ty(&param.ty), " ".into()]);
+                }
+                self.tok_s(&mut args, param.t_eq);
+                self.expr(&mut args, param.default_value);
                 args.push(Cond::Broken.then("\n"));
             }
             if let Some(t) = function.t_varargs {
-                if !function.params.is_empty() {
+                if !first {
                     args.push(Cond::Flat.then(", "));
                 }
                 self.tok(&mut args, t);

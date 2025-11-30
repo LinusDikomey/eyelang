@@ -658,28 +658,29 @@ impl Compiler {
         let named_params = function
             .named_params
             .iter()
-            .map(|(name_span, ty, default_value)| {
-                let name: Box<str> = ast[*name_span].into();
-                let (ty, default_value) = match default_value.map(|default_value| {
-                    let function_name = &ast[function.associated_name];
-                    let value_name =
-                        self.module_path(module) + "." + function_name + ".param$" + &name;
-                    match eval::value_expr(self, module, scope, ast, default_value, ty, &value_name)
-                    {
-                        Ok(val) => val,
-                        Err(err) => {
-                            self.errors.emit(
-                                module,
-                                Error::EvalFailed(err).at_span(ast[default_value].span(ast)),
-                            );
-                            (ConstValue::Undefined, Type::Invalid)
-                        }
+            .map(|param| {
+                let name: Box<str> = ast[param.name].into();
+                let function_name = &ast[function.associated_name];
+                let value_name = self.module_path(module) + "." + function_name + ".param$" + &name;
+                let (value, ty) = match eval::value_expr(
+                    self,
+                    module,
+                    scope,
+                    ast,
+                    param.default_value,
+                    &param.ty,
+                    &value_name,
+                ) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        self.errors.emit(
+                            module,
+                            Error::EvalFailed(err).at_span(ast[param.default_value].span(ast)),
+                        );
+                        (ConstValue::Undefined, Type::Invalid)
                     }
-                }) {
-                    Some((value, ty)) => (ty, Some(self.add_const_value(value, ty))),
-                    None => (self.resolve_type(ty, module, scope), None),
                 };
-                (name, ty, default_value)
+                (name, ty, Some(self.add_const_value(value, ty)))
             })
             .collect();
         let return_type = if matches!(function.return_type, UnresolvedType::Infer(_)) {

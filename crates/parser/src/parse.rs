@@ -653,10 +653,15 @@ impl<T: TreeToken> Parser<'_, T> {
                         } else {
                             UnresolvedType::Infer(name_span)
                         };
-                        if equals.is_some() || p.toks.step_if(TokenType::Equals).is_some() {
+                        if let Some(t_eq) = equals.or_else(|| p.toks.step_if(TokenType::Equals)) {
                             let default_value = p.parse_expr(scope)?;
                             // TODO: should check no duplicate params exist here or in check_signature
-                            named_params.push((name_span, ty, Some(p.ast.expr(default_value))));
+                            named_params.push(ast::NamedParam {
+                                name: name_span,
+                                ty,
+                                t_eq: T::t(t_eq),
+                                default_value: p.ast.expr(default_value),
+                            });
                         } else {
                             params.push((name_span, ty));
                         }

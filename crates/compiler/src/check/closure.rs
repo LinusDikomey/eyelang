@@ -59,7 +59,7 @@ pub fn closure(
         .params
         .iter()
         .map(|(_, ty)| ty)
-        .chain(function.named_params.iter().map(|(_, ty, _)| ty))
+        .chain(function.named_params.iter().map(|param| &param.ty))
         .zip(param_types.iter().skip(1))
     {
         let info =
@@ -82,12 +82,7 @@ pub fn closure(
         .params
         .iter()
         .map(|(name_span, _)| name_span)
-        .chain(
-            function
-                .named_params
-                .iter()
-                .map(|(name_span, _, _)| name_span),
-        )
+        .chain(function.named_params.iter().map(|param| &param.name))
         .map(|name_span| ctx.ast.src()[name_span.range()].to_owned().into_boxed_str())
         .zip(param_types.iter().skip(1));
 
