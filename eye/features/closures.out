@@ -1,0 +1,12 @@
+Compiling closures ...
+Running closures...
+string used in g called with 43
+string used in g called with 44
+called f
+string used in g called with 1
+string used in g called with 2
+called f
+string used in g called with 2
+string used in g called with 3
+called f
+13

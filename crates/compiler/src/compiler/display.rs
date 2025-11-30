@@ -37,7 +37,7 @@ impl<'a> fmt::Display for CheckedFunctionDisplay<'a> {
             }
             cwrite!(
                 f,
-                "(var {i}): {}",
+                "#g<${i}>: {}",
                 self.compiler.types.display(function[param], generics)
             )?;
         }

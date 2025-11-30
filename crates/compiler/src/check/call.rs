@@ -3,7 +3,7 @@ use crate::{InvalidTypeError, Type};
 use crate::{
     compiler::{LocalScope, ResolvedStructDef, ResolvedTypeContent, builtins},
     eval::ConstValueId,
-    hir::{LValue, Node, NodeIds},
+    hir::{Node, NodeIds},
     typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
 use error::{Error, span::TSpan};
@@ -46,9 +46,12 @@ pub fn check_call(
     };
 
     let mut s = String::new();
-    ctx.hir
-        .types
-        .type_to_string_inner(ctx.compiler, ctx.generics, ctx.hir.types[called_ty], &mut s);
+    ctx.hir.types.type_to_string_inner(
+        ctx.compiler,
+        ctx.generics,
+        ctx.hir.types[called_ty],
+        &mut s,
+    );
 
     match ctx.hir.types[called_ty] {
         TypeInfo::Known(Type::Invalid) => {
@@ -409,21 +412,8 @@ pub fn check_call(
             return Node::Invalid;
         }
     }
-    let called_ptr = match LValue::try_from_node(&called_node, &mut ctx.hir) {
-        Some(value) => Node::AddressOf {
-            value: ctx.hir.add_lvalue(value),
-            value_ty: called_ty,
-        },
-        None => {
-            let variable = ctx.hir.add_var(called_ty);
-            Node::Promote {
-                value: ctx.hir.add(called_node),
-                variable,
-            }
-        }
-    };
     let fn_args = ctx.hir.add_nodes([
-        called_ptr,
+        called_node,
         Node::TupleLiteral {
             elems: arg_nodes,
             elem_types: arg_types,

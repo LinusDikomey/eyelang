@@ -148,6 +148,10 @@ impl NodeIds {
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }
+
+    pub fn nth(&self, n: u32) -> Option<NodeId> {
+        (n < self.count).then(|| NodeId(self.index + n))
+    }
 }
 impl From<NodeId> for NodeIds {
     fn from(value: NodeId) -> Self {

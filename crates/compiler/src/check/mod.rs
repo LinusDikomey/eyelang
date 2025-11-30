@@ -158,6 +158,7 @@ impl ProjectErrors {
                 "Error encountered and --crash-on-error is enabled. The error is: {error:?} in {module:?}"
             );
         }
+        tracing::debug!(target: "error", "Emitting error {error:?}");
         self.by_file
             .borrow_mut()
             .entry(module)

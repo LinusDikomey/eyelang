@@ -210,20 +210,6 @@ pub fn closure(
         .hir
         .types
         .add(TypeInfo::Instance(BaseType::Tuple, param_types.skip(1)));
-    // TODO: We can't finish the types here for now so we can't create a finished function even
-    // if it doesn't capture anything. Maybe change the way the TypeTable is shared in the future
-    // (could track the start index and just finish from there + truncate after so that it doesn't
-    // get finished twice)
-    // if capture_nodes.is_empty() {
-    //     (
-    //         Node::FunctionItem(ctx.module, id, generics_instance),
-    //         TypeInfo::FunctionItem {
-    //             module: ctx.module,
-    //             function: id,
-    //             generics: generics_instance,
-    //         },
-    //     )
-    // } else {
     (
         Node::TupleLiteral {
             elems: capture_nodes,

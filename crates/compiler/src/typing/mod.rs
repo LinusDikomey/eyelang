@@ -437,7 +437,7 @@ impl TypeTable {
             return;
         }
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
-        let new = unify(a_ty, b_ty, self, generics, compiler, a).unwrap_or_else(|| {
+        let new = unify(a_ty, b_ty, self, generics, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
             self.type_to_string_inner(compiler, generics, a_ty, &mut expected);
             let mut found = String::new();
@@ -447,9 +447,9 @@ impl TypeTable {
                 module,
                 Error::MismatchedType { expected, found }.at_span(span),
             );
-            TypeInfo::INVALID
+            TypeInfo::INVALID.into()
         });
-        self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(new);
+        self.types[a.idx()] = new;
     }
 
     fn try_unify(
@@ -473,9 +473,9 @@ impl TypeTable {
             }
         };
         a == b
-            || unify(a_ty, b_ty, self, generics, compiler, a)
+            || unify(a_ty, b_ty, self, generics, compiler)
                 .map(|unified| {
-                    self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(unified);
+                    self.types[a.idx()] = unified;
                     self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
                     self.types[original_b.idx()] = TypeInfoOrIdx::Idx(a);
                 })
@@ -722,11 +722,11 @@ impl TypeTable {
                 TypeInfoOrIdx::TypeInfo(info) => break info,
             }
         };
-        let Some(info) = unify(a_ty, info, self, function_generics, compiler, a) else {
+        let Some(info) = unify(a_ty, info, self, function_generics, compiler) else {
             self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(TypeInfo::INVALID);
             return Err((a_ty, info));
         };
-        self.types[a.idx()] = TypeInfoOrIdx::TypeInfo(info);
+        self.types[a.idx()] = info;
         Ok(())
     }
 
@@ -913,7 +913,7 @@ impl TypeTable {
             TypeInfo::MethodItem { .. } => s.push_str("<method item>"),
             TypeInfo::TraitMethodItem { .. } => s.push_str("<trait method item>"),
             TypeInfo::EnumVariantItem { .. } => s.push_str("<enum variant item>"),
-            TypeInfo::Closure { .. } => s.push_str("<closure>"),
+            TypeInfo::Closure { function, .. } => write!(s, "<closure{}>", function.idx()).unwrap(),
         }
     }
 
@@ -1051,7 +1051,6 @@ impl TypeTable {
                 params,
                 return_type,
             } => {
-                // TODO: maybe create a new unique type here in the future
                 let start = buf.len();
                 buf.reserve(captures.count as usize);
                 for i in captures.iter() {
@@ -1393,18 +1392,25 @@ impl TypeTable {
                 ..
             } if bound.trait_id == builtins::get_fn_trait(compiler) => {
                 debug_assert_eq!(bound.generics.count, 2);
-                let ok = self.try_unify(
+                let args_ok = self.try_unify(
                     bound.generics.nth(0).unwrap(),
                     params,
                     function_generics,
                     compiler,
-                ) && self.try_unify(
+                );
+                let return_ok = self.try_unify(
                     bound.generics.nth(1).unwrap(),
                     return_type,
                     function_generics,
                     compiler,
                 );
-                return Ok(ok.then_some(ty.into()));
+                tracing::debug!(
+                    target: "check",
+                    args_ok = args_ok,
+                    return_ok = return_ok,
+                    "unifying closure with Fn trait",
+                );
+                return Ok((args_ok && return_ok).then_some(ty.into()));
             }
             TypeInfo::Unknown(bounds) => {
                 // PERF: avoid the vec and allocate into new bounds instead (helper method extend_bounds using copy_within)

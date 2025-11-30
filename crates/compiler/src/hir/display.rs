@@ -119,7 +119,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
                     display(val),
                 )?;
             }
-            Node::Variable(id) => cwrite!(f, "(#b<var> #y<{}>)", id.0)?,
+            Node::Variable(id) => cwrite!(f, "#g<${}>", id.0)?,
             &Node::Global(module, id, ty) => cwrite!(
                 f,
                 "(#b<global> {}:{}): {}",
@@ -165,7 +165,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
             )?,
             &Node::Promote { value, variable } => cwrite!(
                 f,
-                "(#b<promote> {} #m<into> (#b<var> #y<{}>))",
+                "(#b<promote> {} #m<into> #g<${}>)",
                 display(value),
                 variable.0,
             )?,
@@ -368,7 +368,7 @@ impl<'a> fmt::Display for HirDisplay<'a> {
             } => {
                 cwrite!(
                     f,
-                    "(#b<call-trait-method> #r<{}>",
+                    "(#b<trait-call> #r<{}>",
                     compiler.get_trait_name(trait_id.0, trait_id.1)
                 )?;
                 if trait_generics.count > 0 {
@@ -434,7 +434,7 @@ impl<'a> fmt::Display for PatternDisplay<'a> {
             Pattern::Invalid => cwrite!(f, "#m<invalid>"),
             Pattern::Variable(id) => {
                 let var_ty = hir.vars[id.idx()];
-                cwrite!(f, "(#b<var> #y<{}>): {}", id.0, display_ty(hir[var_ty]),)
+                cwrite!(f, "#g<${}>: {}", id.0, display_ty(hir[var_ty]),)
             }
             Pattern::Ignore => cwrite!(f, "_"),
             &Pattern::Tuple {
