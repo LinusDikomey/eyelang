@@ -35,7 +35,7 @@ use crate::{
     hir::Hir,
     irgen,
     types::{BaseType, BuiltinType, TypeFull, Types},
-    typing::{Bound, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
+    typing::{Bound, LocalOrGlobalInstance, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
 };
 
 use builtins::Builtins;
@@ -1721,24 +1721,27 @@ impl Generics {
         })
     }
 
-    pub fn instantiate(&self, types: &mut TypeTable, span: TSpan) -> LocalTypeIds {
-        let generics = types.add_multiple_unknown(self.generics.len() as _);
+    pub fn instantiate(&self, table: &mut TypeTable, types: &Types, span: TSpan) -> LocalTypeIds {
+        let generics = table.add_multiple_unknown(self.generics.len() as _);
         for ((_, bounds), r) in self.generics.iter().zip(generics.iter()) {
-            let bound_ids = types.add_missing_bounds(bounds.len() as _);
+            let bound_ids = table.add_missing_bounds(bounds.len() as _);
             for (bound, r) in bounds.iter().zip(bound_ids.iter()) {
                 // TODO: generic trait bounds, assuming no generics for now
-                let trait_generics = types.add_multiple_unknown(bound.generics.len() as _);
+                let trait_generics = table.add_multiple_unknown(bound.generics.len() as _);
                 for (&ty, r) in bound.generics.iter().zip(trait_generics.iter()) {
-                    types.replace(r, TypeInfo::Known(ty));
+                    // instantiate generics on requirements of bounds
+                    let ty =
+                        table.from_type_instance(types, ty, LocalOrGlobalInstance::Local(generics));
+                    table.replace(r, ty);
                 }
                 let bound = crate::typing::Bound {
                     trait_id: bound.trait_id,
                     generics: trait_generics,
                     span,
                 };
-                types.replace_bound(r, bound);
+                table.replace_bound(r, bound);
             }
-            types.replace(r, TypeInfo::Unknown(bound_ids));
+            table.replace(r, TypeInfo::Unknown(bound_ids));
         }
         generics
     }

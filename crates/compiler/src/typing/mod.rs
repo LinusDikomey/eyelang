@@ -292,7 +292,10 @@ impl TypeTable {
                             return TypeInfo::INVALID;
                         }
                         let required_ty = compiler.get_base_type_def(id);
-                        let generic_types = required_ty.generics.instantiate(self, ty.span());
+                        let generic_types =
+                            required_ty
+                                .generics
+                                .instantiate(self, &compiler.types, ty.span());
                         for (ty, r) in generics.iter().zip(generic_types.iter()) {
                             let info = self.from_annotation(ty, compiler, module, scope);
                             self.replace(r, TypeInfoOrIdx::TypeInfo(info));
@@ -439,6 +442,7 @@ impl TypeTable {
         self.types[b.idx()] = TypeInfoOrIdx::Idx(a);
         let new = unify(a_ty, b_ty, self, generics, compiler).unwrap_or_else(|| {
             let mut expected = String::new();
+            tracing::debug!(target: "infer", "unification failed of {a_ty:?} and {b_ty:?}");
             self.type_to_string_inner(compiler, generics, a_ty, &mut expected);
             let mut found = String::new();
             self.type_to_string_inner(compiler, generics, b_ty, &mut found);

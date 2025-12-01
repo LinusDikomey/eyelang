@@ -307,7 +307,10 @@ pub fn check_call(
             };
             let signature = &checked_trait.functions[method_index as usize];
             let span = ctx.ast[expr].span(ctx.ast);
-            let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
+            let generics =
+                signature
+                    .generics
+                    .instantiate(&mut ctx.hir.types, &ctx.compiler.types, span);
             debug_assert!(
                 signature.generics.count() > checked_trait.generics.count(),
                 "the method should at least have the trait's and the self type's generics {} >= {}",
@@ -517,20 +520,20 @@ fn call_arg_types(
             found: arg_count,
         });
     }
-    let arg_types = ctx
+    let arg_type_vars = ctx
         .hir
         .types
         .add_multiple_unknown(extra_arg_slot as u32 + arg_count + named_params.len() as u32);
-    for (&ty, idx) in params
+    for (&ty, var) in params
         .iter()
         .map(|(_, ty)| ty)
         .chain(named_params.iter().map(|(_, ty, _)| ty))
-        .zip(arg_types.iter().skip(extra_arg_slot as usize))
+        .zip(arg_type_vars.iter().skip(extra_arg_slot as usize))
     {
         let ty = ctx.from_type_instance(ty, generics);
-        ctx.hir.types.replace(idx, ty);
+        ctx.hir.types.replace(var, ty);
     }
-    Ok(arg_types)
+    Ok(arg_type_vars)
 }
 
 fn check_call_args(

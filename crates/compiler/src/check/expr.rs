@@ -7,7 +7,7 @@ use crate::{
     },
     eval::ConstValueId,
     hir::{self, Comparison, LValue, Logic, Node, NodeIds, Pattern},
-    types::{BaseType, TypeFull},
+    types::{BaseType, TypeFull, Types},
     typing::{
         Bound, Bounds, LocalTypeId, LocalTypeIds, OrdinalType, TypeInfo, TypeInfoOrIdx, TypeTable,
     },
@@ -928,7 +928,9 @@ fn function_item(
     span: TSpan,
 ) -> Node {
     let signature = ctx.compiler.get_signature(function_module, function);
-    let generics = signature.generics.instantiate(&mut ctx.hir.types, span);
+    let generics = signature
+        .generics
+        .instantiate(&mut ctx.hir.types, &ctx.compiler.types, span);
     ctx.specify(
         expected,
         TypeInfo::FunctionItem {
@@ -1176,8 +1178,13 @@ fn check_is_instance_method(
     span: impl Copy + FnOnce(&Ast) -> TSpan,
 ) -> Option<(u32, LocalTypeIds)> {
     let (_, self_param_ty) = signature.all_params().next()?;
-    let call_generics =
-        create_method_call_generics(&mut ctx.hir.types, signature, generics, span(ctx.ast));
+    let call_generics = create_method_call_generics(
+        &mut ctx.hir.types,
+        &ctx.compiler.types,
+        signature,
+        generics,
+        span(ctx.ast),
+    );
     let mut required_pointer_count = 0;
     let mut current_ty = self_param_ty;
     loop {
@@ -1213,7 +1220,8 @@ fn check_is_instance_method(
 }
 
 fn create_method_call_generics(
-    types: &mut TypeTable,
+    table: &mut TypeTable,
+    types: &Types,
     signature: &crate::compiler::Signature,
     type_generics: LocalTypeIds,
     span: TSpan,
@@ -1221,9 +1229,9 @@ fn create_method_call_generics(
     if signature.generics.count() as u32 != type_generics.count {
         debug_assert!(signature.generics.count() as u32 > type_generics.count);
         // perf: instantiates the outer type's generics again unnecessarily
-        let call_generics = signature.generics.instantiate(types, span);
+        let call_generics = signature.generics.instantiate(table, types, span);
         for (r, generic) in call_generics.iter().zip(type_generics.iter()) {
-            types.replace(r, generic);
+            table.replace(r, generic);
         }
         call_generics
     } else {
@@ -1293,8 +1301,13 @@ fn instance_type_item_member_access(
     if let Some(&method) = ty.methods.get(name) {
         let module = ty.module;
         let signature = ctx.compiler.get_signature(module, method);
-        let call_generics =
-            create_method_call_generics(&mut ctx.hir.types, signature, generics, span(ctx.ast));
+        let call_generics = create_method_call_generics(
+            &mut ctx.hir.types,
+            &ctx.compiler.types,
+            signature,
+            generics,
+            span(ctx.ast),
+        );
         ctx.specify(
             expected,
             TypeInfo::FunctionItem {

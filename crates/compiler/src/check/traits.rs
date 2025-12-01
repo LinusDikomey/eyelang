@@ -364,7 +364,7 @@ impl Impl {
         compiler: &Compiler,
         span: TSpan,
     ) -> TypeInfoOrIdx {
-        let impl_generics = self.generics.instantiate(types, span);
+        let impl_generics = self.generics.instantiate(types, &compiler.types, span);
         debug_assert_eq!(trait_generics.count, self.trait_instance.len() as u32);
         for (idx, &ty) in trait_generics.iter().zip(&self.trait_instance) {
             types.specify_type_instance(
