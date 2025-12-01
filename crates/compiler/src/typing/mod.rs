@@ -1412,7 +1412,11 @@ impl TypeTable {
                     target: "check",
                     args_ok = args_ok,
                     return_ok = return_ok,
-                    "unifying closure with Fn trait",
+                    "unifying closure: Fn{} -> {} with Fn{} -> {} trait",
+                    self.type_to_string(compiler, function_generics, self[params]),
+                    self.type_to_string(compiler, function_generics, self[return_type]),
+                    self.type_to_string(compiler, function_generics, self[bound.generics.nth(0).unwrap()]),
+                    self.type_to_string(compiler, function_generics, self[bound.generics.nth(1).unwrap()]),
                 );
                 return Ok((args_ok && return_ok).then_some(ty.into()));
             }

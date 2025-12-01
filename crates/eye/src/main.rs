@@ -135,30 +135,6 @@ fn main() -> Result<(), MainError> {
         compiler.print_project_hir(project);
     }
 
-    if tracing::enabled!(target: "ir", tracing::Level::DEBUG) {
-        let mut env = ir::Environment::new(ir::Primitive::create_infos());
-        let dialects = Dialects {
-            arith: env.get_dialect_module(),
-            tuple: env.get_dialect_module(),
-            mem: env.get_dialect_module(),
-            cf: env.get_dialect_module(),
-            main: env.create_module("main"),
-        };
-        let mut instances = Instances::new();
-        compiler.emit_whole_project_ir(&mut env, &dialects, &mut instances, project);
-        if args.debug_functions.is_empty() {
-            tracing::debug!(target: "ir", "{}", env.display_module(dialects.main));
-        } else {
-            // display functions separately if there was a filter on the output functions so that
-            // they will be filtered
-            for func in env.get_module(dialects.main).functions() {
-                tracing::debug!(
-                    target: "ir", function = func.name, "\n{}",
-                    func.display(&env),
-                );
-            }
-        }
-    }
     if compiler.print_errors() && !args.run_with_errors {
         return Err(MainError::ErrorsFound);
     }
@@ -189,7 +165,20 @@ fn main() -> Result<(), MainError> {
             } else {
                 compiler.emit_whole_project_ir(&mut env, &dialects, &mut instances, project);
             }
-
+            if tracing::enabled!(target: "ir", tracing::Level::DEBUG) {
+                if args.debug_functions.is_empty() {
+                    tracing::debug!(target: "ir", "{}", env.display_module(dialects.main));
+                } else {
+                    // display functions separately if there was a filter on the output functions so that
+                    // they will be filtered
+                    for func in env.get_module(dialects.main).functions() {
+                        tracing::debug!(
+                            target: "ir", function = func.name, "\n{}",
+                            func.display(&env),
+                        );
+                    }
+                }
+            }
             if compiler.print_errors() && !args.run_with_errors {
                 // compiler errors might have originated from generating dependencies
                 return Err(MainError::ErrorsFound);

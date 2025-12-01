@@ -168,14 +168,9 @@ pub fn closure(
         TypeInfo::Instance(BaseType::Tuple, capture_types),
     );
 
-    let (params, param_types) = if capture_types.is_empty() {
-        (params, param_types.skip(1))
-    } else {
-        let params = std::iter::once(("".into(), captures_param))
-            .chain(params)
-            .collect();
-        (params, param_types)
-    };
+    let params = std::iter::once(("".into(), captures_param))
+        .chain(params)
+        .collect();
 
     let checked = CheckedClosure {
         id,

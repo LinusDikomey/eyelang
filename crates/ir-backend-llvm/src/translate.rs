@@ -183,7 +183,7 @@ unsafe fn llvm_ty(ctx: LLVMContextRef, ty: Type, types: &Types) -> Option<LLVMTy
             Some(core::LLVMStructTypeInContext(
                 ctx,
                 types.as_mut_ptr(),
-                elems.count() as _,
+                types.len() as _,
                 FALSE,
             ))
         }
@@ -222,9 +222,16 @@ unsafe fn build_func(
 
             let block_args = ir.get_block_args(block);
             LLVMPositionBuilderAtEnd(builder, llvm_block);
-            for (i, arg) in block_args.iter().enumerate() {
+            let mut llvm_param_idx = 0;
+            for arg in block_args.iter() {
                 if block == ir::BlockId::ENTRY {
-                    instructions[arg.idx()] = LLVMGetParam(llvm_func, i as _);
+                    let ty = types[ir.get_ref_ty(arg)];
+                    // skip all zero-sized parameters
+                    // PERF: don't have to generate an llvm_ty here could use some is_zero_sized function
+                    if llvm_ty(ctx, ty, types).is_some() {
+                        instructions[arg.idx()] = LLVMGetParam(llvm_func, llvm_param_idx);
+                        llvm_param_idx += 1;
+                    }
                 } else {
                     let arg_ty = types[ir.get_ref_ty(arg)];
                     if let Some(ty) = llvm_ty(ctx, arg_ty, types) {
@@ -769,16 +776,19 @@ unsafe fn build_func(
                     I::InsertMember => {
                         let (tuple, mut idx, member): (Ref, u32, Ref) = ir.typed_args(&inst);
                         let (tuple, tuple_ty) = get_ref_and_type(&instructions, tuple);
-                        if let Some((tuple, member)) = tuple.and_then(|tuple| {
-                            get_ref(&instructions, member).map(|member| (tuple, member))
-                        }) {
-                            let Type::Tuple(ids) = tuple_ty else { panic!() };
-                            for ty in ids.iter().take(idx as usize) {
-                                if types.is_zero_sized(types[ty], env.primitives()) {
-                                    idx -= 1;
+                        if let Some(tuple) = tuple {
+                            if let Some(member) = get_ref(&instructions, member) {
+                                let Type::Tuple(ids) = tuple_ty else { panic!() };
+                                for ty in ids.iter().take(idx as usize) {
+                                    if types.is_zero_sized(types[ty], env.primitives()) {
+                                        idx -= 1;
+                                    }
                                 }
+                                core::LLVMBuildInsertValue(builder, tuple, member, idx, NONE)
+                            } else {
+                                // inserting a zero-sized member is a no-op
+                                tuple
                             }
-                            core::LLVMBuildInsertValue(builder, tuple, member, idx, NONE)
                         } else {
                             ptr::null_mut()
                         }
