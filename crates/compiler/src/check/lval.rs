@@ -1,6 +1,7 @@
 use error::{Error, span::TSpan};
 
 use crate::{
+    check::Hooks,
     compiler::{Def, LocalItem, LocalScope, ModuleSpan, ResolvedTypeContent},
     hir::{LValue, Node},
     types::{BaseType, TypeFull},
@@ -8,10 +9,10 @@ use crate::{
 };
 use parser::ast::{Ast, Expr, ExprId, UnOp};
 
-use super::{Ctx, expr};
+use super::Ctx;
 
-pub fn check(
-    ctx: &mut Ctx,
+pub fn check<H: Hooks>(
+    ctx: &mut Ctx<H>,
     expr: ExprId,
     scope: &mut LocalScope,
     return_ty: LocalTypeId,
@@ -41,7 +42,7 @@ pub fn check(
                 .hir
                 .types
                 .add(TypeInfo::Instance(BaseType::Pointer, pointee.into()));
-            let node = expr::check(ctx, inner, scope, pointer, return_ty, noreturn);
+            let node = ctx.check(inner, scope, pointer, return_ty, noreturn);
             (LValue::Deref(ctx.hir.add(node)), pointee)
         }
         Expr::MemberAccess {
@@ -50,7 +51,7 @@ pub fn check(
             ..
         } => {
             let left_ty = ctx.hir.types.add_unknown();
-            let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
+            let left_val = ctx.check(left, scope, left_ty, return_ty, noreturn);
             let name = &ctx.ast.src()[name_span.range()];
             if let TypeInfo::ModuleItem(id) = ctx.hir.types[left_ty] {
                 let def = ctx.compiler.resolve_in_module(
@@ -133,7 +134,7 @@ pub fn check(
         }
         Expr::TupleIdx { left, idx, .. } => {
             let left_ty = ctx.hir.types.add_unknown();
-            let left_val = expr::check(ctx, left, scope, left_ty, return_ty, noreturn);
+            let left_val = ctx.check(left, scope, left_ty, return_ty, noreturn);
             let Some((dereffed_ty, pointer_count)) =
                 auto_deref(ctx, left_ty, |ast| ast[left].span(ast))
             else {
@@ -178,7 +179,7 @@ pub fn check(
                 |ast| ast[expr].span(ast),
             );
             let index_ty = ctx.hir.types.add(TypeInfo::Integer);
-            let index = expr::check(ctx, idx, scope, index_ty, return_ty, noreturn);
+            let index = ctx.check(idx, scope, index_ty, return_ty, noreturn);
             (
                 LValue::ArrayIndex {
                     array: ctx.hir.add_lvalue(array),
@@ -195,8 +196,8 @@ pub fn check(
     }
 }
 
-fn auto_deref(
-    ctx: &mut Ctx<'_>,
+fn auto_deref<H: Hooks>(
+    ctx: &mut Ctx<'_, H>,
     ty: LocalTypeId,
     span: impl Fn(&Ast) -> TSpan,
 ) -> Option<(TypeInfo, u32)> {
@@ -231,8 +232,8 @@ fn auto_deref(
         }
     }
 }
-fn dereffed_to_lvalue(
-    ctx: &mut Ctx,
+fn dereffed_to_lvalue<H: Hooks>(
+    ctx: &mut Ctx<H>,
     node: Node,
     ty: LocalTypeId,
     mut pointer_count: u32,
@@ -265,7 +266,7 @@ fn dereffed_to_lvalue(
     }
 }
 
-fn def_lvalue(ctx: &mut Ctx, expr: ExprId, def: Def) -> (LValue, LocalTypeId) {
+fn def_lvalue<H: Hooks>(ctx: &mut Ctx<H>, expr: ExprId, def: Def) -> (LValue, LocalTypeId) {
     match def {
         Def::Global(module, id) => {
             // PERF: cloning type

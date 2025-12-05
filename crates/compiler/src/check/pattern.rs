@@ -2,7 +2,7 @@ use dmap::DHashMap;
 use error::Error;
 
 use crate::{
-    check::exhaust,
+    check::{Hooks, exhaust},
     compiler::{VarId, builtins},
     hir::Pattern,
     types::BaseType,
@@ -13,8 +13,8 @@ use parser::ast::{Expr, ExprId, IntLiteral, Operator, Primitive, UnOp};
 
 use super::{Ctx, exhaust::Exhaustion};
 
-pub fn check(
-    ctx: &mut Ctx,
+pub fn check<H: Hooks>(
+    ctx: &mut Ctx<'_, H>,
     variables: &mut DHashMap<Box<str>, VarId>,
     exhaustion: &mut Exhaustion,
     pat: ExprId,

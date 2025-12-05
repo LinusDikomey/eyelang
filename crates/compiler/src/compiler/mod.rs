@@ -27,7 +27,7 @@ use segment_list::SegmentList;
 use crate::{
     InvalidTypeError, ProjectId, Type,
     check::{
-        self, ProjectErrors,
+        self, Hooks, ProjectErrors,
         traits::{self, Candidates, Impl},
     },
     eval::{self, ConstValue, ConstValueId},
@@ -792,7 +792,7 @@ impl Compiler {
         let checked = &self.modules[module.idx()].ast.get().unwrap().symbols;
         checked.functions[id.idx()].get_or_resolve_with(
             || panic!("checked function depends on itself recursively"),
-            || check::function(self, module, id),
+            || check::function(self, module, id, &mut ()),
         )
     }
 
@@ -1872,9 +1872,9 @@ impl ResolvedStructDef {
     }
 
     /// get the index of a field while getting the element types of all fields
-    pub fn get_indexed_field(
+    pub fn get_indexed_field<H: Hooks>(
         &self,
-        ctx: &mut crate::check::Ctx,
+        ctx: &mut crate::check::Ctx<H>,
         generics: LocalTypeIds,
         name: &str,
     ) -> (Option<(u32, LocalTypeId)>, LocalTypeIds) {

@@ -227,6 +227,7 @@ pub fn value_expr(
         expected,
         &name,
         crate::compiler::LocalScopeParent::None,
+        &mut (),
     );
     let ty = hir[expected];
     if let crate::hir::Node::Invalid = hir[hir.root_id()] {

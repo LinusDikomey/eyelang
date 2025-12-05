@@ -20,8 +20,8 @@ use crate::{
     Compiler, InvalidTypeError, Type,
     check::closure::CheckedClosure,
     compiler::{
-        BodyOrTypes, CheckedFunction, Generics, LocalScopeParent, ModuleSpan, Signature, VarId,
-        builtins,
+        BodyOrTypes, CheckedFunction, Generics, LocalScope, LocalScopeParent, ModuleSpan,
+        Signature, VarId, builtins,
     },
     hir::{CastId, HIRBuilder, Hir, LValue, Node},
     types::{BaseType, TypeFull},
@@ -30,10 +30,25 @@ use crate::{
 
 use self::exhaust::Exhaustion;
 
-pub(crate) fn function(
+pub trait Hooks {
+    fn on_check_expr(
+        &mut self,
+        _expr: ExprId,
+        _scope: &mut LocalScope,
+        _expected: LocalTypeId,
+        _return_ty: LocalTypeId,
+        _noreturn: &mut bool,
+    ) {
+    }
+    fn on_exit_scope(&mut self, _scope: &mut LocalScope) {}
+}
+impl Hooks for () {}
+
+pub fn function<H: Hooks>(
     compiler: &Compiler,
     module: ModuleId,
     id: parser::ast::FunctionId,
+    hooks: &mut H,
 ) -> crate::compiler::CheckedFunction {
     let ast = &compiler.modules[module.idx()].ast.get().unwrap().ast;
 
@@ -78,6 +93,7 @@ pub(crate) fn function(
             return_type,
             &full_name,
             LocalScopeParent::None,
+            hooks,
         );
         BodyOrTypes::Body(hir)
     } else {
@@ -95,7 +111,7 @@ pub(crate) fn function(
     }
 }
 
-pub fn check(
+pub fn check<H: Hooks>(
     compiler: &Compiler,
     ast: &Ast,
     module: ModuleId,
@@ -107,6 +123,7 @@ pub fn check(
     expected: LocalTypeId,
     name: &str,
     parent_scope: LocalScopeParent,
+    hooks: &mut H,
 ) -> Hir {
     let params = params.into_iter();
     let mut param_vars = Vec::with_capacity(params.size_hint().0);
@@ -134,15 +151,10 @@ pub fn check(
         deferred_exhaustions: Vec::new(),
         deferred_casts: Vec::new(),
         checked_closures: Vec::new(),
+        hooks,
     };
-    let root = expr::check(
-        &mut check_ctx,
-        expr,
-        &mut scope,
-        expected,
-        expected,
-        &mut false,
-    );
+    let root = check_ctx.check(expr, &mut scope, expected, expected, &mut false);
+    check_ctx.hooks.on_exit_scope(&mut scope);
     check_ctx.finish(root, param_vars, name)
 }
 
@@ -183,7 +195,7 @@ impl ProjectErrors {
     }
 }
 
-pub struct Ctx<'a> {
+pub struct Ctx<'a, H: Hooks> {
     pub compiler: &'a Compiler,
     pub ast: &'a Ast,
     pub module: ModuleId,
@@ -197,8 +209,9 @@ pub struct Ctx<'a> {
     /// from, to, cast_expr
     pub deferred_casts: Vec<(LocalTypeId, LocalTypeId, ExprId, CastId)>,
     pub checked_closures: Vec<CheckedClosure>,
+    pub hooks: &'a mut H,
 }
-impl Ctx<'_> {
+impl<H: Hooks> Ctx<'_, H> {
     fn emit(&mut self, error: CompileError) {
         self.compiler.errors.emit(self.module, error);
     }

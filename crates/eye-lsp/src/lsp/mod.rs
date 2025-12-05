@@ -1,12 +1,13 @@
 use std::path::{Component, PathBuf};
 
 use compiler::{Compiler, Def, ModuleSpan, ProjectId, check::ProjectErrors};
-use parser::ast::ModuleId;
+use dmap::DHashMap;
+use parser::ast::{ModuleId, ScopeId};
 use serde_json::Value;
 
 use crate::{
     ResponseError,
-    lsp::find_in_ast::Found,
+    lsp::find_in_ast::{Found, ScopeContext},
     send_notification,
     types::{self, Diagnostic, TextDocumentPositionParams, Uri, request::Request},
 };
@@ -144,14 +145,34 @@ impl Lsp {
     pub fn find_document_position(
         &mut self,
         position: &TextDocumentPositionParams,
-    ) -> Option<(ModuleId, Found)> {
+    ) -> Option<(ModuleId, u32, Found)> {
         let Some(module) = self.find_module_of_uri(&position.textDocument.uri) else {
             tracing::debug!("Module not found for {:?}", position.textDocument.uri);
             return None;
         };
         let ast = self.compiler.get_module_ast(module);
         let offset = position.position.to_offset(ast.src());
-        Some((module, find_in_ast::find(ast, offset)))
+        Some((module, offset, find_in_ast::find(ast, offset)))
+    }
+
+    pub fn find_context_for_scope(&mut self, module: ModuleId, scope: ScopeId) -> ScopeContext {
+        let ast = self.compiler.get_module_ast(module);
+        let mut context_scopes = DHashMap::default();
+        context_scopes.insert(ast.top_level_scope_id(), ScopeContext::TopLevel);
+        for function in ast.function_ids() {
+            context_scopes.insert(ast[function].scope, ScopeContext::Function(function));
+        }
+        let mut current = scope;
+        loop {
+            if let Some(context) = context_scopes.get(&current) {
+                return *context;
+            }
+            let Some(parent) = ast[current].parent else {
+                tracing::warn!("Scope didn't have a parent during context search");
+                return ScopeContext::TopLevel;
+            };
+            current = parent;
+        }
     }
 
     pub fn update_diagnostics(&mut self) {

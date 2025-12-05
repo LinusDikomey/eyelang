@@ -29,7 +29,7 @@ mod modules;
 pub mod std_path;
 mod types;
 /// TypeTable data structure and logic for type inference/checking
-mod typing;
+pub mod typing;
 
 pub use compiler::{Compiler, Def, ModuleSpan, ProjectError};
 pub use link::link;

@@ -8,6 +8,12 @@ pub struct Found {
     pub scope: ScopeId,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ScopeContext {
+    TopLevel,
+    Function(ast::FunctionId),
+}
+
 #[derive(Debug)]
 pub enum FoundType {
     None,

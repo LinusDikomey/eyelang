@@ -61,6 +61,29 @@ pub enum CompletionTriggerKind {
 pub struct CompletionItem {
     pub label: String,
     pub kind: Option<CompletionItemKind>,
+    pub detail: Option<String>,
+    pub labelDetails: Option<CompletionItemLabelDetails>,
+    pub documentation: Option<MarkupContent>,
+}
+
+#[derive(Serialize)]
+pub struct MarkupContent {
+    pub kind: MarkupKind,
+    pub value: String,
+}
+
+#[derive(Serialize)]
+pub enum MarkupKind {
+    #[serde(rename = "plaintext")]
+    PlainText,
+    #[serde(rename = "markdown")]
+    Markdown,
+}
+
+#[derive(Serialize)]
+pub struct CompletionItemLabelDetails {
+    pub detail: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize_repr)]
