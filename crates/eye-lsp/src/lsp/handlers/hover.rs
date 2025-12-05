@@ -2,7 +2,8 @@ use std::fmt::Write;
 
 use compiler::{
     Compiler, Def,
-    compiler::{BodyOrTypes, CaptureId, LocalItem, LocalScope},
+    compiler::{BodyOrTypes, LocalItem, LocalScope, VarId},
+    hir::HIRBuilder,
     typing::LocalTypeId,
 };
 use error::span::TSpan;
@@ -57,7 +58,8 @@ impl Lsp {
                             return Hover::default();
                         };
                         let signature = self.compiler.get_signature(module, function_id);
-                        let hover_var = |ty: LocalTypeId, capture: Option<CaptureId>| {
+                        let hover_var = |var: VarId| {
+                            let ty = hir.vars[var.idx()].ty();
                             let val = &ast.src()[found.span.range()];
                             let ty = self
                                 .compiler
@@ -65,8 +67,8 @@ impl Lsp {
                                 .display(hir[ty], &signature.generics)
                                 .to_string();
                             let mut text = format!("```eye\n{val}: {ty}\n```");
-                            if let Some(capture) = capture {
-                                write!(text, "\n---\nCapture #{}", capture.0).unwrap();
+                            if let compiler::hir::Var::Capture { outer, .. } = hir.vars[var.idx()] {
+                                write!(text, "\n---\nCapture of #{}", outer.0).unwrap();
                             }
                             Hover {
                                 contents: text.into(),
@@ -82,8 +84,7 @@ impl Lsp {
                             return hover(format!("{val} : {ty}").into());
                         };
                         match item {
-                            LocalItem::Var(var_id) => hover_var(hir.vars[var_id.idx()], None),
-                            LocalItem::Capture(capture_id, ty) => hover_var(ty, Some(capture_id)),
+                            LocalItem::Var(var_id) => hover_var(var_id),
                             LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
                                 hover("<invalid value>".into())
                             }
@@ -178,7 +179,8 @@ struct HoverHooks<'a> {
 impl<'a> HoverHooks<'a> {
     fn handle_hovered_expr(
         &mut self,
-        _expr: ExprId,
+        expr: ExprId,
+        hir: &mut HIRBuilder,
         scope: &mut LocalScope,
         ty: LocalTypeId,
         is_pattern: bool,
@@ -186,8 +188,8 @@ impl<'a> HoverHooks<'a> {
         let name = &self.ast.src()[self.span.range()];
         self.ty = Some(ty);
         if self.is_ident && !is_pattern {
-            // TODO: this should not emit errors
-            let item = scope.resolve(name, self.span, self.compiler);
+            // TODO: this should probably not emit errors
+            let item = scope.resolve(name, self.span, self.compiler, hir);
             self.local_item = Some(item);
         }
     }
@@ -196,6 +198,7 @@ impl<'a> compiler::check::Hooks for HoverHooks<'a> {
     fn on_check_expr(
         &mut self,
         expr: parser::ast::ExprId,
+        hir: &mut HIRBuilder,
         scope: &mut compiler::compiler::LocalScope,
         ty: compiler::typing::LocalTypeId,
         _return_ty: compiler::typing::LocalTypeId,
@@ -204,25 +207,32 @@ impl<'a> compiler::check::Hooks for HoverHooks<'a> {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.handle_hovered_expr(expr, scope, ty, false);
+        self.handle_hovered_expr(expr, hir, scope, ty, false);
     }
 
     fn on_checked_lvalue(
         &mut self,
         expr: parser::ast::ExprId,
+        hir: &mut HIRBuilder,
         scope: &mut compiler::compiler::LocalScope,
         ty: LocalTypeId,
     ) {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.handle_hovered_expr(expr, scope, ty, false);
+        self.handle_hovered_expr(expr, hir, scope, ty, false);
     }
 
-    fn on_check_pattern(&mut self, expr: ExprId, scope: &mut LocalScope, ty: LocalTypeId) {
+    fn on_check_pattern(
+        &mut self,
+        expr: ExprId,
+        hir: &mut HIRBuilder,
+        scope: &mut LocalScope,
+        ty: LocalTypeId,
+    ) {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.handle_hovered_expr(expr, scope, ty, true);
+        self.handle_hovered_expr(expr, hir, scope, ty, true);
     }
 }

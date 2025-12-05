@@ -117,7 +117,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 .collect();
             let mut scope = LocalScope {
                 parent: LocalScopeParent::ClosedOver {
-                    scope: closed_over,
+                    scope: &mut *closed_over,
                     captures: &captures,
                     outer_vars: &outer_hir.vars,
                 },
@@ -126,7 +126,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 static_scope: Some(function.scope),
             };
 
-            let captures_param = self.hir.add_var(captures_ty);
+            let captures_param = self.hir.add_captures_param_var(captures_ty);
 
             let root = self.check(body, &mut scope, return_type, return_type, &mut false);
 
@@ -147,7 +147,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
         {
             self.hir.modify_node(node, Node::Variable(var));
             let var = self.hir.get_var(var);
-            self.hir.types.replace(id, var);
+            self.hir.types.replace(id, var.ty());
         }
         self.hir.types.replace(
             captures_ty,
@@ -199,6 +199,5 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 return_type,
             },
         )
-        // }
     }
 }

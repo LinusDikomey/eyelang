@@ -1,6 +1,7 @@
 use compiler::{
     Def, ModuleSpan,
     compiler::{BodyOrTypes, LocalScope, VarId},
+    hir::HIRBuilder,
     typing::LocalTypeId,
 };
 use parser::ast::{Ast, ScopeId};
@@ -101,7 +102,7 @@ impl Lsp {
                 if let BodyOrTypes::Body(hir) = &checked.body_or_types {
                     let signature = self.compiler.get_signature(module, function_id);
                     for (name, variable) in variables {
-                        let ty = hir[hir.vars[variable.idx()]];
+                        let ty = hir[hir.vars[variable.idx()].ty()];
                         let ty = self.compiler.types.display(ty, &signature.generics);
                         completions.push(CompletionItem {
                             label: name,
@@ -137,6 +138,7 @@ impl<'a> compiler::check::Hooks for CompletionHooks<'a> {
     fn on_check_expr(
         &mut self,
         expr: parser::ast::ExprId,
+        _hir: &mut HIRBuilder,
         scope: &mut compiler::compiler::LocalScope,
         _expected: LocalTypeId,
         _return_ty: LocalTypeId,

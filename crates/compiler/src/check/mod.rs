@@ -34,14 +34,29 @@ pub trait Hooks {
     fn on_check_expr(
         &mut self,
         _expr: ExprId,
+        _hir: &mut HIRBuilder,
         _scope: &mut LocalScope,
         _ty: LocalTypeId,
         _return_ty: LocalTypeId,
         _noreturn: &mut bool,
     ) {
     }
-    fn on_check_pattern(&mut self, _expr: ExprId, _scope: &mut LocalScope, _ty: LocalTypeId) {}
-    fn on_checked_lvalue(&mut self, _expr: ExprId, _scope: &mut LocalScope, _ty: LocalTypeId) {}
+    fn on_check_pattern(
+        &mut self,
+        _expr: ExprId,
+        _hir: &mut HIRBuilder,
+        _scope: &mut LocalScope,
+        _ty: LocalTypeId,
+    ) {
+    }
+    fn on_checked_lvalue(
+        &mut self,
+        _expr: ExprId,
+        _hir: &mut HIRBuilder,
+        _scope: &mut LocalScope,
+        _ty: LocalTypeId,
+    ) {
+    }
     fn on_exit_scope(&mut self, _scope: &mut LocalScope) {}
 }
 impl Hooks for () {}
@@ -355,7 +370,7 @@ impl<H: Hooks> Ctx<'_, H> {
                 params: closure
                     .params
                     .iter()
-                    .map(|(name, id)| (name.clone(), hir[hir.vars[id.idx()]]))
+                    .map(|(name, id)| (name.clone(), hir[hir.vars[id.idx()].ty()]))
                     .collect(),
                 named_params: Box::new([]), // TODO: named closure params
                 varargs: false,

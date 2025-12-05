@@ -19,7 +19,7 @@ pub fn check<H: Hooks>(
     noreturn: &mut bool,
 ) -> (LValue, LocalTypeId) {
     let (value, ty) = check_inner(ctx, expr, scope, return_ty, noreturn);
-    ctx.hooks.on_checked_lvalue(expr, scope, ty);
+    ctx.hooks.on_checked_lvalue(expr, &mut ctx.hir, scope, ty);
     (value, ty)
 }
 
@@ -32,15 +32,19 @@ pub fn check_inner<H: Hooks>(
 ) -> (LValue, LocalTypeId) {
     match ctx.ast[expr] {
         Expr::Ident { span, .. } => {
-            match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {
+            match scope.resolve(
+                &ctx.ast.src()[span.range()],
+                span,
+                ctx.compiler,
+                &mut ctx.hir,
+            ) {
                 LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
                     (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))
                 }
                 LocalItem::Var(id) => {
-                    let var_ty = ctx.hir.get_var(id);
+                    let var_ty = ctx.hir.get_var(id).ty();
                     (LValue::Variable(id), var_ty)
                 }
-                LocalItem::Capture(id, ty) => todo!("lvalue capture: {id:?}: {ty:?}"),
                 LocalItem::Def(def) => def_lvalue(ctx, expr, def),
             }
         }

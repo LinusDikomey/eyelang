@@ -13,7 +13,7 @@ use parser::ast::{self, ModuleId};
 
 use crate::check::traits::{self, Candidates};
 use crate::compiler::{Dialects, FunctionToGenerate, Generics, Instance, Instances, builtins};
-use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId};
+use crate::hir::{CastType, LValue, LValueId, Node, Pattern, PatternId, Var};
 use crate::types::{BaseType, TypeFull};
 use crate::typing::{LocalTypeId, LocalTypeIds, OrdinalType};
 use crate::{Compiler, Type};
@@ -92,36 +92,53 @@ pub fn lower_hir(
     let vars = hir
         .vars
         .iter()
-        .map(|&var_ty| {
-            match types::get(
+        .map(|&var| {
+            let Some(ir_ty) = types::get(
                 compiler,
                 builder.env,
                 &mut builder.types,
-                hir[var_ty],
+                hir[var.ty()],
                 Instance {
                     types: generics,
                     outer: None,
                 },
-            ) {
-                Some(ty) => {
-                    let ty = builder.types.add(ty);
-                    let var = builder.append(dialects.mem.Decl(ty, ptr_ty));
-                    Ok((var, ty))
+            ) else {
+                build_crash_point_inner(
+                    compiler,
+                    &mut builder,
+                    dialects,
+                    instances,
+                    to_generate,
+                    unit_ty,
+                    ptr_ty,
+                    return_ty,
+                );
+                return Err(NoReturn);
+            };
+            let ty;
+            let var_ref;
+            match var {
+                Var::Local(_) => {
+                    ty = builder.types.add(ir_ty);
+                    var_ref = builder.append(dialects.mem.Decl(ty, ptr_ty));
                 }
-                None => {
-                    build_crash_point_inner(
-                        compiler,
-                        &mut builder,
-                        dialects,
-                        instances,
-                        to_generate,
-                        unit_ty,
-                        ptr_ty,
-                        return_ty,
-                    );
-                    Err(NoReturn)
+                Var::Capture {
+                    outer: _,
+                    ty: _,
+                    capture_idx,
+                } => {
+                    ty = builder.types.add(ir_ty);
+                    var_ref = builder.append(dialects.mem.Decl(ty, ptr_ty));
+                    // move capture
+                    let captures_param = params.nth(0);
+                    let value =
+                        builder.append(dialects.tuple.MemberValue(captures_param, capture_idx, ty));
+                    builder.append(dialects.mem.Store(var_ref, value, unit_ty));
                 }
-            }
+                // this variable should never be used in the body
+                Var::CapturesParam(_) => return Ok((Ref::UNIT, unit_ty)),
+            };
+            Ok((var_ref, ty))
         })
         .collect();
     let mut vars: Vec<_> = match vars {
@@ -130,6 +147,9 @@ pub fn lower_hir(
     };
     debug_assert_eq!(params.count(), hir.params.len() as _);
     for (param, &var) in params.iter().zip(&hir.params) {
+        if matches!(hir.vars[var.idx()], Var::CapturesParam(_)) {
+            continue;
+        }
         builder.append(dialects.mem.Store(vars[var.idx()].0, param, unit_ty));
     }
     let mut ctx = Ctx {

@@ -31,7 +31,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
         noreturn: &mut bool,
     ) -> Node {
         self.hooks
-            .on_check_expr(expr, scope, expected, return_ty, noreturn);
+            .on_check_expr(expr, &mut self.hir, scope, expected, return_ty, noreturn);
         let ast = self.ast;
         match &ast[expr] {
             Expr::Error(_) => {
@@ -43,10 +43,11 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 items,
                 ..
             } => {
+                let module = scope.module;
                 let mut scope = LocalScope {
-                    parent: LocalScopeParent::Some(scope),
+                    parent: LocalScopeParent::Some(&mut *scope),
                     variables: dmap::new(),
-                    module: scope.module,
+                    module,
                     static_scope: Some(static_scope),
                 };
                 let mut item_nodes = self.hir.add_invalid_nodes(items.count);
@@ -529,7 +530,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let value = self.check(value, scope, pattern_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(scope),
+                    parent: LocalScopeParent::Some(&mut *scope),
                     static_scope: None,
                     variables: dmap::new(),
                 };
@@ -559,7 +560,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let value = self.check(value, scope, pattern_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(scope),
+                    parent: LocalScopeParent::Some(&mut *scope),
                     static_scope: None,
                     variables: dmap::new(),
                 };
@@ -608,9 +609,9 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let branch_nodes = self.hir.add_invalid_nodes(branch_count);
                 let mut all_branches_noreturn = true;
                 let mut branch_scope = LocalScope {
-                    parent: LocalScopeParent::Some(scope),
-                    variables: DHashMap::default(),
                     module: scope.module,
+                    parent: LocalScopeParent::Some(&mut *scope),
+                    variables: DHashMap::default(),
                     static_scope: None,
                 };
                 for ((pat, branch), i) in branches.into_iter().zip(0..) {
@@ -661,8 +662,8 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let value_ty = self.hir.types.add_unknown();
                 let val = self.check(val, scope, value_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
-                    parent: LocalScopeParent::Some(scope),
                     module: scope.module,
+                    parent: LocalScopeParent::Some(&mut *scope),
                     variables: dmap::new(),
                     static_scope: None,
                 };
@@ -704,8 +705,8 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 };
 
                 let mut body_scope = LocalScope {
-                    parent: LocalScopeParent::Some(scope),
                     module: scope.module,
+                    parent: LocalScopeParent::Some(&mut *scope),
                     variables: dmap::new(),
                     static_scope: None,
                 };
@@ -784,17 +785,13 @@ impl<'a, H: Hooks> Ctx<'a, H> {
         span: TSpan,
     ) -> Node {
         let name = &self.ast[span];
-        match scope.resolve(name, span, self.compiler) {
+        match scope.resolve(name, span, self.compiler, &mut self.hir) {
             LocalItem::Var(var) => {
-                let ty = self.hir.get_var(var);
+                let ty = self.hir.get_var(var).ty();
                 self.unify(expected, ty, |_| span);
                 Node::Variable(var)
             }
             LocalItem::Def(def) => self.def_to_node(def, expected, span),
-            LocalItem::Capture(id, ty) => {
-                self.unify(expected, ty, |_| span);
-                Node::Capture(id)
-            }
             LocalItem::Invalid => {
                 self.specify(expected, TypeInfo::INVALID, |_| span);
                 self.invalidate(expected);

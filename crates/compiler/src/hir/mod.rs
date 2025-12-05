@@ -18,13 +18,12 @@ id!(CastId);
 /// High-level intermediate representation for a function. It is created during type checking and
 /// contains all resolved identifiers and type information.
 /// nodes must be non-empty and the last node is the root node
-#[derive(Debug)]
 pub struct Hir {
     nodes: Vec<Node>,
     types: Box<[Type]>,
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
-    pub vars: Vec<LocalTypeId>,
+    pub vars: Vec<Var>,
     pub params: Vec<VarId>,
     casts: Vec<Cast>,
     pub trait_calls: Vec<Option<(ModuleId, FunctionId)>>,
@@ -342,6 +341,25 @@ pub enum Node {
     Continue(u32),
 }
 
+#[derive(Clone, Copy)]
+pub enum Var {
+    Local(LocalTypeId),
+    Capture {
+        outer: VarId,
+        ty: LocalTypeId,
+        capture_idx: u32,
+    },
+    /// the variable that all captures of a closure are passed through
+    CapturesParam(LocalTypeId),
+}
+impl Var {
+    pub fn ty(&self) -> LocalTypeId {
+        match *self {
+            Var::Local(ty) | Var::Capture { ty, .. } | Var::CapturesParam(ty) => ty,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LValue {
     Invalid,
@@ -488,7 +506,7 @@ pub struct HIRBuilder {
     lvalues: Vec<LValue>,
     patterns: Vec<Pattern>,
     pub types: TypeTable,
-    pub vars: Vec<LocalTypeId>,
+    pub vars: Vec<Var>,
     casts: Vec<Cast>,
 }
 impl Index<NodeId> for HIRBuilder {
@@ -552,7 +570,7 @@ impl HIRBuilder {
         mut nodes: Vec<Node>,
         lvalues: Vec<LValue>,
         patterns: Vec<Pattern>,
-        vars: Vec<LocalTypeId>,
+        vars: Vec<Var>,
         casts: Vec<Cast>,
         root: Node,
         params: Vec<VarId>,
@@ -619,11 +637,27 @@ impl HIRBuilder {
 
     pub fn add_var(&mut self, ty: LocalTypeId) -> VarId {
         let id = VarId(self.vars.len() as _);
-        self.vars.push(ty);
+        self.vars.push(Var::Local(ty));
         id
     }
 
-    pub fn get_var(&mut self, id: VarId) -> LocalTypeId {
+    pub fn add_captured_var(&mut self, outer: VarId, ty: LocalTypeId, capture_idx: u32) -> VarId {
+        let id = VarId(self.vars.len() as _);
+        self.vars.push(Var::Capture {
+            outer,
+            ty,
+            capture_idx,
+        });
+        id
+    }
+
+    pub fn add_captures_param_var(&mut self, ty: LocalTypeId) -> VarId {
+        let id = VarId(self.vars.len() as _);
+        self.vars.push(Var::CapturesParam(ty));
+        id
+    }
+
+    pub fn get_var(&mut self, id: VarId) -> Var {
         self.vars[id.idx()]
     }
 

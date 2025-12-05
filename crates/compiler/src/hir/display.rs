@@ -433,8 +433,8 @@ impl<'a> fmt::Display for PatternDisplay<'a> {
         match &hir[pattern] {
             Pattern::Invalid => cwrite!(f, "#m<invalid>"),
             Pattern::Variable(id) => {
-                let var_ty = hir.vars[id.idx()];
-                cwrite!(f, "#g<${}>: {}", id.0, display_ty(hir[var_ty]),)
+                let var_ty = hir.vars[id.idx()].ty();
+                cwrite!(f, "#g<${}>: {}", id.0, display_ty(hir[var_ty]))
             }
             Pattern::Ignore => cwrite!(f, "_"),
             &Pattern::Tuple {

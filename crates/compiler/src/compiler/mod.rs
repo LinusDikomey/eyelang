@@ -32,7 +32,7 @@ use crate::{
     },
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
-    hir::Hir,
+    hir::{HIRBuilder, Hir, Var},
     irgen,
     types::{BaseType, BuiltinType, TypeFull, Types},
     typing::{Bound, LocalOrGlobalInstance, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
@@ -1330,12 +1330,13 @@ impl<T> Resolvable<T> {
 id::id!(VarId);
 id::id!(CaptureId);
 
-pub enum LocalScopeParent<'p> {
-    Some(&'p LocalScope<'p>),
+pub enum LocalScopeParent<'a> {
+    Some(&'a LocalScope<'a>),
     ClosedOver {
-        scope: &'p LocalScope<'p>,
-        captures: &'p RefCell<IndexMap<VarId, CaptureId>>,
-        outer_vars: &'p [LocalTypeId],
+        scope: &'a LocalScope<'a>,
+        /// mapping from outer vars to inner vars
+        captures: &'a RefCell<IndexMap<VarId, VarId>>,
+        outer_vars: &'a [Var],
     },
     None,
 }
@@ -1350,11 +1351,16 @@ pub struct LocalScope<'p> {
 pub enum LocalItem {
     Var(VarId),
     Def(Def),
-    Capture(CaptureId, LocalTypeId),
     Invalid,
 }
-impl LocalScope<'_> {
-    pub fn resolve(&self, name: &str, name_span: TSpan, compiler: &Compiler) -> LocalItem {
+impl<'p> LocalScope<'p> {
+    pub fn resolve(
+        &self,
+        name: &str,
+        name_span: TSpan,
+        compiler: &Compiler,
+        hir: &mut HIRBuilder,
+    ) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
         } else if let Some(def) = self
@@ -1364,22 +1370,24 @@ impl LocalScope<'_> {
             LocalItem::Def(def)
         } else {
             match &self.parent {
-                LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler),
+                LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler, hir),
                 LocalScopeParent::ClosedOver {
                     scope,
                     captures,
                     outer_vars,
                 } => {
-                    let local = scope.resolve(name, name_span, compiler);
+                    let local = scope.resolve(name, name_span, compiler, hir);
                     match local {
                         LocalItem::Var(id) => {
+                            // hir.add_captured_var(outer, ty)
                             let mut captures = captures.borrow_mut();
-                            let next_id = CaptureId(captures.len() as _);
-                            let ty = outer_vars[id.idx()];
-                            LocalItem::Capture(*captures.entry(id).or_insert_with(|| next_id), ty)
+                            let next_capture_idx = captures.len() as u32;
+                            LocalItem::Var(*captures.entry(id).or_insert_with(|| {
+                                let ty = outer_vars[id.idx()].ty();
+                                hir.add_captured_var(id, ty, next_capture_idx)
+                            }))
                         }
                         LocalItem::Def(def) => LocalItem::Def(def),
-                        LocalItem::Capture(_, _) => todo!("capture captures"),
                         LocalItem::Invalid => LocalItem::Invalid,
                     }
                 }

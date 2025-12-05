@@ -16,7 +16,7 @@ mod eval;
 /// various helpers
 mod helpers;
 /// high-level intermediate representation that knows type information and resolved identifiers
-mod hir;
+pub mod hir;
 /// hir->ir lowering
 mod irgen;
 /// Memory layout of types

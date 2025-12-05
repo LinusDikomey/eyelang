@@ -19,7 +19,8 @@ pub fn check<H: Hooks>(
     pat: ExprId,
     expected: LocalTypeId,
 ) -> Pattern {
-    ctx.hooks.on_check_pattern(pat, scope, expected);
+    ctx.hooks
+        .on_check_pattern(pat, &mut ctx.hir, scope, expected);
     match &ctx.ast[pat] {
         &Expr::Nested { inner, .. } => check(ctx, scope, exhaustion, inner, expected),
         Expr::IntLiteral { span, .. } => {
