@@ -23,6 +23,7 @@ impl Uri {
 }
 type DocumentUri = Uri;
 type Integer = i32;
+type UInteger = u32;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -57,6 +58,7 @@ pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub textDocumentSync: Option<TextDocumentSyncOptions>,
     pub definitionProvider: bool,
+    pub documentFormattingProvider: bool,
     // ...
 }
 
@@ -215,4 +217,10 @@ pub struct CodeDescription {
 pub struct Location {
     pub uri: DocumentUri,
     pub range: Range,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TextEdit {
+    pub range: Range,
+    pub newText: String,
 }

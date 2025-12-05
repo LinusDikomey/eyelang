@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
-use crate::types::{Location, Range, TextDocumentPositionParams, WorkDoneProgressParams};
+use crate::types::{
+    Location, Range, TextDocumentIdentifier, TextDocumentPositionParams, TextEdit,
+    WorkDoneProgressParams,
+};
 
 pub trait Request: DeserializeOwned {
     const METHOD: &'static str;
@@ -99,4 +102,18 @@ pub struct DefinitionParams {
 impl Request for DefinitionParams {
     const METHOD: &'static str = "textDocument/definition";
     type Response = Option<Location>;
+}
+#[derive(Deserialize, Debug)]
+pub struct DocumentFormattingParams {
+    pub textDocument: TextDocumentIdentifier,
+    pub options: FormattingOptions,
+}
+impl Request for DocumentFormattingParams {
+    const METHOD: &'static str = "textDocument/formatting";
+    type Response = Option<Vec<TextEdit>>;
+}
+
+#[derive(Deserialize, Debug)]
+pub struct FormattingOptions {
+    // ...
 }

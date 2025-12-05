@@ -115,6 +115,7 @@ impl State {
                                             save: true,
                                         }),
                                         definitionProvider: true,
+                                        documentFormattingProvider: true,
                                     },
                                     server_info: types::ServerInfo {
                                         name: "eye-lsp".to_owned(),

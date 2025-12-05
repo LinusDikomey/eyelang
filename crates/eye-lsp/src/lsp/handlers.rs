@@ -8,11 +8,11 @@ use crate::{
     ResponseError,
     lsp::{Lsp, find_in_ast::FoundType},
     types::{
-        Location, Range,
+        Location, Range, TextEdit,
         notification::{DidOpenTextDocumentParams, DidSaveTextDocumentParams},
         request::{
-            CompletionItem, CompletionItemKind, CompletionParams, DefinitionParams, Hover,
-            HoverParams, Request,
+            CompletionItem, CompletionItemKind, CompletionParams, DefinitionParams,
+            DocumentFormattingParams, Hover, HoverParams, Request,
         },
     },
 };
@@ -38,6 +38,7 @@ impl Lsp {
             HoverParams::METHOD => self.on_request(Self::hover, params),
             CompletionParams::METHOD => self.on_request(Self::complete, params),
             DefinitionParams::METHOD => self.on_request(Self::definition, params),
+            DocumentFormattingParams::METHOD => self.on_request(Self::formatting, params),
             _ => {
                 tracing::info!("Unhandled request {method} {params}");
                 Err(ResponseError {
@@ -239,6 +240,22 @@ impl Lsp {
             uri: self.uri_from_module(module),
             range,
         })
+    }
+
+    pub fn formatting(&mut self, params: DocumentFormattingParams) -> Option<Vec<TextEdit>> {
+        let Ok(src) = std::fs::read_to_string(params.textDocument.uri.path()) else {
+            return None;
+        };
+        let len = src.len().try_into().ok()?;
+        let range = Range::from_span(TSpan::new(0, len), &src);
+        let (formatted, errors) = format::format(src.into_boxed_str());
+        if errors.error_count() > 0 {
+            return None;
+        }
+        Some(vec![TextEdit {
+            range,
+            newText: formatted,
+        }])
     }
 }
 

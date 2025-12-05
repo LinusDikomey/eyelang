@@ -228,6 +228,7 @@ dependencies = [
  "compiler",
  "dmap",
  "error",
+ "format",
  "home",
  "parser",
  "pathdiff",
