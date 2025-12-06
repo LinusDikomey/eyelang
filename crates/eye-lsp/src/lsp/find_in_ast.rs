@@ -18,8 +18,7 @@ pub enum ScopeContext {
 pub enum FoundType {
     None,
     Error,
-    VarDecl,
-    VarRef,
+    Ident,
     Literal,
     EnumLiteral,
     #[allow(unused)] // TODO: remove unused
@@ -126,11 +125,13 @@ fn find_at_offset_expr(
         Expr::Array { elements, .. } | Expr::Tuple { elements, .. } => {
             elements.into_iter().find_map(rec)
         }
-        &Expr::EnumLiteral { ident, args, .. } => {
+        &Expr::EnumLiteral {
+            ident, args, span, ..
+        } => {
             if ident.contains(offset) {
                 Some(Found {
                     ty: FoundType::EnumLiteral,
-                    span: ident,
+                    span,
                     scope,
                 })
             } else {
@@ -197,11 +198,7 @@ fn find_at_offset_expr(
         &Expr::Type { .. } => None,
         Expr::Trait { .. } => None,
         Expr::Ident { .. } => Some(Found {
-            ty: if is_pattern {
-                FoundType::VarDecl
-            } else {
-                FoundType::VarRef
-            },
+            ty: FoundType::Ident,
             scope,
             span,
         }),

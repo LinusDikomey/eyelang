@@ -23,10 +23,45 @@ impl Request for HoverParams {
     type Response = Hover;
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct Hover {
-    pub contents: String, // TODO: can be MarkedString/MarkupContents/...
+    pub contents: HoverContents, // TODO: can be MarkedString/MarkupContents/...
     pub range: Option<Range>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum HoverContents {
+    MarkedString(MarkedString),
+    MarkedStrings(Vec<MarkedString>),
+    MarkupContent(MarkupContent),
+}
+impl From<String> for HoverContents {
+    fn from(value: String) -> Self {
+        Self::MarkedString(MarkedString::String(value))
+    }
+}
+impl<'a> From<&'a str> for HoverContents {
+    fn from(value: &'a str) -> Self {
+        Self::MarkedString(MarkedString::String(value.to_owned()))
+    }
+}
+impl Default for HoverContents {
+    fn default() -> Self {
+        Self::MarkedString(MarkedString::default())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum MarkedString {
+    String(String),
+    Code { language: String, value: String },
+}
+impl Default for MarkedString {
+    fn default() -> Self {
+        Self::String(String::default())
+    }
 }
 
 #[derive(Deserialize)]

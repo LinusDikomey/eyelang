@@ -69,7 +69,7 @@ primitive_impls! { Type BaseType }
 id::id!(BaseType);
 
 macro_rules! builtin_types {
-    ($count: literal $($name: ident = $size: literal)* @generic: $($generic_name: ident = $generics: expr,)*) => {
+    ($count: literal $($name: ident = $size: literal $name_str: literal)* @generic: $($generic_name: ident = $generics: expr,)*) => {
 
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         pub enum BuiltinType {
@@ -99,7 +99,7 @@ macro_rules! builtin_types {
 
             pub fn name(self) -> &'static str {
                 match self {
-                    $( Self::$name => stringify!($name), )*
+                    $( Self::$name => $name_str, )*
                     $( Self::$generic_name => stringify!($generic_name), )*
                 }
             }
@@ -119,21 +119,21 @@ macro_rules! builtin_types {
 builtin_types! {
     19
 
-    Invalid = 0
-    Unit = 0 // this is just an empty tuple but this alias is added so that no interning is needed for unit
-    I8 = 1
-    U8 = 1
-    I16 = 2
-    U16 = 2
-    I32 = 4
-    U32 = 4
-    I64 = 8
-    U64 = 8
-    I128 = 16
-    U128 = 16
-    F32 = 4
-    F64 = 8
-    Type = 9
+    Invalid = 0 "invalid"
+    Unit = 0 "()" // this is just an empty tuple but this alias is added so that no interning is needed for unit
+    I8 = 1 "i8"
+    U8 = 1 "u8"
+    I16 = 2 "i16"
+    U16 = 2 "u16"
+    I32 = 4 "i32"
+    U32 = 4 "u32"
+    I64 = 8 "i64"
+    U64 = 8 "u64"
+    I128 = 16 "i128"
+    U128 = 16 "u128"
+    F32 = 4 "f32"
+    F64 = 8 "f64"
+    Type = 9 "type"
 
     @generic:
     Tuple = vec![("elems".into(), vec![])],

@@ -18,6 +18,18 @@ pub fn check<H: Hooks>(
     return_ty: LocalTypeId,
     noreturn: &mut bool,
 ) -> (LValue, LocalTypeId) {
+    let (value, ty) = check_inner(ctx, expr, scope, return_ty, noreturn);
+    ctx.hooks.on_checked_lvalue(expr, scope, ty);
+    (value, ty)
+}
+
+pub fn check_inner<H: Hooks>(
+    ctx: &mut Ctx<H>,
+    expr: ExprId,
+    scope: &mut LocalScope,
+    return_ty: LocalTypeId,
+    noreturn: &mut bool,
+) -> (LValue, LocalTypeId) {
     match ctx.ast[expr] {
         Expr::Ident { span, .. } => {
             match scope.resolve(&ctx.ast.src()[span.range()], span, ctx.compiler) {

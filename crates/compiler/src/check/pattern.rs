@@ -20,6 +20,7 @@ pub fn check<H: Hooks>(
     pat: ExprId,
     expected: LocalTypeId,
 ) -> Pattern {
+    ctx.hooks.on_check_pattern(pat, expected);
     match &ctx.ast[pat] {
         &Expr::Nested { inner, .. } => check(ctx, variables, exhaustion, inner, expected),
         Expr::IntLiteral { span, .. } => {
