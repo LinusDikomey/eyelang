@@ -1019,9 +1019,13 @@ impl TypeTable {
             TypeInfo::Enum(id) => {
                 // PERF: also buffer variants? and params somehow?
                 let mut variants = Vec::new();
-                for variant_idx in 0..self.enums[id.idx()].variants.len() {
+                let mut enum_text = "enum {".to_owned();
+                let variant_count = self.enums[id.idx()].variants.len();
+                for variant_idx in 0..variant_count {
                     let variant = &self.variants[self.enums[id.idx()].variants[variant_idx].idx()];
                     let name = variant.name.clone();
+                    enum_text.push_str(if variant_idx == 0 { " " } else { ", " });
+                    enum_text.push_str(&name);
                     let ordinal = variant.ordinal;
                     let params = variant
                         .args
@@ -1030,11 +1034,15 @@ impl TypeTable {
                         .collect();
                     variants.push((name, ordinal, params));
                 }
+
+                if variant_count > 0 {
+                    enum_text.push_str(if variant_count > 0 { " }" } else { "}" });
+                }
                 // TODO: better, unique names for local_enum types
                 let base = compiler.types.add_resolved_base(
                     module,
                     ast::TypeId::MISSING,
-                    "local_enum".into(),
+                    enum_text.into_boxed_str(),
                     0,
                     ResolvedTypeDef {
                         def: ResolvedTypeContent::Enum(ResolvedEnumDef {

@@ -95,9 +95,13 @@ pub enum CompletionTriggerKind {
 #[derive(Serialize)]
 pub struct CompletionItem {
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<CompletionItemKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub labelDetails: Option<CompletionItemLabelDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub documentation: Option<MarkupContent>,
 }
 
@@ -117,7 +121,9 @@ pub enum MarkupKind {
 
 #[derive(Serialize)]
 pub struct CompletionItemLabelDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 

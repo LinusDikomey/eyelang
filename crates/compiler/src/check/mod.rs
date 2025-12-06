@@ -40,7 +40,7 @@ pub trait Hooks {
         _noreturn: &mut bool,
     ) {
     }
-    fn on_check_pattern(&mut self, _expr: ExprId, _ty: LocalTypeId) {}
+    fn on_check_pattern(&mut self, _expr: ExprId, _scope: &mut LocalScope, _ty: LocalTypeId) {}
     fn on_checked_lvalue(&mut self, _expr: ExprId, _scope: &mut LocalScope, _ty: LocalTypeId) {}
     fn on_exit_scope(&mut self, _scope: &mut LocalScope) {}
 }

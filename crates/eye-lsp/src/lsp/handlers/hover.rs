@@ -1,6 +1,12 @@
-use compiler::{compiler::BodyOrTypes, typing::LocalTypeId};
+use std::fmt::Write;
+
+use compiler::{
+    Compiler, Def,
+    compiler::{BodyOrTypes, CaptureId, LocalItem, LocalScope},
+    typing::LocalTypeId,
+};
 use error::span::TSpan;
-use parser::ast::Ast;
+use parser::ast::{Ast, ExprId};
 
 use crate::{
     lsp::{
@@ -18,6 +24,7 @@ impl Lsp {
         let Some((module, _offset, found)) = self.find_document_position(&hover.position) else {
             return Hover::default();
         };
+        let context = self.find_context_for_scope(module, found.scope);
         let ast = self.compiler.get_module_ast(module);
         let hover = |contents| Hover {
             contents,
@@ -27,7 +34,7 @@ impl Lsp {
             FoundType::None => Hover::default(),
             FoundType::Error => hover("syntax error".into()),
             FoundType::Ident | FoundType::Literal | FoundType::EnumLiteral => {
-                let context = self.find_context_for_scope(module, found.scope);
+                let is_ident = matches!(found.ty, FoundType::Ident);
                 match context {
                     ScopeContext::TopLevel => Hover::default(),
                     ScopeContext::Function(function_id) => {
@@ -35,7 +42,10 @@ impl Lsp {
                         let mut hooks = HoverHooks {
                             span: found.span,
                             ast,
+                            local_item: None,
                             ty: None,
+                            compiler: &self.compiler,
+                            is_ident,
                         };
                         let checked = compiler::check::function(
                             &self.compiler,
@@ -47,27 +57,90 @@ impl Lsp {
                             return Hover::default();
                         };
                         let signature = self.compiler.get_signature(module, function_id);
-                        let ty = match hooks.ty {
-                            Some(ty) => self
+                        let hover_var = |ty: LocalTypeId, capture: Option<CaptureId>| {
+                            let val = &ast.src()[found.span.range()];
+                            let ty = self
                                 .compiler
                                 .types
                                 .display(hir[ty], &signature.generics)
-                                .to_string(),
-                            None => "<unknown type>".to_owned(),
+                                .to_string();
+                            let mut text = format!("```eye\n{val}: {ty}\n```");
+                            if let Some(capture) = capture {
+                                write!(text, "\n---\nCapture #{}", capture.0).unwrap();
+                            }
+                            Hover {
+                                contents: text.into(),
+                                range: Some(Range::from_span(found.span, ast.src())),
+                            }
                         };
                         let val = &ast.src()[found.span.range()];
-                        Hover {
-                            contents: HoverContents::MarkedString(MarkedString::Code {
-                                language: "eye".into(),
-                                value: format!("{val}: {ty}"),
-                            }),
-                            range: Some(Range::from_span(found.span, ast.src())),
+                        let Some(item) = hooks.local_item else {
+                            let Some(ty) = hooks.ty else {
+                                return hover("expr not found".into());
+                            };
+                            let ty = self.compiler.types.display(hir[ty], &signature.generics);
+                            return hover(format!("{val} : {ty}").into());
+                        };
+                        match item {
+                            LocalItem::Var(var_id) => hover_var(hir.vars[var_id.idx()], None),
+                            LocalItem::Capture(capture_id, ty) => hover_var(ty, Some(capture_id)),
+                            LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
+                                hover("<invalid value>".into())
+                            }
+                            LocalItem::Def(Def::Function(function_module, function)) => {
+                                let signature =
+                                    self.compiler.get_signature(function_module, function);
+                                let mut text = format!("```eye\n{val} :: fn");
+                                if signature.generics.count() > 0 {
+                                    text.push('[');
+                                    for i in 0..signature.generics.count() {
+                                        if i != 0 {
+                                            text.push_str(", ");
+                                        }
+                                        // TODO: not displaying bounds here for now, should be
+                                        // displayed here or in where clause when it is supported
+                                        text.push_str(signature.generics.get_name(i));
+                                    }
+                                    text.push(']');
+                                }
+                                if signature.params.len() + signature.named_params.len() > 0 {
+                                    let mut first = true;
+                                    let mut param_delimiter = |text: &mut String| {
+                                        if first {
+                                            first = false;
+                                        } else {
+                                            text.push_str(", ");
+                                        }
+                                    };
+                                    text.push('(');
+                                    for (name, ty) in &signature.params {
+                                        param_delimiter(&mut text);
+                                        write!(
+                                            text,
+                                            "{name} {}",
+                                            self.compiler.types.display(*ty, &signature.generics),
+                                        )
+                                        .unwrap();
+                                    }
+                                    for (name, ty, _default) in &signature.named_params {
+                                        param_delimiter(&mut text);
+                                        write!(
+                                            text,
+                                            "{name} {} = <TODO: display default>",
+                                            self.compiler.types.display(*ty, &signature.generics)
+                                        )
+                                        .unwrap();
+                                    }
+                                    text.push(')');
+                                }
+                                hover(text.into())
+                            }
+                            // TODO: handle each case separately and produce proper hover text
+                            LocalItem::Def(def) => hover(format!("Definition {def:?}").into()),
                         }
                     }
                 }
             }
-            // FoundType::Literal => todo!(),
-            // FoundType::EnumLiteral => todo!(),
             FoundType::Primitive(_) => hover(HoverContents::MarkedStrings(vec![
                 MarkedString::String("primitive type ".to_owned()),
                 MarkedString::Code {
@@ -97,13 +170,33 @@ impl Lsp {
 struct HoverHooks<'a> {
     span: TSpan,
     ast: &'a Ast,
+    compiler: &'a Compiler,
+    local_item: Option<LocalItem>,
     ty: Option<LocalTypeId>,
+    is_ident: bool,
+}
+impl<'a> HoverHooks<'a> {
+    fn handle_hovered_expr(
+        &mut self,
+        _expr: ExprId,
+        scope: &mut LocalScope,
+        ty: LocalTypeId,
+        is_pattern: bool,
+    ) {
+        let name = &self.ast.src()[self.span.range()];
+        self.ty = Some(ty);
+        if self.is_ident && !is_pattern {
+            // TODO: this should not emit errors
+            let item = scope.resolve(name, self.span, self.compiler);
+            self.local_item = Some(item);
+        }
+    }
 }
 impl<'a> compiler::check::Hooks for HoverHooks<'a> {
     fn on_check_expr(
         &mut self,
         expr: parser::ast::ExprId,
-        _scope: &mut compiler::compiler::LocalScope,
+        scope: &mut compiler::compiler::LocalScope,
         ty: compiler::typing::LocalTypeId,
         _return_ty: compiler::typing::LocalTypeId,
         _noreturn: &mut bool,
@@ -111,25 +204,25 @@ impl<'a> compiler::check::Hooks for HoverHooks<'a> {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.ty = Some(ty);
+        self.handle_hovered_expr(expr, scope, ty, false);
     }
 
     fn on_checked_lvalue(
         &mut self,
         expr: parser::ast::ExprId,
-        _scope: &mut compiler::compiler::LocalScope,
+        scope: &mut compiler::compiler::LocalScope,
         ty: LocalTypeId,
     ) {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.ty = Some(ty);
+        self.handle_hovered_expr(expr, scope, ty, false);
     }
 
-    fn on_check_pattern(&mut self, expr: parser::ast::ExprId, ty: LocalTypeId) {
+    fn on_check_pattern(&mut self, expr: ExprId, scope: &mut LocalScope, ty: LocalTypeId) {
         if self.ast[expr].span(self.ast) != self.span {
             return;
         }
-        self.ty = Some(ty);
+        self.handle_hovered_expr(expr, scope, ty, true);
     }
 }

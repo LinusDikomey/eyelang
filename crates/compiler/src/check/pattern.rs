@@ -1,9 +1,8 @@
-use dmap::DHashMap;
 use error::Error;
 
 use crate::{
     check::{Hooks, exhaust},
-    compiler::{VarId, builtins},
+    compiler::{LocalScope, builtins},
     hir::Pattern,
     types::BaseType,
     typing::{LocalTypeId, TypeInfo},
@@ -15,14 +14,14 @@ use super::{Ctx, exhaust::Exhaustion};
 
 pub fn check<H: Hooks>(
     ctx: &mut Ctx<'_, H>,
-    variables: &mut DHashMap<Box<str>, VarId>,
+    scope: &mut LocalScope,
     exhaustion: &mut Exhaustion,
     pat: ExprId,
     expected: LocalTypeId,
 ) -> Pattern {
-    ctx.hooks.on_check_pattern(pat, expected);
+    ctx.hooks.on_check_pattern(pat, scope, expected);
     match &ctx.ast[pat] {
-        &Expr::Nested { inner, .. } => check(ctx, variables, exhaustion, inner, expected),
+        &Expr::Nested { inner, .. } => check(ctx, scope, exhaustion, inner, expected),
         Expr::IntLiteral { span, .. } => {
             let lit = IntLiteral::parse(&ctx.ast.src()[span.range()]);
             let ty = lit.ty.map_or(TypeInfo::Integer, |ty| {
@@ -64,7 +63,7 @@ pub fn check<H: Hooks>(
         Expr::Ident { span, .. } => {
             let var = ctx.hir.add_var(expected);
             let name = ctx.ast.src()[span.range()].into();
-            variables.insert(name, var);
+            scope.variables.insert(name, var);
             exhaustion.exhaust_full();
             Pattern::Variable(var)
         }
@@ -155,7 +154,7 @@ pub fn check<H: Hooks>(
                         arg_types.iter().skip(1).zip(args).zip(arg_patterns.iter())
                     {
                         let mut arg_exhaustion = Exhaustion::None;
-                        let pat = check(ctx, variables, &mut arg_exhaustion, arg, arg_ty);
+                        let pat = check(ctx, scope, &mut arg_exhaustion, arg, arg_ty);
                         ctx.hir.modify_pattern(r, pat);
                         // TODO: enum argument exhaustion
                     }
@@ -173,7 +172,7 @@ pub fn check<H: Hooks>(
                     for arg in args {
                         let mut arg_exhaustion = Exhaustion::None;
                         let arg_ty = ctx.hir.types.add_unknown();
-                        check(ctx, variables, &mut arg_exhaustion, arg, arg_ty);
+                        check(ctx, scope, &mut arg_exhaustion, arg, arg_ty);
                     }
                     Pattern::Invalid
                 }
@@ -211,9 +210,9 @@ pub fn check<H: Hooks>(
                     let Exhaustion::Tuple(member_exhaustion) = exhaustion else {
                         unreachable!()
                     };
-                    check(ctx, variables, &mut member_exhaustion[i], item_pat, ty)
+                    check(ctx, scope, &mut member_exhaustion[i], item_pat, ty)
                 } else {
-                    check(ctx, variables, &mut Exhaustion::Full, item_pat, ty)
+                    check(ctx, scope, &mut Exhaustion::Full, item_pat, ty)
                 };
                 ctx.hir.modify_pattern(pat_id, pat);
             }

@@ -1,3 +1,4 @@
+use dmap::DHashMap;
 use error::{Error, span::TSpan};
 
 use crate::{
@@ -210,7 +211,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 );
                 let ty = self.hir.types.add(ty);
                 let val = self.check(*val, scope, ty, return_ty, noreturn);
-                let pattern = pattern::check(self, &mut scope.variables, &mut exhaustion, *pat, ty);
+                let pattern = pattern::check(self, scope, &mut exhaustion, *pat, ty);
                 if !exhaustion.is_trivially_exhausted() {
                     self.deferred_exhaustions.push((exhaustion, ty, *pat));
                 }
@@ -533,13 +534,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                     variables: dmap::new(),
                 };
                 let mut exhaustion = Exhaustion::None;
-                let pat = pattern::check(
-                    self,
-                    &mut body_scope.variables,
-                    &mut exhaustion,
-                    pat,
-                    pattern_ty,
-                );
+                let pat = pattern::check(self, &mut body_scope, &mut exhaustion, pat, pattern_ty);
                 if exhaustion.is_trivially_exhausted() {
                     // TODO: Error::ConditionIsAlwaysTrue
                     // maybe even defer this exhaustion to check for this warning in non-trivial case
@@ -569,13 +564,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                     variables: dmap::new(),
                 };
                 let mut exhaustion = Exhaustion::None;
-                let pat = pattern::check(
-                    self,
-                    &mut body_scope.variables,
-                    &mut exhaustion,
-                    pat,
-                    pattern_ty,
-                );
+                let pat = pattern::check(self, &mut body_scope, &mut exhaustion, pat, pattern_ty);
                 if exhaustion.is_trivially_exhausted() {
                     // TODO: Error::ConditionIsAlwaysTrue
                     // maybe even defer this exhaustion to check for this warning in non-trivial case
@@ -614,26 +603,26 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let matched_ty = self.hir.types.add_unknown();
                 let value = self.check(val, scope, matched_ty, return_ty, noreturn);
                 let value = self.hir.add(value);
-                let mut vars = dmap::new();
                 let mut exhaustion = Exhaustion::None;
                 let patterns = self.hir.add_invalid_patterns(branch_count);
                 let branch_nodes = self.hir.add_invalid_nodes(branch_count);
                 let mut all_branches_noreturn = true;
+                let mut branch_scope = LocalScope {
+                    parent: LocalScopeParent::Some(scope),
+                    variables: DHashMap::default(),
+                    module: scope.module,
+                    static_scope: None,
+                };
                 for ((pat, branch), i) in branches.into_iter().zip(0..) {
-                    vars.clear();
-                    let pat = pattern::check(self, &mut vars, &mut exhaustion, pat, matched_ty);
+                    branch_scope.variables.clear();
+                    let pat =
+                        pattern::check(self, &mut branch_scope, &mut exhaustion, pat, matched_ty);
                     self.hir
                         .modify_pattern(hir::PatternId(patterns.index + i), pat);
-                    let mut scope = LocalScope {
-                        parent: LocalScopeParent::Some(scope),
-                        variables: vars,
-                        module: scope.module,
-                        static_scope: None,
-                    };
                     let mut branch_noreturn = false;
                     let branch = self.check(
                         branch,
-                        &mut scope,
+                        &mut branch_scope,
                         expected,
                         return_ty,
                         &mut branch_noreturn,
@@ -641,7 +630,6 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                     if !branch_noreturn {
                         all_branches_noreturn = false;
                     }
-                    vars = scope.variables;
                     self.hir
                         .modify_node(hir::NodeId(branch_nodes.index + i), branch);
                 }
@@ -679,13 +667,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                     static_scope: None,
                 };
                 let mut exhaustion = Exhaustion::None;
-                let pat = pattern::check(
-                    self,
-                    &mut body_scope.variables,
-                    &mut exhaustion,
-                    pat,
-                    value_ty,
-                );
+                let pat = pattern::check(self, &mut body_scope, &mut exhaustion, pat, value_ty);
                 let pat = self.hir.add_pattern(pat);
                 let val = self.hir.add(val);
                 let body_ty = self.hir.types.add_unknown();
@@ -745,13 +727,8 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                     noreturn: false,
                 };
                 let mut exhaustion = Exhaustion::None;
-                let pat_item_node = pattern::check(
-                    self,
-                    &mut body_scope.variables,
-                    &mut exhaustion,
-                    pat,
-                    item_ty,
-                );
+                let pat_item_node =
+                    pattern::check(self, &mut body_scope, &mut exhaustion, pat, item_ty);
                 if exhaustion.is_trivially_exhausted() {
                     self.deferred_exhaustions.push((exhaustion, item_ty, pat));
                 }
