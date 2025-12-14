@@ -53,7 +53,7 @@ fn find_at_offset_scope(ast: &Ast, offset: u32, scope_id: ScopeId) -> Option<Fou
         match def {
             &Definition::Expr { id, .. } => {
                 let expr = ast[id].0;
-                if let Some(found) = find_at_offset_expr(ast, offset, scope_id, expr, false) {
+                if let Some(found) = find_at_offset_expr(ast, offset, scope_id, expr) {
                     return Some(found);
                 };
             }
@@ -68,7 +68,7 @@ fn find_at_offset_scope(ast: &Ast, offset: u32, scope_id: ScopeId) -> Option<Fou
             }
             &Definition::Global(global_id) => {
                 let expr = ast[global_id].val;
-                find_at_offset_expr(ast, offset, scope_id, expr, false);
+                find_at_offset_expr(ast, offset, scope_id, expr);
             }
             Definition::Module(_) | Definition::Generic(_) => {}
         }
@@ -76,14 +76,8 @@ fn find_at_offset_scope(ast: &Ast, offset: u32, scope_id: ScopeId) -> Option<Fou
     None
 }
 
-fn find_at_offset_expr(
-    ast: &Ast,
-    offset: u32,
-    scope: ScopeId,
-    expr: ExprId,
-    is_pattern: bool,
-) -> Option<Found> {
-    let rec = |expr: ExprId| find_at_offset_expr(ast, offset, scope, expr, is_pattern);
+fn find_at_offset_expr(ast: &Ast, offset: u32, scope: ScopeId, expr: ExprId) -> Option<Found> {
+    let rec = |expr: ExprId| find_at_offset_expr(ast, offset, scope, expr);
     let span = ast[expr].span(ast);
     if !span.contains(offset) {
         return None;
@@ -104,7 +98,7 @@ fn find_at_offset_expr(
                 return Some(found);
             }
             for item in items {
-                if let Some(found) = find_at_offset_expr(ast, offset, scope, item, is_pattern) {
+                if let Some(found) = find_at_offset_expr(ast, offset, scope, item) {
                     return Some(found);
                 }
             }
@@ -181,7 +175,7 @@ fn find_at_offset_expr(
             Some(
                 function
                     .body
-                    .and_then(|body| find_at_offset_expr(ast, offset, scope, body, false))
+                    .and_then(|body| find_at_offset_expr(ast, offset, scope, body))
                     .unwrap_or(Found {
                         ty: FoundType::None,
                         span: ast[scope].span,
@@ -204,14 +198,14 @@ fn find_at_offset_expr(
         }),
         Expr::Declare {
             pat, annotated_ty, ..
-        } => find_at_offset_expr(ast, offset, scope, *pat, true)
+        } => find_at_offset_expr(ast, offset, scope, *pat)
             .or_else(|| find_at_offset_ty(offset, scope, annotated_ty)),
         Expr::DeclareWithVal {
             pat,
             annotated_ty,
             val,
             ..
-        } => find_at_offset_expr(ast, offset, scope, *pat, true)
+        } => find_at_offset_expr(ast, offset, scope, *pat)
             .or_else(|| find_at_offset_ty(offset, scope, annotated_ty))
             .or_else(|| rec(*val)),
         Expr::Hole { .. } => Some(Found {
@@ -248,7 +242,7 @@ fn find_at_offset_expr(
         } => rec(cond).or_else(|| rec(then)).or_else(|| rec(else_)),
         &Expr::IfPat {
             pat, value, then, ..
-        } => find_at_offset_expr(ast, offset, scope, pat, true)
+        } => find_at_offset_expr(ast, offset, scope, pat)
             .or_else(|| rec(value))
             .or_else(|| rec(then)),
         &Expr::IfPatElse {
@@ -257,24 +251,22 @@ fn find_at_offset_expr(
             then,
             else_,
             ..
-        } => find_at_offset_expr(ast, offset, scope, pat, true)
+        } => find_at_offset_expr(ast, offset, scope, pat)
             .or_else(|| rec(value))
             .or_else(|| rec(then))
             .or_else(|| rec(else_)),
         &Expr::Match { val, branches, .. } => rec(val).or_else(|| {
             branches.into_iter().find_map(|(pat, val)| {
-                find_at_offset_expr(ast, offset, scope, pat, true).or_else(|| rec(val))
+                find_at_offset_expr(ast, offset, scope, pat).or_else(|| rec(val))
             })
         }),
         &Expr::While { cond, body, .. } => rec(cond).or_else(|| rec(body)),
-        &Expr::WhilePat { pat, val, body, .. } => {
-            find_at_offset_expr(ast, offset, scope, pat, true)
-                .or_else(|| rec(val))
-                .or_else(|| rec(body))
-        }
+        &Expr::WhilePat { pat, val, body, .. } => find_at_offset_expr(ast, offset, scope, pat)
+            .or_else(|| rec(val))
+            .or_else(|| rec(body)),
         &Expr::For {
             pat, iter, body, ..
-        } => find_at_offset_expr(ast, offset, scope, pat, true)
+        } => find_at_offset_expr(ast, offset, scope, pat)
             .or_else(|| rec(iter))
             .or_else(|| rec(body)),
         &Expr::FunctionCall(call_id) => {

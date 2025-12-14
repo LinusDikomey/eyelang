@@ -189,7 +189,7 @@ impl<'a> HoverHooks<'a> {
         self.ty = Some(ty);
         if self.is_ident && !is_pattern {
             // TODO: this should probably not emit errors
-            let item = scope.resolve(name, self.span, self.compiler, hir;
+            let item = scope.resolve(name, self.span, self.compiler, &mut hir.vars);
             self.local_item = Some(item);
         }
     }

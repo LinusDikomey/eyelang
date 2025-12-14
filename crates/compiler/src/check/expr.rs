@@ -45,7 +45,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
             } => {
                 let module = scope.module;
                 let mut scope = LocalScope {
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     variables: dmap::new(),
                     module,
                     static_scope: Some(static_scope),
@@ -530,7 +530,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let value = self.check(value, scope, pattern_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     static_scope: None,
                     variables: dmap::new(),
                 };
@@ -560,7 +560,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let value = self.check(value, scope, pattern_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     static_scope: None,
                     variables: dmap::new(),
                 };
@@ -610,7 +610,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let mut all_branches_noreturn = true;
                 let mut branch_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     variables: DHashMap::default(),
                     static_scope: None,
                 };
@@ -663,7 +663,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 let val = self.check(val, scope, value_ty, return_ty, noreturn);
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     variables: dmap::new(),
                     static_scope: None,
                 };
@@ -706,7 +706,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
 
                 let mut body_scope = LocalScope {
                     module: scope.module,
-                    parent: LocalScopeParent::Some(&mut *scope),
+                    parent: LocalScopeParent::Some(&*scope),
                     variables: dmap::new(),
                     static_scope: None,
                 };
