@@ -139,6 +139,10 @@ pub struct GlobalId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct TypeId(u32);
+impl TypeId {
+    pub const UNIT: Self = Self(0);
+    pub const I1: Self = Self(1);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TypeIds {
@@ -471,7 +475,9 @@ pub struct Types {
 }
 impl Types {
     pub fn new() -> Self {
-        Self { types: Vec::new() }
+        Self {
+            types: vec![Type::UNIT, Type::Primitive(Primitive::I1.into())],
+        }
     }
 
     pub fn add(&mut self, ty: impl Into<Type>) -> TypeId {
@@ -682,7 +688,11 @@ impl FunctionIr {
     }
 
     pub fn get_ref_ty(&self, arg: Ref) -> TypeId {
-        self.insts[arg.idx()].ty
+        match arg {
+            Ref::UNIT => TypeId::UNIT,
+            Ref::TRUE | Ref::FALSE => TypeId::I1,
+            _ => self.insts[arg.idx()].ty,
+        }
     }
 
     #[inline]

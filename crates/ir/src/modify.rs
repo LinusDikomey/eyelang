@@ -38,10 +38,16 @@ impl IrModify {
     }
 
     pub fn get_ref_ty(&self, r: Ref) -> TypeId {
-        if r.idx() < self.ir.insts.len() {
-            self.ir.insts[r.idx()].ty
-        } else {
-            self.additional[r.idx() - self.ir.insts.len()].inst.ty
+        match r {
+            Ref::UNIT => TypeId::I1,
+            Ref::TRUE | Ref::FALSE => TypeId::I1,
+            _ => {
+                if r.idx() < self.ir.insts.len() {
+                    self.ir.insts[r.idx()].ty
+                } else {
+                    self.additional[r.idx() - self.ir.insts.len()].inst.ty
+                }
+            }
         }
     }
 

@@ -19,6 +19,7 @@ pub fn optimizing_pipeline(env: &mut Environment) -> Pipeline {
     // TODO: combine DCE and peepholes
     pipeline.add_function_pass(Box::new(Peepholes::new(env)));
     pipeline.add_function_pass(Box::new(DeadCodeElimination));
+    // TODO: reenable inlining when it works properly
     // pipeline.add_module_pass(Box::new(Inline::new(env)));
     pipeline.add_function_pass(Box::new(SROA::new(env)));
     pipeline.add_function_pass(Box::new(Mem2Reg::new(env)));
