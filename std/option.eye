@@ -16,7 +16,7 @@ Option :: enum[T] {
         .None: true
     }
 
-    unwrap :: fn(this *Option[T]) -> T: match this^ {
+    or_panic :: fn(this *Option[T]) -> T: match this^ {
         .Some(value): value,
         .None: panic("An Option containing a 'None' value was unwrapped")
     }
@@ -26,7 +26,7 @@ Option :: enum[T] {
         .None: default
     }
 
-    expect :: fn(this Option[T], message str) -> T: match this {
+    or_panic_with :: fn(this Option[T], message str) -> T: match this {
         .Some(value): value,
         .None: panic(message)
     }
