@@ -200,58 +200,68 @@ impl RenameTable {
     ) {
         let get = |r: Ref| -> Ref { r.into_ref().map_or(r, |i| self.refs[i as usize]) };
         let get_block = |b: BlockId| self.blocks[b.idx()];
-        let params = &env[inst.function].params;
+        let params = &env[inst.function].params[..];
         let count = params.iter().map(|p| p.slot_count()).sum();
-        let args = if count <= INLINE_ARGS {
-            &mut inst.args[..count]
-        } else {
+        let is_inline = count <= INLINE_ARGS;
+        let mut new_args_start = 0;
+        if !is_inline {
             let i = inst.args[0] as usize;
             let old = &old_extra[i..i + count];
-            let new_i = ir.ir.extra.len();
+            new_args_start = ir.ir.extra.len();
             ir.ir.extra.extend_from_slice(old);
-            &mut ir.ir.extra[new_i..]
         };
-        let mut args = args.iter_mut();
+        let mut arg_idx: usize = 0;
+        let get_arg = |ir: &IrModify, inst: &Instruction, i| {
+            if is_inline {
+                inst.args[i]
+            } else {
+                ir.ir.extra()[new_args_start + i]
+            }
+        };
+        let set_arg = |ir: &mut IrModify, inst: &mut Instruction, i: usize, value| {
+            if is_inline {
+                inst.args[i] = value;
+            } else {
+                ir.ir.extra[new_args_start + i] = value;
+            }
+        };
 
         inst.ty.0 += self.old_types_offset;
 
         for param in params {
             match param {
                 Parameter::Ref | Parameter::RefOf(_) => {
-                    let value = args.next().unwrap();
-                    *value = get(Ref(*value)).0;
+                    let value = get_arg(ir, inst, arg_idx);
+                    set_arg(ir, inst, arg_idx, get(Ref(value)).0);
+                    arg_idx += 1;
                 }
                 Parameter::BlockId => {
-                    let value = args.next().unwrap();
-                    *value = get_block(BlockId(*value)).0;
+                    let value = get_arg(ir, inst, arg_idx);
+                    set_arg(ir, inst, arg_idx, get_block(BlockId(value)).0);
+                    arg_idx += 1;
                 }
                 Parameter::BlockTarget => {
-                    debug_assert_eq!(count, 2);
-                    todo!()
-                    /*
-                    let target = args.next().unwrap();
-                    let block = get_block(BlockId(*target));
-                    *target = block.0;
-                    let arg_count = ir.ir.blocks[block.idx()].arg_count;
-                    let idx = args.next().unwrap();
-                    let args = &old_extra[*idx as usize..*idx as usize + arg_count as usize];
+                    let target = BlockId(get_arg(ir, inst, arg_idx));
+                    let new_target = get_block(target);
+                    set_arg(ir, inst, arg_idx, new_target.0);
+                    let arg_count = ir.ir.blocks[new_target.idx()].arg_count;
+                    let idx = get_arg(ir, inst, arg_idx + 1);
+                    let args = &old_extra[idx as usize..idx as usize + arg_count as usize];
                     let new_idx = ir.ir.extra.len() as u32;
-                    *idx = new_idx;
+                    set_arg(ir, inst, arg_idx + 1, new_idx);
                     ir.ir.extra.extend(args.iter().map(|&arg| get(Ref(arg)).0));
-                    *idx
-                    */
+                    arg_idx += 2;
                 }
                 Parameter::TypeId => {
-                    let value = args.next().unwrap();
-                    *value += self.old_types_offset;
+                    let value = get_arg(ir, inst, arg_idx);
+                    set_arg(ir, inst, arg_idx, value + self.old_types_offset);
+                    arg_idx += 1;
                 }
                 _ => {
-                    for _ in 0..param.slot_count() {
-                        let ignored = args.next();
-                        debug_assert!(ignored.is_some());
-                    }
+                    arg_idx += param.slot_count();
                 }
             }
         }
+        debug_assert_eq!(arg_idx, count);
     }
 }

@@ -157,7 +157,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
             } => self.check_enum_literal(scope, expected, return_ty, span, ident, args, noreturn),
             &Expr::Function { id } => {
                 let function_span = self.ast[expr].span(self.ast);
-                let (node, info) = self.closure(id, scope, function_span);
+                let (node, info) = self.closure(id, scope);
                 self.specify(expected, info, |_| function_span);
                 node
             }
@@ -785,7 +785,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
         span: TSpan,
     ) -> Node {
         let name = &self.ast[span];
-        match scope.resolve(name, span, self.compiler, &mut self.hir) {
+        match scope.resolve(name, span, self.compiler, &mut self.hir.vars) {
             LocalItem::Var(var) => {
                 let ty = self.hir.get_var(var).ty();
                 self.unify(expected, ty, |_| span);

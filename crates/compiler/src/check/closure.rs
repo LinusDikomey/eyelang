@@ -1,21 +1,14 @@
-#![allow(unused)] // TODO: remove this unused after implementing closures again
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
 
 use crate::{
-    check::{Hooks, expr},
-    compiler::{Generics, VarId},
-    eval::ConstValueId,
+    check::Hooks,
+    compiler::{Generics, LocalScope, LocalScopeParent, VarId},
+    hir::{HIRBuilder, Node},
     types::BaseType,
-    typing::{LocalTypeId, LocalTypeIds},
+    typing::{LocalTypeId, LocalTypeIds, TypeInfo, TypeInfoOrIdx},
 };
-use error::{Error, span::TSpan};
 use indexmap::IndexMap;
 
-use crate::{
-    compiler::{CheckedFunction, LocalScope, LocalScopeParent, Signature},
-    hir::{HIRBuilder, Node},
-    typing::{TypeInfo, TypeInfoOrIdx, TypeTable},
-};
 use parser::ast::FunctionId;
 
 use super::Ctx;
@@ -31,12 +24,7 @@ pub struct CheckedClosure {
 }
 
 impl<'a, H: Hooks> Ctx<'a, H> {
-    pub fn closure(
-        &mut self,
-        id: FunctionId,
-        closed_over: &mut LocalScope,
-        closure_span: TSpan,
-    ) -> (Node, TypeInfo) {
+    pub fn closure(&mut self, id: FunctionId, closed_over: &mut LocalScope) -> (Node, TypeInfo) {
         let function = &self.ast[id];
         let body = function
             .body
@@ -47,8 +35,6 @@ impl<'a, H: Hooks> Ctx<'a, H> {
             function.scope,
             self.ast,
         );
-
-        let name = crate::compiler::function_name(self.ast, function, self.module, id);
 
         let param_types = self
             .hir
@@ -79,7 +65,6 @@ impl<'a, H: Hooks> Ctx<'a, H> {
             function.scope,
         );
         let return_type = self.hir.types.add(return_type);
-        let varargs = function.varargs;
 
         let param_names = function
             .params
@@ -93,7 +78,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
             })
             .zip(param_types.iter().skip(1));
 
-        let mut captures = RefCell::new(IndexMap::new());
+        let captures = RefCell::new(IndexMap::new());
         assert_eq!(
             function.generics.count(),
             0,
@@ -106,7 +91,8 @@ impl<'a, H: Hooks> Ctx<'a, H> {
 
         let types = std::mem::take(&mut self.hir.types);
         let (closure_hir, root, captures_param, params) = {
-            let outer_hir = std::mem::replace(&mut self.hir, HIRBuilder::new(types));
+            let mut outer_hir = std::mem::replace(&mut self.hir, HIRBuilder::new(types));
+            let outer_vars = RefCell::new(std::mem::take(&mut outer_hir.vars));
 
             let params: Box<[(Box<str>, VarId)]> = param_names
                 .map(|(name, ty)| (name, self.hir.add_var(ty)))
@@ -119,7 +105,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
                 parent: LocalScopeParent::ClosedOver {
                     scope: &mut *closed_over,
                     captures: &captures,
-                    outer_vars: &outer_hir.vars,
+                    outer_vars: &outer_vars,
                 },
                 variables,
                 module: self.module,
@@ -132,6 +118,7 @@ impl<'a, H: Hooks> Ctx<'a, H> {
 
             let mut inner_hir = std::mem::replace(&mut self.hir, outer_hir);
             self.hir.types = std::mem::take(&mut inner_hir.types);
+            self.hir.vars = outer_vars.into_inner();
             (inner_hir, root, captures_param, params)
         };
 

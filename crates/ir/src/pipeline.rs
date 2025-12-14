@@ -66,6 +66,13 @@ impl<State: Default> Pipeline<State> {
         }
         for (step, module_pass) in &self.steps {
             self.process_step::<R>(env, module, step);
+            let _enter = tracing::span!(
+                target: "optimize",
+                tracing::Level::INFO,
+                "module_pass",
+                pass = ?module_pass
+            )
+            .entered();
             module_pass.run(env, module);
         }
         self.process_step::<R>(env, module, &self.final_step);

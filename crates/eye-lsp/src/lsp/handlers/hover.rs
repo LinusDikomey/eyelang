@@ -179,7 +179,7 @@ struct HoverHooks<'a> {
 impl<'a> HoverHooks<'a> {
     fn handle_hovered_expr(
         &mut self,
-        expr: ExprId,
+        _expr: ExprId,
         hir: &mut HIRBuilder,
         scope: &mut LocalScope,
         ty: LocalTypeId,

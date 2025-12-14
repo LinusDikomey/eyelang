@@ -36,7 +36,7 @@ pub fn check_inner<H: Hooks>(
                 &ctx.ast.src()[span.range()],
                 span,
                 ctx.compiler,
-                &mut ctx.hir,
+                &mut ctx.hir.vars,
             ) {
                 LocalItem::Invalid | LocalItem::Def(Def::Invalid) => {
                     (LValue::Invalid, ctx.hir.types.add(TypeInfo::INVALID))

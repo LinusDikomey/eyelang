@@ -32,7 +32,7 @@ use crate::{
     },
     eval::{self, ConstValue, ConstValueId},
     helpers::IteratorExt,
-    hir::{HIRBuilder, Hir, Var},
+    hir::{Hir, Var},
     irgen,
     types::{BaseType, BuiltinType, TypeFull, Types},
     typing::{Bound, LocalOrGlobalInstance, LocalTypeId, LocalTypeIds, TypeInfo, TypeTable},
@@ -1336,7 +1336,7 @@ pub enum LocalScopeParent<'a> {
         scope: &'a LocalScope<'a>,
         /// mapping from outer vars to inner vars
         captures: &'a RefCell<IndexMap<VarId, VarId>>,
-        outer_vars: &'a [Var],
+        outer_vars: &'a RefCell<Vec<Var>>,
     },
     None,
 }
@@ -1359,7 +1359,7 @@ impl<'p> LocalScope<'p> {
         name: &str,
         name_span: TSpan,
         compiler: &Compiler,
-        hir: &mut HIRBuilder,
+        vars: &mut Vec<Var>,
     ) -> LocalItem {
         if let Some(var) = self.variables.get(name) {
             LocalItem::Var(*var)
@@ -1370,21 +1370,28 @@ impl<'p> LocalScope<'p> {
             LocalItem::Def(def)
         } else {
             match &self.parent {
-                LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler, hir),
+                LocalScopeParent::Some(parent) => parent.resolve(name, name_span, compiler, vars),
                 LocalScopeParent::ClosedOver {
                     scope,
                     captures,
                     outer_vars,
                 } => {
-                    let local = scope.resolve(name, name_span, compiler, hir);
+                    let mut outer_vars = outer_vars.borrow_mut();
+                    let local = scope.resolve(name, name_span, compiler, &mut outer_vars);
                     match local {
-                        LocalItem::Var(id) => {
+                        LocalItem::Var(outer) => {
                             // hir.add_captured_var(outer, ty)
                             let mut captures = captures.borrow_mut();
                             let next_capture_idx = captures.len() as u32;
-                            LocalItem::Var(*captures.entry(id).or_insert_with(|| {
-                                let ty = outer_vars[id.idx()].ty();
-                                hir.add_captured_var(id, ty, next_capture_idx)
+                            LocalItem::Var(*captures.entry(outer).or_insert_with(|| {
+                                let ty = outer_vars[outer.idx()].ty();
+                                let id = VarId(vars.len() as _);
+                                vars.push(Var::Capture {
+                                    outer,
+                                    ty,
+                                    capture_idx: next_capture_idx,
+                                });
+                                id
                             }))
                         }
                         LocalItem::Def(def) => LocalItem::Def(def),

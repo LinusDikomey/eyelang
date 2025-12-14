@@ -87,9 +87,6 @@ pub fn function<H: Hooks>(
     let varargs = signature.varargs;
 
     let name = crate::compiler::function_name(ast, function, module, id);
-    let full_name = compiler.module_path(module)
-        + "."
-        + &crate::compiler::function_name(ast, function, module, id);
 
     let body_or_types = if let Some(body) = function.body {
         let hir = HIRBuilder::new(types);
@@ -108,7 +105,7 @@ pub fn function<H: Hooks>(
             params,
             body,
             return_type,
-            &full_name,
+            &name,
             LocalScopeParent::None,
             hooks,
         );
