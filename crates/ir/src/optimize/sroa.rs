@@ -269,16 +269,17 @@ impl FunctionPass for SROA {
                         if let Some(index) = access.index {
                             let value = ir.add_before(env, access.location, load);
 
+                            let tuple_ty = ir.get_ref_ty(access.location);
                             let element_tuple = load_element_tuples
                                 .entry(access.location)
                                 .or_insert_with(|| {
-                                    ir.add_before(env, access.location, BUILTIN.Undef(access.ty))
+                                    ir.add_before(env, access.location, BUILTIN.Undef(tuple_ty))
                                 });
                             let new_tuple = ir.add_before(
                                 env,
                                 access.location,
                                 self.tuple
-                                    .InsertMember(*element_tuple, index, value, access.ty),
+                                    .InsertMember(*element_tuple, index, value, tuple_ty),
                             );
                             *element_tuple = new_tuple;
                         } else {
