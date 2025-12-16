@@ -148,7 +148,7 @@ impl IrModify {
     pub fn add_block_arg(&mut self, env: &Environment, block: BlockId, ty: TypeId) -> (Ref, u32) {
         let r = Ref((self.ir.insts.len() + self.additional.len()) as u32);
         let block_info = &mut self.ir.blocks[block.idx()];
-        let before = Ref(block_info.idx); // before the first instruction of the body block
+        let before = Ref(block_info.args_idx); // before the first instruction of the body block
         let prev_arg_count = block_info.arg_count;
         block_info.arg_count += 1;
         self.additional.push(AdditionalInst {
@@ -157,7 +157,7 @@ impl IrModify {
         });
         for pred in &self.ir.blocks[block.idx()].preds {
             let pred_info = &self.ir.blocks[pred.idx()];
-            let terminator_idx = pred_info.idx + pred_info.arg_count + pred_info.len - 1;
+            let terminator_idx = pred_info.body_idx + pred_info.len - 1;
             let terminator = &mut self.ir.insts[terminator_idx as usize];
             let func = &env[terminator.function];
             let param_count: usize = func.params.iter().map(|p| p.slot_count()).sum();
@@ -214,14 +214,15 @@ impl IrModify {
         r: Ref,
         (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
     ) -> Ref {
-        let before = if r.idx() < self.ir.insts.len() {
+        let before_old = r.idx() < self.ir.insts.len();
+        let before = if before_old {
             r
         } else {
-            todo!("add before added insts");
+            self.additional[r.idx() - self.ir.insts.len()].before
         };
         let def = &env[function];
         debug_assert!(
-            !def.flags.terminator(),
+            !def.flags.terminator() || !before_old,
             "can't add a terminator before another instruction"
         );
         // PERF: iterating blocks every time is bad, somehow avoid this
@@ -230,10 +231,14 @@ impl IrModify {
                 .blocks
                 .iter()
                 .position(|info| {
-                    let i = info.idx + info.arg_count;
-                    (i..i + info.len).contains(&r.0)
+                    if info.body_idx < self.ir.insts.len() as _ {
+                        let i = info.body_idx;
+                        (i..i + info.len).contains(&r.0)
+                    } else {
+                        info.body_idx == before.0
+                    }
                 })
-                .expect("no block found") as _,
+                .unwrap_or_else(|| panic!("no block found for instruction {r}")) as _,
         );
         let args = write_args(
             &mut self.ir.extra,
@@ -243,10 +248,13 @@ impl IrModify {
             def.varargs,
             args,
         );
+        self.add_inst_before(before, Instruction { function, args, ty })
+    }
+
+    pub fn add_inst_before(&mut self, before: Ref, inst: Instruction) -> Ref {
         let r = Ref((self.ir.insts.len() + self.additional.len())
             .try_into()
             .expect("too many instructions"));
-        let inst = Instruction { function, args, ty };
         self.additional.push(AdditionalInst { before, inst });
         r
     }
@@ -261,72 +269,6 @@ impl IrModify {
             .into_ref()
             .expect("Can't add an instruction after a value Ref");
         self.add_before(env, Ref::index(i + 1), inst)
-    }
-
-    pub fn add_at_end<'r>(
-        &mut self,
-        env: &Environment,
-        (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
-    ) -> Ref {
-        let def = &env[function];
-        // PERF: iterating blocks every time is bad, somehow avoid this
-        let block_count = self.ir.block_count();
-        let (block, block_id) = self
-            .ir
-            .blocks
-            .iter_mut()
-            .zip((0..block_count).map(BlockId))
-            .rev()
-            .max_by_key(|(block, _)| block.idx)
-            .unwrap();
-        block.len += 1;
-        let args = write_args(
-            &mut self.ir.extra,
-            block_id,
-            &mut self.ir.blocks,
-            &def.params,
-            def.varargs,
-            args,
-        );
-        let r = Ref((self.ir.insts.len())
-            .try_into()
-            .expect("too many instructions"));
-        let inst = Instruction { function, args, ty };
-        self.ir.insts.push(inst);
-        r
-    }
-
-    pub fn add_inst_at_end(&mut self, env: &Environment, inst: Instruction) -> Ref {
-        let block_count = self.ir.blocks.len() as u32;
-        let (block, block_id) = self
-            .ir
-            .blocks
-            .iter_mut()
-            .zip((0..block_count).map(BlockId))
-            .rev()
-            .max_by_key(|(block, _)| block.idx)
-            .unwrap();
-        block.len += 1;
-        if env[inst.function].flags.terminator() {
-            // PERF: collecting target blocks
-            let targets: Box<[BlockId]> = self
-                .ir
-                .args_iter(&inst, env)
-                .filter_map(|arg| {
-                    let Argument::BlockTarget(BlockTarget(target, _)) = arg else {
-                        return None;
-                    };
-                    Some(target)
-                })
-                .collect();
-            for target in targets {
-                self.ir.blocks[block_id.idx()].succs.push(target);
-                self.ir.blocks[target.idx()].preds.push(target);
-            }
-        }
-        let r = Ref(self.ir.insts.len() as u32);
-        self.ir.insts.push(inst);
-        r
     }
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
@@ -369,20 +311,29 @@ impl IrModify {
             'add_block_contents: loop {
                 visited_blocks.set(current_block.idx(), true);
                 let info = &mut ir.blocks[current_block.idx()];
-                let mut new_idx =
-                    match new_insts.binary_search_by_key(&info.idx, |(add, _)| add.before.0) {
-                        Ok(mut new_idx) => {
-                            while new_idx > 0 && new_insts[new_idx - 1].0.before.0 == info.idx {
-                                new_idx -= 1;
-                            }
-                            new_idx
+                let mut new_idx = match new_insts
+                    .binary_search_by_key(&info.args_idx, |(add, _)| add.before.0)
+                {
+                    Ok(mut new_idx) => {
+                        while new_idx > 0 && new_insts[new_idx - 1].0.before.0 == info.args_idx {
+                            new_idx -= 1;
                         }
-                        Err(i) => i,
-                    };
+                        new_idx
+                    }
+                    Err(i) => i,
+                };
 
-                let old_range = (info.idx..info.idx + info.arg_count + info.len).map(Ref);
-                info.idx = insts.len() as u32;
-                for current in old_range {
+                // check if block was added after and all insts will be in additional
+                let is_new_block = info.args_idx >= old_insts.len() as _;
+                let inst_range = if is_new_block {
+                    info.args_idx..info.args_idx + 1
+                } else {
+                    info.args_idx..info.body_idx + info.len
+                }
+                .map(Ref);
+                info.args_idx = insts.len() as u32;
+                info.body_idx = info.args_idx + info.arg_count;
+                for current in inst_range {
                     'before: while let Some((inst, r)) = new_insts.get(new_idx)
                         && inst.before == current
                     {
@@ -413,6 +364,10 @@ impl IrModify {
                         insts.push(inst.inst);
                     }
 
+                    if is_new_block {
+                        // there can we no instructions in the old because the block is new
+                        continue;
+                    }
                     let inst = &old_insts[current.idx()];
                     if inst
                         .as_module(crate::BUILTIN)
@@ -521,32 +476,36 @@ impl IrModify {
         self.ir.new_reg(class)
     }
 
-    pub fn add_block(&mut self, args: impl IntoIterator<Item = TypeId>) -> (BlockId, Refs) {
+    pub fn add_block(&mut self, args: impl IntoIterator<Item = TypeId>) -> (BlockId, Refs, Ref) {
         let id = BlockId(self.ir.blocks.len() as _);
-        let idx = self.ir.insts.len() as u32;
-        self.ir
-            .insts
-            .extend(args.into_iter().map(|arg_ty| Instruction {
-                function: crate::FunctionId {
-                    module: crate::ModuleId::BUILTINS,
-                    function: Builtin::BlockArg.id(),
+        let insert_idx = (self.ir.insts.len() + self.additional.len()) as u32;
+        self.additional
+            .extend(args.into_iter().map(|arg_ty| AdditionalInst {
+                // add all arguments "before" the first one so they all get grouped properly
+                before: Ref(insert_idx),
+                inst: Instruction {
+                    function: crate::FunctionId {
+                        module: crate::ModuleId::BUILTINS,
+                        function: Builtin::BlockArg.id(),
+                    },
+                    args: [0, 0],
+                    ty: arg_ty,
                 },
-                args: [0, 0],
-                ty: arg_ty,
             }));
-        let arg_count = self.ir.insts.len() as u32 - idx;
+        let arg_count = (self.ir.insts.len() + self.additional.len()) as u32 - insert_idx;
         self.ir.blocks.push(BlockInfo {
             arg_count,
-            idx,
+            args_idx: insert_idx,
+            body_idx: insert_idx,
             len: 0,
             preds: Vec::new(),
             succs: Vec::new(),
         });
         let arg_refs = Refs {
-            idx,
+            idx: insert_idx,
             count: arg_count,
         };
-        (id, arg_refs)
+        (id, arg_refs, Ref(insert_idx))
     }
 
     pub fn replace_with(&mut self, env: &Environment, r: Ref, new: Ref) {
@@ -581,9 +540,9 @@ impl IrModify {
                 .iter()
                 .position(|info| {
                     // FIXME: arg_count does not work as the offset after adding block args
-                    (info.idx..info.idx + info.arg_count + info.len).contains(&r.0)
+                    (info.args_idx..info.args_idx + info.arg_count + info.len).contains(&r.0)
                 })
-                .expect("no block found") as _,
+                .unwrap_or_else(|| panic!("no block found for ref {r}")) as _,
         )
     }
 
@@ -652,7 +611,7 @@ impl IrModify {
     /// Gets the Ref to the first instruction in the given block before potential modifications.
     pub fn get_original_block_start(&self, block: BlockId) -> Ref {
         let info = &self.ir.blocks[block.idx()];
-        Ref(info.idx + info.arg_count)
+        Ref(info.args_idx + info.arg_count)
     }
 
     pub fn get_block_args(&self, block: BlockId) -> Refs {
@@ -683,28 +642,20 @@ impl IrModify {
             .ir
             .blocks
             .iter()
-            .position(|block| {
-                (block.idx + block.arg_count..block.idx + block.arg_count + block.len)
-                    .contains(&r.0)
-            })
+            .position(|block| (block.body_idx..block.body_idx + block.len).contains(&r.0))
             .unwrap();
         let info = &mut self.ir.blocks[block];
-        let is_end = info.idx + info.arg_count + info.len == r.0 + 1;
-        let split_offset = r.0 - (info.idx + info.arg_count) + 1;
+        let is_end = info.body_idx + info.len == r.0 + 1;
+        let split_offset = r.0 - info.body_idx + 1;
         let new_block_len = if is_end {
             0
         } else {
-            let additional_before_split = self
-                .additional
-                .iter()
-                .filter(|inst| (info.idx..=r.0).contains(&inst.before.0))
-                .count() as u32;
-            let old_count = split_offset + additional_before_split;
+            let old_count = split_offset;
             let new_block_len = info.len - old_count;
             info.len = old_count;
             new_block_len
         };
-        let new_block_idx = info.idx + info.arg_count + split_offset;
+        let new_block_idx = info.body_idx + split_offset;
         let succs = if is_end {
             Vec::new()
         } else {
@@ -713,7 +664,8 @@ impl IrModify {
         let id = BlockId(self.ir.blocks.len() as _);
         self.ir.blocks.push(BlockInfo {
             arg_count: 0,
-            idx: new_block_idx,
+            args_idx: new_block_idx,
+            body_idx: new_block_idx,
             len: new_block_len,
             preds: Vec::new(),
             succs,
@@ -726,4 +678,40 @@ impl IrModify {
 struct AdditionalInst {
     before: Ref,
     inst: Instruction,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{BlockId, Environment, Primitive, dialect, modify::IrModify, verify};
+
+    #[test]
+    fn add_block_arg() {
+        let mut env = Environment::new(Primitive::create_infos());
+        env.get_dialect_module::<dialect::Arith>();
+        env.get_dialect_module::<dialect::Cf>();
+        let src = r#"
+            b0:
+                %0 = arith.Int 0 :: I32
+                     cf.Goto b1
+            b1:
+                %3 = arith.Int 10 :: I32
+                %4 = arith.LT %0 %3 :: I1
+                     cf.Branch %4 b2 b3
+            b2:
+                %7 = arith.Int 1 :: I32
+                %8 = arith.Add %0 %7 :: I32
+                     cf.Goto b1
+            b3:
+                     cf.Ret unit
+        "#;
+        let (function, mut types) = crate::parse::parse_function_body(&env, src);
+        verify::function_body(&env, &function, &types);
+        let mut ir = IrModify::new(function);
+        let i64 = types.add(Primitive::I64);
+        let (_, n) = ir.add_block_arg(&env, BlockId(1), i64);
+        assert_eq!(n, 0);
+        let function = ir.finish_and_compress(&env);
+        println!("{}", function.display(&env, &types));
+        verify::function_body(&env, &function, &types);
+    }
 }

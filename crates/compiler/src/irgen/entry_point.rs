@@ -42,8 +42,7 @@ pub fn entry_point(
         }
         _ => builder.append(arith.CastInt(main_val, i32_ty)),
     };
-    let unit = builder.types.add(ir::Type::UNIT);
-    builder.append(cf.Ret(exit_code, unit));
+    builder.append(cf.Ret(exit_code));
 
     builder.finish("main", i32_ty)
 }

@@ -129,10 +129,10 @@ fn pre_peephole(
                             .into_visit(ir, env, block)
                     };
                 }
-                (Some(l), None) => {
+                (Some(_), None) => {
                     if binop.commutative {
                         // if only the lhs is a constant and the op is commutative, swap the operands
-                        return (inst.function, (rhs, l), arith.ty()).into_visit(ir, env, block);
+                        return (inst.function, (rhs, lhs), arith.ty()).into_visit(ir, env, block);
                     }
                 }
                 (None, Some(b)) => {
@@ -256,7 +256,7 @@ rewrite::visitor! {
             }
         };
 
-        (%r = cf.Branch cond (@t t_args) (@f f_args)) => {
+        (cf.Branch cond (@t t_args) (@f f_args)) => {
             let (taken, taken_args) = if cond == Ref::TRUE {
                 (t, t_args)
             } else if cond == Ref::FALSE {
@@ -265,6 +265,6 @@ rewrite::visitor! {
                 return None;
             };
             let taken_args = taken_args.to_vec();
-            cf.Goto(BlockTarget(taken, Cow::Owned(taken_args)), ir.get_ref_ty(r))
+            cf.Goto(BlockTarget(taken, Cow::Owned(taken_args)))
         };
 }

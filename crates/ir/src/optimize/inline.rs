@@ -2,8 +2,8 @@ use std::{borrow::Cow, cmp::min, fmt};
 
 use crate::{
     Argument, Bitmap, BlockGraph, BlockId, Environment, Function, FunctionIr, LocalFunctionId,
-    Module, ModuleId, ModuleOf, Ref, Type, TypeId, dialect::Cf, modify::IrModify,
-    pipeline::ModulePass, rewrite::RenameTable,
+    Module, ModuleId, ModuleOf, Ref, TypeId, dialect::Cf, modify::IrModify, pipeline::ModulePass,
+    rewrite::RenameTable,
 };
 
 pub struct Inline {
@@ -34,7 +34,6 @@ impl Inline {
             .types
             .clone();
         let mut ir = IrModify::new(ir);
-        let unit_ty = types.add(Type::UNIT);
         for call_ref in ir.refs() {
             let call_inst = *ir.get_inst(call_ref);
             if call_inst.function.module != module || scc.contains(&call_inst.function()) {
@@ -69,7 +68,7 @@ impl Inline {
 
             // reverse postorder ensures defs are visited before uses
             for &block in graph.postorder().iter().rev() {
-                let (new_block, args) = ir.add_block(
+                let (new_block, args, insert_idx) = ir.add_block(
                     callee_ir
                         .get_block_args(block)
                         .iter()
@@ -92,8 +91,7 @@ impl Inline {
                     ir.replace(
                         env,
                         call_ref,
-                        self.cf
-                            .Goto(crate::BlockTarget(new_block, args.into()), unit_ty),
+                        self.cf.Goto(crate::BlockTarget(new_block, args.into())),
                     );
                 }
                 for (arg, renamed) in callee_ir.get_block_args(block).iter().zip(args.iter()) {
@@ -108,18 +106,16 @@ impl Inline {
                     {
                         // Ret becomes a Goto to the block after the inlined call
                         let return_value: Ref = ir.args(&inst, env);
-                        ir.add_at_end(
+                        ir.add_before(
                             env,
-                            self.cf.Goto(
-                                crate::BlockTarget(
-                                    after_call_block,
-                                    Cow::Borrowed(&[return_value]),
-                                ),
-                                unit_ty,
-                            ),
+                            insert_idx,
+                            self.cf.Goto(crate::BlockTarget(
+                                after_call_block,
+                                Cow::Borrowed(&[return_value]),
+                            )),
                         )
                     } else {
-                        ir.add_inst_at_end(env, inst)
+                        ir.add_inst_before(insert_idx, inst)
                     };
                     renames.rename(r, renamed);
                 }

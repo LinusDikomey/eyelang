@@ -97,7 +97,11 @@ fn parse_args<'s>(
         };
         let arg = match tok {
             Token::IntLit(int) => Argument::Int(int),
-            Token::Reg(r) => Argument::Ref(*refs.get(r).unwrap()),
+            Token::Reg(r) => Argument::Ref(
+                *refs
+                    .get(r)
+                    .unwrap_or_else(|| panic!("couldn't find ref %{r}")),
+            ),
             Token::Ident("unit") => Argument::Ref(Ref::UNIT),
             Token::Ident("true") => Argument::Ref(Ref::TRUE),
             Token::Ident("false") => Argument::Ref(Ref::FALSE),

@@ -78,7 +78,8 @@ impl<Env: HasEnvironment> Builder<Env> {
             extra: Vec::new(),
             blocks: vec![BlockInfo {
                 arg_count,
-                idx: 0,
+                args_idx: 0,
+                body_idx: arg_count,
                 len: 0,
                 preds: Vec::new(),
                 succs: Vec::new(),
@@ -132,7 +133,8 @@ impl<Env: HasEnvironment> Builder<Env> {
         let id = BlockId(self.blocks.len() as _);
         self.blocks.push(BlockInfo {
             arg_count: 0,
-            idx: 0,
+            args_idx: 0,
+            body_idx: 0,
             len: 0,
             preds: Vec::new(),
             succs: Vec::new(),
@@ -151,13 +153,14 @@ impl<Env: HasEnvironment> Builder<Env> {
             block.len == 0 && block.arg_count == 0,
             "can't begin a block twice"
         );
-        block.idx = self.insts.len() as _;
+        block.args_idx = self.insts.len() as _;
         self.insts
             .extend(args.into_iter().map(builtins::block_arg_inst));
-        block.arg_count = self.insts.len() as u32 - block.idx;
+        block.arg_count = self.insts.len() as u32 - block.args_idx;
+        block.body_idx = block.args_idx + block.arg_count;
         self.current_block = Some(id);
         Refs {
-            idx: block.idx,
+            idx: block.args_idx,
             count: block.arg_count,
         }
     }
@@ -187,7 +190,8 @@ impl<Env: HasEnvironment> Builder<Env> {
         };
         self.blocks.push(BlockInfo {
             arg_count,
-            idx,
+            args_idx: idx,
+            body_idx: idx + arg_count,
             len: 0,
             preds: Vec::new(),
             succs: Vec::new(),
@@ -204,7 +208,7 @@ impl<Env: HasEnvironment> Builder<Env> {
             mc_regs: Vec::new(),
         };
         let entry = &ir.blocks[BlockId::ENTRY.idx()];
-        let params = (entry.idx..entry.idx + entry.arg_count)
+        let params = (entry.args_idx..entry.args_idx + entry.arg_count)
             .map(|i| {
                 let ty = ir.insts[i as usize].ty;
                 Parameter::RefOf(ty)

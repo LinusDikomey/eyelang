@@ -48,7 +48,7 @@ impl RewriteStrategy for LinearRewriteOrder {
 
     fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
         let info = ir.get_block(block);
-        let s = info.idx + info.arg_count;
+        let s = info.args_idx + info.arg_count;
         s..s + info.len
     }
 }
@@ -71,7 +71,7 @@ impl RewriteStrategy for ReverseRewriteOrder {
 
     fn iterate_block(&self, ir: &IrModify, block: BlockId) -> Self::BlockInstructions {
         let info = ir.get_block(block);
-        let s = info.idx + info.arg_count;
+        let s = info.args_idx + info.arg_count;
         (s..s + info.len).rev()
     }
 }
@@ -189,6 +189,10 @@ impl RenameTable {
 
     pub fn rename_block(&mut self, old: BlockId, renamed: BlockId) {
         self.blocks[old.idx()] = renamed;
+    }
+
+    pub fn get(&self, r: Ref) -> Ref {
+        r.into_ref().map_or(r, |i| self.refs[i as usize])
     }
 
     pub fn visit_inst(

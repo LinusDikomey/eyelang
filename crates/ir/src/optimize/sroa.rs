@@ -46,6 +46,8 @@ impl FunctionPass for SROA {
 
         let mut typed_accesses: DHashMap<Ref, (Vec<Access>, bool, Vec<Ref>)> = dmap::new();
 
+        let mut zero_sized_accesses = Vec::new();
+
         for &block in block_graph.postorder().iter().rev() {
             for (r, inst) in ir.get_block(block) {
                 if let Some(mem) = inst.as_module(self.mem) {
@@ -57,6 +59,7 @@ impl FunctionPass for SROA {
                             {
                                 let ty = ir.get_ref_ty(r);
                                 let (accesses, _, _) = typed_accesses.entry(decl).or_default();
+                                let before_count = accesses.len();
                                 self.split_accesses(
                                     types,
                                     env,
@@ -73,6 +76,10 @@ impl FunctionPass for SROA {
                                         });
                                     },
                                 );
+                                if accesses.len() == before_count {
+                                    // zero-sized load
+                                    zero_sized_accesses.push(r);
+                                }
                                 continue;
                             }
                         }
@@ -83,6 +90,7 @@ impl FunctionPass for SROA {
                             {
                                 let ty = ir.get_ref_ty(val);
                                 let (accesses, _, _) = typed_accesses.entry(decl).or_default();
+                                let before_count = accesses.len();
                                 self.split_accesses(
                                     types,
                                     env,
@@ -99,6 +107,10 @@ impl FunctionPass for SROA {
                                         });
                                     },
                                 );
+                                if accesses.len() == before_count {
+                                    // zero-sized store
+                                    zero_sized_accesses.push(r);
+                                }
 
                                 // still disqualify Decl used in value
                                 if let Some((decl, _)) =
@@ -131,7 +143,7 @@ impl FunctionPass for SROA {
                             if let Some((decl, _)) =
                                 self.find_decl_offset_of_ptr(&ir, types, env, arg)
                             {
-                                tracing::debug!(target: "sroa", function=function, "{r} uses decl {decl} from {arg}");
+                                tracing::debug!(target: "pass::sroa", function=function, "{r} uses decl {decl} from {arg}");
                                 typed_accesses.entry(decl).or_default().1 = true;
                             }
                         }
@@ -149,10 +161,14 @@ impl FunctionPass for SROA {
                 }
             }
         }
-        tracing::debug!(target: "sroa", function = function, "Accesses: {typed_accesses:#?}");
+        tracing::debug!(target: "pass::sroa", function = function, "Accesses: {typed_accesses:#?}");
 
         let mut ir = IrModify::new(ir);
         let mut types = types.clone();
+
+        for r in zero_sized_accesses {
+            ir.delete(env, r);
+        }
 
         'decls: for (decl, (accesses, disqualified, uses)) in typed_accesses {
             if disqualified {
@@ -217,7 +233,7 @@ impl FunctionPass for SROA {
                     (None, Some(_)) => unreachable!(),
                 }
             }
-            tracing::debug!(target: "sroa", function = function, "Got subrange map for {decl}: {subranges:#?}");
+            tracing::debug!(target: "pass::sroa", function = function, "Got subrange map for {decl}: {subranges:#?}");
             if subranges
                 .iter()
                 .any(|(_, &(size, ty, _))| matches!(ty, SubType::Int) && size.get() > 8)
@@ -288,26 +304,27 @@ impl FunctionPass for SROA {
                     }
                     AccessType::Store => {
                         let inst = ir.get_inst(access.location).as_module(self.mem).unwrap();
-                        let unit_ty = ir.get_ref_ty(access.location);
                         debug_assert_eq!(inst.op(), Mem::Store);
                         let (_, value): (Ref, Ref) = ir.typed_args(&inst);
                         if let Some(idx) = access.index {
                             stores_to_delete.insert(access.location);
-                            let value =
-                                self.get_or_extract_index(env, &mut ir, value, idx, access.ty);
-                            ir.add_before(
+                            let value = self.get_or_extract_index(
                                 env,
+                                &mut ir,
+                                value,
+                                idx,
+                                access.ty,
                                 access.location,
-                                self.mem.Store(ptr, value, unit_ty),
                             );
+                            ir.add_before(env, access.location, self.mem.Store(ptr, value));
                         } else {
-                            ir.replace(env, access.location, self.mem.Store(ptr, value, access.ty));
+                            ir.replace(env, access.location, self.mem.Store(ptr, value));
                         };
                     }
                 }
             }
             for r in uses {
-                ir.replace_with(env, r, Ref::UNIT);
+                ir.delete(env, r);
             }
             // replace aggregate loads with the final tuple values
             for (location, tuple) in load_element_tuples {
@@ -315,10 +332,10 @@ impl FunctionPass for SROA {
             }
             // delete all old stores that weren't replaced immediately
             for r in stores_to_delete {
-                ir.replace_with(env, r, Ref::UNIT);
+                ir.delete(env, r);
             }
             // delete original Decl
-            ir.replace_with(env, decl, Ref::UNIT);
+            ir.delete(env, decl);
         }
 
         (ir.finish_and_compress(env), Some(types))
@@ -397,6 +414,7 @@ impl SROA {
         r: Ref,
         idx: u32,
         ty: TypeId,
+        insert_before: Ref,
     ) -> Ref {
         // try to look through InsertMember ops first to see if the value was inserted before
         let mut current = r;
@@ -413,7 +431,7 @@ impl SROA {
                 break;
             }
         }
-        ir.add_after(env, r, self.tuple.MemberValue(r, idx, ty))
+        ir.add_before(env, insert_before, self.tuple.MemberValue(r, idx, ty))
     }
 }
 

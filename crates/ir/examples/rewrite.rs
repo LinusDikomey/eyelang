@@ -31,7 +31,7 @@ fn create_add_function(env: &mut ir::Environment) -> ir::Function {
     let result = builder.append(arith.Add(result, args.nth(2), int_ty));
     let int_zero = builder.append(arith.Int(0, int_ty));
     let return_value = builder.append(arith.Add(result, int_zero, int_ty));
-    builder.append(cf.Ret(return_value, int_ty));
+    builder.append(cf.Ret(return_value));
     builder.finish("add", int_ty)
 }
 

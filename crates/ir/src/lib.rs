@@ -642,13 +642,13 @@ impl FunctionIr {
     pub fn get_terminator(&self, block: BlockId) -> &Instruction {
         let info = &self.blocks[block.idx()];
         assert!(info.len != 0, "block is empty");
-        &self.insts[(info.idx + info.arg_count + info.len) as usize]
+        &self.insts[(info.args_idx + info.arg_count + info.len) as usize]
     }
 
     pub fn get_block_args(&self, id: BlockId) -> Refs {
         let block = &self.blocks[id.0 as usize];
         Refs {
-            idx: block.idx,
+            idx: block.args_idx,
             count: block.arg_count,
         }
     }
@@ -664,13 +664,13 @@ impl FunctionIr {
     + DoubleEndedIterator<Item = (Ref, &Instruction)>
     + use<'_> {
         let block = &self.blocks[id.idx()];
-        self.get_refs(Ref(block.idx + block.arg_count), block.len)
+        self.get_refs(Ref(block.body_idx), block.len)
     }
 
     pub fn block_refs(&self, id: BlockId) -> Refs {
         let block = &self.blocks[id.idx()];
         Refs {
-            idx: block.idx + block.arg_count,
+            idx: block.args_idx + block.arg_count,
             count: block.len,
         }
     }
@@ -887,18 +887,19 @@ impl block_graph::Blocks for FunctionIr {
 #[derive(Clone, Debug)]
 pub struct BlockInfo {
     pub arg_count: u32,
-    pub idx: u32,
+    pub args_idx: u32,
+    pub body_idx: u32,
     pub len: u32,
     pub preds: Vec<BlockId>,
     pub succs: Vec<BlockId>,
 }
 impl BlockInfo {
     pub fn all_refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
-        (self.idx..self.idx + self.arg_count + self.len).map(Ref)
+        (self.args_idx..self.body_idx + self.len).map(Ref)
     }
 
     pub fn body(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
-        let s = self.idx + self.arg_count;
+        let s = self.args_idx + self.arg_count;
         (s..s + self.len).map(Ref)
     }
 }
@@ -1438,6 +1439,75 @@ macro_rules! instruction_attrs {
 }
 
 #[macro_export]
+#[doc(hidden)]
+macro_rules! instruction {
+    (
+        $table_name: ident, $module_name: ident,
+        $(
+            #[doc = $doc: literal]
+        )*
+        $instruction: ident $(<$inst_life: lifetime>)?
+        $(
+            $arg_name: ident: $arg: ident
+            $(<$life: lifetime>)?
+            $(($arg_param: expr))?
+        )*
+        $(!$attr: ident $(= $attr_value: expr)?),*
+        ;
+    ) => {
+        #[allow(non_snake_case)]
+        impl $table_name<$crate::ModuleOf<$module_name>> {
+            #[inline]
+
+            $(#[doc = $doc])*
+            pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
+            where
+                $('a: $inst_life)*
+            {
+                let id = $crate::FunctionId {
+                    module: self.0.id(),
+                    function: $module_name::$instruction.into(),
+                };
+                let args = ($($arg_name,)*);
+                (id, args, ty)
+            }
+        }
+    };
+    (
+        $table_name: ident, $module_name: ident,
+        $(
+            #[doc = $doc: literal]
+        )*
+        $instruction: ident $(<$inst_life: lifetime>)?
+        $(
+            $arg_name: ident: $arg: ident
+            $(<$life: lifetime>)?
+            $(($arg_param: expr))?
+        )*
+        $(!$attr: ident $(= $attr_value: expr)?),*
+        => unit;
+    ) => {
+        #[allow(non_snake_case)]
+        impl $table_name<$crate::ModuleOf<$module_name>> {
+            #[inline]
+
+            $(#[doc = $doc])*
+            pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)*) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
+            where
+                $('a: $inst_life)*
+            {
+                let id = $crate::FunctionId {
+                    module: self.0.id(),
+                    function: $module_name::$instruction.into(),
+                };
+                let args = ($($arg_name,)*);
+                (id, args, $crate::TypeId::UNIT)
+            }
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! instructions {
     (
         $module_name: ident
@@ -1454,6 +1524,7 @@ macro_rules! instructions {
                 $(($arg_param: expr))?
             )*
             $(!$attr: ident $(= $attr_value: expr)?),*
+            $(=> $return: ident)?
             ;
         )*
     ) => {
@@ -1466,25 +1537,21 @@ macro_rules! instructions {
         #[repr(transparent)]
         #[derive(Debug, Clone, Copy)]
         pub struct $table_name<T>(T);
-        #[allow(non_snake_case)]
-        impl $table_name<$crate::ModuleOf<$module_name>> {
-            $(
-                #[inline]
 
-                 $(#[doc = $doc])*
-                 pub fn $instruction<$($inst_life)*>(self, $($arg_name: $crate::parameter_types::$arg $(<$life>)?,)* ty: $crate::TypeId) -> ($crate::FunctionId, $crate::lifetime_or_static!($($inst_life)*), $crate::TypeId)
-                where
-                    $('a: $inst_life)*
-                {
-                    let id = $crate::FunctionId {
-                        module: self.0.id(),
-                        function: $module_name::$instruction.into(),
-                    };
-                    let args = ($($arg_name,)*);
-                    (id, args, ty)
-                }
-            )*
-        }
+        $(
+            $crate::instruction!{
+                $table_name, $module_name,
+                $(#[doc = $doc])*
+                $instruction $(<$inst_life>)?
+                $(
+                  $arg_name: $arg $(<$life>)?
+                  $(($arg_param))?
+                )*
+                $(!$attr $(= $attr_value)?),*
+                $(=> $return)?
+                ;
+            }
+        )*
         impl $crate::Inst for $module_name {
             const MODULE_NAME: &'static ::core::primitive::str = $name;
 

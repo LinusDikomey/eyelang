@@ -1,4 +1,4 @@
-use crate::{Environment, FunctionIr, ModuleId, Types};
+use crate::{Environment, FunctionIr, ModuleId, Types, verify};
 
 pub trait ModulePass: std::fmt::Debug {
     fn run(&self, env: &mut Environment, module: ModuleId);
@@ -50,6 +50,7 @@ impl<State: Default> Pipeline<State> {
         env: &mut Environment,
         module: ModuleId,
     ) {
+        verify::module(env, module);
         for id in env[module].function_ids() {
             let function = &env[module][id];
             let Some(ir) = function.ir.get() else {
@@ -74,8 +75,24 @@ impl<State: Default> Pipeline<State> {
             )
             .entered();
             module_pass.run(env, module);
+            drop(_enter);
+            for id in env[module].function_ids() {
+                let Some(ir) = env[module][id].ir() else {
+                    continue;
+                };
+                tracing::debug!(
+                    target: "passes",
+                    function = env[module][id].name,
+                    "After {:?}:\n{}",
+                    module_pass,
+                    ir.display_with_phys_regs::<R>(env, &env[module][id].types),
+                );
+            }
+
+            verify::module(env, module);
         }
         self.process_step::<R>(env, module, &self.final_step);
+        verify::module(env, module);
     }
 
     fn process_step<R: crate::mc::Register>(
@@ -88,7 +105,6 @@ impl<State: Default> Pipeline<State> {
             let Some(mut ir) = env.modules[module.idx()].functions[id.idx()].ir.take() else {
                 continue;
             };
-
             let mut state = State::default();
 
             for pass in step {
@@ -105,8 +121,8 @@ impl<State: Default> Pipeline<State> {
                     "After {pass:?}:\n{}",
                     ir.display_with_phys_regs::<R>(env, &env[module][id].types),
                 );
+                verify::function_body(env, &ir, env[module][id].types());
             }
-            tracing::debug!(target: "passes", function = env[module][id].name, "Done optimizing");
             env.modules[module.idx()][id]
                 .ir
                 .set(ir)

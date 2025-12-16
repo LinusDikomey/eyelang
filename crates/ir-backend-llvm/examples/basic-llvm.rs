@@ -30,14 +30,13 @@ struct Dialects {
 fn build_mul(env: &Environment, dialects: &Dialects) -> ir::Function {
     let Dialects { arith, cf, .. } = dialects;
     let mut builder = ir::builder::Builder::new(env);
-    let unit = builder.types.add(ir::Type::UNIT);
     let int_ty = builder.types.add(Primitive::I32);
     let param_types = builder.types.add_multiple([Primitive::I32.into(); 2]);
     let (_, params) = builder.create_and_begin_block(param_types.iter());
     let five = builder.append(arith.Int(5, int_ty));
     let res = builder.append(arith.Add(params.nth(0), five, int_ty));
     let res = builder.append(arith.Mul(res, params.nth(1), int_ty));
-    builder.append(cf.Ret(res, unit));
+    builder.append(cf.Ret(res));
 
     builder.finish("my_mul", int_ty)
 }

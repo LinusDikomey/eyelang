@@ -4,7 +4,8 @@ use std::marker::PhantomData;
 use color_format::{cwrite, cwriteln};
 
 use crate::{
-    Argument, Environment, Function, FunctionIr, MCReg, Module, Parameter, Ref, Types, builtins,
+    Argument, Environment, Function, FunctionIr, Instruction, MCReg, Module, Parameter, Ref, Types,
+    builtins,
     mc::{Register, UnknownRegister},
 };
 
@@ -205,107 +206,162 @@ impl<R: Register> fmt::Display for BodyDisplay<'_, R> {
                 }
                 cwrite!(f, ")")?;
             }
-            cwrite!(f, ": #i<preds [>")?;
-            for (i, &pred) in ir.blocks[block.idx()].preds.iter().enumerate() {
-                if i != 0 {
-                    cwrite!(f, " ")?;
+            cwrite!(f, ":")?;
+            let info = &ir.blocks[block.idx()];
+            if !info.preds.is_empty() || !info.succs.is_empty() {
+                write!(f, "    #")?;
+                if !info.preds.is_empty() {
+                    cwrite!(f, " #i<preds [>")?;
+                    for (i, &pred) in info.preds.iter().enumerate() {
+                        if i != 0 {
+                            cwrite!(f, " ")?;
+                        }
+                        cwrite!(f, "#i<b{}>", pred.0)?;
+                    }
+                    cwrite!(f, "#i<]>")?;
                 }
-                cwrite!(f, "#i<{pred}>")?;
-            }
-            cwrite!(f, "#i<] succs [>")?;
-            for (i, &succ) in ir.blocks[block.idx()].succs.iter().enumerate() {
-                if i != 0 {
-                    cwrite!(f, " ")?;
-                }
+                if !info.succs.is_empty() {
+                    cwrite!(f, " #i<succs [>")?;
+                    for (i, &succ) in info.succs.iter().enumerate() {
+                        if i != 0 {
+                            cwrite!(f, " ")?;
+                        }
 
-                cwrite!(f, "#i<{succ}>")?;
+                        cwrite!(f, "#i<b{}>", succ.0)?;
+                    }
+                    cwrite!(f, "#i<]>")?;
+                }
             }
-            cwriteln!(f, "#i<]>")?;
+            writeln!(f)?;
             for (r, inst) in ir.get_block(block) {
-                if inst.module() == builtins::BUILTIN.id()
-                    && inst.function() == builtins::Builtin::Nothing.id()
-                {
-                    // don't show 'Nothing' instructions
-                    continue;
-                }
-                let called_module = &env.modules[inst.function.module.0 as usize];
-                let called = &called_module.functions[inst.function.function.0 as usize];
-
-                cwrite!(f, "    ")?;
-                let has_value = !called.flags.terminator()
-                    && !matches!(types[inst.ty], crate::Type::Tuple(members) if members.count == 0);
-                if has_value {
-                    let r_digits = if r.0 == 0 { 1 } else { r.0.ilog10() + 1 };
-                    for _ in 0..digits - r_digits {
-                        cwrite!(f, " ")?;
-                    }
-                    write!(f, "{r} = ")?;
-                } else {
-                    for _ in 0..digits + 4 {
-                        write!(f, " ")?;
-                    }
-                }
-                write!(
-                    f,
-                    "{}",
-                    InstName {
-                        module: &called_module.name,
-                        function: &called.name,
-                    }
-                )?;
-                for arg in inst.args_inner(&called.params, called.varargs, &ir.blocks, &ir.extra) {
-                    match arg {
-                        Argument::Ref(r) => write!(f, " {r}")?,
-                        Argument::BlockId(id) => cwrite!(f, " {}", id)?,
-                        Argument::BlockTarget(target) => {
-                            cwrite!(f, " {}", target.0)?;
-                            let args = target.1;
-                            if !args.is_empty() {
-                                cwrite!(f, "(")?;
-                                for (i, r) in args.iter().enumerate() {
-                                    if i != 0 {
-                                        write!(f, ", ")?;
-                                    }
-                                    write!(f, "{r}")?;
-                                }
-                                cwrite!(f, ")")?;
-                            }
-                        }
-                        Argument::Int(n) => cwrite!(f, " #y<{}>", n)?,
-                        Argument::Float(x) => cwrite!(f, " #y<{}>", x)?,
-                        Argument::TypeId(ty) => {
-                            let display = types.display_type(ty, &env.primitives);
-                            write!(f, " {display}")?;
-                        }
-                        Argument::FunctionId(id) => {
-                            let module = &env[id.module];
-                            let function = &module[id.function];
-                            cwrite!(f, " #c<{}>.#b<{}>", module.name, function.name)?;
-                        }
-                        Argument::GlobalId(id) => {
-                            let module = &env[id.module];
-                            let global = &module.globals[id.idx as usize];
-                            cwrite!(f, " @#c<{}>.#b<{}>", module.name, global.name)?;
-                        }
-                        Argument::MCReg(r) => {
-                            write!(f, " ")?;
-                            if r.is_dead() {
-                                write!(f, "!")?;
-                            }
-                            if let Some(v) = r.virt() {
-                                cwrite!(f, "#c<${}>", v)?;
-                            } else {
-                                cwrite!(f, "#c<%{}>", r.phys::<R>().unwrap().to_str())?;
-                            }
-                        }
-                    }
-                }
-                if has_value {
-                    let display = types.display_type(inst.ty, &env.primitives);
-                    write!(f, " :: {display}")?;
-                }
-                cwriteln!(f)?;
+                cwriteln!(f, "{}", inst.display::<R>(r, env, types, ir, digits))?;
             }
+        }
+        Ok(())
+    }
+}
+
+impl Instruction {
+    pub fn display<'a, R: Register>(
+        &'a self,
+        r: Ref,
+        env: &'a Environment,
+        types: &'a crate::Types,
+        ir: &'a FunctionIr,
+        ref_digits: u32,
+    ) -> InstructionDisplay<'a, R> {
+        InstructionDisplay {
+            r,
+            inst: self,
+            env,
+            types,
+            ir,
+            ref_digits,
+            _phantom: PhantomData,
+        }
+    }
+}
+pub struct InstructionDisplay<'a, R: Register = UnknownRegister> {
+    r: Ref,
+    inst: &'a Instruction,
+    env: &'a Environment,
+    types: &'a crate::Types,
+    ir: &'a FunctionIr,
+    ref_digits: u32,
+    _phantom: PhantomData<R>,
+}
+impl<'a, R: Register> fmt::Display for InstructionDisplay<'a, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            r,
+            inst,
+            env,
+            types,
+            ir,
+            ref_digits,
+            _phantom: PhantomData,
+        } = self;
+        if inst.module() == builtins::BUILTIN.id()
+            && inst.function() == builtins::Builtin::Nothing.id()
+        {
+            // don't show 'Nothing' instructions
+            return Ok(());
+        }
+        let called_module = &env.modules[inst.function.module.0 as usize];
+        let called = &called_module.functions[inst.function.function.0 as usize];
+
+        cwrite!(f, "    ")?;
+        let has_value = !called.flags.terminator()
+            && !matches!(types[inst.ty], crate::Type::Tuple(members) if members.count == 0);
+        if has_value {
+            let r_digits = if r.0 == 0 { 1 } else { r.0.ilog10() + 1 };
+            for _ in 0..ref_digits.saturating_sub(r_digits) {
+                cwrite!(f, " ")?;
+            }
+            write!(f, "{r} = ")?;
+        } else {
+            for _ in 0..ref_digits + 4 {
+                write!(f, " ")?;
+            }
+        }
+        write!(
+            f,
+            "{}",
+            InstName {
+                module: &called_module.name,
+                function: &called.name,
+            }
+        )?;
+        for arg in inst.args_inner(&called.params, called.varargs, &ir.blocks, &ir.extra) {
+            match arg {
+                Argument::Ref(r) => write!(f, " {r}")?,
+                Argument::BlockId(id) => cwrite!(f, " {}", id)?,
+                Argument::BlockTarget(target) => {
+                    cwrite!(f, " {}", target.0)?;
+                    let args = target.1;
+                    if !args.is_empty() {
+                        cwrite!(f, "(")?;
+                        for (i, r) in args.iter().enumerate() {
+                            if i != 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{r}")?;
+                        }
+                        cwrite!(f, ")")?;
+                    }
+                }
+                Argument::Int(n) => cwrite!(f, " #y<{}>", n)?,
+                Argument::Float(x) => cwrite!(f, " #y<{}>", x)?,
+                Argument::TypeId(ty) => {
+                    let display = types.display_type(ty, &env.primitives);
+                    write!(f, " {display}")?;
+                }
+                Argument::FunctionId(id) => {
+                    let module = &env[id.module];
+                    let function = &module[id.function];
+                    cwrite!(f, " #c<{}>.#b<{}>", module.name, function.name)?;
+                }
+                Argument::GlobalId(id) => {
+                    let module = &env[id.module];
+                    let global = &module.globals[id.idx as usize];
+                    cwrite!(f, " @#c<{}>.#b<{}>", module.name, global.name)?;
+                }
+                Argument::MCReg(r) => {
+                    write!(f, " ")?;
+                    if r.is_dead() {
+                        write!(f, "!")?;
+                    }
+                    if let Some(v) = r.virt() {
+                        cwrite!(f, "#c<${}>", v)?;
+                    } else {
+                        cwrite!(f, "#c<%{}>", r.phys::<R>().unwrap().to_str())?;
+                    }
+                }
+            }
+        }
+        if has_value {
+            let display = types.display_type(inst.ty, &env.primitives);
+            write!(f, " :: {display}")?;
         }
         Ok(())
     }

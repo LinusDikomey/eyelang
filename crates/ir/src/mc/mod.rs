@@ -204,7 +204,7 @@ impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
         let info = ir.get_block(block);
         let args = self
             .regs
-            .get_range(Ref::index(info.idx), Ref::index(info.idx + info.arg_count));
+            .get_range(Ref::index(info.args_idx), Ref::index(info.args_idx + info.arg_count));
         let f = FunctionId {
             module: self.mc.id(),
             function: Mc::IncomingBlockArgs.id(),

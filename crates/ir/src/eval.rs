@@ -654,7 +654,7 @@ pub fn eval<E: EvalEnvironment>(
                     I::Goto => {
                         let BlockTarget(target, args) = ir.args(inst, env.env());
                         let info = &ir.blocks[target.idx()];
-                        let target_pos = info.idx + info.arg_count;
+                        let target_pos = info.args_idx + info.arg_count;
                         if target_pos <= pc {
                             backwards_jumps += 1;
                             if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -670,7 +670,7 @@ pub fn eval<E: EvalEnvironment>(
                         let cond = get_int_ref(&values, cond) == 1;
                         let BlockTarget(target, args) = if cond { a } else { b };
                         let info = &ir.blocks[target.idx()];
-                        let target_pos = info.idx + info.arg_count;
+                        let target_pos = info.args_idx + info.arg_count;
                         if target_pos <= pc {
                             backwards_jumps += 1;
                             if backwards_jumps > BACKWARDS_JUMP_LIMIT {
@@ -1363,7 +1363,10 @@ impl Values {
 
     fn copy_args(&mut self, info: &BlockInfo, args: &[Ref], ir: &FunctionIr, types: &Types) {
         debug_assert_eq!(info.arg_count as usize, args.len());
-        for (&r, i) in args.iter().zip(info.idx..info.idx + info.arg_count) {
+        for (&r, i) in args
+            .iter()
+            .zip(info.args_idx..info.args_idx + info.arg_count)
+        {
             let src = self.slot_map[r.idx()] as usize;
             let dst = self.slot_map[i as usize] as usize;
             let n = slot_count(types[ir.get_ref_ty(r)], types) as usize;

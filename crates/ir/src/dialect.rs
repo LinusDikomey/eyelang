@@ -213,7 +213,7 @@ instructions! {
 
     Decl ty: TypeId !pure;
     Load ptr: Ref !pure;
-    Store ptr: Ref value: Ref;
+    Store ptr: Ref value: Ref => unit;
     MemberPtr ptr: Ref ty: TypeId idx: Int32 !pure;
     IntToPtr value: Ref !pure;
     PtrToInt value: Ref !pure;
@@ -227,7 +227,7 @@ instructions! {
 instructions! {
     Cf "cf" CfInsts
 
-    Goto<'a> target: BlockTarget<'a> !terminator;
-    Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator;
-    Ret value: Ref !terminator;
+    Goto<'a> target: BlockTarget<'a> !terminator => unit;
+    Branch cond: Ref on_true: BlockTarget<'static> on_false: BlockTarget<'static> !terminator => unit;
+    Ret value: Ref !terminator => unit;
 }

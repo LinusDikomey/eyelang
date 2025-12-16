@@ -109,7 +109,6 @@ pub fn lower_hir(
                     dialects,
                     instances,
                     to_generate,
-                    unit_ty,
                     ptr_ty,
                     return_ty,
                 );
@@ -133,7 +132,7 @@ pub fn lower_hir(
                     let captures_param = params.nth(0);
                     let value =
                         builder.append(dialects.tuple.MemberValue(captures_param, capture_idx, ty));
-                    builder.append(dialects.mem.Store(var_ref, value, unit_ty));
+                    builder.append(dialects.mem.Store(var_ref, value));
                 }
                 // this variable should never be used in the body
                 Var::CapturesParam(_) => return Ok((Ref::UNIT, unit_ty)),
@@ -150,7 +149,7 @@ pub fn lower_hir(
         if matches!(hir.vars[var.idx()], Var::CapturesParam(_)) {
             continue;
         }
-        builder.append(dialects.mem.Store(vars[var.idx()].0, param, unit_ty));
+        builder.append(dialects.mem.Store(vars[var.idx()].0, param));
     }
     let mut ctx = Ctx {
         compiler,
@@ -163,15 +162,13 @@ pub fn lower_hir(
         vars: &mut vars,
         control_flow_stack: Vec::new(),
         return_ty,
-        unit_ty,
         ptr_ty,
         i1_ty,
     };
 
     let val = lower(&mut ctx, hir.root_id());
     if let Ok(val) = val {
-        let unit = ctx.builder.types.add(ir::Type::UNIT);
-        ctx.builder.append(ctx.dialects.cf.Ret(val, unit));
+        ctx.builder.append(ctx.dialects.cf.Ret(val));
     }
     ctx.builder.finish_body()
 }
@@ -187,9 +184,6 @@ struct Ctx<'a> {
     vars: &'a [(Ref, ir::TypeId)],
     control_flow_stack: Vec<ControlFlowEntry>,
     return_ty: ir::TypeId,
-    // TODO: improve ergonomics of types, especially primitives in ir, primitives should not have
-    // to be added, also for PERF reasons
-    unit_ty: ir::TypeId,
     ptr_ty: ir::TypeId,
     i1_ty: ir::TypeId,
 }
@@ -310,8 +304,7 @@ impl Ctx<'_> {
 
     fn terminate_noreturn(&mut self) -> Result<std::convert::Infallible> {
         let value = self.builder.append_undef(self.return_ty);
-        self.builder
-            .append(self.dialects.cf.Ret(value, self.unit_ty));
+        self.builder.append(self.dialects.cf.Ret(value));
         Err(NoReturn)
     }
 
@@ -404,7 +397,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let member_ptr = ctx
                     .builder
                     .append(mem.ArrayIndex(array_var, elem_ir_ty, index, elem_ir_ty));
-                ctx.builder.append(mem.Store(member_ptr, val, ctx.unit_ty));
+                ctx.builder.append(mem.Store(member_ptr, val));
             }
             return Ok(ValueOrPlace::Place {
                 ptr: array_var,
@@ -443,7 +436,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     .builder
                     .append(mem.MemberPtr(var, elem_tuple, i, ctx.ptr_ty));
                 let val = lower(ctx, elem)?;
-                ctx.builder.append(mem.Store(elem_ptr, val, ctx.unit_ty));
+                ctx.builder.append(mem.Store(elem_ptr, val));
             }
             // maybe do this differently, could do it like llvm: insertvalue
             ctx.builder.append(mem.Load(var, enum_ty))
@@ -497,7 +490,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 
             let arithmetic = match assign_ty {
                 AssignType::Assign => {
-                    ctx.builder.append(mem.Store(lval, val, ctx.unit_ty));
+                    ctx.builder.append(mem.Store(lval, val));
                     return Ok(ValueOrPlace::Value(Ref::UNIT));
                 }
                 AssignType::AddAssign => Arithmetic::Add,
@@ -511,7 +504,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let ir_ty = ctx.builder.types.add(ty);
             let loaded = ctx.builder.append(mem.Load(lval, ir_ty));
             let result = build_arithmetic(ctx, loaded, val, arithmetic, ir_ty);
-            ctx.builder.append(mem.Store(lval, result, ctx.unit_ty));
+            ctx.builder.append(mem.Store(lval, result));
             Ref::UNIT
         }
 
@@ -562,7 +555,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::Promote { value, variable } => {
             let val = lower(ctx, value)?;
             let var = ctx.vars[variable.idx()].0;
-            ctx.builder.append(mem.Store(var, val, ctx.unit_ty));
+            ctx.builder.append(mem.Store(var, val));
             var
         }
 
@@ -622,19 +615,17 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                     l,
                     BlockTarget::new(rhs),
                     BlockTarget(res, Cow::Borrowed(&[Ref::FALSE])),
-                    ctx.unit_ty,
                 )),
                 crate::hir::Logic::Or => ctx.builder.append(cf.Branch(
                     l,
                     BlockTarget(res, Cow::Borrowed(&[Ref::TRUE])),
                     BlockTarget::new(rhs),
-                    ctx.unit_ty,
                 )),
             };
             ctx.builder.begin_block(rhs, []);
             if let Ok(r) = lower(ctx, r) {
                 ctx.builder
-                    .append(cf.Goto(BlockTarget(res, Cow::Borrowed(&[r])), ctx.unit_ty));
+                    .append(cf.Goto(BlockTarget(res, Cow::Borrowed(&[r]))));
             }
             let args = ctx.builder.begin_block(res, [ctx.i1_ty]);
             args.nth(0)
@@ -695,7 +686,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
 
         &Node::Return(val) => {
             let val = lower(ctx, val)?;
-            ctx.builder.append(cf.Ret(val, ctx.unit_ty));
+            ctx.builder.append(cf.Ret(val));
             return Err(NoReturn);
         }
         &Node::IfElse {
@@ -711,7 +702,6 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 cond,
                 BlockTarget::new(then_block),
                 BlockTarget::new(else_block),
-                ctx.unit_ty,
             ));
             ctx.builder.begin_block(then_block, []);
             lower_if_else_branches(ctx, then, else_, else_block, resulting_ty)?
@@ -742,7 +732,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             if branch_count == 0 {
                 // matching on an uninhabited type so we need to terminate the block
                 let undef = ctx.builder.append_undef(ctx.return_ty);
-                ctx.builder.append(cf.Ret(undef, ctx.unit_ty));
+                ctx.builder.append(cf.Ret(undef));
                 return Err(NoReturn);
             }
             for i in 0..branch_count {
@@ -763,7 +753,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 if let Ok(val) = val {
                     let after = *after_block.get_or_insert_with(|| ctx.builder.create_block());
                     ctx.builder
-                        .append(cf.Goto(BlockTarget(after, Cow::Borrowed(&[val])), ctx.unit_ty));
+                        .append(cf.Goto(BlockTarget(after, Cow::Borrowed(&[val]))));
                 }
                 if let Some(next) = next_block {
                     ctx.builder.begin_block(next, []);
@@ -782,8 +772,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         }
         &Node::While { cond, body } => {
             let cond_block = ctx.builder.create_block();
-            ctx.builder
-                .append(cf.Goto(BlockTarget::new(cond_block), ctx.unit_ty));
+            ctx.builder.append(cf.Goto(BlockTarget::new(cond_block)));
             ctx.builder.begin_block(cond_block, []);
             let cond = lower(ctx, cond)?;
             let body_block = ctx.builder.create_block();
@@ -796,12 +785,10 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 cond,
                 BlockTarget::new(body_block),
                 BlockTarget::new(after_block),
-                ctx.unit_ty,
             ));
             ctx.builder.begin_block(body_block, []);
             if lower(ctx, body).is_ok() {
-                ctx.builder
-                    .append(cf.Goto(BlockTarget::new(cond_block), ctx.unit_ty));
+                ctx.builder.append(cf.Goto(BlockTarget::new(cond_block)));
             }
             ctx.builder.begin_block(after_block, []);
             Ref::UNIT
@@ -809,8 +796,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
         &Node::WhilePat { pat, val, body } => {
             let loop_start = ctx.builder.create_block();
             let after = ctx.builder.create_block();
-            ctx.builder
-                .append(cf.Goto(BlockTarget::new(loop_start), ctx.unit_ty));
+            ctx.builder.append(cf.Goto(BlockTarget::new(loop_start)));
             ctx.builder.begin_block(loop_start, []);
             let val = lower(ctx, val)?;
             lower_pattern(ctx, pat, val, Some(after))?;
@@ -821,8 +807,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             let body_value = lower(ctx, body);
             ctx.control_flow_stack.pop();
             if body_value.is_ok() {
-                ctx.builder
-                    .append(cf.Goto(BlockTarget::new(loop_start), ctx.unit_ty));
+                ctx.builder.append(cf.Goto(BlockTarget::new(loop_start)));
             }
             ctx.builder.begin_block(after, []);
             Ref::UNIT
@@ -876,7 +861,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             };
             if noreturn {
                 let ret = ctx.builder.append_undef(ctx.return_ty);
-                ctx.builder.append(cf.Ret(ret, ctx.unit_ty));
+                ctx.builder.append(cf.Ret(ret));
                 return Err(NoReturn);
             }
             res
@@ -1019,8 +1004,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             } else {
                 entry.loop_begin
             };
-            ctx.builder
-                .append(cf.Goto(BlockTarget::new(target), ctx.unit_ty));
+            ctx.builder.append(cf.Goto(BlockTarget::new(target)));
             return Err(NoReturn);
         }
     };
@@ -1088,15 +1072,13 @@ fn lower_pattern(
             cond,
             BlockTarget::new(on_match),
             BlockTarget::new(on_mismatch),
-            ctx.unit_ty,
         ));
         ctx.builder.begin_block(on_match, []);
     };
     match &ctx.hir[pattern] {
         Pattern::Invalid => crash_point!(ctx),
         Pattern::Variable(id) => {
-            ctx.builder
-                .append(mem.Store(ctx.vars[id.idx()].0, value, ctx.unit_ty));
+            ctx.builder.append(mem.Store(ctx.vars[id.idx()].0, value));
         }
         Pattern::Ignore => {}
         &Pattern::Tuple {
@@ -1136,7 +1118,6 @@ fn lower_pattern(
                 value,
                 BlockTarget::new(on_true),
                 BlockTarget::new(on_false),
-                ctx.unit_ty,
             ));
             ctx.builder.begin_block(on_match, []);
         }
@@ -1184,7 +1165,7 @@ fn lower_pattern(
             // (implicitly casting the types on load)
             let tuple_ty = ctx.builder.types.add(tuple_ty);
             let var = ctx.builder.append(mem.Decl(tuple_ty, ctx.ptr_ty));
-            ctx.builder.append(mem.Store(var, value, ctx.unit_ty));
+            ctx.builder.append(mem.Store(var, value));
             let ordinal_ty = LocalTypeId(types);
             let arg_types = LocalTypeIds {
                 idx: types + 1,
@@ -1296,7 +1277,6 @@ fn build_crash_point(ctx: &mut Ctx) {
         ctx.dialects,
         ctx.instances,
         ctx.to_generate,
-        ctx.unit_ty,
         ctx.ptr_ty,
         ctx.return_ty,
     );
@@ -1308,7 +1288,6 @@ fn build_crash_point_inner(
     dialects: &Dialects,
     instances: &mut Instances,
     to_generate: &mut Vec<FunctionToGenerate>,
-    unit_ty: ir::TypeId,
     ptr_ty: ir::TypeId,
     return_ty: ir::TypeId,
 ) {
@@ -1329,7 +1308,7 @@ fn build_crash_point_inner(
     let unit = builder.types.add(ir::Type::UNIT);
     builder.append((panic_function, (msg), unit));
     let value = builder.append_undef(return_ty);
-    builder.append(dialects.cf.Ret(value, unit_ty));
+    builder.append(dialects.cf.Ret(value));
 }
 
 fn build_arithmetic(
@@ -1382,7 +1361,7 @@ fn lower_if_else_branches(
             let block = ctx.builder.current_block().unwrap();
             let after_block = after_block(ctx);
             ctx.builder
-                .append(cf.Goto(BlockTarget(after_block, Cow::Borrowed(&[val])), ctx.unit_ty));
+                .append(cf.Goto(BlockTarget(after_block, Cow::Borrowed(&[val]))));
             block
         })
     };

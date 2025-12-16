@@ -60,7 +60,7 @@ impl Abi<X86> for SystemV {
         unit: TypeId,
     ) {
         let info = ir.get_block(BlockId::ENTRY);
-        let before = Ref::index(info.idx + info.arg_count);
+        let before = Ref::index(info.args_idx + info.arg_count);
         let mut abi_regs = ABI_PARAM_REGISTERS.into_iter();
         for arg in args.iter() {
             _ = regs.visit_primitive_slots::<Infallible, _>(

@@ -16,9 +16,7 @@ CYAN = '\033[1;36m'
 R = '\033[1;0m'
 
 def main():
-    if subprocess.run(cargo_test).returncode != 0:
-        print(f'{RED}Test(s) failed{R}')
-        exit(1)
+    cargo_test_ok = subprocess.run(cargo_test).returncode == 0
     
     start_time = time.time()
 
@@ -31,6 +29,10 @@ def main():
 
     if errors > 0:
         print(f'{RED}{errors}/{total} tests failed!{R} in {elapsed:.2f}s')
+    if not cargo_test_ok:
+        print(f'{RED}Cargo Test(s) failed{R}')
+        
+    if errors > 0 or not cargo_test_ok:
         exit(1)
     else:
         print(f'{GREEN}All {total} tests passed!{R} in {elapsed:.2f}s')

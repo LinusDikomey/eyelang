@@ -262,7 +262,7 @@ impl FunctionPass for Mem2Reg {
 
 #[cfg(test)]
 mod tests {
-    use crate::{BlockId, BlockTarget, Environment, Ref, Type};
+    use crate::{BlockId, BlockTarget, Environment, Ref};
 
     fn assert_set_eq<T: PartialEq + std::fmt::Debug>(
         set: impl IntoIterator<Item = T>,
@@ -288,7 +288,6 @@ mod tests {
 
         let mut builder = crate::builder::Builder::new(&*env);
 
-        let unit = builder.types.add(Type::UNIT);
         let i32 = builder.types.add(crate::Primitive::I32);
         let ptr = builder.types.add(crate::Primitive::Ptr);
 
@@ -300,32 +299,32 @@ mod tests {
 
         let a = builder.append(mem.Decl(i32, ptr));
         let five = builder.append(arith.Int(5, i32));
-        builder.append(mem.Store(a, five, unit));
-        builder.append(cf.Branch(Ref::TRUE, BlockTarget::new(b1), BlockTarget::new(b3), unit));
+        builder.append(mem.Store(a, five));
+        builder.append(cf.Branch(Ref::TRUE, BlockTarget::new(b1), BlockTarget::new(b3)));
 
         builder.begin_block(b1, []);
         let a_load = builder.append(mem.Load(a, i32));
         let one = builder.append(arith.Int(1, i32));
         let plus1 = builder.append(arith.Add(a_load, one, i32));
-        builder.append(mem.Store(a, plus1, unit));
-        builder.append(cf.Goto(BlockTarget::new(b2), unit));
+        builder.append(mem.Store(a, plus1));
+        builder.append(cf.Goto(BlockTarget::new(b2)));
 
         builder.begin_block(b2, []);
         let a_load = builder.append(mem.Load(a, i32));
         let times2 = builder.append(arith.Add(a_load, a_load, i32));
-        builder.append(mem.Store(a, times2, unit));
+        builder.append(mem.Store(a, times2));
 
         let cond = Ref::TRUE;
-        builder.append(cf.Branch(cond, BlockTarget::new(b1), BlockTarget::new(b4), unit));
+        builder.append(cf.Branch(cond, BlockTarget::new(b1), BlockTarget::new(b4)));
 
         builder.begin_block(b3, []);
         let two = builder.append(arith.Int(2, i32));
-        builder.append(mem.Store(a, two, unit));
-        builder.append(cf.Goto(BlockTarget::new(b4), unit));
+        builder.append(mem.Store(a, two));
+        builder.append(cf.Goto(BlockTarget::new(b4)));
 
         builder.begin_block(b4, []);
         let ret = builder.append(mem.Load(a, i32));
-        builder.append(cf.Ret(ret, unit));
+        builder.append(cf.Ret(ret));
 
         builder.finish_body()
     }
