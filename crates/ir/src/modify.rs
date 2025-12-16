@@ -276,7 +276,7 @@ impl IrModify {
         let Self {
             mut ir,
             additional,
-            renames: rename_map,
+            renames: mut rename_map,
         } = self;
         if additional.is_empty() && rename_map.is_empty() {
             return ir;
@@ -373,7 +373,6 @@ impl IrModify {
 
                 // continue appending the successor to the current block
                 *arg_renames = Some(args.into_owned().into_iter());
-                dbg!(arg_renames);
                 if appending_block.is_none() {
                     *appending_block = Some(*current_block);
                 }
@@ -406,9 +405,9 @@ impl IrModify {
                 .map(Ref);
                 info.args_idx = insts.len() as u32;
                 info.body_idx = info.args_idx + info.arg_count;
-                for current in inst_range {
+                for old_ref in inst_range {
                     'before: while let Some((inst, r)) = new_insts.get(new_idx)
-                        && inst.before == current
+                        && inst.before == old_ref
                     {
                         debug_assert!(
                             !inst
@@ -426,7 +425,7 @@ impl IrModify {
                             if let Some(renamed) =
                                 arg_renames.as_mut().and_then(|renames| renames.next())
                             {
-                                renames[r.idx()] = renamed;
+                                rename_map.insert(*r, renamed);
                                 continue 'before;
                             }
                         } else {
@@ -452,10 +451,10 @@ impl IrModify {
                         // there can be no instructions in the old because the block is new
                         continue;
                     }
-                    let inst = &old_insts[current.idx()];
+                    let inst = &old_insts[old_ref.idx()];
                     if let Some(inst) = inst.as_module(crate::BUILTIN) {
                         if inst.op() == Builtin::Nothing {
-                            renames[current.idx()] = Ref::UNIT;
+                            renames[old_ref.idx()] = Ref::UNIT;
                             if appending_block.is_none() {
                                 ir.blocks[current_block.idx()].len -= 1;
                             }
@@ -464,7 +463,7 @@ impl IrModify {
                             && let Some(renamed) =
                                 arg_renames.as_mut().and_then(|renames| renames.next())
                         {
-                            renames[current.idx()] = renamed;
+                            rename_map.insert(old_ref, renamed);
                             continue;
                         }
                     }
@@ -480,7 +479,7 @@ impl IrModify {
                         continue 'add_block_contents;
                     }
                     let new_r = Ref(insts.len() as _);
-                    renames[current.idx()] = new_r;
+                    renames[old_ref.idx()] = new_r;
                     if let Some(appending) = appending_block {
                         ir.blocks[appending.idx()].len += 1;
                     }

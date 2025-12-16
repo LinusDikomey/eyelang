@@ -1,9 +1,9 @@
 use std::{borrow::Cow, fmt};
 
 use crate::{
-    BUILTIN, BlockId, BlockTarget, Builtin, Environment, FunctionIr, Instruction, Primitive, Ref,
-    Type, Types,
-    dialect::{Arith, Cf, Mem},
+    BUILTIN, BlockId, BlockTarget, Builtin, Environment, FunctionIr, Instruction, ModuleOf,
+    Primitive, Ref, Type, Types,
+    dialect::{Arith, Cf, Mem, Tuple},
     modify::IrModify,
     pipeline::FunctionPass,
     rewrite::{self, IntoVisit, LinearRewriteOrder, Rewrite},
@@ -193,7 +193,7 @@ rewrite::visitor! {
 
     use builtin: crate::Builtin;
     use arith: Arith;
-    // use tuple: Tuple;
+    use tuple: Tuple;
     use mem: Mem;
     use cf: Cf;
 
@@ -267,4 +267,25 @@ rewrite::visitor! {
             let taken_args = taken_args.to_vec();
             cf.Goto(BlockTarget(taken, Cow::Owned(taken_args)))
         };
+        (tuple.MemberValue t (#index)) if t.is_ref() => {
+            inserted_tuple_member(ir, tuple, t, index as _)?
+        };
+}
+
+fn inserted_tuple_member(
+    ir: &IrModify,
+    tuple: ModuleOf<Tuple>,
+    mut t: Ref,
+    index: u32,
+) -> Option<Ref> {
+    while let Some(inst) = ir.get_inst(t).as_module(tuple)
+        && inst.op() == Tuple::InsertMember
+    {
+        let (prev_t, insert_index, inserted_member): (Ref, u32, Ref) = ir.typed_args(&inst);
+        if insert_index == index {
+            return Some(inserted_member);
+        }
+        t = prev_t;
+    }
+    None
 }
