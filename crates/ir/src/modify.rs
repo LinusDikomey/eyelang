@@ -308,6 +308,79 @@ impl IrModify {
             let mut appending_block = None;
 
             let mut current_block = current_block;
+
+            let mut compress_goto = |inst: &Instruction,
+                                     cf: Option<crate::ModuleOf<Cf>>,
+                                     blocks: &mut [BlockInfo],
+                                     current_block: &mut BlockId,
+                                     appending_block: &mut Option<BlockId>,
+                                     visited_blocks: &Bitmap,
+                                     arg_renames: &mut Option<std::vec::IntoIter<Ref>>|
+             -> bool {
+                // FIXME: currently, compressing a chain of multiple blocks causes problems
+                // this check should be removed once it is fixed
+                if appending_block.is_some() {
+                    return false;
+                }
+                let Some(cf) = cf else {
+                    return false;
+                };
+                let Some(cf_inst) = inst.as_module(cf) else {
+                    return false;
+                };
+                if cf_inst.op() != Cf::Goto {
+                    return false;
+                }
+                let params = cf_inst.inst.params();
+                let varargs = cf_inst.inst.varargs();
+                let mut args_iter = decode_args(&inst.args, params, varargs, blocks, &ir.extra);
+                let Some(Argument::BlockTarget(BlockTarget(target, args))) = args_iter.next()
+                else {
+                    unreachable!()
+                };
+                debug_assert!(args_iter.next().is_none());
+                let target_info = &mut blocks[target.idx()];
+                if target_info.preds.len() != 1 {
+                    return false;
+                }
+                // Goto whose target has only a single predecessor:
+                // combine into one block
+                debug_assert_eq!(*current_block, *target_info.preds.first().unwrap());
+                debug_assert_eq!(args.len(), target_info.arg_count as usize);
+                debug_assert!(!visited_blocks.get(target.idx()), "RPO is wrong");
+
+                // successors of the next block become successors of the current block
+                let succs = std::mem::take(&mut target_info.succs);
+                let appending = appending_block.unwrap_or(*current_block);
+                // update the predecessor infos of the successors
+                for &succ in &succs {
+                    let pred = blocks[succ.idx()]
+                        .preds
+                        .iter()
+                        .position(|&pred| pred == target)
+                        .unwrap();
+                    blocks[succ.idx()].preds[pred] = appending;
+                }
+                let info = &mut blocks[appending.idx()];
+                debug_assert_eq!(info.succs.len(), 1);
+                debug_assert_eq!(info.succs[0], target);
+                info.succs = succs;
+
+                removed_blocks.insert(target);
+
+                // trivial goto is removed
+                blocks[appending_block.unwrap_or(*current_block).idx()].len -= 1;
+
+                // continue appending the successor to the current block
+                *arg_renames = Some(args.into_owned().into_iter());
+                dbg!(arg_renames);
+                if appending_block.is_none() {
+                    *appending_block = Some(*current_block);
+                }
+                *current_block = target;
+                true
+            };
+
             'add_block_contents: loop {
                 visited_blocks.set(current_block.idx(), true);
                 let info = &mut ir.blocks[current_block.idx()];
@@ -358,6 +431,17 @@ impl IrModify {
                             }
                         } else {
                             ir.blocks[appending_block.unwrap_or(current_block).idx()].len += 1;
+                            if compress_goto(
+                                &inst.inst,
+                                cf,
+                                &mut ir.blocks,
+                                &mut current_block,
+                                &mut appending_block,
+                                &visited_blocks,
+                                &mut arg_renames,
+                            ) {
+                                continue 'add_block_contents;
+                            }
                         }
                         let new_r = Ref(insts.len() as _);
                         renames[r.idx()] = new_r;
@@ -365,63 +449,35 @@ impl IrModify {
                     }
 
                     if is_new_block {
-                        // there can we no instructions in the old because the block is new
+                        // there can be no instructions in the old because the block is new
                         continue;
                     }
                     let inst = &old_insts[current.idx()];
-                    if inst
-                        .as_module(crate::BUILTIN)
-                        .is_some_and(|inst| inst.op() == Builtin::Nothing)
-                    {
-                        renames[current.idx()] = Ref::UNIT;
-                        if appending_block.is_none() {
-                            ir.blocks[current_block.idx()].len -= 1;
-                        }
-                        continue;
-                    } else if let Some(cf) = cf
-                        && let Some(cf_inst) = inst.as_module(cf)
-                        && cf_inst.op() == Cf::Goto
-                    {
-                        let params = cf_inst.inst.params();
-                        let varargs = cf_inst.inst.varargs();
-                        let mut args_iter =
-                            decode_args(&inst.args, params, varargs, &ir.blocks, &ir.extra);
-                        let Some(Argument::BlockTarget(BlockTarget(target, args))) =
-                            args_iter.next()
-                        else {
-                            unreachable!()
-                        };
-                        debug_assert!(args_iter.next().is_none());
-                        let target_info = &mut ir.blocks[target.idx()];
-                        let compress_trivial_gotos = false;
-                        if compress_trivial_gotos && target_info.preds.len() == 1 {
-                            // Goto whose target has only a single predecessor:
-                            // combine into one block
-                            debug_assert_eq!(current_block, *target_info.preds.first().unwrap());
-                            debug_assert_eq!(args.len(), target_info.arg_count as usize);
-                            debug_assert!(!visited_blocks.get(target.idx()), "RPO is wrong");
-
-                            // successors of the next block become successors of the current block
-                            let succs = std::mem::take(&mut target_info.succs);
-                            let appending = appending_block.unwrap_or(current_block);
-                            let info = &mut ir.blocks[appending.idx()];
-                            debug_assert_eq!(info.succs.len(), 1);
-                            debug_assert_eq!(info.succs[0], target);
-                            info.succs = succs;
-
-                            removed_blocks.insert(target);
-
-                            // trivial goto is removed
-                            ir.blocks[appending_block.unwrap_or(current_block).idx()].len -= 1;
-
-                            // continue appending the successor to the current block
-                            arg_renames = Some(args.into_owned().into_iter());
+                    if let Some(inst) = inst.as_module(crate::BUILTIN) {
+                        if inst.op() == Builtin::Nothing {
+                            renames[current.idx()] = Ref::UNIT;
                             if appending_block.is_none() {
-                                appending_block = Some(current_block);
+                                ir.blocks[current_block.idx()].len -= 1;
                             }
-                            current_block = target;
-                            continue 'add_block_contents;
+                            continue;
+                        } else if inst.op() == Builtin::BlockArg
+                            && let Some(renamed) =
+                                arg_renames.as_mut().and_then(|renames| renames.next())
+                        {
+                            renames[current.idx()] = renamed;
+                            continue;
                         }
+                    }
+                    if compress_goto(
+                        inst,
+                        cf,
+                        &mut ir.blocks,
+                        &mut current_block,
+                        &mut appending_block,
+                        &visited_blocks,
+                        &mut arg_renames,
+                    ) {
+                        continue 'add_block_contents;
                     }
                     let new_r = Ref(insts.len() as _);
                     renames[current.idx()] = new_r;
