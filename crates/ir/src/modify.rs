@@ -760,13 +760,13 @@ mod tests {
                      cf.Ret unit
         "#;
         let (function, mut types) = crate::parse::parse_function_body(&env, src);
-        verify::function_body(&env, &function, &types);
+        verify::function_body(&env, &function, &types, "test");
         let mut ir = IrModify::new(function);
         let i64 = types.add(Primitive::I64);
         let (_, n) = ir.add_block_arg(&env, BlockId(1), i64);
         assert_eq!(n, 0);
         let function = ir.finish_and_compress(&env);
         println!("{}", function.display(&env, &types));
-        verify::function_body(&env, &function, &types);
+        verify::function_body(&env, &function, &types, "test");
     }
 }

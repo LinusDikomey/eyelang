@@ -121,7 +121,7 @@ impl<State: Default> Pipeline<State> {
                     "After {pass:?}:\n{}",
                     ir.display_with_phys_regs::<R>(env, &env[module][id].types),
                 );
-                verify::function_body(env, &ir, env[module][id].types());
+                verify::function_body(env, &ir, env[module][id].types(), &env[module][id].name);
             }
             env.modules[module.idx()][id]
                 .ir

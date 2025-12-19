@@ -400,7 +400,7 @@ fn enable_tracing(args: &args::Args) {
         let default_panic_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let span_trace = tracing_error::SpanTrace::capture();
-            tracing::error!("panic occured:\n{span_trace}");
+            eprintln!("panic occured:\n{span_trace}");
             default_panic_hook(info);
         }));
     }

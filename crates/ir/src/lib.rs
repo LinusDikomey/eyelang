@@ -856,6 +856,15 @@ impl FunctionIr {
     pub fn mc_reg_classes(&self) -> &[RegClass] {
         &self.mc_regs
     }
+
+    pub fn find_block_for_position(&self, i: u32) -> BlockId {
+        let block_id = self
+            .blocks
+            .iter()
+            .position(|info| (info.args_idx..info.body_idx + info.len).contains(&i))
+            .unwrap_or_else(|| panic!("Couldn't find block for index {i}"));
+        BlockId(block_id as _)
+    }
 }
 impl block_graph::Blocks for FunctionIr {
     type Block = BlockId;
