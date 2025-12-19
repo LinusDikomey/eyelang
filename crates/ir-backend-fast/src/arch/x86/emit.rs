@@ -33,7 +33,8 @@ pub fn write(
         *offset = Some((text.len() - start) as u32);
         block_queue.extend(ir.successors(env, block));
 
-        for (r, i) in ir.get_block(block) {
+        let mut block_iter = ir.get_block(block).peekable();
+        while let Some((r, i)) = block_iter.next() {
             if let Some(inst) = i.as_module(mc) {
                 match inst.op() {
                     Mc::IncomingBlockArgs => {}
@@ -165,9 +166,23 @@ pub fn write(
                 }
                 I::jmp => {
                     let target = ir.args(i, env);
+                    if block_queue.front() != Some(&target) || block_iter.next().is_some() {
+                        emit_jmp(
+                            &[0xEB],
+                            &[0xE9],
+                            target,
+                            text,
+                            start,
+                            &block_offsets,
+                            &mut missing_block_addrs,
+                        );
+                    }
+                }
+                I::jl => {
+                    let target = ir.args(i, env);
                     emit_jmp(
-                        &[0xEB],
-                        &[0xE9],
+                        &[0x7C, 0xCB],
+                        &[0x0F, 0x8C],
                         target,
                         text,
                         start,
@@ -175,11 +190,11 @@ pub fn write(
                         &mut missing_block_addrs,
                     );
                 }
-                I::jl => {
+                I::jge => {
                     let target = ir.args(i, env);
                     emit_jmp(
-                        &[0x7C, 0xCB],
-                        &[0x0F, 0x8C],
+                        &[0x7D, 0xCB],
+                        &[0x0F, 0x8D],
                         target,
                         text,
                         start,

@@ -150,7 +150,8 @@ ir::instructions! {
 
 
     jmp addr: BlockId !terminator;
-    jl addr: BlockId;
+    jl  addr: BlockId;
+    jge addr: BlockId;
 
     cmp_rr32 a: MCReg(Usage::Use) b: MCReg(Usage::Use);
 

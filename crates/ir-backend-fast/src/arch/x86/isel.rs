@@ -51,7 +51,17 @@ pub fn codegen(
     let mut ir = IrModify::new(body);
     let args = ir.get_block_args(BlockId::ENTRY);
     abi.implement_params(args, &mut ir, env, isel.mc, &types, &regs, unit);
-    let mut ctx = IselCtx::new(main_module, env, &ir, regs, isel.mc, unit, abi, state);
+    let mut ctx = IselCtx::new(
+        main_module,
+        env,
+        &ir,
+        regs,
+        isel.mc,
+        unit,
+        abi,
+        state,
+        &block_graph,
+    );
 
     ir::rewrite::rewrite_in_place(
         &mut ir,
@@ -168,22 +178,33 @@ ir::visitor! {
         ctx.create_args_copy(env, r, mc, ir, b, &b_args);
         x86.jmp(b, ctx.unit)
     };
-    //(arith.LT a b) => { panic!(); Rewrite::Rename(Ref::UNIT)}; // FIXME: this is only to temporarily make the Branch below work
     (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(lt) => {
+        let next_block = ctx.next_block(block);
         // PERF: cloning the args here
-        let b1_args = b1_args.to_vec();
-        let b2_args = b2_args.to_vec();
+        let mut b1_args = b1_args.to_vec();
+        let mut b2_args = b2_args.to_vec();
         match (ctx.regs.get(a), ctx.regs.get(b)) {
             (&[a], &[b]) => {
                 ir.replace(env, lt, x86.cmp_rr32(a, b, ctx.unit));
             }
             _ => todo!("large int comparisons"),
         }
-        ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
-        let jl = x86.jl(b1, ctx.unit);
-        ir.add_before(env, r, jl);
-        ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
-        x86.jmp(b2, ctx.unit)
+        if next_block.is_some_and(|next| next == b1) {
+            // if b1 is the next block, we want to invert the condition to only emit one jump
+            ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
+            let jge = x86.jge(b2, ctx.unit);
+            ir.add_before(env, r, jge);
+            ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
+            // the jmp is still emitted (to maintain correct successor info)
+            // but will be remvoed during emit
+            x86.jmp(b1, ctx.unit)
+        } else {
+            ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
+            let jl = x86.jl(b1, ctx.unit);
+            ir.add_before(env, r, jl);
+            ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
+            x86.jmp(b2, ctx.unit)
+        }
     };
     (%r = arith.Add a b) => int_bin_op(ctx, ir, types, env, dialects, r, a, b, IntBinOp {
         i8: [X86::add_rr8, X86::add_ri8],

@@ -13,9 +13,11 @@ pub use parcopy::ParcopySolver;
 pub use regalloc::{Regalloc, regalloc};
 
 use crate::Argument;
+use crate::BlockGraph;
 use crate::BlockId;
 use crate::Environment;
 use crate::FunctionId;
+use crate::FunctionIr;
 use crate::Inst;
 use crate::Layout;
 use crate::MCReg;
@@ -154,6 +156,7 @@ pub struct IselCtx<'a, I: McInst> {
     mc: ModuleOf<Mc>,
     use_counts: UseCounts,
     pub state: &'a mut BackendState,
+    next_blocks: Box<[Option<BlockId>]>,
 }
 impl<'a, I: McInst> IselCtx<'a, I> {
     pub fn new(
@@ -165,8 +168,16 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         unit: TypeId,
         abi: &'static dyn Abi<I>,
         state: &'a mut BackendState,
+        block_graph: &BlockGraph<FunctionIr>,
     ) -> Self {
         let use_counts = UseCounts::compute(ir, env);
+        let mut next_blocks: Box<[Option<BlockId>]> = vec![None; ir.block_ids().len()].into();
+        for order in block_graph.postorder().windows(2) {
+            // after comes first since we actually care about rpo
+            let after = order[0];
+            let block = order[1];
+            next_blocks[block.idx()] = Some(after);
+        }
         Self {
             main_module,
             unit,
@@ -175,6 +186,7 @@ impl<'a, I: McInst> IselCtx<'a, I> {
             use_counts,
             abi,
             state,
+            next_blocks,
         }
     }
 
@@ -195,6 +207,10 @@ impl<'a, I: McInst> IselCtx<'a, I> {
         self.state.stack_size += layout.size as u32;
         self.state.stack_size
     }
+
+    pub fn next_block(&self, block: BlockId) -> Option<BlockId> {
+        self.next_blocks[block.idx()]
+    }
 }
 impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
     fn begin_block(&mut self, env: &Environment, ir: &mut IrModify, block: BlockId) {
@@ -202,9 +218,10 @@ impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
             return;
         }
         let info = ir.get_block(block);
-        let args = self
-            .regs
-            .get_range(Ref::index(info.args_idx), Ref::index(info.args_idx + info.arg_count));
+        let args = self.regs.get_range(
+            Ref::index(info.args_idx),
+            Ref::index(info.args_idx + info.arg_count),
+        );
         let f = FunctionId {
             module: self.mc.id(),
             function: Mc::IncomingBlockArgs.id(),
