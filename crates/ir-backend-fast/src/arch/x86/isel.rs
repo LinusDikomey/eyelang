@@ -1,10 +1,10 @@
 use std::convert::Infallible;
 
 use ir::{
-    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, MCReg, ModuleId, Primitive, Ref,
-    Type, Types,
+    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, IntoArgs, MCReg, ModuleId, ModuleOf,
+    Primitive, Ref, Type, TypeId, Types,
     dialect::Arith,
-    mc::{Abi, BackendState, IselCtx},
+    mc::{Abi, BackendState, IselCtx, Mc},
     modify::IrModify,
     rewrite::{ReverseRewriteOrder, Rewrite},
     slots::Slots,
@@ -103,6 +103,60 @@ fn int_size_of_ref(r: Ref, ir: &IrModify, types: &Types) -> IntSize {
     }
 }
 
+// TODO: this really sucks, need a good struct for ir visitors that passes everything used in ir visitor
+// and probably another struct for calling cmp_branch
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+fn cmp_branch<
+    A1: IntoArgs<'static>,
+    F1: Fn(BlockId) -> (FunctionId, A1, TypeId),
+    A2: IntoArgs<'static>,
+    F2: Fn(BlockId) -> (FunctionId, A2, TypeId),
+>(
+    ctx: &mut IselCtx<X86>,
+    ir: &mut IrModify,
+    env: &Environment,
+    x86: ModuleOf<X86>,
+    mc: ModuleOf<Mc>,
+    block: BlockId,
+    cmp: Ref,
+    r: Ref,
+    a: Ref,
+    b: Ref,
+    b1: BlockId,
+    b1_args: Vec<Ref>,
+    b2: BlockId,
+    b2_args: Vec<Ref>,
+    cond_jmp: F1,
+    inverse_cond_jmp: F2,
+) -> (
+    FunctionId,
+    impl use<A1, F1, A2, F2> + IntoArgs<'static>,
+    TypeId,
+) {
+    let next_block = ctx.next_block(block);
+    match (ctx.regs.get(a), ctx.regs.get(b)) {
+        (&[a], &[b]) => {
+            ir.replace(env, cmp, x86.cmp_rr32(a, b, ctx.unit));
+        }
+        _ => todo!("large int comparisons"),
+    }
+    if next_block.is_some_and(|next| next == b1) {
+        // if b1 is the next block, we want to invert the condition to only emit one jump
+        ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
+        ir.add_before(env, r, inverse_cond_jmp(b2));
+        ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
+        // the jmp is still emitted (to maintain correct successor info)
+        // but will be remvoed during emit
+        x86.jmp(b1, ctx.unit)
+    } else {
+        ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
+        ir.add_before(env, r, cond_jmp(b1));
+        ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
+        x86.jmp(b2, ctx.unit)
+    }
+}
+
 ir::visitor! {
     InstructionSelector,
     Rewrite,
@@ -178,33 +232,40 @@ ir::visitor! {
         ctx.create_args_copy(env, r, mc, ir, b, &b_args);
         x86.jmp(b, ctx.unit)
     };
-    (%r = cf.Branch (%lt = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(lt) => {
-        let next_block = ctx.next_block(block);
+    (%r = cf.Branch (%cmp = arith.Eq a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(cmp) => {
         // PERF: cloning the args here
-        let mut b1_args = b1_args.to_vec();
-        let mut b2_args = b2_args.to_vec();
-        match (ctx.regs.get(a), ctx.regs.get(b)) {
-            (&[a], &[b]) => {
-                ir.replace(env, lt, x86.cmp_rr32(a, b, ctx.unit));
-            }
-            _ => todo!("large int comparisons"),
-        }
-        if next_block.is_some_and(|next| next == b1) {
-            // if b1 is the next block, we want to invert the condition to only emit one jump
-            ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
-            let jge = x86.jge(b2, ctx.unit);
-            ir.add_before(env, r, jge);
-            ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
-            // the jmp is still emitted (to maintain correct successor info)
-            // but will be remvoed during emit
-            x86.jmp(b1, ctx.unit)
-        } else {
-            ctx.create_args_copy(env, r, mc, ir, b1, &b1_args.to_vec());
-            let jl = x86.jl(b1, ctx.unit);
-            ir.add_before(env, r, jl);
-            ctx.create_args_copy(env, r, mc, ir, b2, &b2_args.to_vec());
-            x86.jmp(b2, ctx.unit)
-        }
+        cmp_branch(ctx, ir, env, x86, mc, block, cmp, r, a, b, b1, b1_args.to_vec(), b2, b2_args.to_vec(),
+            |b| x86.je(b),
+            |b| x86.jne(b),
+        )
+    };
+    (%r = cf.Branch (%cmp = arith.LT a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(cmp) => {
+        // PERF: cloning the args here
+        cmp_branch(ctx, ir, env, x86, mc, block, cmp, r, a, b, b1, b1_args.to_vec(), b2, b2_args.to_vec(),
+            |b| x86.jl(b),
+            |b| x86.jge(b),
+        )
+    };
+    (%r = cf.Branch (%cmp = arith.GT a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(cmp) => {
+        // PERF: cloning the args here
+        cmp_branch(ctx, ir, env, x86, mc, block, cmp, r, a, b, b1, b1_args.to_vec(), b2, b2_args.to_vec(),
+            |b| x86.jg(b),
+            |b| x86.jle(b),
+        )
+    };
+    (%r = cf.Branch (%cmp = arith.LE a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(cmp) => {
+        // PERF: cloning the args here
+        cmp_branch(ctx, ir, env, x86, mc, block, cmp, r, a, b, b1, b1_args.to_vec(), b2, b2_args.to_vec(),
+            |b| x86.jle(b),
+            |b| x86.jg(b),
+        )
+    };
+    (%r = cf.Branch (%cmp = arith.GE a b) (@b1 b1_args) (@b2 b2_args)) if ctx.single_use(cmp) => {
+        // PERF: cloning the args here
+        cmp_branch(ctx, ir, env, x86, mc, block, cmp, r, a, b, b1, b1_args.to_vec(), b2, b2_args.to_vec(),
+            |b| x86.jge(b),
+            |b| x86.jl(b),
+        )
     };
     (%r = arith.Add a b) => int_bin_op(ctx, ir, types, env, dialects, r, a, b, IntBinOp {
         i8: [X86::add_rr8, X86::add_ri8],

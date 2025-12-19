@@ -93,7 +93,7 @@ pub fn write(
                 continue;
             }
             let Some(inst) = i.as_module(x86) else {
-                panic!("expected x86 instruction but encountered other module at {r:?}");
+                panic!("expected x86 instruction but encountered other module at {r}");
             };
 
             use X86 as I;
@@ -178,6 +178,30 @@ pub fn write(
                         );
                     }
                 }
+                I::je => {
+                    let target = ir.args(i, env);
+                    emit_jmp(
+                        &[0x74, 0xCB],
+                        &[0x0F, 0x84],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
+                I::jne => {
+                    let target = ir.args(i, env);
+                    emit_jmp(
+                        &[0x75, 0xCB],
+                        &[0x0F, 0x85],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
                 I::jl => {
                     let target = ir.args(i, env);
                     emit_jmp(
@@ -195,6 +219,30 @@ pub fn write(
                     emit_jmp(
                         &[0x7D, 0xCB],
                         &[0x0F, 0x8D],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
+                I::jle => {
+                    let target = ir.args(i, env);
+                    emit_jmp(
+                        &[0x7E, 0xCB],
+                        &[0x0F, 0x8E],
+                        target,
+                        text,
+                        start,
+                        &block_offsets,
+                        &mut missing_block_addrs,
+                    );
+                }
+                I::jg => {
+                    let target = ir.args(i, env);
+                    emit_jmp(
+                        &[0x7F, 0xCB],
+                        &[0x0F, 0x8F],
                         target,
                         text,
                         start,
