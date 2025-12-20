@@ -2,8 +2,8 @@ mod macros;
 pub use macros::visitor;
 
 use crate::{
-    BlockGraph, BlockId, Environment, FunctionId, FunctionIr, INLINE_ARGS, Instruction, IntoArgs,
-    Parameter, Ref, TypeId, Types, modify::IrModify,
+    BUILTIN, BlockGraph, BlockId, BlockInfo, Builtin, Environment, FunctionId, FunctionIr,
+    INLINE_ARGS, Instruction, IntoArgs, Parameter, Ref, TypeId, Types, modify::IrModify,
 };
 
 pub trait Visitor<Ctx = ()> {
@@ -144,15 +144,22 @@ pub fn rewrite_in_place<Ctx: RewriteCtx, R: Visitor<Ctx, Output = Rewrite>>(
                     // instruction was deleted, skip it
                     break;
                 };
-                let mut inst = inst;
-                crate::update_inst_refs(
-                    &mut inst,
-                    env,
-                    &mut ir.ir.extra,
-                    &ir.ir.blocks,
-                    |r| ir.renames.get(&r).copied().unwrap_or(r),
-                    std::convert::identity,
-                );
+                // let mut inst = inst;
+                // crate::update_inst_refs(
+                //     &mut inst,
+                //     env,
+                //     &mut ir.ir.extra,
+                //     &ir.ir.blocks,
+                //     |r| ir.renames.get(&r).copied().unwrap_or(r),
+                //     std::convert::identity,
+                // );
+                if inst.function.module == BUILTIN.id()
+                    && inst.function.function == Builtin::Nothing.id()
+                    || inst.function.function == Builtin::Copy.id()
+                {
+                    // no longer a real instruction, we are done
+                    break;
+                }
                 let rewrite = rewriter.visit_instruction(ir, types, env, &inst, r, block, ctx);
                 match rewrite {
                     None => break,
@@ -183,6 +190,14 @@ impl RenameTable {
         }
     }
 
+    pub fn with_counts(refs: u32, blocks: u32) -> Self {
+        Self {
+            refs: (0..refs).map(Ref).collect(),
+            blocks: (0..blocks).map(BlockId).collect(),
+            old_types_offset: 0,
+        }
+    }
+
     pub fn rename(&mut self, old: Ref, renamed: Ref) {
         self.refs[old.idx()] = renamed;
     }
@@ -195,10 +210,14 @@ impl RenameTable {
         r.into_ref().map_or(r, |i| self.refs[i as usize])
     }
 
+    /// Update an instructions arguments to the renamevd values. Passing in old_extra will cause
+    /// extra info to get copied into extra (used by inlining).
+    /// When passing None to old_extra, the info will be updated in-place
     pub fn visit_inst(
         &self,
-        ir: &mut IrModify,
-        old_extra: &[u32],
+        extra: &mut Vec<u32>,
+        blocks: &[BlockInfo],
+        old_extra: Option<&[u32]>,
         inst: &mut Instruction,
         env: &Environment,
     ) {
@@ -210,23 +229,27 @@ impl RenameTable {
         let mut new_args_start = 0;
         if !is_inline {
             let i = inst.args[0] as usize;
-            let old = &old_extra[i..i + count];
-            new_args_start = ir.ir.extra.len();
-            ir.ir.extra.extend_from_slice(old);
+            if let Some(old_extra) = old_extra {
+                let old = &old_extra[i..i + count];
+                new_args_start = extra.len();
+                extra.extend_from_slice(old);
+            } else {
+                new_args_start = i;
+            }
         };
         let mut arg_idx: usize = 0;
-        let get_arg = |ir: &IrModify, inst: &Instruction, i| {
+        let get_arg = |extra: &[u32], inst: &Instruction, i| {
             if is_inline {
                 inst.args[i]
             } else {
-                ir.ir.extra()[new_args_start + i]
+                extra[new_args_start + i]
             }
         };
-        let set_arg = |ir: &mut IrModify, inst: &mut Instruction, i: usize, value| {
+        let set_arg = |extra: &mut [u32], inst: &mut Instruction, i: usize, value| {
             if is_inline {
                 inst.args[i] = value;
             } else {
-                ir.ir.extra[new_args_start + i] = value;
+                extra[new_args_start + i] = value;
             }
         };
 
@@ -235,30 +258,37 @@ impl RenameTable {
         for param in params {
             match param {
                 Parameter::Ref | Parameter::RefOf(_) => {
-                    let value = get_arg(ir, inst, arg_idx);
-                    set_arg(ir, inst, arg_idx, get(Ref(value)).0);
+                    let value = get_arg(extra, inst, arg_idx);
+                    set_arg(extra, inst, arg_idx, get(Ref(value)).0);
                     arg_idx += 1;
                 }
                 Parameter::BlockId => {
-                    let value = get_arg(ir, inst, arg_idx);
-                    set_arg(ir, inst, arg_idx, get_block(BlockId(value)).0);
+                    let value = get_arg(extra, inst, arg_idx);
+                    set_arg(extra, inst, arg_idx, get_block(BlockId(value)).0);
                     arg_idx += 1;
                 }
                 Parameter::BlockTarget => {
-                    let target = BlockId(get_arg(ir, inst, arg_idx));
+                    let target = BlockId(get_arg(extra, inst, arg_idx));
                     let new_target = get_block(target);
-                    set_arg(ir, inst, arg_idx, new_target.0);
-                    let arg_count = ir.ir.blocks[new_target.idx()].arg_count;
-                    let idx = get_arg(ir, inst, arg_idx + 1);
-                    let args = &old_extra[idx as usize..idx as usize + arg_count as usize];
-                    let new_idx = ir.ir.extra.len() as u32;
-                    set_arg(ir, inst, arg_idx + 1, new_idx);
-                    ir.ir.extra.extend(args.iter().map(|&arg| get(Ref(arg)).0));
+                    set_arg(extra, inst, arg_idx, new_target.0);
+                    let arg_count = blocks[new_target.idx()].arg_count;
+                    let idx = get_arg(extra, inst, arg_idx + 1);
+                    let range = idx as usize..idx as usize + arg_count as usize;
+                    if let Some(old_extra) = old_extra {
+                        let args = &old_extra[range];
+                        let new_idx = extra.len() as u32;
+                        set_arg(extra, inst, arg_idx + 1, new_idx);
+                        extra.extend(args.iter().map(|&arg| get(Ref(arg)).0));
+                    } else {
+                        for arg in &mut extra[range] {
+                            *arg = get(Ref(*arg)).0;
+                        }
+                    }
                     arg_idx += 2;
                 }
                 Parameter::TypeId => {
-                    let value = get_arg(ir, inst, arg_idx);
-                    set_arg(ir, inst, arg_idx, value + self.old_types_offset);
+                    let value = get_arg(extra, inst, arg_idx);
+                    set_arg(extra, inst, arg_idx, value + self.old_types_offset);
                     arg_idx += 1;
                 }
                 _ => {

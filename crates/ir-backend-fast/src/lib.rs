@@ -174,12 +174,20 @@ impl FunctionPass<BackendState> for Isel {
         env: &ir::Environment,
         types: &ir::Types,
         ir: ir::FunctionIr,
-        _name: &str,
+        name: &str,
         state: &mut BackendState,
     ) -> (ir::FunctionIr, Option<ir::Types>) {
         let mut isel = self.isel;
-        let (mir, types) =
-            arch::x86::codegen(env, &ir, types, &mut isel, self.module_id, self.abi, state);
+        let (mir, types) = arch::x86::codegen(
+            env,
+            &ir,
+            types,
+            &mut isel,
+            self.module_id,
+            self.abi,
+            state,
+            name,
+        );
         (mir, Some(types))
     }
 }

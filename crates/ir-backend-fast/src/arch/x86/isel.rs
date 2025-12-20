@@ -20,7 +20,15 @@ pub fn codegen(
     main_module: ModuleId,
     abi: &'static dyn Abi<X86>,
     state: &mut BackendState,
+    function_name: &str,
 ) -> (FunctionIr, ir::Types) {
+    let _enter = tracing::span!(
+        target: "isel",
+        tracing::Level::INFO,
+        "function",
+        function = function_name,
+    )
+    .entered();
     let mut body = body.clone();
 
     let mut regs = Slots::with_default(&body, types, MCReg::from_virt(0));

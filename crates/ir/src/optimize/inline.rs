@@ -88,6 +88,9 @@ impl Inline {
                             call_arg
                         })
                         .collect();
+                    // FIXME: can't add a Goto after the last instruction of the block here for now
+                    // but also the call instruction should be preserved since it was renamed to the
+                    // the return value
                     ir.replace(
                         env,
                         call_ref,
@@ -99,8 +102,14 @@ impl Inline {
                 }
                 for (r, inst) in callee_ir.get_block(block) {
                     let mut inst = *inst;
-                    renames.visit_inst(&mut ir, &callee_ir.extra, &mut inst, env);
-                    let renamed = if inst
+                    renames.visit_inst(
+                        &mut ir.ir.extra,
+                        &ir.ir.blocks,
+                        Some(&callee_ir.extra),
+                        &mut inst,
+                        env,
+                    );
+                    if inst
                         .as_module(self.cf)
                         .is_some_and(|inst| inst.op() == Cf::Ret)
                     {
@@ -113,11 +122,11 @@ impl Inline {
                                 after_call_block,
                                 Cow::Borrowed(&[return_value]),
                             )),
-                        )
+                        );
                     } else {
-                        ir.add_inst_before(insert_idx, inst)
-                    };
-                    renames.rename(r, renamed);
+                        let renamed = ir.add_inst_before(insert_idx, inst);
+                        renames.rename(r, renamed);
+                    }
                 }
             }
         }

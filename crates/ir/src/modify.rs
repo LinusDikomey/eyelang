@@ -4,20 +4,18 @@ use crate::{
     Argument, Bitmap, BlockGraph, BlockId, BlockInfo, BlockTarget, Builtin, Environment,
     FunctionId, FunctionIr, INLINE_ARGS, Inst, Instruction, IntoArgs, MCReg, Parameter, Ref, Refs,
     TypeId, TypedInstruction, argument, builder::write_args, decode_args, dialect::Cf,
-    mc::RegClass,
+    mc::RegClass, rewrite::RenameTable,
 };
 
 pub struct IrModify {
     pub(crate) ir: FunctionIr,
     additional: Vec<AdditionalInst>,
-    pub renames: DHashMap<Ref, Ref>,
 }
 impl IrModify {
     pub fn new(ir: FunctionIr) -> Self {
         Self {
             ir,
             additional: Vec::new(),
-            renames: dmap::new(),
         }
     }
 
@@ -26,15 +24,11 @@ impl IrModify {
     }
 
     pub fn refs(&self) -> impl use<> + ExactSizeIterator<Item = Ref> {
-        self.ir.refs()
+        (0..(self.ir.insts.len() + self.additional.len()) as u32).map(Ref)
     }
 
     pub fn block_ids(&self) -> impl ExactSizeIterator<Item = BlockId> + use<> {
         self.ir.block_ids()
-    }
-
-    pub fn renames(&self) -> &DHashMap<Ref, Ref> {
-        &self.renames
     }
 
     pub fn get_ref_ty(&self, r: Ref) -> TypeId {
@@ -78,7 +72,6 @@ impl IrModify {
             r.is_ref(),
             "Tried to get an instruction from a Ref value: {r}"
         );
-        let r = self.renames.get(&r).copied().unwrap_or(r);
         if !r.is_ref() {
             return Err(());
         }
@@ -273,28 +266,24 @@ impl IrModify {
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
         let cf = env.get_dialect_module_if_present::<Cf>();
-        let Self {
-            mut ir,
-            additional,
-            renames: mut rename_map,
-        } = self;
-        if additional.is_empty() && rename_map.is_empty() {
-            return ir;
-        }
+        let Self { mut ir, additional } = self;
+        // TODO: IrModify should keep track of number of instructions replaced with Nothing/Copy so
+        // that we can skip compressing. Also could preallocate the new insts buffer perfectly
+        // if additional.is_empty() {
+        //     return ir;
+        // }
+
+        let inst_count = (ir.insts.len() + additional.len()) as u32;
+        let mut renames = RenameTable::with_counts(inst_count, ir.block_count());
 
         let block_graph = BlockGraph::calculate(&ir, env);
 
         let inst_count = ir.insts.len() + additional.len();
-        // TODO: IrModify could keep track of number of deleted instructions sot that we can always
-        // preallocate perfectly here. Also could know if the ir should still be compressed with no
-        // renames/additional instructions
         let mut insts = Vec::with_capacity(inst_count);
         let new_refs = (ir.insts.len() as u32..).map(Ref);
         let old_insts = ir.insts;
         let mut new_insts: Vec<_> = additional.into_iter().zip(new_refs).collect();
         new_insts.sort_by_key(|(inst, _r)| inst.before.0);
-
-        let mut renames: Box<[Ref]> = (0..inst_count as u32).map(Ref).collect();
 
         let mut visited_blocks = Bitmap::new(ir.blocks.len());
         let mut removed_blocks = DHashSet::default();
@@ -309,19 +298,18 @@ impl IrModify {
 
             let mut current_block = current_block;
 
+            #[allow(unused)] // FIXME: remove after return false is also removed
             let mut compress_goto = |inst: &Instruction,
                                      cf: Option<crate::ModuleOf<Cf>>,
+                                     extra: &[u32],
                                      blocks: &mut [BlockInfo],
                                      current_block: &mut BlockId,
                                      appending_block: &mut Option<BlockId>,
                                      visited_blocks: &Bitmap,
-                                     arg_renames: &mut Option<std::vec::IntoIter<Ref>>|
+                                     arg_renames: &mut Option<std::vec::IntoIter<Ref>>,
+                                     renames: &mut RenameTable,
+                                     goto_ref: Ref|
              -> bool {
-                // FIXME: currently, compressing a chain of multiple blocks causes problems
-                // this check should be removed once it is fixed
-                if appending_block.is_some() {
-                    return false;
-                }
                 let Some(cf) = cf else {
                     return false;
                 };
@@ -333,7 +321,7 @@ impl IrModify {
                 }
                 let params = cf_inst.inst.params();
                 let varargs = cf_inst.inst.varargs();
-                let mut args_iter = decode_args(&inst.args, params, varargs, blocks, &ir.extra);
+                let mut args_iter = decode_args(&inst.args, params, varargs, blocks, extra);
                 let Some(Argument::BlockTarget(BlockTarget(target, args))) = args_iter.next()
                 else {
                     unreachable!()
@@ -345,21 +333,21 @@ impl IrModify {
                 }
                 // Goto whose target has only a single predecessor:
                 // combine into one block
-                debug_assert_eq!(*current_block, *target_info.preds.first().unwrap());
+                debug_assert_eq!(
+                    appending_block.unwrap_or(*current_block),
+                    *target_info.preds.first().unwrap()
+                );
                 debug_assert_eq!(args.len(), target_info.arg_count as usize);
                 debug_assert!(!visited_blocks.get(target.idx()), "RPO is wrong");
+
+                eprintln!("Compressing {target} into {current_block}");
 
                 // successors of the next block become successors of the current block
                 let succs = std::mem::take(&mut target_info.succs);
                 let appending = appending_block.unwrap_or(*current_block);
                 // update the predecessor infos of the successors
                 for &succ in &succs {
-                    let pred = blocks[succ.idx()]
-                        .preds
-                        .iter()
-                        .position(|&pred| pred == target)
-                        .unwrap();
-                    blocks[succ.idx()].preds[pred] = appending;
+                    blocks[succ.idx()].replace_pred(target, appending);
                 }
                 let info = &mut blocks[appending.idx()];
                 debug_assert_eq!(info.succs.len(), 1);
@@ -377,6 +365,8 @@ impl IrModify {
                     *appending_block = Some(*current_block);
                 }
                 *current_block = target;
+                // goto returns a unit so this rename is correct
+                renames.rename(goto_ref, Ref::UNIT);
                 true
             };
 
@@ -406,18 +396,19 @@ impl IrModify {
                 info.args_idx = insts.len() as u32;
                 info.body_idx = info.args_idx + info.arg_count;
                 for old_ref in inst_range {
-                    'before: while let Some((inst, r)) = new_insts.get(new_idx)
-                        && inst.before == old_ref
+                    'before: while let Some((added, r)) = new_insts.get(new_idx)
+                        && added.before == old_ref
                     {
+                        let mut inst = added.inst;
                         debug_assert!(
                             !inst
-                                .inst
                                 .as_module(crate::BUILTIN)
                                 .is_some_and(|inst| inst.op() == Builtin::Nothing),
                             "Nothing in additional shouldn't happen"
                         );
+                        renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
                         new_idx += 1;
-                        if inst
+                        if added
                             .inst
                             .as_module(crate::BUILTIN)
                             .is_some_and(|inst| inst.op() == Builtin::BlockArg)
@@ -425,36 +416,45 @@ impl IrModify {
                             if let Some(renamed) =
                                 arg_renames.as_mut().and_then(|renames| renames.next())
                             {
-                                rename_map.insert(*r, renamed);
+                                renames.rename(*r, renamed);
                                 continue 'before;
                             }
                         } else {
                             ir.blocks[appending_block.unwrap_or(current_block).idx()].len += 1;
                             if compress_goto(
-                                &inst.inst,
+                                &inst,
                                 cf,
+                                &ir.extra,
                                 &mut ir.blocks,
                                 &mut current_block,
                                 &mut appending_block,
                                 &visited_blocks,
                                 &mut arg_renames,
+                                &mut renames,
+                                *r,
                             ) {
                                 continue 'add_block_contents;
                             }
                         }
                         let new_r = Ref(insts.len() as _);
-                        renames[r.idx()] = new_r;
-                        insts.push(inst.inst);
+                        renames.rename(*r, new_r);
+                        insts.push(inst);
                     }
 
                     if is_new_block {
                         // there can be no instructions in the old because the block is new
                         continue;
                     }
-                    let inst = &old_insts[old_ref.idx()];
+                    let mut inst = old_insts[old_ref.idx()];
+                    renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
                     if let Some(inst) = inst.as_module(crate::BUILTIN) {
-                        if inst.op() == Builtin::Nothing {
-                            renames[old_ref.idx()] = Ref::UNIT;
+                        if matches!(inst.op(), Builtin::Nothing | Builtin::Copy) {
+                            let new = if inst.op() == Builtin::Nothing {
+                                Ref::UNIT
+                            } else {
+                                Ref(inst.args[0])
+                            };
+                            renames.rename(old_ref, new);
                             if appending_block.is_none() {
                                 ir.blocks[current_block.idx()].len -= 1;
                             }
@@ -463,27 +463,30 @@ impl IrModify {
                             && let Some(renamed) =
                                 arg_renames.as_mut().and_then(|renames| renames.next())
                         {
-                            rename_map.insert(old_ref, renamed);
+                            renames.rename(old_ref, renamed);
                             continue;
                         }
                     }
                     if compress_goto(
-                        inst,
+                        &inst,
                         cf,
+                        &mut ir.extra,
                         &mut ir.blocks,
                         &mut current_block,
                         &mut appending_block,
                         &visited_blocks,
                         &mut arg_renames,
+                        &mut renames,
+                        old_ref,
                     ) {
                         continue 'add_block_contents;
                     }
                     let new_r = Ref(insts.len() as _);
-                    renames[old_ref.idx()] = new_r;
+                    renames.rename(old_ref, new_r);
                     if let Some(appending) = appending_block {
                         ir.blocks[appending.idx()].len += 1;
                     }
-                    insts.push(*inst);
+                    insts.push(inst);
                 }
                 break 'add_block_contents;
             }
@@ -492,17 +495,16 @@ impl IrModify {
             removed_blocks.insert(BlockId(i as _));
         });
 
-        let renamed = |r: Ref| {
-            let r = rename_map.get(&r).copied().unwrap_or(r);
-            if r.is_ref() { renames[r.idx()] } else { r }
-        };
-
+        // TODO: probably should get rid of block renaming, maybe just have a notion of free block
+        // slots in the ir
         let mut renamed_blocks = DHashMap::default();
-        for &removed in &removed_blocks {
+        let mut removed_block_iter = removed_blocks.iter().copied().peekable();
+        while removed_block_iter.peek().is_some() {
             while removed_blocks.contains(&BlockId(ir.blocks.len() as u32 - 1)) {
                 ir.blocks.pop();
                 continue;
             }
+            let removed = removed_block_iter.next().unwrap();
             if removed.idx() >= ir.blocks.len() {
                 continue;
             }
@@ -510,12 +512,17 @@ impl IrModify {
             renamed_blocks.insert(BlockId(ir.blocks.len() as u32), removed);
         }
 
-        for inst in &mut insts {
-            crate::update_inst_refs(inst, env, &mut ir.extra, &ir.blocks, renamed, |block| {
-                renamed_blocks.get(&block).copied().unwrap_or(block)
-            });
-        }
         if !renamed_blocks.is_empty() {
+            for inst in &mut insts {
+                crate::update_inst_refs(
+                    inst,
+                    env,
+                    &mut ir.extra,
+                    &ir.blocks,
+                    std::convert::identity,
+                    |block| renamed_blocks.get(&block).copied().unwrap_or(block),
+                );
+            }
             for block in &mut ir.blocks {
                 for b in block.succs.iter_mut().chain(block.preds.iter_mut()) {
                     *b = renamed_blocks.get(b).copied().unwrap_or(*b);
@@ -565,8 +572,24 @@ impl IrModify {
 
     pub fn replace_with(&mut self, env: &Environment, r: Ref, new: Ref) {
         let block = self.inst_block(r);
+        let ty = self.get_ref_ty(new);
         self.on_inst_remove(env, r, block);
-        self.renames.insert(r, new);
+        let inst = if (r.0 as usize) < self.ir.insts.len() {
+            &mut self.ir.insts[r.0 as usize]
+        } else {
+            &mut self.additional[r.0 as usize - self.ir.insts.len()].inst
+        };
+        inst.function = FunctionId {
+            module: crate::ModuleId::BUILTINS,
+            function: Builtin::Copy.id(),
+        };
+        inst.args = [new.0, 0];
+        inst.ty = ty;
+    }
+
+    pub fn delete(&mut self, env: &Environment, r: Ref) {
+        let block = self.inst_block(r);
+        self.on_inst_remove(env, r, block);
         let inst = if (r.0 as usize) < self.ir.insts.len() {
             &mut self.ir.insts[r.0 as usize]
         } else {
@@ -576,10 +599,8 @@ impl IrModify {
             module: crate::ModuleId::BUILTINS,
             function: Builtin::Nothing.id(),
         };
-    }
-
-    pub fn delete(&mut self, env: &Environment, r: Ref) {
-        self.replace_with(env, r, Ref::UNIT);
+        inst.args = [0, 0];
+        inst.ty = TypeId::UNIT;
     }
 
     pub fn inst_block(&self, r: Ref) -> BlockId {
@@ -699,24 +720,34 @@ impl IrModify {
             .iter()
             .position(|block| (block.body_idx..block.body_idx + block.len).contains(&r.0))
             .unwrap();
+        let block_id = BlockId(block as _);
+        let new_block_id = BlockId(self.ir.blocks.len() as _);
         let info = &mut self.ir.blocks[block];
         let is_end = info.body_idx + info.len == r.0 + 1;
+        debug_assert!(
+            !is_end,
+            "Can't split block at the end, should add a new block instead"
+        );
         let split_offset = r.0 - info.body_idx + 1;
-        let new_block_len = if is_end {
-            0
-        } else {
+        let new_block_len = {
             let old_count = split_offset;
             let new_block_len = info.len - old_count;
             info.len = old_count;
             new_block_len
         };
         let new_block_idx = info.body_idx + split_offset;
-        let succs = if is_end {
-            Vec::new()
-        } else {
-            std::mem::take(&mut info.succs)
+        let succs = {
+            let mut succs = std::mem::take(&mut info.succs);
+            for succ in &mut succs {
+                if *succ == block_id {
+                    // block has itself as successor, can just replace it directly with the split block id
+                    *succ = new_block_id;
+                } else {
+                    self.ir.blocks[succ.idx()].replace_pred(block_id, new_block_id);
+                }
+            }
+            succs
         };
-        let id = BlockId(self.ir.blocks.len() as _);
         self.ir.blocks.push(BlockInfo {
             arg_count: 0,
             args_idx: new_block_idx,
@@ -725,7 +756,7 @@ impl IrModify {
             preds: Vec::new(),
             succs,
         });
-        id
+        new_block_id
     }
 }
 

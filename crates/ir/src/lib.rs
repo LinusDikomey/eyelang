@@ -911,6 +911,16 @@ impl BlockInfo {
         let s = self.args_idx + self.arg_count;
         (s..s + self.len).map(Ref)
     }
+
+    pub fn replace_pred(&mut self, pred: BlockId, replaced_with: BlockId) {
+        let i = self.preds.iter().position(|&p| p == pred).unwrap();
+        self.preds[i] = replaced_with;
+    }
+
+    pub fn replace_succ(&mut self, succ: BlockId, replaced_with: BlockId) {
+        let i = self.succs.iter().position(|&s| s == succ).unwrap();
+        self.succs[i] = replaced_with;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

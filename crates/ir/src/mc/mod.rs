@@ -227,8 +227,7 @@ impl<'a, I: McInst> crate::rewrite::RewriteCtx for IselCtx<'a, I> {
             function: Mc::IncomingBlockArgs.id(),
         };
         let start = ir.get_original_block_start(block);
-        let r = ir.add_before(env, start, (f, ((), args), self.unit));
-        eprintln!("Added IncomingBlockArgs: {r} before {start}");
+        ir.add_before(env, start, (f, ((), args), self.unit));
     }
 }
 

@@ -8,6 +8,7 @@ instructions! {
     Nothing  !pure;
     BlockArg !pure;
     Undef    !pure;
+    Copy     arg: Ref !pure;
 }
 
 pub const BUILTIN: ModuleOf<Builtin> = ModuleOf(ModuleId::BUILTINS, std::marker::PhantomData);

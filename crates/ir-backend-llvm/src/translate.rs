@@ -320,6 +320,7 @@ unsafe fn build_func(
                     ir::Builtin::Undef => llvm_ty(ctx, types[inst.ty()], types)
                         .map(|ty| LLVMGetUndef(ty))
                         .unwrap_or(ptr::null_mut()),
+                    ir::Builtin::Copy => unreachable!(),
                 }
             } else if let Some(inst) = inst.as_module(dialects.arith) {
                 use ir::dialect::Arith as I;

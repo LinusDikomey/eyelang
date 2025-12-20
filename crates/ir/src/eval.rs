@@ -326,12 +326,13 @@ pub fn eval<E: EvalEnvironment>(
                 use crate::Builtin as I;
                 match typed_inst.op() {
                     I::Nothing => Val::Unit,
-                    I::BlockArg => panic!("BlockArg inside function body encountered"),
+                    I::BlockArg => unreachable!("BlockArg inside function body encountered"),
                     I::Undef => {
                         // TODO: could track usage of undefined values and error
                         pc += 1;
                         continue;
                     }
+                    I::Copy => unreachable!("Copy should only exist during optimization, not eval"),
                 }
             } else if let Some(typed_inst) = inst.as_module(dialects.arith) {
                 use crate::dialect::Arith as I;
