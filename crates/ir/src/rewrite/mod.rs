@@ -210,6 +210,10 @@ impl RenameTable {
         r.into_ref().map_or(r, |i| self.refs[i as usize])
     }
 
+    pub fn get_block(&self, block: BlockId) -> BlockId {
+        self.blocks[block.idx()]
+    }
+
     /// Update an instructions arguments to the renamevd values. Passing in old_extra will cause
     /// extra info to get copied into extra (used by inlining).
     /// When passing None to old_extra, the info will be updated in-place
@@ -224,8 +228,12 @@ impl RenameTable {
         let get = |r: Ref| -> Ref { r.into_ref().map_or(r, |i| self.refs[i as usize]) };
         let get_block = |b: BlockId| self.blocks[b.idx()];
         let params = &env[inst.function].params[..];
-        let count = params.iter().map(|p| p.slot_count()).sum();
-        let is_inline = count <= INLINE_ARGS;
+        let vararg_count = inst.args[1] as usize;
+        let count = params.iter().map(|p| p.slot_count()).sum::<usize>()
+            + env[inst.function]
+                .varargs()
+                .map_or(0, |param| param.slot_count() * vararg_count);
+        let is_inline = env[inst.function].varargs().is_none() && count <= INLINE_ARGS;
         let mut new_args_start = 0;
         if !is_inline {
             let i = inst.args[0] as usize;
@@ -233,6 +241,7 @@ impl RenameTable {
                 let old = &old_extra[i..i + count];
                 new_args_start = extra.len();
                 extra.extend_from_slice(old);
+                inst.args[0] = new_args_start as _;
             } else {
                 new_args_start = i;
             }
@@ -255,7 +264,12 @@ impl RenameTable {
 
         inst.ty.0 += self.old_types_offset;
 
-        for param in params {
+        for param in params.iter().copied().chain(
+            env[inst.function]
+                .varargs()
+                .iter()
+                .flat_map(|a| std::iter::repeat_n(*a, vararg_count)),
+        ) {
             match param {
                 Parameter::Ref | Parameter::RefOf(_) => {
                     let value = get_arg(extra, inst, arg_idx);

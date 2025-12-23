@@ -7,6 +7,7 @@ use crate::{
     mc::RegClass, rewrite::RenameTable,
 };
 
+#[derive(Debug)]
 pub struct IrModify {
     pub(crate) ir: FunctionIr,
     additional: Vec<AdditionalInst>,
@@ -145,7 +146,8 @@ impl IrModify {
         let prev_arg_count = block_info.arg_count;
         block_info.arg_count += 1;
         self.additional.push(AdditionalInst {
-            before,
+            insert_at: before,
+            position: Insert::Before,
             inst: crate::builtins::block_arg_inst(ty),
         });
         for pred in &self.ir.blocks[block.idx()].preds {
@@ -204,18 +206,37 @@ impl IrModify {
     pub fn add_before<'r>(
         &mut self,
         env: &Environment,
+        before: Ref,
+        inst: (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) -> Ref {
+        self.add_before_or_after(env, before, Insert::Before, inst)
+    }
+
+    pub fn add_after<'r>(
+        &mut self,
+        env: &Environment,
         r: Ref,
+        inst: (FunctionId, impl IntoArgs<'r>, TypeId),
+    ) -> Ref {
+        self.add_before_or_after(env, r, Insert::After, inst)
+    }
+
+    pub fn add_before_or_after<'r>(
+        &mut self,
+        env: &Environment,
+        insert_at: Ref,
+        position: Insert,
         (function, args, ty): (FunctionId, impl IntoArgs<'r>, TypeId),
     ) -> Ref {
-        let before_old = r.idx() < self.ir.insts.len();
-        let before = if before_old {
-            r
+        let insert_at_old = insert_at.idx() < self.ir.insts.len();
+        let insert_at = if insert_at_old {
+            insert_at
         } else {
-            self.additional[r.idx() - self.ir.insts.len()].before
+            self.additional[insert_at.idx() - self.ir.insts.len()].insert_at
         };
         let def = &env[function];
         debug_assert!(
-            !def.flags.terminator() || !before_old,
+            !def.flags.terminator() || !insert_at_old || position == Insert::After,
             "can't add a terminator before another instruction"
         );
         // PERF: iterating blocks every time is bad, somehow avoid this
@@ -226,12 +247,13 @@ impl IrModify {
                 .position(|info| {
                     if info.body_idx < self.ir.insts.len() as _ {
                         let i = info.body_idx;
-                        (i..i + info.len).contains(&r.0)
+                        (i..i + info.len).contains(&insert_at.0)
                     } else {
-                        info.body_idx == before.0
+                        info.body_idx == insert_at.0
                     }
                 })
-                .unwrap_or_else(|| panic!("no block found for instruction {r}")) as _,
+                .unwrap_or_else(|| panic!("no block found for instruction {insert_at}"))
+                as _,
         );
         let args = write_args(
             &mut self.ir.extra,
@@ -241,27 +263,24 @@ impl IrModify {
             def.varargs,
             args,
         );
-        self.add_inst_before(before, Instruction { function, args, ty })
+        self.add_inst_before_or_after(insert_at, position, Instruction { function, args, ty })
     }
 
-    pub fn add_inst_before(&mut self, before: Ref, inst: Instruction) -> Ref {
+    pub fn add_inst_before_or_after(
+        &mut self,
+        insert_at: Ref,
+        position: Insert,
+        inst: Instruction,
+    ) -> Ref {
         let r = Ref((self.ir.insts.len() + self.additional.len())
             .try_into()
             .expect("too many instructions"));
-        self.additional.push(AdditionalInst { before, inst });
+        self.additional.push(AdditionalInst {
+            insert_at,
+            position,
+            inst,
+        });
         r
-    }
-
-    pub fn add_after<'r>(
-        &mut self,
-        env: &Environment,
-        r: Ref,
-        inst: (FunctionId, impl IntoArgs<'r>, TypeId),
-    ) -> Ref {
-        let i = r
-            .into_ref()
-            .expect("Can't add an instruction after a value Ref");
-        self.add_before(env, Ref::index(i + 1), inst)
     }
 
     pub fn finish_and_compress(self, env: &Environment) -> FunctionIr {
@@ -283,7 +302,12 @@ impl IrModify {
         let new_refs = (ir.insts.len() as u32..).map(Ref);
         let old_insts = ir.insts;
         let mut new_insts: Vec<_> = additional.into_iter().zip(new_refs).collect();
-        new_insts.sort_by_key(|(inst, _r)| inst.before.0);
+        new_insts.sort_by(|(a, _), (b, _)| {
+            a.insert_at
+                .0
+                .cmp(&b.insert_at.0)
+                .then(a.position.cmp(&b.position))
+        });
 
         let mut visited_blocks = Bitmap::new(ir.blocks.len());
         let mut removed_blocks = DHashSet::default();
@@ -310,6 +334,7 @@ impl IrModify {
                                      renames: &mut RenameTable,
                                      goto_ref: Ref|
              -> bool {
+                return false;
                 let Some(cf) = cf else {
                     return false;
                 };
@@ -339,8 +364,6 @@ impl IrModify {
                 );
                 debug_assert_eq!(args.len(), target_info.arg_count as usize);
                 debug_assert!(!visited_blocks.get(target.idx()), "RPO is wrong");
-
-                eprintln!("Compressing {target} into {current_block}");
 
                 // successors of the next block become successors of the current block
                 let succs = std::mem::take(&mut target_info.succs);
@@ -374,10 +397,10 @@ impl IrModify {
                 visited_blocks.set(current_block.idx(), true);
                 let info = &mut ir.blocks[current_block.idx()];
                 let mut new_idx = match new_insts
-                    .binary_search_by_key(&info.args_idx, |(add, _)| add.before.0)
+                    .binary_search_by_key(&info.args_idx, |(add, _)| add.insert_at.0)
                 {
                     Ok(mut new_idx) => {
-                        while new_idx > 0 && new_insts[new_idx - 1].0.before.0 == info.args_idx {
+                        while new_idx > 0 && new_insts[new_idx - 1].0.insert_at.0 == info.args_idx {
                             new_idx -= 1;
                         }
                         new_idx
@@ -388,7 +411,13 @@ impl IrModify {
                 // check if block was added after and all insts will be in additional
                 let is_new_block = info.args_idx >= old_insts.len() as _;
                 let inst_range = if is_new_block {
-                    info.args_idx..info.args_idx + 1
+                    // new blocks only contain a single Nothing "insert point" in their body
+                    debug_assert_eq!(
+                        info.len, 1,
+                        "Can't have a previous length other than 1 in new block"
+                    );
+                    info.len = 0;
+                    info.args_idx..info.body_idx + 1
                 } else {
                     info.args_idx..info.body_idx + info.len
                 }
@@ -397,15 +426,17 @@ impl IrModify {
                 info.body_idx = info.args_idx + info.arg_count;
                 for old_ref in inst_range {
                     'before: while let Some((added, r)) = new_insts.get(new_idx)
-                        && added.before == old_ref
+                        && added.insert_at == old_ref
+                        && added.position == Insert::Before
                     {
                         let mut inst = added.inst;
-                        debug_assert!(
-                            !inst
-                                .as_module(crate::BUILTIN)
-                                .is_some_and(|inst| inst.op() == Builtin::Nothing),
-                            "Nothing in additional shouldn't happen"
-                        );
+                        if inst
+                            .as_module(crate::BUILTIN)
+                            .is_some_and(|inst| inst.op() == Builtin::Nothing)
+                        {
+                            new_idx += 1;
+                            continue 'before;
+                        }
                         renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
                         new_idx += 1;
                         if added
@@ -441,75 +472,127 @@ impl IrModify {
                         insts.push(inst);
                     }
 
-                    if is_new_block {
-                        // there can be no instructions in the old because the block is new
-                        continue;
-                    }
-                    let mut inst = old_insts[old_ref.idx()];
-                    renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
-                    if let Some(inst) = inst.as_module(crate::BUILTIN) {
-                        if matches!(inst.op(), Builtin::Nothing | Builtin::Copy) {
-                            let new = if inst.op() == Builtin::Nothing {
-                                Ref::UNIT
-                            } else {
-                                Ref(inst.args[0])
-                            };
-                            renames.rename(old_ref, new);
-                            if appending_block.is_none() {
-                                ir.blocks[current_block.idx()].len -= 1;
+                    if !is_new_block {
+                        let mut inst = old_insts[old_ref.idx()];
+                        renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
+                        if let Some(inst) = inst.as_module(crate::BUILTIN) {
+                            if matches!(inst.op(), Builtin::Nothing | Builtin::Copy) {
+                                let new = if inst.op() == Builtin::Nothing {
+                                    Ref::UNIT
+                                } else {
+                                    Ref(inst.args[0])
+                                };
+                                renames.rename(old_ref, new);
+                                if appending_block.is_none() {
+                                    ir.blocks[current_block.idx()].len -= 1;
+                                }
+                                continue;
+                            } else if inst.op() == Builtin::BlockArg
+                                && let Some(renamed) =
+                                    arg_renames.as_mut().and_then(|renames| renames.next())
+                            {
+                                renames.rename(old_ref, renamed);
+                                continue;
                             }
-                            continue;
-                        } else if inst.op() == Builtin::BlockArg
-                            && let Some(renamed) =
-                                arg_renames.as_mut().and_then(|renames| renames.next())
-                        {
-                            renames.rename(old_ref, renamed);
-                            continue;
                         }
+                        if compress_goto(
+                            &inst,
+                            cf,
+                            &mut ir.extra,
+                            &mut ir.blocks,
+                            &mut current_block,
+                            &mut appending_block,
+                            &visited_blocks,
+                            &mut arg_renames,
+                            &mut renames,
+                            old_ref,
+                        ) {
+                            continue 'add_block_contents;
+                        }
+                        let new_r = Ref(insts.len() as _);
+                        renames.rename(old_ref, new_r);
+                        if let Some(appending) = appending_block {
+                            ir.blocks[appending.idx()].len += 1;
+                        }
+                        insts.push(inst);
                     }
-                    if compress_goto(
-                        &inst,
-                        cf,
-                        &mut ir.extra,
-                        &mut ir.blocks,
-                        &mut current_block,
-                        &mut appending_block,
-                        &visited_blocks,
-                        &mut arg_renames,
-                        &mut renames,
-                        old_ref,
-                    ) {
-                        continue 'add_block_contents;
+                    'after: while let Some((added, r)) = new_insts.get(new_idx)
+                        && added.insert_at == old_ref
+                    {
+                        debug_assert_eq!(
+                            added.position,
+                            Insert::After,
+                            "Insert::Before should already be consumed for the instruction"
+                        );
+                        let mut inst = added.inst;
+                        if inst
+                            .as_module(crate::BUILTIN)
+                            .is_some_and(|inst| inst.op() == Builtin::Nothing)
+                        {
+                            new_idx += 1;
+                            continue 'after;
+                        }
+                        renames.visit_inst(&mut ir.extra, &ir.blocks, None, &mut inst, env);
+                        new_idx += 1;
+                        if added
+                            .inst
+                            .as_module(crate::BUILTIN)
+                            .is_some_and(|inst| inst.op() == Builtin::BlockArg)
+                        {
+                            if let Some(renamed) =
+                                arg_renames.as_mut().and_then(|renames| renames.next())
+                            {
+                                renames.rename(*r, renamed);
+                                continue 'after;
+                            }
+                        } else {
+                            ir.blocks[appending_block.unwrap_or(current_block).idx()].len += 1;
+                            if compress_goto(
+                                &inst,
+                                cf,
+                                &ir.extra,
+                                &mut ir.blocks,
+                                &mut current_block,
+                                &mut appending_block,
+                                &visited_blocks,
+                                &mut arg_renames,
+                                &mut renames,
+                                *r,
+                            ) {
+                                continue 'add_block_contents;
+                            }
+                        }
+                        let new_r = Ref(insts.len() as _);
+                        renames.rename(*r, new_r);
+                        insts.push(inst);
                     }
-                    let new_r = Ref(insts.len() as _);
-                    renames.rename(old_ref, new_r);
-                    if let Some(appending) = appending_block {
-                        ir.blocks[appending.idx()].len += 1;
-                    }
-                    insts.push(inst);
                 }
                 break 'add_block_contents;
             }
         }
         visited_blocks.visit_unset_bits(|i| {
-            removed_blocks.insert(BlockId(i as _));
+            if i < ir.blocks.len() as usize {
+                removed_blocks.insert(BlockId(i as _));
+            }
         });
 
-        // TODO: probably should get rid of block renaming, maybe just have a notion of free block
-        // slots in the ir
         let mut renamed_blocks = DHashMap::default();
-        let mut removed_block_iter = removed_blocks.iter().copied().peekable();
-        while removed_block_iter.peek().is_some() {
-            while removed_blocks.contains(&BlockId(ir.blocks.len() as u32 - 1)) {
+        // let mut removed_block_iter = removed_blocks.iter().copied().peekable();
+        'remove_blocks: while !removed_blocks.is_empty() {
+            let last = BlockId(ir.blocks.len() as u32 - 1);
+            while removed_blocks.contains(&last) {
                 ir.blocks.pop();
-                continue;
+                removed_blocks.remove(&last);
+                continue 'remove_blocks;
             }
-            let removed = removed_block_iter.next().unwrap();
-            if removed.idx() >= ir.blocks.len() {
-                continue;
-            }
-            ir.blocks.swap_remove(removed.idx());
-            renamed_blocks.insert(BlockId(ir.blocks.len() as u32), removed);
+            let Some(&to_remove) = removed_blocks.iter().next() else {
+                // no more blocks to remove after popping
+                break;
+            };
+
+            ir.blocks.swap_remove(to_remove.idx());
+            removed_blocks.remove(&to_remove);
+            renamed_blocks.insert(BlockId(ir.blocks.len() as u32), to_remove);
         }
 
         if !renamed_blocks.is_empty() {
@@ -540,34 +623,56 @@ impl IrModify {
 
     pub fn add_block(&mut self, args: impl IntoIterator<Item = TypeId>) -> (BlockId, Refs, Ref) {
         let id = BlockId(self.ir.blocks.len() as _);
-        let insert_idx = (self.ir.insts.len() + self.additional.len()) as u32;
+        let args_idx = (self.ir.insts.len() + self.additional.len()) as u32;
         self.additional
-            .extend(args.into_iter().map(|arg_ty| AdditionalInst {
-                // add all arguments "before" the first one so they all get grouped properly
-                before: Ref(insert_idx),
-                inst: Instruction {
-                    function: crate::FunctionId {
-                        module: crate::ModuleId::BUILTINS,
-                        function: Builtin::BlockArg.id(),
-                    },
-                    args: [0, 0],
-                    ty: arg_ty,
-                },
-            }));
-        let arg_count = (self.ir.insts.len() + self.additional.len()) as u32 - insert_idx;
+            .extend(
+                args.into_iter()
+                    .zip(args_idx..)
+                    .map(|(arg_ty, idx)| AdditionalInst {
+                        // add all arguments "after" the index of themselves so they all get grouped properly
+                        // with the ability to insert after and before them preserved
+                        insert_at: Ref(idx),
+                        position: Insert::After,
+                        inst: Instruction {
+                            function: crate::FunctionId {
+                                module: crate::ModuleId::BUILTINS,
+                                function: Builtin::BlockArg.id(),
+                            },
+                            args: [0, 0],
+                            ty: arg_ty,
+                        },
+                    }),
+            );
+        let body_idx = (self.ir.insts.len() + self.additional.len()) as u32;
+        let arg_count = body_idx - args_idx;
         self.ir.blocks.push(BlockInfo {
             arg_count,
-            args_idx: insert_idx,
-            body_idx: insert_idx,
-            len: 0,
+            args_idx,
+            body_idx,
+            len: 1,
             preds: Vec::new(),
             succs: Vec::new(),
         });
+        // insert point instruction
+        self.additional.push(AdditionalInst {
+            insert_at: Ref(body_idx),
+            position: Insert::After,
+            inst: Instruction::NOTHING,
+        });
         let arg_refs = Refs {
-            idx: insert_idx,
+            idx: args_idx,
             count: arg_count,
         };
-        (id, arg_refs, Ref(insert_idx))
+        (id, arg_refs, Ref(body_idx))
+    }
+
+    pub fn get_block_insert_point(&self, block: BlockId) -> Ref {
+        let info = &self.ir.blocks[block.idx()];
+        debug_assert!(
+            info.len > 0,
+            "Can't determine insert point for an empty block, this should never happen"
+        );
+        Ref(info.body_idx + info.len - 1)
     }
 
     pub fn replace_with(&mut self, env: &Environment, r: Ref, new: Ref) {
@@ -595,19 +700,14 @@ impl IrModify {
         } else {
             &mut self.additional[r.0 as usize - self.ir.insts.len()].inst
         };
-        inst.function = FunctionId {
-            module: crate::ModuleId::BUILTINS,
-            function: Builtin::Nothing.id(),
-        };
-        inst.args = [0, 0];
-        inst.ty = TypeId::UNIT;
+        *inst = Instruction::NOTHING;
     }
 
     pub fn inst_block(&self, r: Ref) -> BlockId {
         let r = if r.idx() < self.ir.insts.len() {
             r
         } else {
-            self.additional[r.idx()].before
+            self.additional[r.idx()].insert_at
         };
         // PERF: iterating blocks every time is bad, avoid this maybe with a BTreeMap in IrModify
         BlockId(
@@ -695,6 +795,10 @@ impl IrModify {
         self.ir.get_block_args(block)
     }
 
+    pub fn get_original_block_refs(&self, block: BlockId) -> Refs {
+        self.ir.get_block_refs(block)
+    }
+
     pub fn prepare_instruction<'a, A: crate::IntoArgs<'a>>(
         &mut self,
         params: &[Parameter],
@@ -713,37 +817,43 @@ impl IrModify {
         self.ir.args_iter(inst, env)
     }
 
-    pub fn split_block_after(&mut self, r: Ref) -> BlockId {
-        let block = self
-            .ir
-            .blocks
-            .iter()
-            .position(|block| (block.body_idx..block.body_idx + block.len).contains(&r.0))
-            .unwrap();
-        let block_id = BlockId(block as _);
+    /// Splits a block into two before the specified instruction Ref, returning the id of the new
+    /// block as well as the insert point of the existing block. The existing block will be left
+    /// without a terminator.
+    pub fn split_block_before(&mut self, block: BlockId, r: Ref) -> (BlockId, Ref) {
         let new_block_id = BlockId(self.ir.blocks.len() as _);
-        let info = &mut self.ir.blocks[block];
-        let is_end = info.body_idx + info.len == r.0 + 1;
+        let info = &mut self.ir.blocks[block.idx()];
         debug_assert!(
-            !is_end,
-            "Can't split block at the end, should add a new block instead"
+            (info.body_idx..info.body_idx + info.len).contains(&r.0),
+            "Ref is outside of the block"
         );
-        let split_offset = r.0 - info.body_idx + 1;
-        let new_block_len = {
-            let old_count = split_offset;
-            let new_block_len = info.len - old_count;
-            info.len = old_count;
-            new_block_len
-        };
+        let split_offset = r.0 - info.body_idx;
         let new_block_idx = info.body_idx + split_offset;
+        let new_block_len = info.len - split_offset;
+        info.len = split_offset;
+        let insert_point = if split_offset == 0 && info.arg_count == 0 {
+            info.args_idx = (self.ir.insts.len() + self.additional.len()) as u32;
+            info.body_idx = info.args_idx;
+            info.len = 1;
+            let insert_point = Ref(info.body_idx);
+            // insert point instruction
+            self.additional.push(AdditionalInst {
+                insert_at: insert_point,
+                position: Insert::After,
+                inst: Instruction::NOTHING,
+            });
+            insert_point
+        } else {
+            Ref(info.body_idx + split_offset - 1)
+        };
         let succs = {
             let mut succs = std::mem::take(&mut info.succs);
             for succ in &mut succs {
-                if *succ == block_id {
+                if *succ == block {
                     // block has itself as successor, can just replace it directly with the split block id
                     *succ = new_block_id;
                 } else {
-                    self.ir.blocks[succ.idx()].replace_pred(block_id, new_block_id);
+                    self.ir.blocks[succ.idx()].replace_pred(block, new_block_id);
                 }
             }
             succs
@@ -756,14 +866,28 @@ impl IrModify {
             preds: Vec::new(),
             succs,
         });
-        new_block_id
+        (new_block_id, insert_point)
+    }
+
+    pub fn add_manual_preds(&mut self, block: BlockId, preds: impl Iterator<Item = BlockId>) {
+        self.ir.blocks[block.idx()].succs.extend(preds);
+    }
+    pub fn add_manual_succs(&mut self, block: BlockId, succs: impl Iterator<Item = BlockId>) {
+        self.ir.blocks[block.idx()].succs.extend(succs);
     }
 }
 
 #[derive(Debug)]
 struct AdditionalInst {
-    before: Ref,
+    insert_at: Ref,
+    position: Insert,
     inst: Instruction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Insert {
+    Before,
+    After,
 }
 
 #[cfg(test)]

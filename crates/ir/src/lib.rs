@@ -605,7 +605,7 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FunctionIr {
     blocks: Vec<BlockInfo>,
     insts: Vec<Instruction>,
@@ -639,17 +639,19 @@ impl FunctionIr {
         (idx.0..idx.0 + count).map(|i| (Ref(i), &self.insts[i as usize]))
     }
 
-    pub fn get_terminator(&self, block: BlockId) -> &Instruction {
-        let info = &self.blocks[block.idx()];
-        assert!(info.len != 0, "block is empty");
-        &self.insts[(info.args_idx + info.arg_count + info.len) as usize]
-    }
-
     pub fn get_block_args(&self, id: BlockId) -> Refs {
         let block = &self.blocks[id.0 as usize];
         Refs {
             idx: block.args_idx,
             count: block.arg_count,
+        }
+    }
+
+    pub fn get_block_refs(&self, block: BlockId) -> Refs {
+        let info = &self.blocks[block.idx()];
+        Refs {
+            idx: info.body_idx,
+            count: info.len,
         }
     }
 
@@ -665,6 +667,14 @@ impl FunctionIr {
     + use<'_> {
         let block = &self.blocks[id.idx()];
         self.get_refs(Ref(block.body_idx), block.len)
+    }
+
+    pub fn preds(&self, block: BlockId) -> &[BlockId] {
+        &self.blocks[block.idx()].preds
+    }
+
+    pub fn succs(&self, block: BlockId) -> &[BlockId] {
+        &self.blocks[block.idx()].succs
     }
 
     pub fn block_refs(&self, id: BlockId) -> Refs {
@@ -930,6 +940,15 @@ pub struct Instruction {
     ty: TypeId,
 }
 impl Instruction {
+    pub const NOTHING: Self = Self {
+        function: FunctionId {
+            module: crate::ModuleId::BUILTINS,
+            function: Builtin::Nothing.id(),
+        },
+        args: [0, 0],
+        ty: TypeId::UNIT,
+    };
+
     pub fn module(&self) -> ModuleId {
         self.function.module
     }
@@ -1051,6 +1070,10 @@ pub fn update_inst_refs(
                 extra[idx] = update(Ref(extra[idx])).0;
                 idx += 1;
             }
+            Parameter::BlockId => {
+                extra[idx] = update_block(BlockId(extra[idx])).0;
+                idx += 1;
+            }
             Parameter::BlockTarget => {
                 let target = update_block(BlockId(extra[idx]));
                 extra[idx] = target.0;
@@ -1060,10 +1083,6 @@ pub fn update_inst_refs(
                 for i in arg_idx..arg_idx + arg_count {
                     extra[i as usize] = update(Ref(extra[i as usize])).0;
                 }
-            }
-            Parameter::BlockId => {
-                extra[idx] = update_block(BlockId(extra[idx])).0;
-                idx += 1;
             }
             Parameter::Int
             | Parameter::Float
@@ -1089,8 +1108,12 @@ pub fn update_inst_refs(
                     inst.args[idx] = update(Ref(inst.args[idx])).0;
                     idx += 1;
                 }
+                Parameter::BlockId => {
+                    extra[idx] = update_block(BlockId(extra[idx])).0;
+                    idx += 1;
+                }
                 Parameter::BlockTarget => {
-                    let target = BlockId(inst.args[idx]);
+                    let target = update_block(BlockId(inst.args[idx]));
                     let args_idx = inst.args[idx + 1];
                     idx += 2;
                     let arg_count = blocks[target.idx()].arg_count;
@@ -1098,8 +1121,7 @@ pub fn update_inst_refs(
                         extra[i as usize] = update(Ref(extra[i as usize])).0;
                     }
                 }
-                Parameter::BlockId
-                | Parameter::Int
+                Parameter::Int
                 | Parameter::Float
                 | Parameter::Int32
                 | Parameter::TypeId
@@ -1622,7 +1644,7 @@ macro_rules! instructions {
 
         }
         impl $module_name {
-            pub fn id(self) -> $crate::LocalFunctionId {
+            pub const fn id(self) -> $crate::LocalFunctionId {
                 $crate::LocalFunctionId(self as u32)
             }
 

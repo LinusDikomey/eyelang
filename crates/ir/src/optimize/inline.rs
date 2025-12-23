@@ -2,7 +2,10 @@ use std::{borrow::Cow, cmp::min, fmt};
 
 use crate::{
     Argument, Bitmap, BlockGraph, BlockId, Environment, Function, FunctionIr, LocalFunctionId,
-    Module, ModuleId, ModuleOf, Ref, TypeId, dialect::Cf, modify::IrModify, pipeline::ModulePass,
+    Module, ModuleId, ModuleOf, Ref, TypeId,
+    dialect::Cf,
+    modify::{Insert, IrModify},
+    pipeline::ModulePass,
     rewrite::RenameTable,
 };
 
@@ -34,98 +37,112 @@ impl Inline {
             .types
             .clone();
         let mut ir = IrModify::new(ir);
-        for call_ref in ir.refs() {
-            let call_inst = *ir.get_inst(call_ref);
-            if call_inst.function.module != module || scc.contains(&call_inst.function()) {
-                continue;
-            }
-            let Some(callee_ir) = env[call_inst.function].ir() else {
-                continue;
-            };
-            let callee_types = env[call_inst.function].types();
-            if !should_inline(&ir, callee_ir) {
-                continue;
-            }
-            // inline!
-            let name = &env.modules[module.idx()].functions[function.idx()].name;
-            let inlined_name = &env[call_inst.function].name;
-            tracing::debug!(target: "pass::inline", "Inlining {inlined_name} into {name}");
-
-            let old_types_offset = types.types.len() as u32;
-            types.types.extend_from_slice(&callee_types.types);
-            let mut renames = RenameTable::new(callee_ir, old_types_offset);
-            let graph = BlockGraph::calculate(callee_ir, env);
-
-            let after_call_block = ir.split_block_after(call_ref);
-
-            // add the functions return type as a block argument to the new block
-            let mut return_ty = env[call_inst.function]
-                .return_type
-                .expect("Function missing return type");
-            return_ty.0 += old_types_offset;
-            let (return_val, _) = ir.add_block_arg(env, after_call_block, return_ty);
-            ir.replace_with(env, call_ref, return_val);
-
-            // reverse postorder ensures defs are visited before uses
-            for &block in graph.postorder().iter().rev() {
-                let (new_block, args, insert_idx) = ir.add_block(
-                    callee_ir
-                        .get_block_args(block)
-                        .iter()
-                        .map(|r| TypeId(callee_ir.get_ref_ty(r).0 + old_types_offset)),
-                );
-                renames.rename_block(block, new_block);
-                if block == BlockId::ENTRY {
-                    let call_args = ir.args_iter(&call_inst, env);
-                    let args: Vec<_> = callee_ir
-                        .get_block_args(block)
-                        .iter()
-                        .zip(call_args)
-                        .map(|(_block_arg, call_arg)| {
-                            let Argument::Ref(call_arg) = call_arg else {
-                                unreachable!()
-                            };
-                            call_arg
-                        })
-                        .collect();
-                    // FIXME: can't add a Goto after the last instruction of the block here for now
-                    // but also the call instruction should be preserved since it was renamed to the
-                    // the return value
-                    ir.replace(
-                        env,
-                        call_ref,
-                        self.cf.Goto(crate::BlockTarget(new_block, args.into())),
-                    );
+        for block in ir.block_ids() {
+            for call_ref in ir.get_original_block_refs(block).iter() {
+                let call_inst = *ir.get_inst(call_ref);
+                if call_inst.function.module != module || scc.contains(&call_inst.function()) {
+                    continue;
                 }
-                for (arg, renamed) in callee_ir.get_block_args(block).iter().zip(args.iter()) {
-                    renames.rename(arg, renamed);
+                let Some(callee_ir) = env[call_inst.function].ir() else {
+                    continue;
+                };
+                let callee_types = env[call_inst.function].types();
+                if !should_inline(&ir, callee_ir) {
+                    continue;
                 }
-                for (r, inst) in callee_ir.get_block(block) {
-                    let mut inst = *inst;
-                    renames.visit_inst(
-                        &mut ir.ir.extra,
-                        &ir.ir.blocks,
-                        Some(&callee_ir.extra),
-                        &mut inst,
-                        env,
+                // inline!
+                let name = &env.modules[module.idx()].functions[function.idx()].name;
+                let inlined_name = &env[call_inst.function].name;
+                tracing::debug!(target: "pass::inline", "Inlining {inlined_name} into {name}");
+
+                let old_types_offset = types.types.len() as u32;
+                types.types.extend_from_slice(&callee_types.types);
+                let mut renames = RenameTable::new(callee_ir, old_types_offset);
+                let graph = BlockGraph::calculate(callee_ir, env);
+
+                let (after_block, call_site_insert_point) = ir.split_block_before(block, call_ref);
+
+                // add the functions return type as a block argument to the new block
+                let mut return_ty = env[call_inst.function]
+                    .return_type
+                    .expect("Function missing return type");
+                return_ty.0 += old_types_offset;
+                let (return_val, _) = ir.add_block_arg(env, after_block, return_ty);
+                ir.replace_with(env, call_ref, return_val);
+
+                for &block in graph.postorder().iter().rev() {
+                    let (new_block, _, _) = ir.add_block(
+                        callee_ir
+                            .get_block_args(block)
+                            .iter()
+                            .map(|r| TypeId(callee_ir.get_ref_ty(r).0 + old_types_offset)),
                     );
-                    if inst
-                        .as_module(self.cf)
-                        .is_some_and(|inst| inst.op() == Cf::Ret)
-                    {
-                        // Ret becomes a Goto to the block after the inlined call
-                        let return_value: Ref = ir.args(&inst, env);
-                        ir.add_before(
+                    if block == BlockId::ENTRY {
+                        let call_args = ir.args_iter(&call_inst, env);
+                        let args: Vec<_> = callee_ir
+                            .get_block_args(block)
+                            .iter()
+                            .zip(call_args)
+                            .map(|(_block_arg, call_arg)| {
+                                let Argument::Ref(call_arg) = call_arg else {
+                                    unreachable!()
+                                };
+                                call_arg
+                            })
+                            .collect();
+                        ir.add_after(
                             env,
-                            insert_idx,
-                            self.cf.Goto(crate::BlockTarget(
-                                after_call_block,
-                                Cow::Borrowed(&[return_value]),
-                            )),
+                            call_site_insert_point,
+                            self.cf.Goto(crate::BlockTarget(new_block, args.into())),
                         );
-                    } else {
-                        let renamed = ir.add_inst_before(insert_idx, inst);
-                        renames.rename(r, renamed);
+                    }
+                    renames.rename_block(block, new_block);
+                }
+
+                // reverse postorder ensures defs are visited before uses
+                for &block in graph.postorder().iter().rev() {
+                    let new_block = renames.get_block(block);
+                    ir.add_manual_preds(
+                        new_block,
+                        callee_ir.preds(block).iter().map(|&b| renames.get_block(b)),
+                    );
+                    ir.add_manual_succs(
+                        new_block,
+                        callee_ir.succs(block).iter().map(|&b| renames.get_block(b)),
+                    );
+                    let args = ir.get_block_args(new_block);
+                    let insert_idx = ir.get_block_insert_point(new_block);
+                    for (arg, renamed) in callee_ir.get_block_args(block).iter().zip(args.iter()) {
+                        renames.rename(arg, renamed);
+                    }
+                    for (r, inst) in callee_ir.get_block(block) {
+                        let mut inst = *inst;
+                        renames.visit_inst(
+                            &mut ir.ir.extra,
+                            &ir.ir.blocks,
+                            Some(&callee_ir.extra),
+                            &mut inst,
+                            env,
+                        );
+                        if inst
+                            .as_module(self.cf)
+                            .is_some_and(|inst| inst.op() == Cf::Ret)
+                        {
+                            // Ret becomes a Goto to the block after the inlined call
+                            let return_value: Ref = ir.args(&inst, env);
+                            ir.add_after(
+                                env,
+                                insert_idx,
+                                self.cf.Goto(crate::BlockTarget(
+                                    after_block,
+                                    Cow::Borrowed(&[return_value]),
+                                )),
+                            );
+                        } else {
+                            let renamed =
+                                ir.add_inst_before_or_after(insert_idx, Insert::After, inst);
+                            renames.rename(r, renamed);
+                        }
                     }
                 }
             }
