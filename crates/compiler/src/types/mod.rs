@@ -133,7 +133,7 @@ builtin_types! {
     U128 = 16 "u128"
     F32 = 4 "f32"
     F64 = 8 "f64"
-    Type = 9 "type"
+    Type = 0 "type"
 
     @generic:
     Tuple = vec![("elems".into(), vec![])],

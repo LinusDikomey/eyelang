@@ -396,7 +396,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 let index = ctx.builder.append(arith.Int(i, u64_ty));
                 let member_ptr = ctx
                     .builder
-                    .append(mem.ArrayIndex(array_var, elem_ir_ty, index, elem_ir_ty));
+                    .append(mem.ArrayIndex(array_var, elem_ir_ty, index, ctx.ptr_ty));
                 ctx.builder.append(mem.Store(member_ptr, val));
             }
             return Ok(ValueOrPlace::Place {
@@ -527,7 +527,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
                 true,
             );
             let ir_ty = ctx.builder.types.add(ir_ty);
-            let global = ctx.builder.append(mem.Global(global, ir_ty));
+            let global = ctx.builder.append(mem.Global(global, ctx.ptr_ty));
             ctx.builder.append(mem.Load(global, ir_ty))
         }
 
@@ -679,7 +679,7 @@ fn lower_expr(ctx: &mut Ctx, node: NodeId) -> Result<ValueOrPlace> {
             return Ok(ValueOrPlace::Place {
                 ptr: ctx
                     .builder
-                    .append(mem.ArrayIndex(array, elem_ir_ty, index, elem_ir_ty)),
+                    .append(mem.ArrayIndex(array, elem_ir_ty, index, ctx.ptr_ty)),
                 value_ty: elem_ir_ty,
             });
         }
@@ -1043,7 +1043,7 @@ fn lower_lval(ctx: &mut Ctx, lval: LValueId) -> Result<Ref> {
             let idx = lower(ctx, index)?;
             let ty = ctx.get_hir_type(element_type)?;
             let ty = ctx.builder.types.add(ty);
-            ctx.builder.append(mem.ArrayIndex(ptr, ty, idx, ty))
+            ctx.builder.append(mem.ArrayIndex(ptr, ty, idx, ctx.ptr_ty))
         }
     })
 }
